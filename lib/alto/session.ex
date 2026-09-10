@@ -393,6 +393,18 @@ defmodule Alto.Session do
       "at_ms" => event.at_ms,
       "data" => encode_term(event.data)
     }
+    |> with_wire_data(event.data)
+  end
+
+  # Keep an additive, self-contained projection for replay in a fresh VM.
+  # Exact terms can contain atoms from application modules not loaded there;
+  # replay must never loosen binary_to_term's safe decoding to recreate them.
+  defp with_wire_data(record, data) do
+    projection = Alto.Protocol.encode_term(data)
+    _encoded = JSON.encode!(projection)
+    Map.put(record, "wire_data", projection)
+  rescue
+    _error -> record
   end
 
   @doc false

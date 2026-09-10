@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Save a JSON projection alongside exact event payloads so fresh-VM replay
+  does not depend on atoms loaded by an earlier execution.
 - Add persisted due times and fenced delayed release to the existing queue.
   Scheduled records use log version 2 so old readers cannot execute them early.
   See [delayed queue semantics](docs/delayed-queue.md).

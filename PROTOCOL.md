@@ -313,7 +313,10 @@ poll again later when the high watermark advances. `gap` is true when the
 requested cursor is beyond the stored high watermark (for example, after a
 state rollback). Corrupt logs and logs over 16 MB or 20,000 records fail
 closed. Event `data` uses the same readable, lossy JSON term encoding as live
-notifications; the session log retains the exact source terms.
+notifications; new session records retain this JSON projection alongside the
+exact source terms, so replay works without recreating atoms in a fresh VM.
+Older records without a projection use the existing safe term decoder; an
+unavailable atom or unsupported payload produces an explicit replay error.
 
 Replay describes successfully persisted records. Session logging is
 best-effort, and this cursor cannot prove that every execution event was

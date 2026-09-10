@@ -184,9 +184,11 @@ defmodule Alto.Listeners.Connection do
 
   defp session_events_payload(records) do
     Enum.reduce_while(records, {:ok, []}, fn record, {:ok, acc} ->
-      case Alto.Session.decode_term(record["data"]) do
+      case session_event_data(record) do
         {:ok, data} ->
-          event = record |> Map.put("data", Protocol.encode_term(data)) |> Protocol.encode_term()
+          event =
+            record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()
+
           {:cont, {:ok, [event | acc]}}
 
         {:error, reason} ->
@@ -197,6 +199,13 @@ defmodule Alto.Listeners.Connection do
       {:ok, events} -> {:ok, Enum.reverse(events)}
       error -> error
     end
+  end
+
+  defp session_event_data(%{"wire_data" => data}), do: {:ok, data}
+
+  defp session_event_data(record) do
+    with {:ok, data} <- Alto.Session.decode_term(record["data"]),
+         do: {:ok, Protocol.encode_term(data)}
   end
 
   # Bounded claims: the byte budget derives from this connection's

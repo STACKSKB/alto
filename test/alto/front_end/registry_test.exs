@@ -386,7 +386,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     wait_until(fn ->
       case Alto.Session.read(session_id, session_dir: root) do
         {:ok, records} ->
-          Enum.any?(records, &(&1["type"] == "event" and &1["event"] == "run_cancelled"))
+          Enum.any?(records, &(&1["type"] == "event" and &1["event"] == "run_cancelled")) and
+            Enum.any?(records, &(&1["type"] == "completed"))
 
         _ ->
           false

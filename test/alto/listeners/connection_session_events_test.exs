@@ -6,6 +6,48 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
   alias Alto.Listeners.Connection
   alias Alto.Session
 
+  test "fresh VM replays projection without creating atoms from stored terms" do
+    dir = Path.join(System.tmp_dir!(), "alto-fresh-replay-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    key = "only_in_original_vm_#{System.unique_integer([:positive])}"
+    data = %{String.to_atom(key) => "survives restart"}
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+
+    :ok =
+      Session.append(id, Session.event_record("run-1", Event.durable(:tool_completed, data)),
+        session_dir: dir
+      )
+
+    command =
+      JSON.encode!(%{"v" => 1, "id" => "replay", "type" => "session_events", "session_id" => id})
+
+    script = """
+    {:ok, page} = Alto.Session.events(#{inspect(id)}, session_dir: #{inspect(dir)})
+    {:error, _} = Alto.Session.decode_term(hd(page.events)["data"])
+    {:ok, registry} = Alto.FrontEnd.Registry.start_link(name: nil,
+      session_dir: #{inspect(dir)}, config_resolver: fn _ -> {:error, :unknown} end)
+    Alto.Listeners.Connection.run_command(#{inspect(command)}, registry, &IO.write/1)
+    """
+
+    paths = Path.wildcard(Path.join([Mix.Project.build_path(), "lib", "*", "ebin"]))
+    args = Enum.flat_map(paths, &["-pa", &1]) ++ ["-e", script]
+
+    {output, 0} =
+      System.cmd(System.find_executable("elixir"), args,
+        env: [{"ERL_FLAGS", "+S 2:2"}],
+        stderr_to_stdout: true
+      )
+
+    reply =
+      output
+      |> String.split("\n", trim: true)
+      |> Enum.find(&String.starts_with?(&1, "{"))
+      |> JSON.decode!()
+
+    assert reply["type"] == "ok"
+    assert hd(reply["events"])["data"] == %{key => "survives restart"}
+  end
+
   test "session event replay survives registry restart" do
     dir = Path.join(System.tmp_dir!(), "alto-conn-events-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
