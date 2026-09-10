@@ -60,6 +60,67 @@ monotonic deadline. Children and batches consume those same counters and
 deadline, so a batch cannot multiply the root allowance by its child count.
 The child’s local `max_steps` remains an additional per-child limit.
 
+
+### Durable count budgets
+
+Trusted hosts can back the shared effect and model-request counters with an
+`Alto.OperationLog`. Each execution tree should use one account key:
+
+```elixir
+alias Alto.Runner.Budget.Account
+{:ok, ledger} = Alto.OperationLog.start_link(
+  id: "budgets", name: nil, dir: "/private/alto-state/operations")
+{:ok, account} = Account.open(ledger, "tree-123",
+  max_effects: 1000, max_model_requests: 80)
+
+Alto.run(task, budget_account: account, loop: loop, provider: provider)
+```
+
+The caller supervises the ledger. A run and its children consume the same
+account; sharing it across additional runs intentionally shares one allowance.
+Each successful reservation appends and syncs a revision-fenced counter update
+before granting permission to dispatch. Both counters are read in one coherent
+snapshot. Reopening an account preserves its generation and counters; caps can
+only become tighter. Previously created handles also obey a tightened cap.
+
+Approval snapshots include the account key and generation. The restoring host
+must reopen and supply that same account through `budget_account:`. Restore
+uses the current durable counts, including charges made after the snapshot;
+it never clones the snapshot's remaining allowance. Missing/replaced accounts,
+an observed counter rollback or ledger failure reject restoration/reservation.
+The legacy in-memory counter path remains the default. Separate child
+checkpoints are still disabled: durable counts alone do not recover child
+dispatch, active execution time, or parent joins.
+
+This account persists count limits only. The existing monotonic run deadline
+and root checkpoint's remaining active time keep their current semantics;
+waiting for a supported root approval still pauses that run's active time.
+Coordinating active time across independently parked children remains pending.
+Model-request limits count requests, not tokens or currency.
+
+Reservations are not refunded when a callback fails, cancellation arrives or
+the deadline expires after the durable charge. If a write or reply is uncertain,
+the caller gets no dispatch permission; a reservation may nevertheless remain
+consumed. Repeating an old reservation call is not an execution retry grant.
+Counters are bounded admission state rather than a billing ledger.
+
+After the execution tree has ended, a host can read `Account.read(account)` and
+call `Account.close(account, revision)`. Closure rejects future reservations
+through old handles and records a terminal ledger outcome, allowing normal
+index eviction. It does not cancel already dispatched callbacks. Closure uses
+a second ledger attempt, so the ledger must allow at least two attempts. A
+crash during closure leaves a non-active retained operation for review; it
+cannot silently reopen with zero counters. Reusing an evicted key creates a new
+generation that cannot restore an old snapshot.
+
+Active accounts cannot be evicted. The operation ledger's configured record,
+operation and log-size bounds still apply; log exhaustion denies reservations.
+`OperationLog.update_checkpoint/4` is the generic primitive used here: it
+replaces active retained data at an expected revision without releasing the
+checkpoint or granting an execution attempt. Application code remains
+responsible for its own retained-data schema and authority. Older Alto readers
+reject the new `checkpoint_update` record kind instead of skipping charges.
+
 Runtime tools are capabilities of the parent. An explicit child tool list must
 be an exact normalized subset of the parent list; a module and `{Module, []}`
 are equivalent. A child can narrow model exposure, but cannot add a tool or
@@ -118,9 +179,9 @@ the parent result. A session is not a durable dispatch or join ledger. A crash
 before the parent records a result can leave a child log with only its backward
 link; applications must not infer execution or retry eligibility from it.
 
-Checkpoints remain root-only. Independently suspended children, durable shared
-budget accounting and recovered parent joins are not implemented by this
-option. Checkpoint fingerprints include the subagent policy and tool
+Checkpoints remain root-only. Independently suspended children, shared active-time accounting and
+recovered parent joins are not implemented by this option. Durable count
+budgets are a separate opt-in mechanism described above. Checkpoint fingerprints include the subagent policy and tool
 configuration, so changing those trusted settings invalidates an old packet.
 
 

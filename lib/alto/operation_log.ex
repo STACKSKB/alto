@@ -233,6 +233,11 @@ defmodule Alto.OperationLog do
     GenServer.call(server, {:checkpoint, op_key, attempt_id, checkpoint})
   end
 
+  @doc "Update an active checkpoint in place, fenced by its current revision."
+  def update_checkpoint(server \\ __MODULE__, op_key, expected_revision, checkpoint) do
+    GenServer.call(server, {:checkpoint_update, op_key, expected_revision, checkpoint})
+  end
+
   @doc "Record a host decision to resume a checkpoint, fenced by revision."
   def resume_checkpoint(server \\ __MODULE__, op_key, expected_revision, decision) do
     GenServer.call(server, {:resume_checkpoint, op_key, expected_revision, decision})
@@ -564,6 +569,44 @@ defmodule Alto.OperationLog do
                   revision: entry.revision + 1
               }
 
+              state = %{state | ops: Map.put(state.ops, op_key, entry)}
+              {:reply, {:ok, recovery_view(op_key, entry)}, state}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:checkpoint_update, op_key, expected_revision, checkpoint}, _from, state) do
+    with :ok <- validate_key(op_key),
+         :ok <- validate_revision(expected_revision),
+         :ok <- validate_checkpoint(checkpoint, state),
+         {:ok, entry} <- fetch_op(state, op_key),
+         :ok <- expect_revision(entry, expected_revision) do
+      cond do
+        entry.outcome != nil ->
+          {:reply, {:error, :already_decided}, state}
+
+        not entry.checkpoint_active ->
+          {:reply, {:error, :not_checkpointed}, state}
+
+        true ->
+          log = %{
+            "v" => @version,
+            "t" => "checkpoint_update",
+            "op" => op_key,
+            "expected_revision" => expected_revision,
+            "checkpoint" => checkpoint,
+            "at_ms" => System.system_time(:millisecond)
+          }
+
+          case append(state, log) do
+            :ok ->
+              entry = %{entry | checkpoint: checkpoint, revision: entry.revision + 1}
               state = %{state | ops: Map.put(state.ops, op_key, entry)}
               {:reply, {:ok, recovery_view(op_key, entry)}, state}
 
@@ -1343,6 +1386,20 @@ defmodule Alto.OperationLog do
         {:ok, %{state | ops: Map.put(state.ops, op, record)}}
       else
         migration_required(state, op, :invalid_checkpoint)
+      end
+    end
+  end
+
+  defp log_apply(state, "checkpoint_update", op, entry) do
+    with {:ok, record} <- fetch_op(state, op),
+         :ok <- validate_revision(entry["expected_revision"]),
+         :ok <- validate_checkpoint(entry["checkpoint"], state),
+         :ok <- expect_revision(record, entry["expected_revision"]) do
+      if record.outcome == nil and record.checkpoint_active do
+        record = %{record | checkpoint: entry["checkpoint"], revision: record.revision + 1}
+        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      else
+        migration_required(state, op, :invalid_checkpoint_update)
       end
     end
   end

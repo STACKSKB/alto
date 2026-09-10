@@ -22,6 +22,7 @@ defmodule Alto.Config do
     :project_instructions,
     :max_steps,
     :max_effects,
+    :budget_account,
     :max_model_requests,
     :run_timeout,
     :provider_timeout,

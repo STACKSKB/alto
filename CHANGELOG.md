@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional durable shared effect/model-count accounts on the operation
+  ledger. Restored budgets reconnect to current counters; tightened limits,
+  generation fencing and account closure prevent replenishing old allowances.
+- Add revision-fenced retained checkpoint updates without execution grants.
+
 - Add optional separate child sessions with independent transcript snapshots,
   parent/identity links and child session IDs in delegation results. Shared
   session behavior remains the default; independent child recovery is pending.
