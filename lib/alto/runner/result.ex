@@ -1,5 +1,5 @@
-defmodule Alto.Runner.Serial.Result do
-  @moduledoc "The inspectable result of one serial Alto run."
+defmodule Alto.Runner.Result do
+  @moduledoc "The inspectable result of one Alto run."
 
   @enforce_keys [
     :output,
@@ -24,6 +24,9 @@ defmodule Alto.Runner.Serial.Result do
     :transcript_bytes,
     :session_id,
     :run_id,
+    :agent_identity,
+    workspace: nil,
+    checkpoint: nil,
     usage: %{},
     persistence: :not_requested
   ]
@@ -39,7 +42,26 @@ defmodule Alto.Runner.Serial.Result do
           transcript_bytes: non_neg_integer(),
           session_id: String.t() | nil,
           run_id: String.t() | nil,
+          agent_identity: %{root_run_id: binary(), path: [binary()]} | nil,
+          workspace: map() | nil,
+          checkpoint: map() | nil,
           usage: map(),
           persistence: :not_requested | :ok | {:degraded, [term()]}
         }
+
+  @doc "An empty outcome for failures before execution starts."
+  def empty(session_id \\ nil) do
+    %__MODULE__{
+      output: nil,
+      loop_state: nil,
+      messages: [],
+      events: [],
+      events_dropped: 0,
+      verdict: :rejected_before_dispatch,
+      model_requests: 0,
+      transcript_bytes: 0,
+      session_id: session_id,
+      run_id: nil
+    }
+  end
 end

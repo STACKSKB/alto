@@ -487,7 +487,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:registry_provider_started, provider_pid}, @receive_timeout
     provider_monitor = Process.monitor(provider_pid)
     old_registry = Process.whereis(registry)
-    run_pid = :sys.get_state(registry).runs[run_id].task_pid
+    run_pid = Alto.Test.Runner.worker(:sys.get_state(registry).runs[run_id].handle)
     run_monitor = Process.monitor(run_pid)
     Process.exit(old_registry, :kill)
 

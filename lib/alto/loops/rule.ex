@@ -81,6 +81,48 @@ defmodule Alto.Loops.Rule do
 
   def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: Transition.continue(state)
 
+  @impl true
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) do
+    with {:ok, spec_steps} <- steps(spec),
+         true <- is_list(state.steps) and state.steps != [],
+         true <- Enum.all?(state.steps, &valid_step?/1),
+         true <- is_integer(state.index) and state.index >= 1,
+         true <- state.index + length(state.steps) - 1 == length(spec_steps),
+         true <- is_map(state.arguments),
+         true <- is_list(state.results) do
+      {:ok, %{arguments: state.arguments, index: state.index, results: state.results}}
+    else
+      _ -> {:error, :invalid_checkpoint}
+    end
+  end
+
+  @impl true
+  def load_checkpoint(
+        checkpoint,
+        %Spec{} = spec
+      )
+      when is_map(checkpoint) do
+    with true <- Map.keys(checkpoint) |> Enum.sort() == [:arguments, :index, :results],
+         arguments <- checkpoint.arguments,
+         index <- checkpoint.index,
+         results <- checkpoint.results,
+         true <- is_map(arguments) and is_integer(index) and index >= 1 and is_list(results),
+         {:ok, steps} <- steps(spec),
+         true <- index <= length(steps) do
+      remaining = Enum.drop(steps, index - 1)
+
+      if remaining == [],
+        do: {:error, :invalid_checkpoint},
+        else:
+          {:ok,
+           %__MODULE__{arguments: arguments, steps: remaining, index: index, results: results}}
+    else
+      _ -> {:error, :invalid_checkpoint}
+    end
+  end
+
+  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+
   ## Internals
 
   defp steps(%Spec{} = spec) do

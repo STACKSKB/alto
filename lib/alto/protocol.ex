@@ -6,7 +6,9 @@ defmodule Alto.Protocol do
   and host-independent: it encodes server-to-client messages and decodes
   client-to-server commands, and defines the lossy term encoding for event
   data and approval details. Exactness lives in the durable log, never on the
-  wire.
+  wire. The optional command envelope dispatches only to trusted callbacks
+  configured by the resident application; no client-supplied modules or atoms
+  are resolved, and the default registry has no commands enabled.
 
   Every encoder takes `max_line_bytes` and never emits a truncated envelope:
   an oversized message returns `{:error, :overflow}` so the transport can send
@@ -40,6 +42,7 @@ defmodule Alto.Protocol do
           | {:reload, String.t(), String.t()}
           | {:auth, String.t(), map()}
           | {:input, String.t(), map()}
+          | {:command, String.t(), String.t(), map()}
 
   @doc "The protocol version this codec speaks."
   @spec version() :: pos_integer()
@@ -237,7 +240,7 @@ defmodule Alto.Protocol do
 
   @spec ok(String.t() | nil, map(), pos_integer()) :: {:ok, iodata()} | {:error, :overflow}
   def ok(id, payload, max_line_bytes) do
-    encode(Map.merge(%{"type" => "ok", "id" => id}, encode_term(payload)), max_line_bytes)
+    encode(Map.merge(encode_term(payload), %{"type" => "ok", "id" => id}), max_line_bytes)
   end
 
   defp event_object(seq, %Event{} = event) do
@@ -263,7 +266,7 @@ defmodule Alto.Protocol do
   end
 
   defp encode(payload, max_line_bytes) do
-    line = [JSON.encode!(Map.merge(%{"v" => @version}, payload)), "\n"]
+    line = [JSON.encode!(Map.put(payload, "v", @version)), "\n"]
 
     if IO.iodata_length(line) <= max_line_bytes do
       {:ok, line}
@@ -399,6 +402,15 @@ defmodule Alto.Protocol do
   defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, object}}
 
   defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, object}}
+
+  defp decode_object("command", id, object) do
+    with {:ok, name} <- required_binary(object, "name"),
+         payload when is_map(payload) <- Map.get(object, "payload") do
+      {:ok, {:command, id, name, payload}}
+    else
+      _ -> {:error, :invalid}
+    end
+  end
 
   defp decode_object(_type, id, _object), do: {:error, {:unknown_type, id}}
 

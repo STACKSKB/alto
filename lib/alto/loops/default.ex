@@ -136,6 +136,76 @@ defmodule Alto.Loops.Default do
     Transition.error(state, {:unexpected_event, event.type, state.phase})
   end
 
+  @impl true
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) do
+    with :ok <- validate_checkpoint_state(state) do
+      {:ok,
+       %{
+         task: state.task,
+         phase: state.phase,
+         step: state.step,
+         observations: state.observations
+       }}
+    end
+  end
+
+  @impl true
+  def load_checkpoint(checkpoint, %Spec{} = spec) do
+    with true <- checkpoint_keys?(checkpoint),
+         task <- Map.fetch!(checkpoint, :task),
+         phase <- Map.fetch!(checkpoint, :phase),
+         step <- Map.fetch!(checkpoint, :step),
+         observations <- Map.fetch!(checkpoint, :observations),
+         :ok <- validate_phase(phase),
+         :ok <- validate_step(step),
+         true <- is_list(observations) do
+      {:ok,
+       %__MODULE__{
+         task: task,
+         phase: phase,
+         step: step,
+         observations: observations,
+         context: spec.context,
+         subagents: spec.subagents
+       }}
+    else
+      _ -> {:error, :invalid_checkpoint}
+    end
+  end
+
+  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+
+  defp checkpoint_keys?(checkpoint) when is_map(checkpoint) do
+    Map.keys(checkpoint) |> Enum.sort() == [:observations, :phase, :step, :task]
+  end
+
+  defp checkpoint_keys?(_checkpoint), do: false
+
+  defp validate_checkpoint_state(state) do
+    with :ok <- validate_phase(state.phase),
+         :ok <- validate_step(state.step),
+         true <- is_list(state.observations) do
+      :ok
+    else
+      _ -> {:error, :invalid_checkpoint}
+    end
+  end
+
+  defp validate_step(step) when is_integer(step) and step >= 1, do: :ok
+  defp validate_step(_step), do: {:error, :invalid_checkpoint}
+
+  defp validate_phase(:awaiting_model), do: :ok
+
+  defp validate_phase({:awaiting_tools, pending}) when is_map(pending) do
+    if Enum.all?(pending, fn {_id, count} -> is_integer(count) and count >= 1 end),
+      do: :ok,
+      else: {:error, :invalid_checkpoint}
+  end
+
+  defp validate_phase({:settling, :request_model}), do: :ok
+  defp validate_phase({:settling, {:stop, _result}}), do: :ok
+  defp validate_phase(_phase), do: {:error, :invalid_checkpoint}
+
   defp settle(state, continuation, outcome) do
     event =
       Event.durable(:step_settled, %{

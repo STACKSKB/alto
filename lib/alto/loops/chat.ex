@@ -37,4 +37,23 @@ defmodule Alto.Loops.Chat do
   def handle_event(%Event{} = event, %__MODULE__{} = state, _spec) do
     Transition.error(state, {:unexpected_event, event.type, state.phase})
   end
+
+  @impl true
+  def dump_checkpoint(%__MODULE__{task: task, phase: phase}, %Spec{})
+      when phase in [:awaiting_model, :complete],
+      do: {:ok, %{task: task, phase: phase}}
+
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
+
+  @impl true
+  def load_checkpoint(checkpoint, %Spec{} = spec) when is_map(checkpoint) do
+    if Map.keys(checkpoint) |> Enum.sort() == [:phase, :task] and
+         checkpoint.phase in [:awaiting_model, :complete] do
+      {:ok, %__MODULE__{task: checkpoint.task, phase: checkpoint.phase, context: spec.context}}
+    else
+      {:error, :invalid_checkpoint}
+    end
+  end
+
+  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
 end

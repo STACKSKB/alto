@@ -12,12 +12,17 @@ defmodule Alto.Effect do
   @enforce_keys [:kind, :data]
   defstruct [:kind, :data]
 
-  @type kind :: :emit | :request_model | :run_tool | :invoke_tool | :spawn_agent
+  @type kind :: :emit | :request_model | :run_tool | :invoke_tool | :spawn_agent | :spawn_agents
   @type t :: %__MODULE__{kind: kind(), data: map()}
 
   @spec emit(Event.t()) :: t()
   def emit(%Event{} = event), do: new(:emit, %{event: event})
 
+  @doc """
+  Request a model step. Optional `:context_message` appends trusted-loop context
+  as a user message before this request, under the run's transcript byte bound.
+  It cannot change roles or grant tool capabilities.
+  """
   @spec request_model(map()) :: t()
   def request_model(request), do: new(:request_model, request)
 
@@ -42,6 +47,10 @@ defmodule Alto.Effect do
 
   @spec spawn_agent(map()) :: t()
   def spawn_agent(request), do: new(:spawn_agent, request)
+
+  @doc "Run a bounded batch of child requests and report ordered subagent outcomes."
+  @spec spawn_agents(map()) :: t()
+  def spawn_agents(request), do: new(:spawn_agents, request)
 
   defp new(kind, data) when is_map(data), do: %__MODULE__{kind: kind, data: data}
 end

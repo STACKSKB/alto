@@ -284,6 +284,38 @@ Old servers ignore the unknown `resume` field and start fresh (receivers
 ignore unknown fields); clients that need resume must check the session
 outlives the attempt via `sessions`.
 
+**`command`** — invoke an optional trusted application hook.
+
+Example request:
+
+```json
+{"v": 1, "type": "command", "id": "c-13", "name": "queue_wakeup", "payload": {"queue": "invoices"}}
+```
+
+Request fields are a required non-empty string `name` and a required JSON
+object payload. The resident application enables hooks by configuring the
+registry with a map from binary names to arity-one functions. The server
+looks up the name in that map; clients cannot provide modules, atoms, or
+executable code. The default registry has no hooks enabled, so an
+unconfigured name answers `error` with code `unknown_command`.
+
+The configured callback receives the decoded payload map and may return a map,
+{:ok, map()}, or {:error, reason}. A successful map is returned as an ok
+reply with the callback map merged into the normal type/id envelope. Callback
+errors use the connection's existing error-code mapping (for example,
+not_found, invalid, and unknown_run remain distinguishable); callback
+exceptions and throws are returned as error (internal) with bounded encoded
+detail. A callback result that is not a map or {:ok, map()} is also an
+internal error.
+
+Hook execution happens after callback lookup has returned from the registry,
+so a hook may synchronously call other registry APIs, including start_run,
+without deadlocking the registry process. Successful replies are encoded
+against the connection max_line_bytes limit; an oversized reply becomes an
+internal error and is never partially emitted. Hook execution itself is
+application-controlled and has no protocol-level timeout, so configured
+callbacks should remain bounded.
+
 **`sessions`** — list resumable sessions.
 
 ```json

@@ -8,6 +8,8 @@ defmodule Alto.Config do
   """
 
   @allowed_options [
+    :runner,
+    :runner_options,
     :loop,
     :provider,
     :provider_options,
@@ -16,11 +18,13 @@ defmodule Alto.Config do
     :tools,
     :model_tools,
     :approval,
+    :checkpoint_version,
     :prompt,
     :system_prompt,
     :project_instructions,
     :max_steps,
     :max_effects,
+    :budget_account,
     :max_model_requests,
     :run_timeout,
     :provider_timeout,

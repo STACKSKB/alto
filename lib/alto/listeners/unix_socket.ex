@@ -44,6 +44,9 @@ defmodule Alto.Listeners.UnixSocket do
 
   @impl true
   def init(opts) do
+    # Supervisor shutdown must run terminate/2 to unlink the socket.
+    Process.flag(:trap_exit, true)
+
     registry = Keyword.fetch!(opts, :registry)
     path = opts |> Keyword.fetch!(:path) |> Path.expand()
     max_line_bytes = Keyword.get(opts, :max_line_bytes, @default_max_line_bytes)
@@ -137,6 +140,9 @@ defmodule Alto.Listeners.UnixSocket do
   end
 
   @impl true
+  def handle_info({:EXIT, acceptor, reason}, %{acceptor: acceptor} = state),
+    do: {:stop, {:acceptor_stopped, reason}, state}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true

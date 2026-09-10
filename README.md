@@ -138,3 +138,36 @@ external side effects in the host application while Alto enforces its own
 execution and resource boundaries.
 
 Alto is distributed under the [MIT License](./LICENSE).
+
+Durable hosts can use [approval continuations](docs/checkpoints.md) to persist
+exact prepared operations, release workers while awaiting decisions, and resume
+under preserved budgets with the existing queue and operation ledger.
+
+Trusted loops can request [bounded subagent batches](docs/subagents.md), sharing
+execution budgets and inherited tool authority while running children concurrently.
+Hosts can opt into durable isolated Git workspaces and immutable patch capture.
+`Alto.Workspaces.prepare_apply/3` captures a portable approval manifest, and
+`apply/2` checks the saved resource revision, patch hash, repository and affected
+files before integrating into the source working tree. The index stays unchanged.
+Disjoint patches can be reviewed together and applied independently; overlapping
+edits invalidate the saved approval. Applied patches remain available for review
+until explicitly discarded. Named agent profiles, approval and integration
+selection, and communication policy remain host concerns.
+
+Preparation is read-only. Application serializes callers sharing the same workspace
+manager; it does not exclude unrelated editors or Git processes. Errors before
+dispatch are known refusals. Failures after Git starts, including incomplete durable
+recording, return `{:unknown, reason}` and retain the resource for review without
+automatic replay. An interrupted application is not an atomic multi-file rollback.
+The Git integration manifest is bounded to 256 affected regular files, 128 MiB of
+existing affected content and 32 KB of serialized metadata; captured patches are
+bounded to 1 MB. Symlink paths and repository filters remain unsupported.
+
+### Replaceable execution hosts
+
+The default `Alto.Runner.Serial` and the optional `Alto.Runner.Stepped` compose
+shared execution components. Select a host with `runner:` in `Alto.Config` or
+run options. Handles are opaque and results use `Alto.Runner.Result`; registry
+and TUI integrations consume completion notifications instead of inspecting
+Tasks. Stepped can also wait for a one-use admission ticket before each effect.
+See [runners and migration](docs/runners.md) for contracts and examples.

@@ -1,6 +1,6 @@
 defmodule Alto.FrontEnd.Registry do
   @moduledoc """
-  The resident-side hub between the serial host and front-end transports.
+  The resident-side hub between the execution host and front-end transports.
 
   The registry owns run lifetimes started through it, assigns provisional
   per-run durable sequence numbers (the protocol contract: the session store will assign
@@ -35,15 +35,13 @@ defmodule Alto.FrontEnd.Registry do
 
   alias Alto.Approval.Request, as: ApprovalRequest
   alias Alto.Event
-  alias Alto.Runner.Serial
+  alias Alto.Runner
 
-  @enforce_keys [:id, :handle, :task, :task_pid, :monitor]
+  @enforce_keys [:id, :handle, :completion_ref]
   defstruct [
     :id,
     :handle,
-    :task,
-    :task_pid,
-    :monitor,
+    :completion_ref,
     :session_id,
     :task_preview,
     :config_name,
@@ -53,7 +51,6 @@ defmodule Alto.FrontEnd.Registry do
     head_seq: 0,
     status: :running,
     result: nil,
-    task_result: nil,
     pending: %{}
   ]
 
@@ -101,6 +98,11 @@ defmodule Alto.FrontEnd.Registry do
       without an explicit per-call budget (default 1 MiB minus envelope
       reserve); transports pass their own `max_line_bytes`-derived budget
       per call so claims never outgrow the connection;
+    * :commands — optional map of non-empty binary names to trusted arity-one
+      callbacks. A callback receives a map and returns a map, {:ok, map()},
+      or {:error, reason}; it runs in a supervised task;
+    * `:command_timeout` — callback deadline in milliseconds (default 30,000).
+      A timeout reports an unknown outcome; callers must reconcile before retrying;
     * `:disconnect_after_overflow` — `:never` (default) or `:immediately`;
     * `:sessions` — served-run session persistence (, explicit opt-in,
       default `false` keeps served runs unpersisted): `true` persists each
@@ -117,7 +119,9 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   @doc """
-  Start a run from a trusted, resolver-resolvable configuration name.
+  Start a run from a trusted, resolver-resolvable configuration name. An
+  optional owner pid may be supplied in opts; it receives the runner's
+  cancellation guarantee, while the registry process is the default owner.
 
   Options: `:resume` — continue a persisted session id instead of starting
   fresh. The session must exist with a resumable (completed-run) transcript
@@ -129,6 +133,45 @@ defmodule Alto.FrontEnd.Registry do
           {:ok, String.t()} | {:error, term()}
   def start_run(server \\ __MODULE__, config_name, task, opts \\ []) do
     GenServer.call(server, {:start_run, config_name, task, opts})
+  end
+
+  @doc "Return the authoritative stored runner return for a run."
+  @spec run_result(GenServer.server(), String.t()) ::
+          :running | {:ok, Runner.outcome()} | {:error, :unknown_run}
+  def run_result(server \\ __MODULE__, run_id) do
+    GenServer.call(server, {:run_result, run_id})
+  end
+
+  @doc "Invoke a trusted, configured application command callback."
+  @spec command(GenServer.server(), binary(), map()) :: {:ok, map()} | {:error, term()}
+  def command(server \\ __MODULE__, name, payload)
+
+  def command(server, name, payload) when is_binary(name) and is_map(payload) do
+    with {:ok, callback, timeout} <- GenServer.call(server, {:command_callback, name}) do
+      case Alto.Runner.Execution.Support.supervised_call(
+             fn -> invoke_command(callback, payload) end,
+             timeout,
+             nil
+           ) do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, {:command_outcome_unknown, reason}}
+      end
+    end
+  end
+
+  def command(_server, _name, _payload), do: {:error, :invalid_command}
+
+  defp invoke_command(callback, payload) do
+    case callback.(payload) do
+      result when is_map(result) -> {:ok, result}
+      {:ok, result} when is_map(result) -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :invalid_command_result}
+    end
+  rescue
+    exception -> {:error, {:command_exception, Exception.message(exception)}}
+  catch
+    kind, reason -> {:error, {:command_throw, kind, reason}}
   end
 
   @doc "The session id owning a run, or `nil` when the run is unpersisted."
@@ -288,6 +331,8 @@ defmodule Alto.FrontEnd.Registry do
       max_retained_events: Keyword.get(opts, :max_retained_events, @default_max_retained_events),
       max_finished_runs: Keyword.get(opts, :max_finished_runs, @default_max_finished_runs),
       max_claim_bytes: Keyword.get(opts, :max_claim_bytes, @default_max_claim_bytes),
+      commands: Keyword.get(opts, :commands, %{}),
+      command_timeout: Keyword.get(opts, :command_timeout, 30_000),
       sessions_enabled: sessions_enabled,
       session_dir: session_dir,
       disconnect_after_overflow:
@@ -299,7 +344,9 @@ defmodule Alto.FrontEnd.Registry do
 
     with :ok <- validate_capacity_options(state),
          :ok <- validate_max_finished_runs(state.max_finished_runs),
-         :ok <- validate_max_claim_bytes(state.max_claim_bytes) do
+         :ok <- validate_max_claim_bytes(state.max_claim_bytes),
+         :ok <- validate_commands(state.commands),
+         :ok <- validate_command_timeout(state.command_timeout) do
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
@@ -323,6 +370,24 @@ defmodule Alto.FrontEnd.Registry do
 
   defp validate_max_claim_bytes(n) when is_integer(n) and n >= 0, do: :ok
   defp validate_max_claim_bytes(n), do: {:error, {:invalid_max_claim_bytes, n}}
+
+  defp validate_owner(owner) when is_pid(owner), do: :ok
+  defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
+
+  defp validate_command_timeout(value) when is_integer(value) and value > 0, do: :ok
+  defp validate_command_timeout(value), do: {:error, {:invalid_option, :command_timeout, value}}
+
+  defp validate_commands(commands) when is_map(commands) do
+    if Enum.all?(commands, fn {name, callback} ->
+         is_binary(name) and name != "" and is_function(callback, 1)
+       end) do
+      :ok
+    else
+      {:error, {:invalid_option, :commands, commands}}
+    end
+  end
+
+  defp validate_commands(commands), do: {:error, {:invalid_option, :commands, commands}}
 
   defp validate_max_finished_runs(n) when is_integer(n) and n >= 0, do: :ok
   defp validate_max_finished_runs(n), do: {:error, {:invalid_max_finished_runs, n}}
@@ -356,10 +421,13 @@ defmodule Alto.FrontEnd.Registry do
 
   @impl true
   def handle_call({:start_run, config_name, task, opts}, _from, state) do
-    with :ok <- active_capacity(state),
+    owner = Keyword.get(opts, :owner, self())
+
+    with :ok <- validate_owner(owner),
+         :ok <- active_capacity(state),
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
-         {:ok, session_opts} <- resume_opts(Keyword.get(opts, :resume), state) do
+         {:ok, session_opts} <- execution_session_opts(opts, state) do
       run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
       me = self()
 
@@ -368,21 +436,19 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
-        |> Keyword.put(:owner, me)
+        |> Keyword.put(:owner, owner)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
         |> Keyword.put(:event_sink, fn event ->
           GenServer.call(me, {:ingest_run_event, run_id, event})
         end)
         |> with_session(session_opts, state)
 
-      case Serial.start(task, run_opts) do
-        {:ok, handle} ->
+      case start_observed(task, run_opts) do
+        {:ok, handle, completion_ref} ->
           run = %__MODULE__{
             id: run_id,
             handle: handle,
-            task: handle.task,
-            task_pid: handle.task.pid,
-            monitor: Process.monitor(handle.task.pid),
+            completion_ref: completion_ref,
             session_id: Keyword.get(session_opts, :session),
             task_preview: String.slice(task, 0, 120),
             config_name: config_name,
@@ -398,6 +464,21 @@ defmodule Alto.FrontEnd.Registry do
     else
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:run_result, run_id}, _from, state) do
+    case Map.fetch(state.runs, run_id) do
+      {:ok, %{status: :running}} -> {:reply, :running, state}
+      {:ok, %{result: result}} -> {:reply, {:ok, result}, state}
+      :error -> {:reply, {:error, :unknown_run}, state}
+    end
+  end
+
+  def handle_call({:command_callback, name}, _from, state) do
+    case Map.fetch(state.commands, name) do
+      {:ok, callback} -> {:reply, {:ok, callback, state.command_timeout}, state}
+      :error -> {:reply, {:error, :unknown_command}, state}
     end
   end
 
@@ -504,7 +585,7 @@ defmodule Alto.FrontEnd.Registry do
   def handle_call({:cancel, run_id, reason}, _from, state) do
     case Map.fetch(state.runs, run_id) do
       {:ok, run} ->
-        Serial.cancel(run.handle, reason)
+        Runner.cancel(run.handle, reason)
         {:reply, :ok, state}
 
       :error ->
@@ -621,29 +702,16 @@ defmodule Alto.FrontEnd.Registry do
     end
   end
 
-  # The supervised run task delivers its reply before its DOWN arrives; keep
-  # it so finish_run never races the mailbox.
-  def handle_info({ref, reply}, state) when is_reference(ref) do
-    case find_run(state, task_ref: ref) do
-      nil -> {:noreply, state}
-      run -> {:noreply, %{state | runs: Map.put(state.runs, run.id, %{run | task_result: reply})}}
+  def handle_info({:alto_runner_result, ref, outcome}, state) do
+    case find_run(state, completion_ref: ref) do
+      %{status: :running} = run -> {:noreply, finish_run(state, run, outcome)}
+      _ -> {:noreply, state}
     end
   end
 
   @impl true
-  def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
-    state =
-      cond do
-        run = find_run(state, monitor: monitor) ->
-          finish_run(state, run, reason)
-
-        true ->
-          state
-          |> maybe_drop_subscriber(monitor)
-          |> maybe_clear_pending(monitor)
-      end
-
-    {:noreply, state}
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    {:noreply, state |> maybe_drop_subscriber(monitor) |> maybe_clear_pending(monitor)}
   end
 
   defp maybe_drop_subscriber(state, monitor) do
@@ -670,6 +738,7 @@ defmodule Alto.FrontEnd.Registry do
     {status, result} =
       case run.status do
         :running -> {"running", nil}
+        {:done, {:error, :approval_suspended}, _, _} -> {"suspended", run.result}
         {:done, :ok, _, _} -> {"completed", run.result}
         {:done, {:cancelled, _}, _, _} -> {"cancelled", run.result}
         _ -> {"failed", run.result}
@@ -910,17 +979,20 @@ defmodule Alto.FrontEnd.Registry do
 
   ## Run completion
 
-  defp finish_run(state, run, down_reason) do
-    # The supervised task's reply message carries its raw return value, which
-    # is the serial run result; a crash sends no reply, only the DOWN.
-    run_result =
-      case run.task_result do
-        {:ok, %Alto.Runner.Serial.Result{}} = result -> result
-        {:error, _reason, %Alto.Runner.Serial.Result{}} = result -> result
-        {:exit, reason} -> {:error, {:run_process_failed, reason}, nil}
-        _other -> await_run(run, down_reason)
-      end
+  defp start_observed(task, opts) do
+    with {:ok, handle} <- Runner.start(task, opts) do
+      case Runner.subscribe(handle, self()) do
+        {:ok, ref} ->
+          {:ok, handle, ref}
 
+        {:error, reason} ->
+          Runner.terminate(handle, :subscription_failed)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp finish_run(state, run, run_result) do
     {outcome, output, model_requests} =
       case run_result do
         {:ok, result} ->
@@ -933,7 +1005,7 @@ defmodule Alto.FrontEnd.Registry do
           {{:error, reason}, nil, model_requests_of(result)}
 
         _other ->
-          {{:error, {:run_process_failed, down_reason}}, nil, 0}
+          {{:error, :invalid_runner_result}, nil, 0}
       end
 
     # Cleanup: a finished run owns no pending approvals. Waiters that
@@ -980,16 +1052,8 @@ defmodule Alto.FrontEnd.Registry do
     %{state | runs: runs, finished_order: order, subscribers: subscribers}
   end
 
-  defp await_run(run, down_reason) do
-    case Serial.await(run.handle, 0) do
-      {:ok, result} -> result
-      {:error, _reason, result} -> result
-      _other -> {:error, {:run_process_failed, down_reason}, nil}
-    end
-  end
-
   defp model_requests_of(nil), do: 0
-  defp model_requests_of(%Alto.Runner.Serial.Result{} = result), do: result.model_requests
+  defp model_requests_of(%Alto.Runner.Result{} = result), do: result.model_requests
 
   ## Approvals
 
@@ -1039,12 +1103,8 @@ defmodule Alto.FrontEnd.Registry do
 
   ## Lookups and small helpers
 
-  defp find_run(state, monitor: monitor) do
-    Enum.find_value(state.runs, fn {_id, run} -> if run.monitor == monitor, do: run end)
-  end
-
-  defp find_run(state, task_ref: ref) do
-    Enum.find_value(state.runs, fn {_id, run} -> if run.task.ref == ref, do: run end)
+  defp find_run(state, completion_ref: ref) do
+    Enum.find_value(state.runs, fn {_id, run} -> if run.completion_ref == ref, do: run end)
   end
 
   defp find_subscriber(state, monitor: monitor) do
@@ -1091,6 +1151,23 @@ defmodule Alto.FrontEnd.Registry do
   # Reads the resumable transcript up front so an unrestorable session
   # fails the start instead of running with invented history. Mirrors
   # Alto.resume/3 over the registry's session directory.
+  # Checkpoint packets are accepted only through this trusted Elixir API.
+  # Socket start_run never accepts continuation state or approval decisions.
+  defp execution_session_opts(opts, state) do
+    case Keyword.get(opts, :checkpoint) do
+      nil ->
+        resume_opts(Keyword.get(opts, :resume), state)
+
+      {%{"session_id" => session} = packet, decision} when decision in [:approve, :deny] ->
+        with :ok <- Alto.Session.validate_id(session) do
+          {:ok, [session: session, checkpoint: {packet, decision}]}
+        end
+
+      _ ->
+        {:error, :invalid_checkpoint}
+    end
+  end
+
   defp resume_opts(nil, state) do
     if state.sessions_enabled do
       {:ok, [session: Alto.Session.generate_id()]}

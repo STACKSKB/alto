@@ -4,16 +4,16 @@ defmodule Alto.TUI.Backend do
 
   Configure `tui_backends: [custom: {MyBackend, options}]`. The adapter accepts
   the same trusted run options (including event sink and approval policy),
-  returns a serial-compatible supervised task handle, and supports cancellation.
-  Its task must return an `Alto.Runner.Serial.Result` outcome. It owns resume
+  returns an opaque Alto runner handle, and supports cancellation.
+  The runner must return an `Alto.Runner.Result` outcome. It owns resume
   semantics using the supplied catalog task. A configured adapter is trusted
   code and must enforce the supplied approval policy and runtime limits.
   The built-in Codex integration retains its account-specific UI.
   """
 
   @callback start(map(), String.t(), keyword(), keyword()) ::
-              {:ok, Alto.Runner.Serial.Handle.t()} | {:error, term()}
-  @callback cancel(Alto.Runner.Serial.Handle.t(), term(), keyword()) :: term()
+              {:ok, Alto.Runner.Handle.t()} | {:error, term()}
+  @callback cancel(Alto.Runner.Handle.t(), term(), keyword()) :: term()
 
   def configured(options), do: Keyword.get(options, :tui_backends, [])
 

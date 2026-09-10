@@ -162,18 +162,30 @@ defmodule Alto.ConsumerTest do
   end
 
   test "a stale worker cannot ack a newer owner's claim", %{queue: q, ledger: l} do
-    # Short lease, slow handler: the ack lands after expiry.
+    # Advance the queue clock inside the handler: its ack lands after expiry,
+    # while the next owner's lease is independent of host scheduling latency.
     dir = Path.join(System.tmp_dir!(), "alto-stale-#{System.unique_integer([:positive])}")
     tag = System.unique_integer([:positive])
     q2 = :"stale_queue_#{tag}"
-    {:ok, _} = Queue.start_link(id: "sq#{tag}", dir: dir, name: q2, lease_ms: 30)
+    clock = :atomics.new(1, [])
+    :atomics.put(clock, 1, 1_000)
+
+    {:ok, _} =
+      Queue.start_link(
+        id: "sq#{tag}",
+        dir: dir,
+        name: q2,
+        lease_ms: 30,
+        clock: fn -> :atomics.get(clock, 1) end
+      )
+
     on_exit(fn -> File.rm_rf!(dir) end)
 
     {:ok, _} = Queue.admit(q2, "src:del-1", %{})
     test_pid = self()
 
     slow = fn _payload, _ctx ->
-      Process.sleep(150)
+      :atomics.add(clock, 1, 150)
       send(test_pid, :slow_ran)
       :done
     end
@@ -231,6 +243,63 @@ defmodule Alto.ConsumerTest do
     assert {:error, :duplicate} = Queue.admit(q, "src:del-1", %{})
     assert :idle = Consumer.poll(c)
     refute_received :handled
+  end
+
+  test "checkpointed work is acknowledged after restart without handler replay", %{dir: dir} do
+    tag = System.unique_integer([:positive])
+    qname = String.to_atom("checkpoint_queue_#{tag}")
+    lname = String.to_atom("checkpoint_ledger_#{tag}")
+    qdir = Path.join(dir, "cq")
+    ldir = Path.join(dir, "cl")
+    {:ok, _} = Queue.start_link(id: "cq#{tag}", dir: qdir, name: qname)
+    {:ok, _} = OperationLog.start_link(id: "cl#{tag}", dir: ldir, name: lname)
+    {:ok, _} = Queue.put(qname, "job", %{value: 1})
+    {:ok, record} = Queue.lookup(qname, "job")
+    parent = self()
+
+    c =
+      start_consumer!(
+        queue: qname,
+        ledger: lname,
+        handler: fn _, _ ->
+          send(parent, :checkpoint_ran)
+          {:checkpoint, %{"state" => 1}}
+        end
+      )
+
+    assert {:handled, [:checkpointed]} = Consumer.poll(c)
+    assert_received :checkpoint_ran
+    GenServer.stop(c)
+    GenServer.stop(qname)
+    GenServer.stop(lname)
+    {:ok, _} = Queue.start_link(id: "cq#{tag}", dir: qdir, name: qname)
+    {:ok, _} = OperationLog.start_link(id: "cl#{tag}", dir: ldir, name: lname)
+
+    {:ok, _} =
+      Queue.restore(
+        qname,
+        "business-generation:" <> record.generation_id,
+        record.generation_id,
+        %{value: 1},
+        recovery_revision: 3
+      )
+
+    {:ok, _} = Queue.put(qname, "independent", %{value: 2})
+
+    c2 =
+      start_consumer!(
+        queue: qname,
+        ledger: lname,
+        handler: fn payload, _ ->
+          send(parent, {:ran, payload})
+          :done
+        end
+      )
+
+    assert {:handled, [:acked_checkpoint]} = Consumer.poll(c2)
+    assert {:handled, [{:decided, :completed}]} = Consumer.poll(c2)
+    assert_received {:ran, %{value: 2}}
+    refute_received :ran
   end
 
   test "a business key gets a fresh ledger identity after completion", %{queue: q, ledger: l} do
@@ -377,7 +446,7 @@ defmodule Alto.ConsumerTest do
   end
 
   test "authoritative run verdict survives bounded event eviction" do
-    result = %Alto.Runner.Serial.Result{
+    result = %Alto.Runner.Result{
       output: nil,
       loop_state: nil,
       messages: [],
@@ -394,7 +463,7 @@ defmodule Alto.ConsumerTest do
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do
-    result = %Alto.Runner.Serial.Result{
+    result = %Alto.Runner.Result{
       output: nil,
       loop_state: nil,
       messages: [],

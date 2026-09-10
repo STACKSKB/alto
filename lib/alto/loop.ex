@@ -14,6 +14,16 @@ defmodule Alto.Loop do
   @callback init(task :: term(), Spec.t()) :: Transition.t()
   @callback handle_event(Event.t(), state :: term(), Spec.t()) :: Transition.t()
 
+  @doc "Optionally encode loop state at a durable checkpoint boundary."
+  @callback dump_checkpoint(state :: term(), Spec.t()) ::
+              {:ok, term()} | {:error, term()}
+
+  @doc "Optionally restore loop state from a previously encoded checkpoint."
+  @callback load_checkpoint(checkpoint :: term(), Spec.t()) ::
+              {:ok, state :: term()} | {:error, term()}
+
+  @optional_callbacks dump_checkpoint: 2, load_checkpoint: 2
+
   @doc "Run a hook after a lifecycle event has occurred and before continuation effects execute."
   @spec after_event(Spec.t(), atom(), Alto.Hook.handler()) :: Spec.t()
   def after_event(%Spec{} = spec, event_type, hook) when is_atom(event_type) do
