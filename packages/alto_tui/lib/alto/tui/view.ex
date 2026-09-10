@@ -24,7 +24,7 @@ defmodule Alto.TUI.View do
     |> add(transcript_widget(state), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
-    |> maybe_add(details_widget(state), layout.details)
+    |> add_details(state, layout.details, :pane)
     |> add(status_widget(state, width), layout.status)
     |> add_context_drawer(state, layout)
     |> add_overlay(state.overlay, layout.root)
@@ -420,7 +420,7 @@ defmodule Alto.TUI.View do
   defp transcript_scroll(state),
     do: min(state.transcript_scroll, transcript_bottom_scroll(state))
 
-  defp details_widget(state, presentation \\ :pane) do
+  defp details_widget(state, presentation) do
     {title, text} = details_content(state, presentation)
 
     title =
@@ -437,10 +437,62 @@ defmodule Alto.TUI.View do
     }
   end
 
+  defp add_details(widgets, _state, nil, _presentation), do: widgets
+
+  defp add_details(widgets, %{pending_approvals: []} = state, rect, presentation),
+    do: add(widgets, details_widget(state, presentation), rect)
+
+  defp add_details(widgets, state, rect, presentation) do
+    details = details_widget(state, presentation)
+    controls = approval_controls(rect)
+
+    content = %Rect{
+      x: rect.x + 1,
+      y: rect.y + 1,
+      width: max(rect.width - 2, 0),
+      height: max(rect.height - 2 - length(controls), 0)
+    }
+
+    widgets =
+      widgets
+      |> add(%{details | text: "", scroll: {0, 0}}, rect)
+      |> add(%{details | block: nil}, content)
+
+    Enum.reduce(controls, widgets, fn control, acc ->
+      button = %Paragraph{
+        text: control.label,
+        style: style(fg: :black, bg: @accent, modifiers: [:bold])
+      }
+
+      add(acc, button, control.rect)
+    end)
+  end
+
+  # Rendering and hit testing share these rectangles; only a visible button
+  # can submit a decision. The actions remain fixed while the details scroll.
+  defp approval_controls(rect) when rect.height >= 4 and rect.width >= 16 do
+    [{:approve, "[ Approve F8 ]"}, {:deny, "[ Deny F9 ]"}]
+    |> Enum.with_index()
+    |> Enum.map(fn {{decision, label}, index} ->
+      %{
+        decision: decision,
+        label: label,
+        rect: %Rect{
+          x: rect.x + 1,
+          y: rect.y + rect.height - 3 + index,
+          width: String.length(label),
+          height: 1
+        }
+      }
+    end)
+  end
+
+  defp approval_controls(_rect), do: []
+
   defp add_context_drawer(widgets, state, layout) do
     case context_overlay_rect(state, layout.root.width, layout.root.height) do
       nil -> widgets
-      rect -> widgets ++ [{%Clear{}, rect}, {details_widget(state, :drawer), rect}]
+      rect -> widgets |> add(%Clear{}, rect) |> add_details(state, rect, :drawer)
     end
   end
 
@@ -823,15 +875,10 @@ defmodule Alto.TUI.View do
   defp details_target(%{details_drawer_open?: true}, rect, _x, y) when y == rect.y,
     do: :details_close
 
-  defp details_target(%{pending_approvals: [_ | _]}, rect, _x, y) do
-    relative = y - rect.y
-    bottom = rect.height - 2
-
-    cond do
-      relative == bottom -> {:approval, :approve}
-      relative == bottom + 1 -> {:approval, :deny}
-      true -> :details
-    end
+  defp details_target(%{pending_approvals: [_ | _]}, rect, x, y) do
+    Enum.find_value(approval_controls(rect), :details, fn control ->
+      if PaneLayout.contains?(control.rect, x, y), do: {:approval, control.decision}
+    end)
   end
 
   defp details_target(_state, _rect, _x, _y), do: :details
@@ -840,8 +887,7 @@ defmodule Alto.TUI.View do
     text =
       "#{request.tool}\n\n" <>
         "Arguments\n#{inspect(request.arguments, pretty: true, limit: 30)}\n\n" <>
-        "Prepared\n#{inspect(request.details, pretty: true, limit: 30)}\n\n" <>
-        "F8 / click bottom: approve\nF9 / click last row: deny"
+        "Prepared\n#{inspect(request.details, pretty: true, limit: 30)}"
 
     {" approval required ", text}
   end

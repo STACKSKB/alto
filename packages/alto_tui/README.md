@@ -23,8 +23,9 @@ stays in the composer until the queued message has started. Queued messages are
 kept in memory for the lifetime of the TUI.
 
 The status bar shows whether Alto is waiting for the model, executing a tool, or
-waiting for approval. Use F8 to approve or F9 to deny a pending request. Esc stops
-the selected task's run and preserves your draft. If a popup or the compact details
+waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,
+to answer a pending request. Esc stops the selected task's run and preserves your
+draft. If a popup or the compact details
 drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
 failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
