@@ -213,6 +213,53 @@ defmodule Alto.Session do
     end
   end
 
+  @doc "Read a bounded page of durable event records using a stable event ordinal.
+
+  `cursor` is the number of durable event ordinals already consumed; ordinals
+  are independent of live registry sequence numbers. `complete` means the
+  current page reached the session log's current end, not that the run
+  completed. `last_cursor` and `high_watermark` remain available on complete
+  pages so a client can poll for events appended later."
+  @spec events(session_id(), keyword()) ::
+          {:ok,
+           %{
+             events: [record()],
+             next_cursor: non_neg_integer() | nil,
+             last_cursor: non_neg_integer(),
+             high_watermark: non_neg_integer(),
+             complete: boolean(),
+             gap: boolean()
+           }}
+          | {:error, term()}
+  def events(id, opts \\ []) do
+    with :ok <- validate_id(id),
+         {:ok, cursor} <- event_cursor(Keyword.get(opts, :cursor, 0)),
+         {:ok, limit} <- event_limit(Keyword.get(opts, :limit, 100)),
+         {:ok, run_id} <- event_run_id(Keyword.get(opts, :run_id)) do
+      path = log_path(dir(opts), id)
+
+      case bounded_read(path, @max_log_bytes) do
+        {:ok, contents} ->
+          case decode_lines(contents, id) do
+            {:ok, records} ->
+              page_events(records, cursor, limit, run_id)
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        {:error, :enoent} ->
+          {:error, {:session_not_found, id}}
+
+        {:error, {:too_large, size, max}} ->
+          {:error, {:session_too_large, id, size, max}}
+
+        {:error, reason} ->
+          {:error, {:session_read_failed, reason}}
+      end
+    end
+  end
+
   @doc "Fetch the latest resumable transcript for a session."
   @spec transcript(session_id(), keyword()) ::
           {:ok,
@@ -346,6 +393,18 @@ defmodule Alto.Session do
       "at_ms" => event.at_ms,
       "data" => encode_term(event.data)
     }
+    |> with_wire_data(event.data)
+  end
+
+  # Keep an additive, self-contained projection for replay in a fresh VM.
+  # Exact terms can contain atoms from application modules not loaded there;
+  # replay must never loosen binary_to_term's safe decoding to recreate them.
+  defp with_wire_data(record, data) do
+    projection = Alto.Protocol.encode_term(data)
+    _encoded = JSON.encode!(projection)
+    Map.put(record, "wire_data", projection)
+  rescue
+    _error -> record
   end
 
   @doc false
@@ -396,6 +455,48 @@ defmodule Alto.Session do
   end
 
   ## Internals
+
+  defp event_cursor(cursor) when is_integer(cursor) and cursor >= 0, do: {:ok, cursor}
+  defp event_cursor(cursor), do: {:error, {:invalid_event_cursor, cursor}}
+
+  defp event_limit(limit) when is_integer(limit) and limit in 1..@max_list_entries,
+    do: {:ok, limit}
+
+  defp event_limit(limit), do: {:error, {:invalid_event_limit, limit}}
+
+  defp event_run_id(nil), do: {:ok, nil}
+  defp event_run_id(run_id) when is_binary(run_id) and run_id != "", do: {:ok, run_id}
+  defp event_run_id(run_id), do: {:error, {:invalid_event_run_id, run_id}}
+
+  defp page_events(records, cursor, limit, run_id) do
+    candidates =
+      records
+      |> Enum.filter(&(&1["type"] == "event"))
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {record, ordinal} ->
+        ordinal > cursor and (is_nil(run_id) or record["run_id"] == run_id)
+      end)
+
+    events =
+      candidates
+      |> Enum.take(limit)
+      |> Enum.map(fn {record, ordinal} -> Map.put(record, "ordinal", ordinal) end)
+
+    last_ordinal = List.last(events) && Map.fetch!(List.last(events), "ordinal")
+    complete = length(candidates) <= limit
+    total = Enum.count(records, &(&1["type"] == "event"))
+    last_cursor = last_ordinal || cursor
+
+    {:ok,
+     %{
+       events: events,
+       next_cursor: if(complete, do: nil, else: last_ordinal),
+       last_cursor: last_cursor,
+       high_watermark: total,
+       complete: complete,
+       gap: cursor > total
+     }}
+  end
 
   defp maybe_term(nil), do: nil
   defp maybe_term(term), do: encode_term(term)

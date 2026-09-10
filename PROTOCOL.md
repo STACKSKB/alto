@@ -296,6 +296,57 @@ the server's session directory — independent of the live-run replay
 window, so evicted and restarted-away runs stay discoverable. An
 unreadable store answers `error` (`internal`).
 
+**`runs`** — list resident run summaries for reconnecting clients.
+
+```json
+{"v": 1, "type": "runs", "id": "c-11"}
+```
+
+The reply is `ok` with `{"runs": [...]}`. Each summary contains `id`,
+`session_id`, `title`, `config`, `status` (`running`, `completed`,
+`cancelled`, or `failed`), `started_at_ms`, `pending_approvals`, and normalized
+`usage` (available after completion).
+Summaries are bounded by the resident finished-run window and ordered newest first.
+
+**`session_transcript`** — read the latest persisted conversation
+messages, including prompts after a resident restart.
+
+```json
+{"v": 1, "type": "session_transcript", "id": "c-12",
+ "session_id": "sess-abc123"}
+```
+
+The reply includes the latest 100 `messages`, `revision`, and `truncated`.
+A session without a resumable transcript returns `error` with code `not_found`.
+A reply that exceeds the connection envelope limit returns an explicit error.
+
+**`session_events`** — read a bounded page of durable events from a session,
+including after the resident registry has restarted.
+
+```json
+{"v": 1, "type": "session_events", "id": "c-10",
+ "session_id": "sess-1", "limit": 100, "cursor": 0, "run_id": "run-41"}
+```
+
+`cursor` is a stable durable event ordinal, independent of the live registry
+`seq` values used by `attach`. The `ok` reply contains `events`, each with an
+`ordinal`, plus `next_cursor`, `last_cursor`, `high_watermark`, `complete`,
+and `gap`. `complete` means the page reached the current end of the session
+log; it does not mean the run completed. Clients can retain `last_cursor` and
+poll again later when the high watermark advances. `gap` is true when the
+requested cursor is beyond the stored high watermark (for example, after a
+state rollback). Corrupt logs and logs over 16 MB or 20,000 records fail
+closed. Event `data` uses the same readable, lossy JSON term encoding as live
+notifications; new session records retain this JSON projection alongside the
+exact source terms, so replay works without recreating atoms in a fresh VM.
+Older records without a projection use the existing safe term decoder; an
+unavailable atom or unsupported payload produces an explicit replay error.
+
+Replay describes successfully persisted records. Session logging is
+best-effort, and this cursor cannot prove that every execution event was
+written. Persistence degradation remains part of the run result; `gap: false`
+is not a claim that an execution had no persistence failures.
+
 **`cancel`** — cooperative cancellation via the existing handle API.
 
 ```json

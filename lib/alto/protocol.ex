@@ -27,6 +27,10 @@ defmodule Alto.Protocol do
           {:attach, String.t(), String.t() | nil, pos_integer(), [atom()]}
           | {:start_run, String.t(), String.t(), String.t(), String.t() | nil}
           | {:sessions, String.t()}
+          | {:runs, String.t()}
+          | {:session_transcript, String.t(), String.t()}
+          | {:session_events, String.t(), String.t(), pos_integer(), non_neg_integer(),
+             String.t() | nil}
           | {:cancel, String.t(), String.t(), String.t() | nil}
           | {:approval_response, String.t(), String.t(), :approve | {:deny, String.t()}}
           | {:queue_claim, String.t(), pos_integer(), String.t() | nil}
@@ -319,8 +323,30 @@ defmodule Alto.Protocol do
     end
   end
 
+  defp decode_object("runs", id, _object), do: {:ok, {:runs, id}}
+
   defp decode_object("sessions", id, _object) do
     {:ok, {:sessions, id}}
+  end
+
+  defp decode_object("session_transcript", id, object) do
+    with {:ok, session_id} <- required_binary(object, "session_id"),
+         :ok <-
+           if(Map.has_key?(object, "limit") or Map.has_key?(object, "cursor"),
+             do: {:error, :unsupported},
+             else: :ok
+           ) do
+      {:ok, {:session_transcript, id, session_id}}
+    end
+  end
+
+  defp decode_object("session_events", id, object) do
+    with {:ok, session_id} <- required_binary(object, "session_id"),
+         {:ok, limit} <- optional_ops_limit(object, "limit"),
+         {:ok, cursor} <- optional_non_negative_integer(object, "cursor"),
+         {:ok, run_id} <- optional_binary(object, "run_id") do
+      {:ok, {:session_events, id, session_id, limit, cursor, run_id}}
+    end
   end
 
   defp decode_object("cancel", id, object) do

@@ -80,19 +80,67 @@ defmodule Alto.Runner.Serial do
     end
   end
 
-  @doc "Start a serial run and return a handle without waiting for it."
+  @doc "Start a serial run and return a handle without waiting for it.
+
+  When `owner: pid` is supplied, Alto starts a small guardian which monitors
+  that process and cooperatively cancels the run if the owner exits. The
+  default has no owner guardian, preserving standalone run lifetime semantics.
+  "
   @spec start(term(), keyword()) :: {:ok, Handle.t()} | {:error, term()}
   def start(task, opts \\ []) do
-    cancel_ref = make_ref()
+    case validate_owner(Keyword.get(opts, :owner)) do
+      :ok ->
+        cancel_ref = make_ref()
+        run_opts = opts |> Keyword.delete(:owner) |> Keyword.put(:cancel_ref, cancel_ref)
 
-    case Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
-           run(task, Keyword.put(opts, :cancel_ref, cancel_ref))
-         end) do
-      %Task{} = task_process ->
-        {:ok, %Handle{task: task_process, cancel_ref: cancel_ref}}
+        case Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
+               run(task, run_opts)
+             end) do
+          %Task{} = task_process ->
+            handle = %Handle{task: task_process, cancel_ref: cancel_ref}
+            maybe_start_owner_guardian(handle, Keyword.get(opts, :owner))
+            {:ok, handle}
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   catch
     :exit, reason -> {:error, {:run_start_failed, reason}}
+  end
+
+  defp validate_owner(nil), do: :ok
+  defp validate_owner(owner) when is_pid(owner), do: :ok
+  defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
+
+  defp maybe_start_owner_guardian(_handle, nil), do: :ok
+
+  defp maybe_start_owner_guardian(
+         %Handle{task: %Task{pid: task_pid}, cancel_ref: cancel_ref},
+         owner
+       )
+       when is_pid(owner) do
+    spawn(fn -> owner_guardian(owner, task_pid, cancel_ref) end)
+    :ok
+  end
+
+  defp owner_guardian(owner, task_pid, cancel_ref) do
+    owner_ref = Process.monitor(owner)
+    task_ref = Process.monitor(task_pid)
+
+    receive do
+      {:DOWN, ^task_ref, :process, ^task_pid, _reason} ->
+        Process.demonitor(owner_ref, [:flush])
+        :ok
+
+      {:DOWN, ^owner_ref, :process, ^owner, reason} ->
+        if Process.alive?(task_pid),
+          do: send(task_pid, {:alto_cancel, cancel_ref, {:owner_down, reason}})
+
+        receive do
+          {:DOWN, ^task_ref, :process, ^task_pid, _reason} -> :ok
+        end
+    end
   end
 
   @doc "Wait for a previously started run without cancelling it on timeout."

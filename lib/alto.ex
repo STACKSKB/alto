@@ -81,7 +81,13 @@ defmodule Alto do
     end
   end
 
-  @doc "Start a cancellable serial run without waiting for it."
+  @doc """
+  Start a cancellable serial run without waiting for it.
+
+  Pass `owner: pid` to cooperatively cancel when that resident owner exits.
+  Omitting it preserves standalone lifetime semantics. The process that calls
+  `start/2` owns the returned Task and is the process that may call `await/2`.
+  """
   @spec start(term(), keyword()) :: {:ok, Serial.Handle.t()} | {:error, term()}
   def start(task, opts \\ []), do: Serial.start(task, opts)
 

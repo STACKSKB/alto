@@ -545,6 +545,31 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:DOWN, ^monitor, :process, ^provider_pid, _reason}
   end
 
+  test "owner exit cooperatively cancels an in-flight run" do
+    parent = self()
+
+    owner =
+      spawn(fn ->
+        assert {:ok, handle} =
+                 Alto.start("owned wait",
+                   provider: {BlockingProvider, test_pid: parent},
+                   owner: self()
+                 )
+
+        send(parent, {:owned_handle, handle})
+        receive do: (:keep_alive -> :ok)
+      end)
+
+    assert_receive {:owned_handle, handle}
+    task_monitor = Process.monitor(handle.task.pid)
+    assert_receive {:provider_started, provider_pid}
+    provider_monitor = Process.monitor(provider_pid)
+    Process.exit(owner, :kill)
+
+    assert_receive {:DOWN, ^task_monitor, :process, _pid, _reason}, 2_000
+    assert_receive {:DOWN, ^provider_monitor, :process, ^provider_pid, _reason}
+  end
+
   test "cancellation interrupts an in-flight tool task" do
     parent = self()
 

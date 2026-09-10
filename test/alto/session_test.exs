@@ -59,6 +59,49 @@ defmodule Alto.SessionTest do
     assert {:ok, ^data} = Session.decode_term(stored["data"])
   end
 
+  test "events paginates by stable ordinal and filters mixed runs", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+
+    for {run_id, type} <- [{"run-a", :one}, {"run-b", :two}, {"run-a", :three}] do
+      assert :ok =
+               Session.append(id, Session.event_record(run_id, Event.durable(type, %{})),
+                 session_dir: dir
+               )
+    end
+
+    assert {:ok, %{events: [first], next_cursor: 1, complete: false, gap: false}} =
+             Session.events(id, session_dir: dir, limit: 1)
+
+    assert first["ordinal"] == 1
+
+    assert {:ok, %{events: [second], next_cursor: nil, complete: true}} =
+             Session.events(id, session_dir: dir, cursor: 1, limit: 10, run_id: "run-a")
+
+    assert second["run_id"] == "run-a"
+    assert second["ordinal"] == 3
+  end
+
+  test "events rejects invalid cursors and corrupt trailing records", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+
+    assert {:error, {:invalid_event_cursor, -1}} = Session.events(id, cursor: -1)
+    assert {:error, {:invalid_event_limit, 0}} = Session.events(id, limit: 0)
+    assert {:error, {:invalid_event_run_id, 12}} = Session.events(id, run_id: 12)
+
+    path = Path.join(dir, id <> ".jsonl")
+    assert :ok = File.write(path, "{\"v\":1,\"type\":\"event\"}\n{partial", [:append])
+    assert {:error, {:session_corrupt, ^id, 3}} = Session.events(id, session_dir: dir)
+  end
+
+  test "a cursor beyond stored history reports a gap instead of silently accepting it", %{
+    dir: dir
+  } do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+
+    assert {:ok, %{gap: true, high_watermark: 0}} =
+             Session.events(id, session_dir: dir, cursor: 9)
+  end
+
   test "completed and compaction records persist outcomes", %{dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 

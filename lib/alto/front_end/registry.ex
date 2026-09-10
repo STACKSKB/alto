@@ -45,6 +45,10 @@ defmodule Alto.FrontEnd.Registry do
     :task_pid,
     :monitor,
     :session_id,
+    :task_preview,
+    :config_name,
+    :started_at_ms,
+    :start_order,
     events_rev: [],
     head_seq: 0,
     status: :running,
@@ -142,6 +146,29 @@ defmodule Alto.FrontEnd.Registry do
   def sessions(server \\ __MODULE__) do
     GenServer.call(server, :sessions)
   end
+
+  @doc "Read a bounded page of durable session events, independent of live runs."
+  @spec session_events(
+          GenServer.server(),
+          String.t(),
+          pos_integer(),
+          non_neg_integer(),
+          String.t() | nil
+        ) ::
+          {:ok, map()} | {:error, term()}
+  def session_events(server \\ __MODULE__, session_id, limit, cursor, run_id \\ nil) do
+    GenServer.call(server, {:session_events, session_id, limit, cursor, run_id})
+  end
+
+  @doc "Read the latest 100 messages from a persisted session transcript."
+  @spec session_transcript(GenServer.server(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def session_transcript(server \\ __MODULE__, session_id) do
+    GenServer.call(server, {:session_transcript, session_id})
+  end
+
+  @doc "Bounded resident run summaries for reconnecting front ends."
+  def runs(server \\ __MODULE__), do: GenServer.call(server, :runs)
 
   @doc "Live run ids, for the `hello` message."
   @spec run_ids(GenServer.server()) :: [String.t()]
@@ -341,6 +368,7 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
+        |> Keyword.put(:owner, me)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
         |> Keyword.put(:event_sink, fn event ->
           GenServer.call(me, {:ingest_run_event, run_id, event})
@@ -355,7 +383,11 @@ defmodule Alto.FrontEnd.Registry do
             task: handle.task,
             task_pid: handle.task.pid,
             monitor: Process.monitor(handle.task.pid),
-            session_id: Keyword.get(session_opts, :session)
+            session_id: Keyword.get(session_opts, :session),
+            task_preview: String.slice(task, 0, 120),
+            config_name: config_name,
+            started_at_ms: System.system_time(:millisecond),
+            start_order: System.unique_integer([:positive, :monotonic])
           }
 
           {:reply, {:ok, run_id}, %{state | runs: Map.put(state.runs, run_id, run)}}
@@ -378,6 +410,44 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_call(:sessions, _from, state) do
     {:reply, Alto.Session.list(session_dir: state.session_dir), state}
+  end
+
+  def handle_call({:session_events, session_id, limit, cursor, run_id}, _from, state) do
+    {:reply,
+     Alto.Session.events(session_id,
+       session_dir: state.session_dir,
+       limit: limit,
+       cursor: cursor,
+       run_id: run_id
+     ), state}
+  end
+
+  def handle_call({:session_transcript, session_id}, _from, state) do
+    reply =
+      with {:ok, transcript} <-
+             Alto.Session.transcript(session_id, session_dir: state.session_dir),
+           messages = Enum.take(transcript.messages, -100) do
+        {:ok,
+         %{
+           messages: messages,
+           revision: transcript.revision,
+           truncated: length(messages) < length(transcript.messages)
+         }}
+      else
+        {:error, reason} -> {:error, reason}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call(:runs, _from, state) do
+    summaries =
+      state.runs
+      |> Map.values()
+      |> Enum.sort_by(& &1.start_order, :desc)
+      |> Enum.map(&run_summary/1)
+
+    {:reply, {:ok, summaries}, state}
   end
 
   def handle_call(:run_ids, _from, state) do
@@ -594,6 +664,34 @@ defmodule Alto.FrontEnd.Registry do
   def terminate(_reason, state) do
     Enum.each(state.subscribers, fn {pid, _subscriber} -> send(pid, :alto_close) end)
     :ok
+  end
+
+  defp run_summary(run) do
+    {status, result} =
+      case run.status do
+        :running -> {"running", nil}
+        {:done, :ok, _, _} -> {"completed", run.result}
+        {:done, {:cancelled, _}, _, _} -> {"cancelled", run.result}
+        _ -> {"failed", run.result}
+      end
+
+    usage =
+      case result do
+        {:ok, value} -> value.usage
+        {:error, _, value} when not is_nil(value) -> value.usage
+        _ -> %{}
+      end
+
+    %{
+      id: run.id,
+      session_id: run.session_id,
+      title: run.task_preview,
+      config: run.config_name,
+      status: status,
+      pending_approvals: map_size(run.pending),
+      usage: usage,
+      started_at_ms: run.started_at_ms
+    }
   end
 
   ## Run events

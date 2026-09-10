@@ -52,6 +52,7 @@ defmodule Alto.Queue do
   alias Alto.DurableLog
 
   @version 1
+  @scheduled_version 2
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @default_max_records 10_000
   @default_max_completed 10_000
@@ -72,7 +73,8 @@ defmodule Alto.Queue do
     :max_key_bytes,
     :max_log_bytes,
     :lease_ms,
-    :legacy_admission
+    :legacy_admission,
+    :clock
   ]
   defstruct [
     :id,
@@ -86,6 +88,7 @@ defmodule Alto.Queue do
     :max_log_bytes,
     :lease_ms,
     :legacy_admission,
+    :clock,
     records: %{},
     fifo: [],
     next_id: 1,
@@ -107,7 +110,8 @@ defmodule Alto.Queue do
       status: :pending,
       claim_id: nil,
       claimed_by: nil,
-      lease_until_ms: nil
+      lease_until_ms: nil,
+      not_before_ms: nil
     ]
   end
 
@@ -127,6 +131,7 @@ defmodule Alto.Queue do
     * `:max_key_bytes` — dedup key length bound (default 256);
     * `:max_log_bytes` — maximum replay file size (default 64 MiB);
     * `:lease_ms` — claim lease (default 300,000);
+    * `:clock` — injectable zero-arity millisecond clock (default system time);
     * `:legacy_admission` — treatment for old log records that do not say
       whether they came from `put/3` or `admit/3`. The safe default is
       `:reject`; pass `:business` or `:delivery` only after classifying that
@@ -146,9 +151,11 @@ defmodule Alto.Queue do
     max_completed = Keyword.get(opts, :max_completed, @default_max_completed)
 
     legacy_admission = Keyword.get(opts, :legacy_admission, :reject)
+    clock = Keyword.get(opts, :clock, fn -> System.system_time(:millisecond) end)
 
     with :ok <- validate_max_completed(max_completed),
-         :ok <- validate_legacy_admission(legacy_admission) do
+         :ok <- validate_legacy_admission(legacy_admission),
+         :ok <- validate_clock(clock) do
       state = %__MODULE__{
         id: id,
         dir: dir,
@@ -159,7 +166,8 @@ defmodule Alto.Queue do
         max_key_bytes: Keyword.get(opts, :max_key_bytes, @default_max_key_bytes),
         max_log_bytes: Keyword.get(opts, :max_log_bytes, @default_max_log_bytes),
         lease_ms: Keyword.get(opts, :lease_ms, @default_lease_ms),
-        legacy_admission: legacy_admission
+        legacy_admission: legacy_admission,
+        clock: clock
       }
 
       case Alto.Storage.acquire(state.path <> ".lock",
@@ -208,6 +216,9 @@ defmodule Alto.Queue do
   defp validate_legacy_admission(mode),
     do: {:error, {:invalid_legacy_admission, mode}}
 
+  defp validate_clock(clock) when is_function(clock, 0), do: :ok
+  defp validate_clock(clock), do: {:error, {:invalid_clock, clock}}
+
   @doc "Storage directory for queue logs, honouring an explicit override."
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []) do
@@ -232,11 +243,14 @@ defmodule Alto.Queue do
   This is the *business-key* path: last-arrival-wins by arrival order. It
   never consults the completed-delivery window — use `admit/3` for source
   delivery identity.
+  Pass `delay_ms: non_neg_integer()` for relative scheduling or
+  `not_before_ms: non_neg_integer()` for an absolute due time. The default
+  is immediate eligibility.
   """
-  @spec put(GenServer.server(), binary(), term()) ::
+  @spec put(GenServer.server(), binary(), term(), keyword()) ::
           {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
-  def put(server \\ __MODULE__, key, payload) do
-    GenServer.call(server, {:put, key, payload})
+  def put(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
+    GenServer.call(server, {:put, key, payload, opts})
   end
 
   @doc """
@@ -248,11 +262,13 @@ defmodule Alto.Queue do
   answers `{:error, {:key_claimed, key}}`; a key blanked within the
   `max_completed` window answers `{:error, :duplicate}` without creating a
   second work item. Only a fresh key creates a record.
+  Pass the same optional scheduling keys as `put/4`; duplicate admissions
+  never modify the original schedule.
   """
-  @spec admit(GenServer.server(), binary(), term()) ::
+  @spec admit(GenServer.server(), binary(), term(), keyword()) ::
           {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
-  def admit(server \\ __MODULE__, key, payload) do
-    GenServer.call(server, {:admit, key, payload})
+  def admit(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
+    GenServer.call(server, {:admit, key, payload, opts})
   end
 
   @doc """
@@ -296,10 +312,16 @@ defmodule Alto.Queue do
     GenServer.call(server, {:ack, claim_id})
   end
 
-  @doc "Return a claim to pending (the client failed before finishing)."
-  @spec release(GenServer.server(), String.t()) :: :ok | {:error, :not_found}
-  def release(server \\ __MODULE__, claim_id) do
-    GenServer.call(server, {:release, claim_id})
+  @doc "Return a claim to pending (the client failed before finishing). Pass `delay_ms:` to delay it."
+  @spec release(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  def release(server \\ __MODULE__, claim_id, opts \\ []) when is_list(opts) do
+    GenServer.call(server, {:release, claim_id, opts})
+  end
+
+  @doc "Return a claim to pending after an optional delay, fenced by claim id."
+  def reschedule(server \\ __MODULE__, claim_id, delay_ms)
+      when is_integer(delay_ms) and delay_ms >= 0 do
+    release(server, claim_id, delay_ms: delay_ms)
   end
 
   @doc "Blank every record for `key` (record cancellation)."
@@ -472,7 +494,8 @@ defmodule Alto.Queue do
 
   defp apply_logged(state, line, number) do
     case JSON.decode(line) do
-      {:ok, %{"v" => @version, "type" => type} = entry} when is_binary(type) ->
+      {:ok, %{"v" => version, "type" => type} = entry}
+      when version in [@version, @scheduled_version] and is_binary(type) ->
         log_apply(state, type, entry)
 
       _other ->
@@ -483,7 +506,7 @@ defmodule Alto.Queue do
   # Replay applies logged transitions only; live ops only log transitions
   # they performed, so replaying reproduces the same state.
   defp log_apply(state, "put", entry) do
-    with {:ok, key, payload, revision, mode, generation_id, operation_key} <-
+    with {:ok, key, payload, revision, mode, generation_id, operation_key, not_before_ms} <-
            decode_put(entry, state) do
       {:ok,
        upsert(
@@ -495,7 +518,8 @@ defmodule Alto.Queue do
          entry["at_ms"],
          mode,
          generation_id,
-         operation_key
+         operation_key,
+         not_before_ms
        )}
     end
   end
@@ -519,9 +543,15 @@ defmodule Alto.Queue do
   end
 
   defp log_apply(state, "release", entry) do
-    case Map.fetch(state.records, entry["id"]) do
-      {:ok, record} -> {:ok, put_record(state, unclaim(record))}
-      :error -> {:ok, state}
+    with :ok <- validate_due(entry["not_before_ms"]) do
+      case Map.fetch(state.records, entry["id"]) do
+        {:ok, record} ->
+          {:ok,
+           put_record(state, %Record{unclaim(record) | not_before_ms: entry["not_before_ms"]})}
+
+        :error ->
+          {:ok, state}
+      end
     end
   end
 
@@ -547,8 +577,11 @@ defmodule Alto.Queue do
       generation_id =
         Map.get_lazy(entry, "generation_id", fn -> legacy_generation_id(state.id, id) end)
 
-      if is_binary(generation_id) and generation_id != "" do
-        {:ok, key, payload, revision, mode, generation_id, entry["operation_key"]}
+      not_before_ms = entry["not_before_ms"]
+
+      if is_binary(generation_id) and generation_id != "" and
+           (is_nil(not_before_ms) or (is_integer(not_before_ms) and not_before_ms >= 0)) do
+        {:ok, key, payload, revision, mode, generation_id, entry["operation_key"], not_before_ms}
       else
         {:error, :bad_entry}
       end
@@ -566,11 +599,17 @@ defmodule Alto.Queue do
          at_ms,
          mode,
          generation_id,
-         operation_key
+         operation_key,
+         not_before_ms
        ) do
     case pending_by_key(state, key) do
       {:ok, record} ->
-        put_record(state, %Record{record | payload: payload, revision: revision})
+        put_record(state, %Record{
+          record
+          | payload: payload,
+            revision: revision,
+            not_before_ms: not_before_ms
+        })
 
       :error ->
         record = %Record{
@@ -581,6 +620,7 @@ defmodule Alto.Queue do
           at_ms: at_ms,
           generation_id: generation_id,
           operation_key: operation_key,
+          not_before_ms: not_before_ms,
           mode: mode_from_log(mode)
         }
 
@@ -589,7 +629,7 @@ defmodule Alto.Queue do
   end
 
   @impl true
-  def handle_call({:put, key, payload}, _from, state) do
+  def handle_call({:put, key, payload, opts}, _from, state) do
     # Expiry is lazy, but a put on the claimed key is itself a lookup. Keep
     # the original state as the failure rollback point: reclaiming in memory
     # must not make a failed append look durable.
@@ -597,7 +637,8 @@ defmodule Alto.Queue do
 
     with :ok <- validate_key(key, reclaimed_state),
          :ok <- validate_payload(payload, reclaimed_state),
-         {:ok, record, log, next_id} <- build_put(reclaimed_state, key, payload),
+         {:ok, not_before_ms} <- schedule_at(reclaimed_state, opts),
+         {:ok, record, log, next_id} <- build_put(reclaimed_state, key, payload, not_before_ms),
          :ok <- append(reclaimed_state, log) do
       {:reply, {:ok, %{id: record.id, revision: record.revision, status: record.status}},
        %{put_record(reclaimed_state, record) | next_id: next_id}}
@@ -607,13 +648,14 @@ defmodule Alto.Queue do
   end
 
   @impl true
-  def handle_call({:admit, key, payload}, _from, state) do
+  def handle_call({:admit, key, payload, opts}, _from, state) do
     reclaimed_state = reclaim_expired(state)
 
     with :ok <- validate_key(key, reclaimed_state),
          :ok <- validate_payload(payload, reclaimed_state),
+         {:ok, not_before_ms} <- schedule_at(reclaimed_state, opts),
          :ok <- check_not_completed(reclaimed_state, key),
-         {:ok, record, log, next_id} <- build_admit(reclaimed_state, key, payload),
+         {:ok, record, log, next_id} <- build_admit(reclaimed_state, key, payload, not_before_ms),
          :ok <- append(reclaimed_state, log) do
       {:reply, {:ok, %{id: record.id, revision: record.revision, status: record.status}},
        %{put_record(reclaimed_state, record) | next_id: next_id}}
@@ -658,7 +700,7 @@ defmodule Alto.Queue do
         {:reply, {:error, :not_found}, state}
 
       {:ok, record} ->
-        now = System.system_time(:millisecond)
+        now = now(state)
 
         if is_integer(record.lease_until_ms) and record.lease_until_ms <= now do
           {:reply, {:error, :lease_expired}, reclaim_expired(state)}
@@ -681,17 +723,36 @@ defmodule Alto.Queue do
     end
   end
 
-  def handle_call({:release, claim_id}, _from, state) do
+  def handle_call({:release, claim_id, opts}, _from, state) do
     case find_by_claim(state, claim_id) do
       :error ->
         {:reply, {:error, :not_found}, state}
 
       {:ok, record} ->
-        log = %{"v" => @version, "type" => "release", "id" => record.id}
+        if is_integer(record.lease_until_ms) and record.lease_until_ms <= now(state) do
+          {:reply, {:error, :lease_expired}, reclaim_expired(state)}
+        else
+          case schedule_at(state, opts) do
+            {:ok, not_before_ms} ->
+              log = %{
+                "v" => schedule_version(not_before_ms),
+                "type" => "release",
+                "id" => record.id,
+                "not_before_ms" => not_before_ms
+              }
 
-        case append(state, log) do
-          :ok -> {:reply, :ok, put_record(state, unclaim(record))}
-          {:error, reason} -> {:reply, {:error, {:queue_write_failed, reason}}, state}
+              case append(state, log) do
+                :ok ->
+                  {:reply, :ok,
+                   put_record(state, %Record{unclaim(record) | not_before_ms: not_before_ms})}
+
+                {:error, reason} ->
+                  {:reply, {:error, {:queue_write_failed, reason}}, state}
+              end
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
         end
     end
   end
@@ -808,7 +869,7 @@ defmodule Alto.Queue do
     pending =
       state.fifo
       |> Enum.map(&Map.fetch!(state.records, &1))
-      |> Enum.filter(&(&1.status == :pending))
+      |> Enum.filter(&(&1.status == :pending and due?(&1, now(state))))
       |> Enum.take(count)
 
     case select_fitting(pending, budget) do
@@ -819,7 +880,7 @@ defmodule Alto.Queue do
         {:reply, {:ok, []}, state}
 
       {:ok, fitting} ->
-        now = System.system_time(:millisecond)
+        now = now(state)
 
         {claimed, logs} =
           Enum.map_reduce(fitting, [], fn record, logs ->
@@ -932,7 +993,7 @@ defmodule Alto.Queue do
   # Expired leases revert lazily: no timer, no scheduler — a claim dies
   # when someone looks, and the log keeps the last transition per record.
   defp reclaim_expired(state) do
-    now = System.system_time(:millisecond)
+    now = now(state)
 
     Enum.reduce(state.records, state, fn
       {_id, %Record{status: :claimed, lease_until_ms: until} = record}, state
@@ -946,6 +1007,33 @@ defmodule Alto.Queue do
 
   defp unclaim(record),
     do: %Record{record | status: :pending, claim_id: nil, claimed_by: nil, lease_until_ms: nil}
+
+  defp now(state), do: state.clock.()
+
+  defp due?(%Record{not_before_ms: nil}, _now), do: true
+  defp due?(%Record{not_before_ms: at}, now) when is_integer(at), do: at <= now
+
+  defp schedule_at(state, opts) do
+    if Keyword.keyword?(opts) and
+         length(Keyword.keys(opts)) == MapSet.size(MapSet.new(Keyword.keys(opts))) and
+         Enum.all?(Keyword.keys(opts), &(&1 in [:not_before_ms, :delay_ms])) do
+      case {Keyword.get(opts, :not_before_ms), Keyword.get(opts, :delay_ms)} do
+        {nil, nil} -> {:ok, nil}
+        {at, nil} when is_integer(at) and at >= 0 -> {:ok, at}
+        {nil, delay} when is_integer(delay) and delay >= 0 -> {:ok, now(state) + delay}
+        _ -> {:error, {:invalid_schedule, opts}}
+      end
+    else
+      {:error, {:invalid_schedule, opts}}
+    end
+  end
+
+  defp validate_due(nil), do: :ok
+  defp validate_due(at) when is_integer(at) and at >= 0, do: :ok
+  defp validate_due(_at), do: {:error, :bad_entry}
+
+  defp schedule_version(nil), do: @version
+  defp schedule_version(_due), do: @scheduled_version
 
   defp validate_key(key, state) when is_binary(key) do
     if byte_size(key) in 1..state.max_key_bytes, do: :ok, else: {:error, {:invalid_key, key}}
@@ -969,7 +1057,7 @@ defmodule Alto.Queue do
     if map_size(state.records) < state.max_records, do: :ok, else: {:error, :queue_full}
   end
 
-  defp build_put(state, key, payload) do
+  defp build_put(state, key, payload, not_before_ms) do
     cond do
       # Someone is actively handling this key; the flow retries or the
       # caller treats it as a conflict. Never shadow a claimed record.
@@ -992,14 +1080,27 @@ defmodule Alto.Queue do
                 payload,
                 revision,
                 "business",
-                record.generation_id
+                record.generation_id,
+                nil,
+                not_before_ms
               )
 
-            {:ok, %Record{record | payload: payload, revision: revision}, log, state.next_id}
+            {:ok,
+             %Record{record | payload: payload, revision: revision, not_before_ms: not_before_ms},
+             log, state.next_id}
 
           :error ->
             with :ok <- validate_room(state) do
-              record = new_record(state, key, payload, :business)
+              record =
+                new_record(
+                  state,
+                  key,
+                  payload,
+                  :business,
+                  generate_generation_id(),
+                  nil,
+                  not_before_ms
+                )
 
               log =
                 put_log(
@@ -1009,7 +1110,9 @@ defmodule Alto.Queue do
                   payload,
                   record.revision,
                   "business",
-                  record.generation_id
+                  record.generation_id,
+                  nil,
+                  not_before_ms
                 )
 
               {:ok, record, log, state.next_id + 1}
@@ -1034,7 +1137,7 @@ defmodule Alto.Queue do
 
   # Insert-only: a pending delivery key is a redelivery of bytes already
   # accepted — first wins, no update, no revision bump.
-  defp build_admit(state, key, payload) do
+  defp build_admit(state, key, payload, not_before_ms) do
     cond do
       claimed_by_key?(state, key) ->
         {:error, {:key_claimed, key}}
@@ -1044,7 +1147,16 @@ defmodule Alto.Queue do
 
       true ->
         with :ok <- validate_room(state) do
-          record = new_record(state, key, payload, :delivery)
+          record =
+            new_record(
+              state,
+              key,
+              payload,
+              :delivery,
+              generate_generation_id(),
+              nil,
+              not_before_ms
+            )
 
           log =
             put_log(
@@ -1054,7 +1166,9 @@ defmodule Alto.Queue do
               payload,
               record.revision,
               "delivery",
-              record.generation_id
+              record.generation_id,
+              nil,
+              not_before_ms
             )
 
           {:ok, record, log, state.next_id + 1}
@@ -1092,19 +1206,16 @@ defmodule Alto.Queue do
     end
   end
 
-  defp new_record(state, key, payload, mode) do
-    new_record(state, key, payload, mode, generate_generation_id(), nil)
-  end
-
-  defp new_record(state, key, payload, mode, generation_id, operation_key) do
+  defp new_record(state, key, payload, mode, generation_id, operation_key, not_before_ms \\ nil) do
     %Record{
       id: "rec-" <> Integer.to_string(state.next_id),
       key: key,
       payload: payload,
       revision: 1,
-      at_ms: System.system_time(:millisecond),
+      at_ms: now(state),
       generation_id: generation_id,
       operation_key: operation_key,
+      not_before_ms: not_before_ms,
       mode: mode
     }
   end
@@ -1117,10 +1228,11 @@ defmodule Alto.Queue do
          revision,
          mode,
          generation_id,
-         operation_key \\ nil
+         operation_key,
+         not_before_ms \\ nil
        ) do
     %{
-      "v" => @version,
+      "v" => schedule_version(not_before_ms),
       "type" => "put",
       "id" => record_id,
       "key" => key,
@@ -1129,6 +1241,7 @@ defmodule Alto.Queue do
       "mode" => mode,
       "generation_id" => generation_id,
       "operation_key" => operation_key,
+      "not_before_ms" => not_before_ms,
       "at_ms" => System.system_time(:millisecond),
       "queue" => id
     }
@@ -1168,6 +1281,7 @@ defmodule Alto.Queue do
       claim_id: record.claim_id,
       claimed_by: record.claimed_by,
       lease_until_ms: record.lease_until_ms,
+      not_before_ms: record.not_before_ms,
       generation_id: record.generation_id,
       operation_key: record.operation_key,
       admission: record.mode

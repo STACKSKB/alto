@@ -71,6 +71,15 @@ defmodule Alto.Listeners.Connection do
             error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
         end
 
+      {:ok, {:runs, id}} ->
+        case Registry.runs(registry) do
+          {:ok, runs} ->
+            send_ok(send_line, max_line_bytes, id, %{"runs" => Protocol.encode_term(runs)})
+
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
       {:ok, {:sessions, id}} ->
         case Registry.sessions(registry) do
           {:ok, summaries} ->
@@ -84,6 +93,35 @@ defmodule Alto.Listeners.Connection do
                 error_reply(send_line, max_line_bytes, id, "internal", :sessions_overflow)
             end
 
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
+      {:ok, {:session_transcript, id, session_id}} ->
+        case Registry.session_transcript(registry, session_id) do
+          {:ok, transcript} ->
+            send_ok(send_line, max_line_bytes, id, Protocol.encode_term(transcript))
+
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
+      {:ok, {:session_events, id, session_id, limit, cursor, run_id}} ->
+        with {:ok, page} <-
+               Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
+             {:ok, events} <- session_events_payload(page.events) do
+          payload = %{
+            "session_id" => session_id,
+            "events" => events,
+            "next_cursor" => page.next_cursor,
+            "last_cursor" => page.last_cursor,
+            "high_watermark" => page.high_watermark,
+            "complete" => page.complete,
+            "gap" => page.gap
+          }
+
+          send_ok(send_line, max_line_bytes, id, payload)
+        else
           {:error, reason} ->
             error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
         end
@@ -160,6 +198,32 @@ defmodule Alto.Listeners.Connection do
           "overrides are not accepted in v1"
         )
     end
+  end
+
+  defp session_events_payload(records) do
+    Enum.reduce_while(records, {:ok, []}, fn record, {:ok, acc} ->
+      case session_event_data(record) do
+        {:ok, data} ->
+          event =
+            record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()
+
+          {:cont, {:ok, [event | acc]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:session_event_payload, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, events} -> {:ok, Enum.reverse(events)}
+      error -> error
+    end
+  end
+
+  defp session_event_data(%{"wire_data" => data}), do: {:ok, data}
+
+  defp session_event_data(record) do
+    with {:ok, data} <- Alto.Session.decode_term(record["data"]),
+         do: {:ok, Protocol.encode_term(data)}
   end
 
   # Bounded claims: the byte budget derives from this connection's
@@ -325,6 +389,9 @@ defmodule Alto.Listeners.Connection do
   defp error_code(:ops_overflow), do: "internal"
   defp error_code({:invalid_limit, _}), do: "invalid"
   defp error_code({:invalid_cursor, _}), do: "invalid"
+  defp error_code({:invalid_event_cursor, _}), do: "invalid"
+  defp error_code({:invalid_event_limit, _}), do: "invalid"
+  defp error_code({:invalid_event_run_id, _}), do: "invalid"
   defp error_code({:invalid_filter, _}), do: "invalid"
   # resume failures: unknown or unrestorable sessions are `not_found`
   # with the reason in the detail; unreadable stores are `internal`, and a
@@ -341,8 +408,11 @@ defmodule Alto.Listeners.Connection do
 
   defp send_ok(send_line, max_line_bytes, id, payload) do
     case Protocol.ok(id, payload, max_line_bytes) do
-      {:ok, line} -> send_line.(line)
-      {:error, :overflow} -> :ok
+      {:ok, line} ->
+        send_line.(line)
+
+      {:error, :overflow} ->
+        error_reply(send_line, max_line_bytes, id, "internal", :reply_overflow)
     end
   end
 
