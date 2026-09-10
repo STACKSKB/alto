@@ -27,6 +27,7 @@ defmodule Alto.Runner.Serial do
   alias Alto.Context.Transcript
   alias Alto.Context.Window
   alias Alto.Runner.Budget
+  alias Alto.Subagents.Journal
 
   require Logger
 
@@ -45,8 +46,6 @@ defmodule Alto.Runner.Serial do
   @default_compaction_summary_input_bytes 100_000
   @default_retry_base_backoff_ms 500
   @default_retry_max_backoff_ms 5_000
-  @subagent_await_ms 50
-  @subagent_cancel_grace_ms 5_000
 
   @type provider_spec :: module() | {module(), keyword()}
   @type approval_spec :: module() | {module(), keyword()}
@@ -54,13 +53,16 @@ defmodule Alto.Runner.Serial do
 
   @spec run(term(), keyword()) :: run_result()
   def run(task, opts \\ []) do
-    case Keyword.pop(opts, :workspace_assignment) do
-      {nil, opts} ->
-        run_without_workspace(task, opts)
+    outcome =
+      case Keyword.pop(opts, :workspace_assignment) do
+        {nil, opts} ->
+          run_without_workspace(task, opts)
 
-      {{manager, snapshot, identity}, opts} ->
-        run_in_workspace(task, opts, manager, snapshot, identity)
-    end
+        {{manager, snapshot, identity}, opts} ->
+          run_in_workspace(task, opts, manager, snapshot, identity)
+      end
+
+    retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
   end
 
   defp run_without_workspace(task, opts) do
@@ -424,27 +426,19 @@ defmodule Alto.Runner.Serial do
 
   defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
     with {:ok, specs, concurrency} <- validate_batch(data, run),
-         {:ok, specs} <- prepare_subagent_workspaces(specs, run) do
-      {status, outcomes} =
-        Alto.Runner.SubagentBatch.run(specs, concurrency, &start_subagent(&1, run), fn ->
-          case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
-            {{:cancelled, _} = cancelled, _} -> cancelled
-            {_, {:error, _} = error} -> error
-            _ -> :continue
-          end
-        end)
-
+         {:ok, status, outcomes, journal, run} <- run_children(specs, concurrency, run) do
       {results, run} =
         Enum.map_reduce(outcomes, run, fn {id, outcome}, acc ->
           {subagent_data(id, outcome), merge_child_result(acc, outcome)}
         end)
 
       case status do
-        :ok -> batch_completed(results, run)
+        :ok -> batch_completed(results, run, journal)
         {:cancelled, reason} -> {:cancelled, reason, run}
         {:error, reason} -> {:error, reason, run}
       end
     else
+      {:error, reason, run} -> {:error, reason, run}
       {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
     end
   end
@@ -802,13 +796,157 @@ defmodule Alto.Runner.Serial do
   end
 
   defp run_subagent(spec, run) do
-    with {:ok, [prepared]} <- prepare_subagent_workspaces([spec], run),
-         {:ok, handle} <- start_subagent(prepared, run) do
-      await_subagent(handle, spec, run)
-    else
-      {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
+    case run_children([spec], 1, run) do
+      {:ok, :ok, [{id, outcome}], journal, run} ->
+        data = subagent_data(id, outcome) |> with_journal(journal)
+        type = if data.status == :error, do: :subagent_failed, else: :subagent_completed
+        {:event, Event.durable(type, data), merge_child_result(run, outcome)}
+
+      {:ok, {status, reason}, outcomes, _journal, run} ->
+        run =
+          Enum.reduce(outcomes, run, fn {_, outcome}, acc -> merge_child_result(acc, outcome) end)
+
+        {status, reason, run}
+
+      {:error, reason, run} ->
+        {:error, reason, run}
+
+      {:error, reason} ->
+        {:event, subagent_failed(spec.id, reason), run}
     end
   end
+
+  defp run_children(specs, concurrency, run) do
+    with {:ok, specs} <- prepare_subagent_workspaces(specs, run),
+         {:ok, journal, run} <- open_child_journal(specs, run) do
+      {status, outcomes} =
+        Alto.Runner.SubagentBatch.run(
+          specs,
+          concurrency,
+          &dispatch_subagent(&1, run, journal),
+          fn ->
+            case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+              {{:cancelled, _} = cancelled, _} -> cancelled
+              {_, {:error, _} = error} -> error
+              _ -> :continue
+            end
+          end
+        )
+
+      case finish_child_journal(journal, outcomes) do
+        :ok ->
+          {:ok, status, outcomes, journal, run}
+
+        {:error, reason} ->
+          run =
+            run |> merge_verdict(:unknown) |> add_persistence_error({:subagent_journal, reason})
+
+          if status == :ok do
+            run =
+              Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
+                merge_child_result(acc, outcome)
+              end)
+
+            {:error, {:subagent_journal_failed, reason}, run}
+          else
+            # Cancellation/timeout is still the parent disposition. Preserve
+            # unresolved dispatch evidence instead of claiming a joined result.
+            {:ok, status, outcomes, journal, run}
+          end
+      end
+    end
+  end
+
+  defp open_child_journal(_specs, %{subagent_journal: nil} = run), do: {:ok, nil, run}
+
+  defp open_child_journal(specs, run) do
+    {key, run} = next_operation(run)
+
+    metadata = %{
+      "parent_run_id" => run.tool_context.session_id,
+      "parent_session_id" => run.session,
+      "agent_identity" => Alto.Protocol.encode_term(run.agent_identity)
+    }
+
+    with {:ok, journal} <-
+           Journal.open(
+             run.subagent_journal,
+             "children:" <> key,
+             Enum.map(specs, & &1.id),
+             metadata
+           ) do
+      event =
+        Event.durable(:subagents_started, %{
+          ids: Enum.map(specs, & &1.id),
+          journal: Journal.identity(journal)
+        })
+
+      {:ok, journal, record_event(run, event)}
+    end
+  end
+
+  defp dispatch_subagent(spec, run, nil), do: start_subagent(spec, run)
+
+  defp dispatch_subagent(spec, run, journal) do
+    with {:ok, ticket} <- Journal.dispatch(journal, spec.id) do
+      case start_subagent(Map.put(spec, :subagent_ticket, ticket), run) do
+        {:ok, _} = started ->
+          started
+
+        {:error, reason} = error ->
+          case Journal.complete(ticket, subagent_data(spec.id, error)) do
+            {:ok, _} ->
+              error
+
+            {:error, storage_reason} ->
+              {:error, {:subagent_journal_failed, reason, storage_reason}}
+          end
+      end
+    end
+  end
+
+  defp retain_child_outcome(nil, outcome), do: outcome
+
+  defp retain_child_outcome(%Journal.Ticket{} = ticket, outcome) do
+    data = subagent_data(ticket.id, outcome)
+    result = elem(outcome, tuple_size(outcome) - 1)
+    retained = Map.put(data, :persistence, result.persistence)
+
+    case Journal.complete(ticket, retained) do
+      {:ok, _} ->
+        outcome
+
+      {:error, reason} ->
+        errors = existing_persistence_errors(result) ++ [{:subagent_journal, reason}]
+
+        {:error, {:subagent_journal_failed, reason},
+         %{result | verdict: :unknown, persistence: persistence_status(errors)}}
+    end
+  end
+
+  defp finish_child_journal(nil, _outcomes), do: :ok
+
+  defp finish_child_journal(journal, outcomes) do
+    skipped =
+      Enum.reduce_while(outcomes, :ok, fn
+        {id, {:error, {:not_started, _}} = outcome}, :ok ->
+          case Journal.skip(journal, id, subagent_data(id, outcome)) do
+            {:ok, _} -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+
+        _, :ok ->
+          {:cont, :ok}
+      end)
+
+    with :ok <- skipped, {:ok, _} <- Journal.join(journal), do: :ok
+  end
+
+  defp with_journal(data, nil), do: data
+  defp with_journal(data, journal), do: Map.put(data, :journal, Journal.identity(journal))
+
+  defp configured_subagent_journal(%BoundedSubagents{journal: journal}), do: journal
+  defp configured_subagent_journal(_), do: nil
 
   defp configured_workspaces(%BoundedSubagents{workspaces: manager}), do: manager
   defp configured_workspaces(_), do: nil
@@ -946,6 +1084,8 @@ defmodule Alto.Runner.Serial do
             cwd: run.tool_context.cwd,
             workspace_assignment: Map.get(spec, :workspace_assignment),
             parent_workspaces: run.workspaces,
+            parent_subagent_journal: run.subagent_journal,
+            subagent_ticket: Map.get(spec, :subagent_ticket),
             tool_context_metadata: run.tool_context.metadata,
             budget: run.budget,
             owner: self(),
@@ -997,39 +1137,6 @@ defmodule Alto.Runner.Serial do
     end
   end
 
-  defp await_subagent(handle, spec, run) do
-    case await(handle, @subagent_await_ms) do
-      {:error, :await_timeout} ->
-        case cancellation(run.cancel_ref) do
-          {:cancelled, reason} ->
-            cancel(handle, reason)
-            outcome = shutdown_subagent(handle)
-            {:cancelled, reason, merge_child_result(run, outcome)}
-
-          :continue ->
-            await_subagent(handle, spec, run)
-        end
-
-      outcome ->
-        data = subagent_data(spec.id, outcome)
-        type = if data.status == :error, do: :subagent_failed, else: :subagent_completed
-        {:event, Event.durable(type, data), merge_child_result(run, outcome)}
-    end
-  end
-
-  defp shutdown_subagent(handle) do
-    case await(handle, @subagent_cancel_grace_ms) do
-      {:error, :await_timeout} ->
-        case Task.shutdown(handle.task, :brutal_kill) do
-          {:ok, outcome} -> outcome
-          _ -> {:error, {:run_process_failed, :cancel_timeout}}
-        end
-
-      outcome ->
-        outcome
-    end
-  end
-
   defp subagent_data(id, {:ok, result}),
     do: Map.merge(child_fields(id, result), %{status: :ok})
 
@@ -1076,8 +1183,8 @@ defmodule Alto.Runner.Serial do
 
   defp merge_child_result(run, _outcome), do: run
 
-  defp batch_completed(results, run) do
-    data = %{results: results}
+  defp batch_completed(results, run, journal) do
+    data = with_journal(%{results: results}, journal)
 
     with :ok <- check_native_result(data, run.max_tool_result_bytes),
          {:ok, run} <-
@@ -2237,8 +2344,19 @@ defmodule Alto.Runner.Serial do
     end
   end
 
-  defp persist_session_outcome(%{session: nil}, outcome),
-    do: put_persistence(outcome, :not_requested)
+  defp persist_session_outcome(%{session: nil}, outcome) do
+    # A run without a transcript can still request durable child journals.
+    # Keep their persistence failures visible instead of erasing them here.
+    result = elem(outcome, tuple_size(outcome) - 1)
+
+    status =
+      case existing_persistence_errors(result) do
+        [] -> :not_requested
+        errors -> persistence_status(errors)
+      end
+
+    put_persistence(outcome, status)
+  end
 
   defp persist_session_outcome(run, {:ok, result}) do
     errors =
@@ -2527,6 +2645,9 @@ defmodule Alto.Runner.Serial do
       workspaces:
         Keyword.get(opts, :parent_workspaces) ||
           configured_workspaces(settings.spec.subagents),
+      subagent_journal:
+        Keyword.get(opts, :parent_subagent_journal) ||
+          configured_subagent_journal(settings.spec.subagents),
       resume_snapshot: true,
       tool_specs: [],
       prompt_config: []

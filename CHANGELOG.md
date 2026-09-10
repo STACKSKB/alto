@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional child dispatch journals with exact retained results, revision-fenced
+  join acknowledgement and explicit retirement. Children persist their own results
+  before returning; uncertain dispatches are never automatically repeated.
+
 - Add optional durable shared effect/model-count accounts on the operation
   ledger. Restored budgets reconnect to current counters; tightened limits,
   generation fencing and account closure prevent replenishing old allowances.

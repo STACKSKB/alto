@@ -149,6 +149,86 @@ does not get to alter runtime capabilities through prompt text. A trusted loop
 may also add a bounded `context_message` to a model request; Alto records it as
 a user message and validates it under the transcript limit.
 
+## Durable child dispatch and retained joins
+
+A trusted host can enable an `Alto.OperationLog` journal on its subagent policy:
+
+```elixir
+{:ok, ledger} = Alto.OperationLog.start_link(
+  id: "children", name: MyChildJournal, dir: "/private/alto-state/operations")
+policy = Alto.Subagents.bounded(
+  max_depth: 1, max_children: 4, max_concurrency: 2, journal: MyChildJournal)
+```
+
+The policy covers single-child and batch effects. Descendants inherit the
+journal along with their shared budgets and owned lifetime. A run-scoped
+operation key identifies each batch. Its immutable metadata contains the
+parent run/session and execution-tree identity; child IDs retain input order.
+The parent emits `subagents_started` with a portable `journal` binding. Normal
+single-child and batch completion data also includes that binding.
+
+Alto persists a unique dispatch ticket before starting each child. The child
+itself records its bounded result after session persistence and workspace
+capture, before returning to its parent. This retains the exact native child
+summary (including output, verdict, usage, session/workspace links and
+persistence status), even when the parent cannot collect its reply. The journal
+does not store the child's full transcript or arbitrary loop state. Failure to
+retain a result keeps the dispatch uncertain and prevents a successful join.
+Queued cancellation records known non-dispatch separately; it cannot overwrite
+a dispatched child.
+
+Completed results remain nonterminal retained checkpoints. Ledger pressure
+cannot evict them before a parent acknowledges consumption and explicitly
+retires the batch. A host can use the generic API directly:
+
+```elixir
+alias Alto.Subagents.Journal
+{:ok, batch} = Journal.restore(MyChildJournal, saved_binding)
+{:ok, joined} = Journal.join(batch)
+# joined.results is an ordered list of {child_id, exact_result} pairs.
+# First durably save the consumer's continuation with this binding/results.
+{:ok, acknowledged} = Journal.acknowledge(batch, joined.revision,
+  %{"parent_checkpoint" => durable_checkpoint_id})
+:ok = Journal.retire(batch, acknowledged.revision)
+```
+
+`acknowledge/3` fences the viewed revision and accepts a nonempty JSON receipt;
+the host is responsible for that receipt referring to its durable continuation.
+The runner does not automatically acknowledge a join merely because its loop
+received an event or a best-effort session write succeeded. Acknowledgement
+alone retains the results. Retirement uses a second ledger attempt and makes
+the batch eligible for normal terminal eviction. If retirement is interrupted,
+read its current revision and finish `retire/2`; this performs only ledger
+updates, never child execution. Reusing an evicted key creates a new generation,
+so old parent bindings and dispatch tickets cannot attach to the replacement.
+
+For custom hosts, `open/4` creates/reconnects a batch from ordered unique IDs
+and immutable JSON metadata. `dispatch/2` grants a planned child once;
+`complete/2` retains a portable result under that ticket, and `skip/3` records a
+planned child's known non-dispatch. Exact repeated result publication is
+idempotent; conflicting results are rejected. A lost dispatch reply does not
+permit redispatch. `read/1` exposes planned, dispatched and completed children;
+`join/1` returns results only when every child has a retained outcome. A
+completed result can still describe an uncertain external effect: its verdict
+remains authoritative and joining it grants no retry permission.
+
+Results use the existing exact checkpoint codec, capped at 64,000 bytes per
+native result. Nonportable values fail closed. Decoding loads Alto's fixed runner/usage vocabulary and does not create atoms;
+trusted code defining additional result atoms must already be loaded in the
+restoring VM. Stored data never selects modules to load. The whole batch must also fit the ledger's checkpoint/record/log limits,
+so applications may need a larger `max_recovery_bytes`/`max_record_bytes` for
+multiple large results. Exhaustion can prevent saving a result after execution;
+the dispatch then remains uncertain. Private storage is required because exact
+outputs can contain sensitive data. Prefer a stable registered ledger name in
+policies whose configuration must match across runner checkpoint restoration.
+
+This option provides durable dispatch records and recoverable join data. It
+does not automatically recreate a parent's pending batch continuation, restart
+planned children, independently suspend/resume children, or coordinate active
+time across parked participants. A recorded dispatch without a result remains
+uncertain after restart and is never blindly rerun. These lifecycle mechanisms
+remain separate work; session replay alone cannot supply them.
+
 ## Child sessions
 
 The default `sessions: :shared` policy keeps child audit events in the parent's
