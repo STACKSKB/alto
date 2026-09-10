@@ -255,19 +255,29 @@ defmodule Alto.Listeners.ConnectionQueueTest do
     test "disconnect expiry reclaims; stale handles stay dead", %{queue: queue} do
       {:ok, _} = Alto.Queue.put(queue, "job-1", %{n: 1})
 
-      # Shorten the lease by claiming from a short-lease twin? Instead drive
-      # expiry through the queue API on a dedicated short-lease queue.
+      # Drive expiry explicitly so persistence latency cannot expire the new lease.
       dir =
         Path.join(System.tmp_dir!(), "alto-claim-expiry-#{System.unique_integer([:positive])}")
 
       name = :"expiry-queue-#{System.unique_integer([:positive])}"
-      {:ok, _} = Alto.Queue.start_link(id: "expiry", dir: dir, name: name, lease_ms: 20)
+      clock = :atomics.new(1, [])
+      :atomics.put(clock, 1, 1_000)
+
+      {:ok, _} =
+        Alto.Queue.start_link(
+          id: "expiry",
+          dir: dir,
+          name: name,
+          lease_ms: 20,
+          clock: fn -> :atomics.get(clock, 1) end
+        )
+
       on_exit(fn -> File.rm_rf!(dir) end)
 
       {:ok, _} = Alto.Queue.put(name, "job", %{})
       {:ok, [first]} = Alto.Queue.claim(name, 1, "gone-station")
       # The client disconnects without acking; the lease expires.
-      Process.sleep(60)
+      :atomics.add(clock, 1, 60)
       {:ok, [second]} = Alto.Queue.claim(name, 1, "next-station")
 
       assert second.id == first.id

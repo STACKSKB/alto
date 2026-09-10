@@ -162,18 +162,30 @@ defmodule Alto.ConsumerTest do
   end
 
   test "a stale worker cannot ack a newer owner's claim", %{queue: q, ledger: l} do
-    # Short lease, slow handler: the ack lands after expiry.
+    # Advance the queue clock inside the handler: its ack lands after expiry,
+    # while the next owner's lease is independent of host scheduling latency.
     dir = Path.join(System.tmp_dir!(), "alto-stale-#{System.unique_integer([:positive])}")
     tag = System.unique_integer([:positive])
     q2 = :"stale_queue_#{tag}"
-    {:ok, _} = Queue.start_link(id: "sq#{tag}", dir: dir, name: q2, lease_ms: 30)
+    clock = :atomics.new(1, [])
+    :atomics.put(clock, 1, 1_000)
+
+    {:ok, _} =
+      Queue.start_link(
+        id: "sq#{tag}",
+        dir: dir,
+        name: q2,
+        lease_ms: 30,
+        clock: fn -> :atomics.get(clock, 1) end
+      )
+
     on_exit(fn -> File.rm_rf!(dir) end)
 
     {:ok, _} = Queue.admit(q2, "src:del-1", %{})
     test_pid = self()
 
     slow = fn _payload, _ctx ->
-      Process.sleep(150)
+      :atomics.add(clock, 1, 150)
       send(test_pid, :slow_ran)
       :done
     end
