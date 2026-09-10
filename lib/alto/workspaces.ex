@@ -75,7 +75,7 @@ defmodule Alto.Workspaces do
              true <- Map.take(info.workspace, Map.keys(workspace)) == workspace do
           case info.status do
             "intended" -> create_workspace(manager, workspace)
-            status when status in ["ready", "worked", "frozen"] -> {:ok, info}
+            status when status in ["ready", "worked", "frozen", "applied"] -> {:ok, info}
             _ -> {:error, {:workspace_requires_review, id}}
           end
         else
@@ -157,9 +157,11 @@ defmodule Alto.Workspaces do
     end)
   end
 
-  @doc "Read only a frozen patch whose bounded bytes still match its recorded hash."
+  @doc "Read a retained captured patch whose bounded bytes still match its recorded hash."
   def patch(%__MODULE__{} = manager, id) do
-    with {:ok, %{status: "frozen", workspace: workspace}} <- get(manager, id),
+    with {:ok, %{status: status, workspace: workspace}}
+         when status in ["frozen", "applied", "in_progress", "pending_action"] <-
+           get(manager, id),
          true <- workspace["patch_path"] == Path.join([manager.root, id, "patch.diff"]),
          :ok <- safe_path(workspace["patch_path"]),
          {:ok, patch} <- read_bounded(workspace["patch_path"], 1_000_000),
@@ -170,6 +172,116 @@ defmodule Alto.Workspaces do
       {:ok, _} -> {:error, :workspace_not_frozen}
       {:error, _} = error -> error
     end
+  end
+
+  @doc """
+  Prepare read-only approval data for applying a frozen Git patch to its source.
+
+  The returned portable manifest binds the resource revision, immutable patch,
+  repository identity and affected files. Store it unchanged through approval;
+  `apply/2` verifies it again before dispatch. No target or ledger writes occur.
+  """
+  def prepare_apply(%__MODULE__{} = manager, id, revision) do
+    with {:ok, info} <- applicable(manager, id, revision),
+         {:ok, _patch} <- patch(manager, id),
+         {:ok, integration} <-
+           Alto.Workspaces.GitPatch.prepare(
+             info.workspace["snapshot"]["source"],
+             info.workspace["patch_path"],
+             info.workspace["patch_sha256"],
+             manager.backend_options
+           ),
+         {:ok, ^info} <- applicable(manager, id, revision) do
+      {:ok, %{"workspace_id" => id, "revision" => revision, "integration" => integration}}
+    else
+      {:ok, _} -> {:error, :stale_workspace}
+      error -> error
+    end
+  end
+
+  @doc """
+  Apply exactly a prepared patch, fencing the resource and serializing this
+  manager's integrations into the same target. The Git staging area is unchanged.
+
+  Preconditions fail with `{:error, reason}` before target mutation. Failures
+  after dispatch return `{:unknown, reason}` and retain the interrupted resource
+  for review; never retry them automatically. Success retains an `applied`
+  checkpoint and its patch until explicit discard. These cooperative locks do
+  not prevent unrelated programs from editing the target during application.
+  """
+  def apply(
+        %__MODULE__{} = manager,
+        %{"workspace_id" => id, "revision" => revision, "integration" => integration}
+      )
+      when is_map(integration) and is_map_key(integration, "target") and
+             is_map(:erlang.map_get("target", integration)) do
+    locked(manager, id, fn ->
+      with {:ok, info} <- applicable(manager, id, revision),
+           true <- integration["target"]["root"] == info.workspace["snapshot"]["source"],
+           true <- integration["patch_sha256"] == info.workspace["patch_sha256"] do
+        target_locked(manager, info.workspace["snapshot"]["source"], fn ->
+          with {:ok, _} <- patch(manager, id),
+               :ok <-
+                 Alto.Workspaces.GitPatch.verify(
+                   integration,
+                   info.workspace["patch_path"],
+                   manager.backend_options
+                 ),
+               {:ok, attempt} <- activate(manager, info, "apply") do
+            apply_dispatched(manager, info, attempt, integration)
+          end
+        end)
+      else
+        false -> {:error, :invalid_prepared_patch}
+        error -> error
+      end
+    end)
+  end
+
+  def apply(%__MODULE__{}, _), do: {:error, :invalid_prepared_patch}
+
+  defp applicable(manager, id, revision) do
+    with {:ok, info} <- expect(manager, id, revision, false),
+         true <-
+           manager.backend == Alto.Workspaces.Git and
+             info.workspace["backend"] == Atom.to_string(Alto.Workspaces.Git),
+         true <- info.status == "frozen" do
+      {:ok, info}
+    else
+      false -> {:error, :workspace_not_applicable}
+      error -> error
+    end
+  end
+
+  defp apply_dispatched(manager, info, attempt, integration) do
+    with {:ok, evidence} <-
+           Alto.Workspaces.GitPatch.apply(
+             integration,
+             info.workspace["patch_path"],
+             manager.backend_options
+           ),
+         {:ok, updated} <-
+           checkpoint(
+             manager,
+             info.id,
+             attempt,
+             "applied",
+             Map.put(info.workspace, "application", evidence)
+           ) do
+      {:ok, updated}
+    else
+      {:unknown, _} = uncertain -> uncertain
+      {:error, reason} -> {:unknown, {:workspace_application_checkpoint_failed, reason}}
+    end
+  rescue
+    error -> {:unknown, {:workspace_application_failed, Exception.message(error)}}
+  catch
+    kind, reason -> {:unknown, {:workspace_application_failed, kind, reason}}
+  end
+
+  defp target_locked(manager, target, fun) do
+    path = Path.join([manager.root, "locks", "target-" <> hash(target) <> ".lock"])
+    with :ok <- safe_path(path), do: Storage.with_lock(path, [timeout: 2_000], fun)
   end
 
   @doc "Explicitly discard retained files, including an interrupted attempt, under a revision fence."
@@ -222,7 +334,7 @@ defmodule Alto.Workspaces do
   end
 
   defp activate(manager, %{status: status} = info, action)
-       when status in ["ready", "worked", "frozen"] do
+       when status in ["ready", "worked", "frozen", "applied"] do
     with {:ok, _} <-
            OperationLog.resume_checkpoint(manager.ledger, info.id, info.revision, %{
              "action" => action
@@ -269,11 +381,11 @@ defmodule Alto.Workspaces do
   defp view(%{status: {:decided, :completed, %{"status" => "discarded"}}, recovery: workspace}),
     do: {"discarded", workspace}
 
-  defp view(%{status: {:intended}, checkpoint: checkpoint, recovery: workspace})
-       when is_map(checkpoint),
-       do: {"pending_action", workspace}
+  defp view(%{status: {:intended}, checkpoint: %{"workspace" => workspace}}),
+    do: {"pending_action", workspace}
 
   defp view(%{status: {:intended}, recovery: workspace}), do: {"intended", workspace}
+  defp view(%{checkpoint: %{"workspace" => workspace}}), do: {"in_progress", workspace}
   defp view(%{recovery: workspace}), do: {"in_progress", workspace}
 
   defp locked(manager, id, fun) do

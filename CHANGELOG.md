@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add prepared, revision-fenced application of captured workspace patches with
+  stale-file checks, retained application evidence and conservative interruption
+  recovery. Preparation and application preserve the source Git index.
+
 - Replace ambiguous approval click hints with fixed, labeled Approve and Deny buttons.
 - Show TUI run phases and keep pending approval controls visible while composing.
 - Queue one follow-up per task and allow Esc cancellation without losing drafts.

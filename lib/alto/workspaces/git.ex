@@ -10,6 +10,32 @@ defmodule Alto.Workspaces.Git do
   @default_patch_bytes 1_000_000
   @default_timeout 120_000
 
+  @doc false
+  def command(cwd, args, opts \\ []) do
+    with {:ok, limits} <- limits(opts), do: git(cwd, args, limits)
+  end
+
+  @doc false
+  def integration_target(repo, opts \\ []) do
+    with {:ok, limits} <- limits(opts),
+         {:ok, root} <- repository_root(repo, limits),
+         :ok <- bounded_tree(Path.join(root, ".git"), limits.max_source_bytes, limits.max_files),
+         :ok <- reject_alternates(root),
+         :ok <- reject_source_filters(root, limits),
+         {:ok, head} <- git(root, ["rev-parse", "--verify", "HEAD^{commit}"], limits),
+         {:ok, config} <- git(root, ["config", "--includes", "--null", "--list"], limits),
+         {:ok, stat} <- File.stat(root) do
+      {:ok,
+       %{
+         "root" => root,
+         "head" => String.trim(head),
+         "inode" => stat.inode,
+         "device" => stat.major_device,
+         "config_sha256" => Base.encode16(:crypto.hash(:sha256, config), case: :lower)
+       }}
+    end
+  end
+
   @spec snapshot(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     with {:ok, limits} <- limits(opts),
