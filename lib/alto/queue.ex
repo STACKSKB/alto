@@ -298,6 +298,31 @@ defmodule Alto.Queue do
   end
 
   @doc """
+  Atomically claim due records whose map payload contains every key/value in
+  `selector`, preserving FIFO order among matching records. The selector is a
+  non-empty map of at most eight UTF-8 string keys (1..100 bytes) and scalar
+  values or flat lists of scalar values; its encoded term is bounded to 4 KiB.
+  Matching scans the bounded queue globally, then applies the existing
+  `max_bytes` wire budget and durable batch claim. Unrelated records remain
+  pending. No selector is persisted and no executable predicate is accepted.
+  """
+  @spec claim_matching(GenServer.server(), map(), pos_integer(), term(), non_neg_integer()) ::
+          {:ok, [map()]} | {:error, term()}
+  def claim_matching(server \\ __MODULE__, selector, count \\ 1, by \\ nil, max_bytes)
+      when is_integer(count) and count >= 1 and is_integer(max_bytes) and max_bytes >= 0 do
+    case validate_selector(selector) do
+      :ok ->
+        GenServer.call(
+          server,
+          {:claim_matching, selector, min(count, @max_claim_count), by, max_bytes}
+        )
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc """
   Claim up to `count` oldest pending records whose encoded wire form fits
   in `max_bytes` (JSON array bytes of the claimed views).
 
@@ -706,12 +731,16 @@ defmodule Alto.Queue do
 
   @impl true
   def handle_call({:claim, count, by}, _from, state) do
-    do_claim(state, count, by, :infinity)
+    do_claim(state, count, by, :infinity, %{})
   end
 
   @impl true
   def handle_call({:claim_bounded, count, by, max_bytes}, _from, state) do
-    do_claim(state, count, by, max_bytes)
+    do_claim(state, count, by, max_bytes, %{})
+  end
+
+  def handle_call({:claim_matching, selector, count, by, max_bytes}, _from, state) do
+    do_claim(state, count, by, max_bytes, selector)
   end
 
   @impl true
@@ -904,52 +933,50 @@ defmodule Alto.Queue do
     "clm-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
   end
 
-  defp do_claim(state, count, by, budget) do
+  defp do_claim(state, count, by, budget, selector) do
     state = reclaim_expired(state)
+
+    now = now(state)
 
     pending =
       state.fifo
       |> Enum.map(&Map.fetch!(state.records, &1))
-      |> Enum.filter(&(&1.status == :pending and due?(&1, now(state))))
+      |> Enum.filter(
+        &(&1.status == :pending and due?(&1, now) and matches_selector?(&1, selector))
+      )
       |> Enum.take(count)
 
-    case select_fitting(pending, budget) do
+    candidates =
+      Enum.map(pending, fn record ->
+        %Record{
+          record
+          | status: :claimed,
+            claim_id: fresh_claim_id(),
+            claimed_by: by,
+            lease_until_ms: now + state.lease_ms
+        }
+      end)
+
+    case select_fitting(candidates, budget) do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
 
       {:ok, []} ->
         {:reply, {:ok, []}, state}
 
-      {:ok, fitting} ->
-        now = now(state)
-
-        {claimed, logs} =
-          Enum.map_reduce(fitting, [], fn record, logs ->
-            claim_id = fresh_claim_id()
-            until = now + state.lease_ms
-
-            record = %Record{
-              record
-              | status: :claimed,
-                claim_id: claim_id,
-                claimed_by: by,
-                lease_until_ms: until
-            }
-
-            log = %{
+      {:ok, claimed} ->
+        logs =
+          Enum.map(claimed, fn record ->
+            %{
               "v" => @version,
               "type" => "claim",
               "id" => record.id,
-              "claim_id" => claim_id,
-              "by" => by,
-              "until_ms" => until,
+              "claim_id" => record.claim_id,
+              "by" => record.claimed_by,
+              "until_ms" => record.lease_until_ms,
               "at_ms" => now
             }
-
-            {record, [log | logs]}
           end)
-
-        logs = Enum.reverse(logs)
 
         # One append for the whole batch: either every claim is durable or
         # none is. The previous per-record loop could persist the first
@@ -964,6 +991,55 @@ defmodule Alto.Queue do
             {:reply, {:error, {:queue_write_failed, reason}}, state}
         end
     end
+  end
+
+  defp matches_selector?(_record, selector) when map_size(selector) == 0, do: true
+
+  defp matches_selector?(%Record{payload: payload}, selector) when is_map(payload) do
+    Enum.all?(selector, fn {key, value} -> Map.get(payload, key, :__missing__) === value end)
+  end
+
+  defp validate_selector(selector) when is_map(selector) and map_size(selector) in 1..8 do
+    with :ok <- validate_selector_bytes(selector),
+         :ok <- validate_selector_keys(selector),
+         :ok <- validate_selector_values(selector) do
+      :ok
+    end
+  end
+
+  defp validate_selector(_), do: {:error, :invalid_selector}
+
+  defp validate_selector_keys(selector) do
+    if Enum.all?(
+         Map.keys(selector),
+         &(is_binary(&1) and String.valid?(&1) and byte_size(&1) in 1..100)
+       ),
+       do: :ok,
+       else: {:error, :invalid_selector}
+  end
+
+  defp validate_selector_values(selector) do
+    if Enum.all?(Map.values(selector), &selector_value?/1),
+      do: :ok,
+      else: {:error, :invalid_selector}
+  end
+
+  defp selector_value?(nil), do: true
+  defp selector_value?(value) when is_boolean(value), do: true
+  defp selector_value?(value) when is_integer(value), do: true
+  defp selector_value?(value) when is_float(value), do: true
+  defp selector_value?(value) when is_binary(value), do: String.valid?(value)
+  defp selector_value?(value) when is_list(value), do: Enum.all?(value, &selector_scalar?/1)
+  defp selector_value?(_), do: false
+
+  defp selector_scalar?(value), do: not is_list(value) and selector_value?(value)
+
+  defp validate_selector_bytes(selector) do
+    if byte_size(:erlang.term_to_binary(selector)) <= 4_096,
+      do: :ok,
+      else: {:error, :invalid_selector}
+  rescue
+    _ -> {:error, :invalid_selector}
   end
 
   # Oldest-first fitting prefix over the encoded wire form, so every leased

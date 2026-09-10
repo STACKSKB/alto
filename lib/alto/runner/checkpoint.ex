@@ -21,7 +21,8 @@ defmodule Alto.Runner.Checkpoint do
     :pending_provider_calls,
     :request_model_tools,
     :transcript_revision,
-    :compacted?
+    :compacted?,
+    :agent_identity
   ]
 
   def capture(run, pending, remaining, terminal) do
@@ -51,6 +52,7 @@ defmodule Alto.Runner.Checkpoint do
          "state" => encoded,
          "budget" => Budget.snapshot(run.budget),
          "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(run.usage)),
+         "agent_identity" => Alto.Protocol.encode_term(run.agent_identity),
          "session_id" => run.session,
          "transcript_revision" => revision,
          "request" => Alto.Protocol.encode_term(pending.request)
@@ -78,11 +80,17 @@ defmodule Alto.Runner.Checkpoint do
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          true <- saved.transcript_bytes <= run.max_transcript_bytes,
          true <- saved.transcript_revision == packet["transcript_revision"],
+         true <- valid_agent_identity?(saved.agent_identity),
+         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
          {:ok, current_revision} <- transcript_revision(run),
          true <- current_revision == saved.transcript_revision,
          true <- within_budget?(budget) do
       restored =
-        run |> Map.merge(saved) |> Map.put(:loop_state, state) |> Map.put(:budget, budget)
+        run
+        |> Map.merge(saved)
+        |> Map.put(:loop_state, state)
+        |> Map.put(:budget, budget)
+        |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
 
       {:ok, restored,
        %{pending: pending, remaining: remaining, terminal: terminal, decision: decision}}
@@ -113,6 +121,15 @@ defmodule Alto.Runner.Checkpoint do
     saved["effects_used"] <= saved["max_effects"] and
       saved["model_requests_used"] <= saved["max_model_requests"]
   end
+
+  defp valid_agent_identity?(%{root_run_id: root_run_id, path: path} = identity)
+       when is_binary(root_run_id) and byte_size(root_run_id) in 1..256 and is_list(path) do
+    map_size(identity) == 2 and length(path) <= 64 and
+      String.valid?(root_run_id) and
+      Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1)))
+  end
+
+  defp valid_agent_identity?(_), do: false
 
   defp fingerprint(run) do
     tools =

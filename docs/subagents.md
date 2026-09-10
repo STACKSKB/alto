@@ -95,3 +95,29 @@ queue job. Checkpoints are root-only: an independent child cannot suspend and
 resume a shared parent checkpoint. Checkpoint fingerprints include the
 subagent policy and tool configuration, so changing those trusted settings
 invalidates an old packet.
+
+
+## Execution-tree identity
+
+Every serial tool context and result contains `agent_identity`, a map with
+`root_run_id` and `path`. A root starts with its current run ID and an empty
+path. Child paths append their spawn ID, so a grandchild can be addressed as
+`["parser", "tests"]` within the same root. Spawn request data cannot replace
+this identity. Internal host options are trusted configuration, not model input.
+Identity paths are bounded to 64 nonempty UTF-8 segments of at most 256 bytes;
+root IDs are nonempty UTF-8 strings of at most 256 bytes.
+
+Exact checkpoint capture saves the identity and exposes a JSON summary in the
+packet. Restore checks that summary against saved state and restores both the
+result and live tool context identity. The resumed execution has a new current
+run ID but keeps its original root namespace. A completed-session follow-up
+starts a fresh namespace. Applications can use this to scope local mailboxes
+without letting a model choose its sender identity. Identity does not itself
+start a mailbox, authorize a recipient, persist child execution or isolate a
+workspace; these remain separate policies and mechanisms.
+
+`Alto.Queue.claim_matching/5` provides an optional generic storage primitive
+for addressed consumers. A bounded exact map selector filters payload fields
+inside the atomic claim operation, before applying existing due-time, FIFO,
+wire-byte and lease rules. Unrelated records are not claimed. The queue remains
+one bounded store; applications define envelopes, addresses and authorization.

@@ -856,6 +856,7 @@ defmodule Alto.Runner.Serial do
             session: run.session,
             session_dir: run.session_dir,
             parent_run_id: run.tool_context.session_id,
+            agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
             parent_model_tools: run.model_tools,
             agent_depth: run.agent_depth + 1,
             resume_snapshot: false
@@ -2322,6 +2323,7 @@ defmodule Alto.Runner.Serial do
            normalize_retries(Keyword.get(opts, :provider_retries, @default_provider_retries)),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
          {:ok, agent_depth} <- normalize_agent_depth(Keyword.get(opts, :agent_depth, 0)),
+         {:ok, _agent_identity} <- normalize_agent_identity(Keyword.get(opts, :agent_identity)),
          {:ok, resume_snapshot} <-
            normalize_resume_snapshot(Keyword.get(opts, :resume_snapshot, true)),
          :ok <- validate_session_dir(Keyword.get(opts, :session_dir)),
@@ -2372,6 +2374,12 @@ defmodule Alto.Runner.Serial do
   defp build_run(settings, cwd, opts) do
     session_id = Keyword.get_lazy(opts, :session_id, &generate_run_id/0)
 
+    agent_identity =
+      case Keyword.get(opts, :agent_identity) do
+        nil -> %{root_run_id: session_id, path: []}
+        identity -> identity
+      end
+
     initial = %{
       loop_state: nil,
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
@@ -2379,7 +2387,8 @@ defmodule Alto.Runner.Serial do
       tool_context: %Context{
         session_id: session_id,
         cwd: cwd,
-        metadata: Keyword.get(opts, :tool_context_metadata, %{})
+        metadata: Keyword.get(opts, :tool_context_metadata, %{}),
+        agent_identity: agent_identity
       },
       model_requests: 0,
       usage: Usage.new(),
@@ -2399,13 +2408,15 @@ defmodule Alto.Runner.Serial do
       compacted?: false,
       provider_retries: @default_provider_retries,
       agent_depth: 0,
+      agent_identity: agent_identity,
       max_agent_depth: 0,
       resume_snapshot: true,
       tool_specs: [],
       prompt_config: []
     }
 
-    {:ok, Map.merge(initial, settings)}
+    with {:ok, _} <- normalize_agent_identity(agent_identity),
+         do: {:ok, Map.merge(initial, settings)}
   end
 
   # A provider is model capability state: generic rule runs are constructed
@@ -2616,6 +2627,25 @@ defmodule Alto.Runner.Serial do
     end
   end
 
+  defp normalize_agent_identity(nil), do: {:ok, nil}
+
+  defp normalize_agent_identity(%{root_run_id: root_run_id, path: path} = identity)
+       when is_binary(root_run_id) and byte_size(root_run_id) in 1..256 and is_list(path) do
+    if map_size(identity) == 2 and length(path) <= 64 and
+         String.valid?(root_run_id) and
+         Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1))) do
+      {:ok, identity}
+    else
+      {:error, {:invalid_option, :agent_identity, identity}}
+    end
+  end
+
+  defp normalize_agent_identity(other),
+    do: {:error, {:invalid_option, :agent_identity, other}}
+
+  defp child_agent_identity(%{root_run_id: root_run_id, path: path}, id),
+    do: %{root_run_id: root_run_id, path: path ++ [id]}
+
   defp normalize_resume_snapshot(value) when value in [true, false], do: {:ok, value}
   defp normalize_resume_snapshot(other), do: {:error, {:invalid_option, :resume_snapshot, other}}
 
@@ -2725,7 +2755,11 @@ defmodule Alto.Runner.Serial do
   defp task_text(task), do: inspect(task)
 
   defp runtime_context(run),
-    do: %{session_id: run.tool_context.session_id, cwd: run.tool_context.cwd}
+    do: %{
+      session_id: run.tool_context.session_id,
+      cwd: run.tool_context.cwd,
+      agent_identity: run.tool_context.agent_identity
+    }
 
   defp result(run, output, disposition) do
     %Result{
@@ -2739,6 +2773,7 @@ defmodule Alto.Runner.Serial do
       transcript_bytes: run.transcript_bytes,
       session_id: run.session,
       run_id: run.tool_context.session_id,
+      agent_identity: run.tool_context.agent_identity,
       usage: Usage.to_map(run.usage),
       persistence: persistence_status(Enum.reverse(run.persistence_errors))
     }
