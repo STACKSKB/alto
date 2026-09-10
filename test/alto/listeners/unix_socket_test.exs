@@ -125,6 +125,33 @@ defmodule Alto.Listeners.UnixSocketTest do
     %{root: root, path: path, registry: registry, socket: socket, buffer: ""}
   end
 
+  test "supervised shutdown removes the socket and stops its acceptor", %{path: path} do
+    acceptor = :sys.get_state(UnixSocket).acceptor
+    monitor = Process.monitor(acceptor)
+
+    assert :ok = stop_supervised(UnixSocket)
+    refute File.exists?(path)
+    assert_receive {:DOWN, ^monitor, :process, ^acceptor, _reason}
+    assert {:error, :enoent} = :gen_tcp.connect({:local, path}, 0, [:binary, {:active, false}])
+  end
+
+  test "acceptor failure terminates the listener instead of leaving an inert socket", %{
+    root: root,
+    registry: registry
+  } do
+    path = Path.join(root, "acceptor-failure.sock")
+    name = :"acceptor-listener-#{System.unique_integer([:positive])}"
+    spec = listener_spec(name, registry, path, name) |> Map.put(:restart, :temporary)
+    listener = start_supervised!(spec)
+    monitor = Process.monitor(listener)
+    acceptor = :sys.get_state(listener).acceptor
+
+    Process.exit(acceptor, :kill)
+
+    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}
+    refute File.exists?(path)
+  end
+
   test "greets with the protocol version, live runs, and the line bound", %{
     socket: socket,
     path: path,
