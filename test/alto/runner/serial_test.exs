@@ -538,7 +538,7 @@ defmodule Alto.Runner.SerialTest do
     monitor = Process.monitor(provider_pid)
 
     assert {:error, :await_timeout} = Alto.await(handle, 10)
-    assert Process.alive?(handle.task.pid)
+    assert Process.alive?(Alto.Test.Runner.worker(handle))
     assert :ok = Alto.cancel(handle, :user)
     assert {:error, {:cancelled, :user}, result} = Alto.await(handle, 1_000)
     assert Enum.map(result.events, & &1.type) == [:run_cancelled]
@@ -561,7 +561,7 @@ defmodule Alto.Runner.SerialTest do
       end)
 
     assert_receive {:owned_handle, handle}
-    task_monitor = Process.monitor(handle.task.pid)
+    task_monitor = Process.monitor(Alto.Test.Runner.worker(handle))
     assert_receive {:provider_started, provider_pid}
     provider_monitor = Process.monitor(provider_pid)
     Process.exit(owner, :kill)

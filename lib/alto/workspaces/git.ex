@@ -1,6 +1,8 @@
 defmodule Alto.Workspaces.Git do
   @moduledoc "Bounded independent local Git clones for isolated child workspaces."
 
+  @behaviour Alto.Workspaces.Backend
+
   alias Alto.Command
   alias Alto.Tool.Context
 
@@ -149,6 +151,29 @@ defmodule Alto.Workspaces.Git do
     else
       false -> {:error, :wrong_workspace}
       {:error, _} = error -> error
+    end
+  end
+
+  @doc false
+  def prepare_apply(source, patch_path, patch_sha256, opts \\ []) do
+    Alto.Workspaces.GitPatch.prepare(source, patch_path, patch_sha256, opts)
+  end
+
+  @doc false
+  def verify_apply(source, integration, patch_path, opts \\ []) do
+    with true <- get_in(integration, ["target", "root"]) == source do
+      Alto.Workspaces.GitPatch.verify(integration, patch_path, opts)
+    else
+      false -> {:error, :stale_patch_target}
+    end
+  end
+
+  @doc false
+  def apply(source, integration, patch_path, opts \\ []) do
+    with true <- get_in(integration, ["target", "root"]) == source do
+      Alto.Workspaces.GitPatch.apply(integration, patch_path, opts)
+    else
+      false -> {:unknown, :stale_patch_target}
     end
   end
 

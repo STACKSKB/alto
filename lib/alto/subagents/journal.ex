@@ -8,11 +8,11 @@ defmodule Alto.Subagents.Journal do
   never grants permission to repeat a child. This module stores lifecycle
   records; the host still owns execution, authority, budgets and recovery.
   """
-  alias Alto.OperationLog
-  alias Alto.Runner.Checkpoint
+  alias Alto.Persistence.Codec
+  alias Alto.Persistence.Retained
 
   @enforce_keys [:ledger, :key, :generation]
-  defstruct [:ledger, :key, :generation]
+  defstruct [:ledger, :key, :generation, deadline: :infinity]
 
   defmodule Ticket do
     @moduledoc "A dispatch identity returned only after durable admission."
@@ -26,7 +26,7 @@ defmodule Alto.Subagents.Journal do
   @max_result_bytes 64_000
 
   @doc "Create or reconnect an ordered batch with immutable JSON metadata."
-  def open(ledger, key, ids, metadata \\ %{}) do
+  def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
     with :ok <- valid_plan(ids, metadata) do
       initial = %{
         "kind" => @kind,
@@ -37,13 +37,23 @@ defmodule Alto.Subagents.Journal do
       }
 
       safe(fn ->
-        with {:ok, entry} <- ensure_intent(ledger, key, initial),
+        with :ok <- Retained.deadline_ok(Keyword.get(opts, :deadline, :infinity)),
+             {:ok, entry} <-
+               Retained.ensure_intent(
+                 ledger,
+                 key,
+                 @kind,
+                 nil,
+                 initial,
+                 Keyword.get(opts, :deadline, :infinity)
+               ),
              :ok <- valid_initial(entry),
              true <- entry.recovery["ids"] == ids and entry.recovery["metadata"] == metadata,
              batch = %__MODULE__{
                ledger: ledger,
                key: key,
-               generation: entry.recovery["generation"]
+               generation: entry.recovery["generation"],
+               deadline: Keyword.get(opts, :deadline, :infinity)
              },
              :ok <- initialize(batch, entry),
              {:ok, _} <- read(batch) do
@@ -61,18 +71,27 @@ defmodule Alto.Subagents.Journal do
     do: %{"key" => key, "generation" => generation}
 
   @doc "Reconnect by saved identity without creating a missing or replaced batch."
-  def restore(ledger, %{"key" => key, "generation" => generation} = identity)
+  def restore(ledger, identity, opts \\ [])
+
+  def restore(ledger, %{"key" => key, "generation" => generation} = identity, opts)
       when map_size(identity) == 2 and is_binary(key) and is_binary(generation) do
-    batch = %__MODULE__{ledger: ledger, key: key, generation: generation}
+    batch = %__MODULE__{
+      ledger: ledger,
+      key: key,
+      generation: generation,
+      deadline: Keyword.get(opts, :deadline, :infinity)
+    }
+
     with {:ok, _} <- read(batch), do: {:ok, batch}
   end
 
-  def restore(_, _), do: {:error, :invalid_batch_identity}
+  def restore(_, _, _), do: {:error, :invalid_batch_identity}
 
   @doc "Read an exact retained packet and its revision, including retirement state."
   def read(%__MODULE__{} = batch) do
     safe(fn ->
-      with {:ok, entry} <- OperationLog.recovery(batch.ledger, batch.key),
+      with {:ok, entry} <-
+             Retained.read(batch.ledger, batch.key, batch.deadline),
            :ok <- valid_initial(entry),
            true <- entry.recovery["generation"] == batch.generation,
            :ok <- valid_packet(entry.checkpoint, entry.recovery),
@@ -203,7 +222,7 @@ defmodule Alto.Subagents.Journal do
   defp replace(batch, snapshot, packet) do
     safe(fn ->
       with {:ok, entry} <-
-             OperationLog.update_checkpoint(batch.ledger, batch.key, snapshot.revision, packet) do
+             Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline) do
         {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: :active}}
       end
     end)
@@ -213,16 +232,10 @@ defmodule Alto.Subagents.Journal do
   defp active(_), do: {:error, :batch_not_active}
 
   defp decode_results(children) do
-    # A fresh observer need not have executed the runner. Load the fixed Alto
-    # result vocabulary before safe ETF decoding; never load modules named by
-    # a stored value or create atoms from stored data.
-    Code.ensure_loaded!(Alto.Runner.Serial)
-    Code.ensure_loaded!(Alto.Usage)
-
     Enum.reduce_while(children, {:ok, []}, fn child, {:ok, results} ->
       case child do
         %{"state" => "completed", "id" => id, "result" => encoded} ->
-          case Checkpoint.decode(encoded) do
+          case Codec.decode(encoded, max_bytes: @max_result_bytes) do
             {:ok, value} -> {:cont, {:ok, [{id, value} | results]}}
             {:error, _} = error -> {:halt, error}
           end
@@ -238,33 +251,25 @@ defmodule Alto.Subagents.Journal do
   end
 
   defp encode_result(result) do
-    if :erlang.external_size(result) <= @max_result_bytes,
-      do: Checkpoint.encode(result),
-      else: {:error, {:child_result_too_large, @max_result_bytes}}
+    case Codec.encode(result, max_bytes: @max_result_bytes) do
+      {:ok, encoded} ->
+        {:ok, encoded}
+
+      {:error, :not_portable_or_too_large} ->
+        if portable_size?(result),
+          do: {:error, :checkpoint_not_portable_or_too_large},
+          else: {:error, {:child_result_too_large, @max_result_bytes}}
+    end
   rescue
     _ -> {:error, :checkpoint_not_portable_or_too_large}
-  end
-
-  defp ensure_intent(ledger, key, initial) do
-    case OperationLog.recovery(ledger, key) do
-      {:error, :not_found} ->
-        case OperationLog.record_intent(ledger, key, @kind, nil, initial) do
-          :ok -> OperationLog.recovery(ledger, key)
-          {:error, :intent_conflict} -> OperationLog.recovery(ledger, key)
-          error -> error
-        end
-
-      other ->
-        other
-    end
   end
 
   defp initialize(_batch, %{checkpoint: packet}) when is_map(packet), do: :ok
 
   defp initialize(batch, %{status: {:intended}}) do
-    case OperationLog.record_attempt(batch.ledger, batch.key, @initialize) do
+    case Retained.record_attempt(batch.ledger, batch.key, @initialize, batch.deadline) do
       :ok ->
-        with {:ok, entry} <- OperationLog.recovery(batch.ledger, batch.key),
+        with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
              do: initialize(batch, entry)
 
       {:error, :checkpoint_active} ->
@@ -284,7 +289,13 @@ defmodule Alto.Subagents.Journal do
 
     packet = Map.merge(initial, %{"children" => children, "join" => nil})
 
-    case OperationLog.record_checkpoint(batch.ledger, batch.key, @initialize, packet) do
+    case Retained.record_checkpoint(
+           batch.ledger,
+           batch.key,
+           @initialize,
+           packet,
+           batch.deadline
+         ) do
       :ok -> :ok
       {:error, :checkpoint_active} -> :ok
       error -> error
@@ -295,10 +306,16 @@ defmodule Alto.Subagents.Journal do
 
   defp begin_retirement(batch, %{state: :active} = snapshot) do
     with {:ok, _} <-
-           OperationLog.resume_checkpoint(batch.ledger, batch.key, snapshot.revision, %{
-             "action" => @retire,
-             "generation" => batch.generation
-           }),
+           Retained.resume(
+             batch.ledger,
+             batch.key,
+             snapshot.revision,
+             %{
+               "action" => @retire,
+               "generation" => batch.generation
+             },
+             batch.deadline
+           ),
          do: :ok
   end
 
@@ -311,12 +328,20 @@ defmodule Alto.Subagents.Journal do
       if snapshot.state == :retired do
         :ok
       else
-        with :ok <- OperationLog.record_attempt(batch.ledger, batch.key, @retire),
+        with :ok <-
+               Retained.record_attempt(batch.ledger, batch.key, @retire, batch.deadline),
              :ok <-
-               OperationLog.record_outcome(batch.ledger, batch.key, @retire, :completed, %{
-                 "generation" => batch.generation,
-                 "joined" => true
-               }),
+               Retained.record_outcome(
+                 batch.ledger,
+                 batch.key,
+                 @retire,
+                 :completed,
+                 %{
+                   "generation" => batch.generation,
+                   "joined" => true
+                 },
+                 batch.deadline
+               ),
              do: :ok
       end
     end
@@ -421,9 +446,16 @@ defmodule Alto.Subagents.Journal do
     _ -> false
   end
 
+  defp portable_size?(term) do
+    :erlang.external_size(term) <= @max_result_bytes
+  rescue
+    _ -> false
+  end
+
   defp safe(fun) do
     fun.()
   catch
+    :exit, {:timeout, _reason} -> {:error, :run_timeout}
     :exit, reason -> {:error, {:subagent_journal_unavailable, reason}}
   end
 end

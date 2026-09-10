@@ -1,6 +1,6 @@
 defmodule Alto.Session do
   @moduledoc """
-  Append-only JSONL session records for the serial host, plus a revisioned
+  Append-only JSONL session records for the execution host, plus a revisioned
   transcript sidecar for resume.
 
   One directory per state home, one `<id>.jsonl` log per session. Records are
@@ -364,7 +364,7 @@ defmodule Alto.Session do
 
   def decode_term(other), do: {:error, {:invalid_term_payload, other}}
 
-  ## Records built by the serial host
+  ## Records built by the execution host
 
   @doc false
   @spec started_record(map()) :: record()

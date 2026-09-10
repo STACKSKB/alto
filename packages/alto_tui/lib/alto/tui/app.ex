@@ -398,8 +398,8 @@ defmodule Alto.TUI.App do
     {:noreply, send_queued(state, task_id)}
   end
 
-  # Alto's async task sends its result directly to the process that started it.
-  def handle_info({ref, result}, state) when is_reference(ref) do
+  # Completion is a runner notification, independent of its implementation.
+  def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
     case find_run(state, ref: ref) do
       nil -> {:noreply, state, render?: false}
       {local_id, run} -> {:noreply, finish_run(state, local_id, run, result)}
@@ -533,8 +533,8 @@ defmodule Alto.TUI.App do
       true ->
         with {:ok, state, task} <- ensure_task(state, prompt),
              {:ok, run_options} <- run_options(state, profile),
-             {:ok, handle, local_id} <- start_task(task, prompt, run_options) do
-          attach_started_run(state, task, prompt, handle, local_id)
+             {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
+          attach_started_run(state, task, prompt, handle, completion_ref, local_id)
         else
           {:error, reason} -> %{state | notice: "cannot start: #{short_inspect(reason)}"}
         end
@@ -635,20 +635,24 @@ defmodule Alto.TUI.App do
       )
 
     with {:ok, handle} <- do_start_task(task, prompt, run_options) do
-      {:ok, handle, local_id}
+      case Alto.subscribe(handle) do
+        {:ok, ref} ->
+          {:ok, handle, ref, local_id}
+
+        {:error, reason} ->
+          Alto.terminate(handle, :subscription_failed)
+          {:error, reason}
+      end
     end
   end
 
-  defp attach_started_run(state, task, prompt, handle, local_id) do
-    monitor = handle.task.ref
-
+  defp attach_started_run(state, task, prompt, handle, completion_ref, local_id) do
     run = %{
       kind: :alto,
       adapter: Backend.lookup(state.run_options, state.selected_backend),
       handle: handle,
       task_id: task["id"],
-      ref: handle.task.ref,
-      monitor: monitor,
+      ref: completion_ref,
       phase: "starting",
       approval_ids: MapSet.new(),
       started_at_ms: System.system_time(:millisecond)
@@ -677,7 +681,7 @@ defmodule Alto.TUI.App do
       start_native_task(task, prompt, run_options)
     else
       with {:ok, module, options} <- Backend.lookup(run_options, backend),
-           {:ok, %Alto.Runner.Serial.Handle{} = handle} <-
+           {:ok, %Alto.Runner.Handle{} = handle} <-
              module.start(task, prompt, run_options, options),
            do: {:ok, handle}
     end

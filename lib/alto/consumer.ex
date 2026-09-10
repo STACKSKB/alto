@@ -96,16 +96,16 @@ defmodule Alto.Consumer do
   end
 
   @doc "Read an authoritative runner verdict or fold legacy tool events."
-  @spec worst_outcome([Alto.Event.t()] | Alto.Runner.Serial.Result.t()) ::
+  @spec worst_outcome([Alto.Event.t()] | Alto.Runner.Result.t()) ::
           :unknown | :failed | :completed | :empty
-  def worst_outcome(%Alto.Runner.Serial.Result{verdict: :unknown}), do: :unknown
+  def worst_outcome(%Alto.Runner.Result{verdict: :unknown}), do: :unknown
 
-  def worst_outcome(%Alto.Runner.Serial.Result{verdict: class})
+  def worst_outcome(%Alto.Runner.Result{verdict: class})
       when class in [:failed_known, :rejected_before_dispatch],
       do: :failed
 
-  def worst_outcome(%Alto.Runner.Serial.Result{verdict: :completed}), do: :completed
-  def worst_outcome(%Alto.Runner.Serial.Result{verdict: :empty}), do: :empty
+  def worst_outcome(%Alto.Runner.Result{verdict: :completed}), do: :completed
+  def worst_outcome(%Alto.Runner.Result{verdict: :empty}), do: :empty
 
   def worst_outcome(events) do
     classes =
@@ -356,7 +356,7 @@ defmodule Alto.Consumer do
       {:failed, reason} ->
         decide(op, claim_id, :failed_known, %{reason: inspect(reason, limit: 5)}, state)
 
-      {:run, %Alto.Runner.Serial.Result{} = result} ->
+      {:run, %Alto.Runner.Result{} = result} ->
         apply_run_verdict(op, claim_id, result, state)
 
       {:outcome, class, evidence}

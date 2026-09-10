@@ -162,3 +162,12 @@ automatic replay. An interrupted application is not an atomic multi-file rollbac
 The Git integration manifest is bounded to 256 affected regular files, 128 MiB of
 existing affected content and 32 KB of serialized metadata; captured patches are
 bounded to 1 MB. Symlink paths and repository filters remain unsupported.
+
+### Replaceable execution hosts
+
+The default `Alto.Runner.Serial` and the optional `Alto.Runner.Stepped` compose
+shared execution components. Select a host with `runner:` in `Alto.Config` or
+run options. Handles are opaque and results use `Alto.Runner.Result`; registry
+and TUI integrations consume completion notifications instead of inspecting
+Tasks. Stepped can also wait for a one-use admission ticket before each effect.
+See [runners and migration](docs/runners.md) for contracts and examples.

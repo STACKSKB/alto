@@ -2,10 +2,10 @@
 
 `Alto.Approvals.Checkpoint` returns `:suspend` at a required tool approval.
 With an explicit `checkpoint_version` and a loop implementing the optional
-checkpoint callbacks, the serial runner returns:
+checkpoint callbacks, the shared execution hosts return:
 
 ```elixir
-{:error, :approval_suspended, %Alto.Runner.Serial.Result{checkpoint: packet}}
+{:error, :approval_suspended, %Alto.Runner.Result{checkpoint: packet}}
 ```
 
 The prepared tool has not executed. The packet contains the exact pending
@@ -73,3 +73,13 @@ to exact checkpoint packets; these bounds may need to exceed the small defaults
 used by short queue examples. Checkpoints do not make an uncertain external
 effect automatically retryable. Interruptions after resumed dispatch still
 require authoritative reconciliation or explicit operator review.
+
+Checkpoint packets include a versioned shared continuation format. Serial and
+Stepped use that same format. Journal and workspace bindings use the durable
+store identity, not the current server PID; restarting the same store preserves
+the binding. Unavailable or different stores fail closed. Tool/loop code and
+explicit checkpoint version checks still apply.
+
+Packets captured before the runner refactor are deliberately rejected rather
+than guessed into the new format. Reconcile any suspended operations before
+upgrading; completed session transcripts remain resumable. See [runner migration](runners.md).

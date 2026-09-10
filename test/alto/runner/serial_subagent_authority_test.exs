@@ -160,7 +160,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
     assert_receive {:provider_started, parent_or_child}, 2_000
     child_monitor = Process.monitor(parent_or_child)
-    Process.exit(handle.task.pid, :kill)
+    Process.exit(Alto.Test.Runner.worker(handle), :kill)
     assert_receive {:DOWN, ^child_monitor, :process, ^parent_or_child, _}, 2_000
   end
 

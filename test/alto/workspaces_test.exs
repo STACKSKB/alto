@@ -3,7 +3,9 @@ defmodule Alto.WorkspacesTest do
   alias Alto.{OperationLog, Workspaces}
 
   defmodule Backend do
-    def snapshot(source, _opts), do: {:ok, %{"source" => source, "base_commit" => "test"}}
+    @behaviour Alto.Workspaces.Backend
+
+    def snapshot(source, _opts), do: {:ok, %{"base_commit" => "test", "label" => source}}
 
     def checkout(_snapshot, path, opts) do
       File.mkdir_p!(path)
@@ -21,6 +23,46 @@ defmodule Alto.WorkspacesTest do
     end
 
     def diff(_snapshot, _path, _opts), do: {:ok, "reviewed patch\n"}
+
+    def prepare_apply(source, patch_path, patch_sha256, _opts) do
+      {:ok,
+       %{
+         "engine" => "fake",
+         "source" => source,
+         "patch_path" => patch_path,
+         "patch_sha256" => patch_sha256
+       }}
+    end
+
+    def verify_apply(
+          source,
+          %{"engine" => "fake", "source" => target, "patch_sha256" => sha},
+          patch_path,
+          _opts
+        ) do
+      if source == target and is_binary(sha) and File.exists?(patch_path),
+        do: :ok,
+        else: {:error, :invalid_fake_patch_target}
+    end
+
+    def apply(_source, %{"engine" => "fake", "patch_sha256" => sha}, _patch_path, _opts) do
+      {:ok, %{"engine" => "fake", "applied_sha256" => sha}}
+    end
+  end
+
+  defmodule OtherBackend do
+    @behaviour Alto.Workspaces.Backend
+    alias Alto.WorkspacesTest.Backend
+
+    def snapshot(source, opts), do: Backend.snapshot(source, opts)
+    def checkout(snapshot, path, opts), do: Backend.checkout(snapshot, path, opts)
+    def diff(snapshot, path, opts), do: Backend.diff(snapshot, path, opts)
+    def prepare_apply(source, path, sha, opts), do: Backend.prepare_apply(source, path, sha, opts)
+
+    def verify_apply(source, integration, path, opts),
+      do: Backend.verify_apply(source, integration, path, opts)
+
+    def apply(source, integration, path, opts), do: Backend.apply(source, integration, path, opts)
   end
 
   setup do
@@ -191,5 +233,42 @@ defmodule Alto.WorkspacesTest do
     link = m.root <> "-link"
     File.ln_s!(source, link)
     assert {:error, :workspace_path_symlink} = Workspaces.prepare(%{m | root: link}, source)
+  end
+
+  test "a non-Git backend can provide the optional integration lifecycle", %{
+    manager: m,
+    snapshot: s
+  } do
+    assert {:ok, ready} = Workspaces.create(m, s, owner("integration"))
+    assert {:ok, :done, worked} = Workspaces.use(m, ready.id, ready.revision, fn _ -> :done end)
+    assert {:ok, frozen} = Workspaces.freeze(m, worked.id, worked.revision)
+    assert {:ok, prepared} = Workspaces.prepare_apply(m, frozen.id, frozen.revision)
+    assert prepared["integration"]["engine"] == "fake"
+    assert prepared["patch_sha256"] == frozen.workspace["patch_sha256"]
+    assert {:ok, applied} = Workspaces.apply(m, prepared)
+    assert applied.status == "applied"
+    assert applied.workspace["application"]["engine"] == "fake"
+  end
+
+  test "integration rejects a substituted target", %{manager: m, snapshot: s, source: source} do
+    assert {:ok, ready} = Workspaces.create(m, s, owner("target-binding"))
+    assert {:ok, :done, worked} = Workspaces.use(m, ready.id, ready.revision, fn _ -> :done end)
+    assert {:ok, frozen} = Workspaces.freeze(m, worked.id, worked.revision)
+    assert {:ok, prepared} = Workspaces.prepare_apply(m, frozen.id, frozen.revision)
+
+    substituted = put_in(prepared, ["integration", "source"], source <> "-other")
+    assert {:error, :invalid_fake_patch_target} = Workspaces.apply(m, substituted)
+    assert {:ok, ^frozen} = Workspaces.get(m, frozen.id)
+  end
+
+  test "integration rejects a manager using a different backend", %{manager: m, snapshot: s} do
+    assert {:ok, ready} = Workspaces.create(m, s, owner("backend-binding"))
+    assert {:ok, :done, worked} = Workspaces.use(m, ready.id, ready.revision, fn _ -> :done end)
+    assert {:ok, frozen} = Workspaces.freeze(m, worked.id, worked.revision)
+    assert {:ok, prepared} = Workspaces.prepare_apply(m, frozen.id, frozen.revision)
+    other = %{m | backend: OtherBackend}
+
+    assert {:error, :stale_workspace} = Workspaces.apply(other, prepared)
+    assert {:ok, ^frozen} = Workspaces.get(m, frozen.id)
   end
 end

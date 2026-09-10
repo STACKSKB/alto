@@ -8,7 +8,7 @@ defmodule Alto.Runner.Budget.Account do
   Counters persist independently of runner snapshots. The caller owns the
   ledger lifetime and chooses a unique key for each execution tree.
   """
-  alias Alto.OperationLog
+  alias Alto.Persistence.Retained
 
   @enforce_keys [:ledger, :key, :generation]
   defstruct [:ledger, :key, :generation]
@@ -29,33 +29,23 @@ defmodule Alto.Runner.Budget.Account do
           "generation" => Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
         })
 
+      deadline = Keyword.get(opts, :deadline, :infinity)
+
       safe(fn ->
-        with {:ok, entry} <- ensure_intent(ledger, key, initial),
+        with :ok <- Retained.deadline_ok(deadline),
+             {:ok, entry} <- Retained.ensure_intent(ledger, key, @kind, nil, initial, deadline),
              :ok <- valid_initial(entry),
              account = %__MODULE__{
                ledger: ledger,
                key: key,
                generation: entry.recovery["generation"]
              },
-             :ok <- initialize(account, entry),
-             {:ok, _} <- tighten(account, caps["max_effects"], caps["max_model_requests"]) do
+             :ok <- initialize(account, entry, deadline),
+             {:ok, _} <-
+               tighten(account, caps["max_effects"], caps["max_model_requests"], deadline) do
           {:ok, account}
         end
       end)
-    end
-  end
-
-  defp ensure_intent(ledger, key, initial) do
-    case OperationLog.recovery(ledger, key) do
-      {:error, :not_found} ->
-        case OperationLog.record_intent(ledger, key, @kind, nil, initial) do
-          :ok -> OperationLog.recovery(ledger, key)
-          {:error, :intent_conflict} -> OperationLog.recovery(ledger, key)
-          {:error, _} = error -> error
-        end
-
-      other ->
-        other
     end
   end
 
@@ -64,9 +54,11 @@ defmodule Alto.Runner.Budget.Account do
     do: %{"key" => key, "generation" => generation}
 
   @doc "Read one consistent revision and both counters."
-  def read(%__MODULE__{} = account) do
+  def read(%__MODULE__{} = account), do: read(account, :infinity)
+
+  def read(%__MODULE__{} = account, deadline) do
     safe(fn ->
-      with {:ok, entry} <- OperationLog.recovery(account.ledger, account.key),
+      with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
            :ok <- valid_initial(entry),
            true <- entry.recovery["generation"] == account.generation,
            true <- match?({:checkpointed, _, @attempt}, entry.status),
@@ -81,13 +73,21 @@ defmodule Alto.Runner.Budget.Account do
 
   @doc "Lower shared caps. Already consumed counts remain consumed."
   def tighten(%__MODULE__{} = account, effects, models) do
+    tighten(account, effects, models, :infinity)
+  end
+
+  def tighten(%__MODULE__{} = account, effects, models, deadline) do
     if valid_cap?(effects) and valid_cap?(models) do
-      update(account, fn packet ->
-        {:ok,
-         packet
-         |> Map.update!("max_effects", &min(&1, effects))
-         |> Map.update!("max_model_requests", &min(&1, models))}
-      end)
+      update(
+        account,
+        fn packet ->
+          {:ok,
+           packet
+           |> Map.update!("max_effects", &min(&1, effects))
+           |> Map.update!("max_model_requests", &min(&1, models))}
+        end,
+        deadline
+      )
     else
       {:error, :invalid_budget_account_limits}
     end
@@ -103,20 +103,24 @@ defmodule Alto.Runner.Budget.Account do
           :model -> {"model_requests_used", "max_model_requests", :model_request_limit}
         end
 
-      case update(account, fn packet ->
-             maximum = min(cap, packet[limit])
+      case update(
+             account,
+             fn packet ->
+               maximum = min(cap, packet[limit])
 
-             cond do
-               deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
-                 {:error, :run_timeout}
+               cond do
+                 deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
+                   {:error, :run_timeout}
 
-               packet[counter] < maximum ->
-                 {:ok, Map.update!(packet, counter, &(&1 + 1))}
+                 packet[counter] < maximum ->
+                   {:ok, Map.update!(packet, counter, &(&1 + 1))}
 
-               true ->
-                 {:error, {error, maximum}}
-             end
-           end) do
+                 true ->
+                   {:error, {error, maximum}}
+               end
+             end,
+             deadline
+           ) do
         {:ok, _} -> :ok
         {:error, _} = error -> error
       end
@@ -128,21 +132,32 @@ defmodule Alto.Runner.Budget.Account do
   @doc "Close an account at the viewed revision, denying future reservations. Never refunds counts."
   def close(%__MODULE__{} = account, expected_revision) do
     safe(fn ->
-      with {:ok, %{revision: revision, packet: packet}} <- read(account),
+      with :ok <- Retained.deadline_ok(:infinity),
+           {:ok, %{revision: revision, packet: packet}} <- read(account),
            true <- revision == expected_revision,
            {:ok, _} <-
-             OperationLog.resume_checkpoint(account.ledger, account.key, revision, %{
-               "action" => "close_budget",
-               "generation" => account.generation
-             }),
-           :ok <- OperationLog.record_attempt(account.ledger, account.key, "close-budget"),
+             Retained.resume(
+               account.ledger,
+               account.key,
+               revision,
+               %{"action" => "close_budget", "generation" => account.generation},
+               :infinity
+             ),
            :ok <-
-             OperationLog.record_outcome(
+             Retained.record_attempt(
+               account.ledger,
+               account.key,
+               "close-budget",
+               :infinity
+             ),
+           :ok <-
+             Retained.record_outcome(
                account.ledger,
                account.key,
                "close-budget",
                :completed,
-               Map.take(packet, @limits ++ @counters)
+               Map.take(packet, @limits ++ @counters),
+               :infinity
              ) do
         :ok
       else
@@ -152,16 +167,17 @@ defmodule Alto.Runner.Budget.Account do
     end)
   end
 
-  defp update(account, fun) do
+  defp update(account, fun, deadline) do
     safe(fn ->
-      with {:ok, %{revision: revision, packet: packet} = current} <- read(account),
+      with :ok <- Retained.deadline_ok(deadline),
+           {:ok, %{revision: revision, packet: packet} = current} <- read(account, deadline),
            {:ok, replacement} <- fun.(packet) do
         if replacement == packet do
           {:ok, current}
         else
-          case OperationLog.update_checkpoint(account.ledger, account.key, revision, replacement) do
+          case Retained.cas(account.ledger, account.key, revision, replacement, deadline) do
             {:ok, entry} -> {:ok, %{revision: entry.revision, packet: entry.checkpoint}}
-            {:error, :stale_revision} -> update(account, fun)
+            {:error, :stale_revision} -> update(account, fun, deadline)
             {:error, _} = error -> error
           end
         end
@@ -171,36 +187,37 @@ defmodule Alto.Runner.Budget.Account do
 
   # Initialization records only counter state, never external dispatch. Its
   # deterministic attempt can safely finish an interrupted initialization.
-  defp initialize(account, %{status: {:checkpointed, _, @attempt}}), do: ensure_readable(account)
+  defp initialize(account, %{status: {:checkpointed, _, @attempt}}, deadline),
+    do: ensure_readable(account, deadline)
 
-  defp initialize(account, %{status: {:intended}}) do
-    case OperationLog.record_attempt(account.ledger, account.key, @attempt) do
+  defp initialize(account, %{status: {:intended}}, deadline) do
+    case Retained.record_attempt(account.ledger, account.key, @attempt, deadline) do
       :ok ->
-        with {:ok, entry} <- OperationLog.recovery(account.ledger, account.key),
-             do: initialize(account, entry)
+        with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
+             do: initialize(account, entry, deadline)
 
       {:error, :checkpoint_active} ->
-        ensure_readable(account)
+        ensure_readable(account, deadline)
 
       {:error, _} = error ->
         error
     end
   end
 
-  defp initialize(account, %{status: {:dispatched, @attempt}} = entry) do
+  defp initialize(account, %{status: {:dispatched, @attempt}} = entry, deadline) do
     packet = Map.merge(entry.recovery, %{"effects_used" => 0, "model_requests_used" => 0})
 
-    case OperationLog.record_checkpoint(account.ledger, account.key, @attempt, packet) do
+    case Retained.record_checkpoint(account.ledger, account.key, @attempt, packet, deadline) do
       :ok -> :ok
-      {:error, :checkpoint_active} -> ensure_readable(account)
+      {:error, :checkpoint_active} -> ensure_readable(account, deadline)
       {:error, _} = error -> error
     end
   end
 
-  defp initialize(_, _), do: {:error, :budget_account_not_active}
+  defp initialize(_, _, _), do: {:error, :budget_account_not_active}
 
-  defp ensure_readable(account) do
-    with {:ok, _} <- read(account), do: :ok
+  defp ensure_readable(account, deadline) do
+    with {:ok, _} <- read(account, deadline), do: :ok
   end
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
@@ -231,10 +248,20 @@ defmodule Alto.Runner.Budget.Account do
   defp valid_packet(_, _), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
+    keys = if Keyword.keyword?(opts), do: Keyword.keys(opts), else: []
+
     if Keyword.keyword?(opts) and
-         Enum.sort(Keyword.keys(opts)) == [:max_effects, :max_model_requests] and
-         Enum.all?(opts, fn {_, value} -> valid_cap?(value) end),
-       do: {:ok, Map.new(opts, fn {key, value} -> {Atom.to_string(key), value} end)},
+         Enum.sort(keys -- [:deadline]) == [:max_effects, :max_model_requests] and
+         (not Keyword.has_key?(opts, :deadline) or
+            Keyword.get(opts, :deadline) == :infinity or is_integer(Keyword.get(opts, :deadline))) and
+         Enum.all?(Keyword.take(opts, [:max_effects, :max_model_requests]), fn {_, value} ->
+           valid_cap?(value)
+         end),
+       do:
+         {:ok,
+          opts
+          |> Keyword.take([:max_effects, :max_model_requests])
+          |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)},
        else: {:error, :invalid_budget_account_limits}
   end
 
@@ -243,6 +270,7 @@ defmodule Alto.Runner.Budget.Account do
   defp safe(fun) do
     fun.()
   catch
+    :exit, {:timeout, _reason} -> {:error, :run_timeout}
     :exit, reason -> {:error, {:budget_account_unavailable, reason}}
   end
 end

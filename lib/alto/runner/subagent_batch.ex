@@ -1,36 +1,37 @@
 defmodule Alto.Runner.SubagentBatch do
-  @moduledoc false
-  alias Alto.Runner.Serial
+  @moduledoc "Runs bounded child handles through a runner lifecycle contract."
 
   # Handles remain owned by the parent host. Each child also monitors that host,
   # so an unexpected parent exit cancels children without relying on this loop.
-  def run(specs, concurrency, start, check) do
+  @doc "Run children with `start` and a runner module implementing await/cancel/terminate."
+  def run(specs, concurrency, start, check, opts \\ []) do
+    runner = Keyword.get(opts, :runner, Alto.Runner)
     state = %{pending: specs, active: [], completed: %{}}
-    {status, state} = drive(state, concurrency, start, check)
+    {status, state} = drive(state, concurrency, start, check, runner)
     outcomes = Enum.map(specs, &{&1.id, Map.fetch!(state.completed, &1.id)})
     {status, outcomes}
   end
 
-  defp drive(state, concurrency, start, check) do
+  defp drive(state, concurrency, start, check, runner) do
     case check.() do
       :continue ->
         case admit(state, concurrency, start, check) do
           {:ok, state} ->
-            state = collect(state)
+            state = collect(state, runner)
 
             if state.pending == [] and state.active == [] do
               {:ok, state}
             else
               Process.sleep(10)
-              drive(state, concurrency, start, check)
+              drive(state, concurrency, start, check, runner)
             end
 
           {status, state} ->
-            {status, stop(state, status)}
+            {status, stop(state, status, runner)}
         end
 
       status ->
-        {status, stop(state, status)}
+        {status, stop(state, status, runner)}
     end
   end
 
@@ -59,9 +60,9 @@ defmodule Alto.Runner.SubagentBatch do
     end
   end
 
-  defp collect(state) do
+  defp collect(state, runner) do
     Enum.reduce(state.active, %{state | active: []}, fn {id, handle}, acc ->
-      case Serial.await(handle, 0) do
+      case await(runner, handle) do
         {:error, :await_timeout} -> %{acc | active: [{id, handle} | acc.active]}
         outcome -> complete(acc, id, outcome)
       end
@@ -71,8 +72,8 @@ defmodule Alto.Runner.SubagentBatch do
   defp complete(state, id, outcome),
     do: %{state | completed: Map.put(state.completed, id, outcome)}
 
-  defp stop(state, status) do
-    Enum.each(state.active, fn {_id, handle} -> Serial.cancel(handle, status) end)
+  defp stop(state, status, runner) do
+    Enum.each(state.active, fn {_id, handle} -> cancel(runner, handle, status) end)
 
     state =
       Enum.reduce(state.pending, %{state | pending: []}, fn spec, acc ->
@@ -80,11 +81,11 @@ defmodule Alto.Runner.SubagentBatch do
       end)
 
     # One grace period for the entire batch, not one timeout per child.
-    drain(state, System.monotonic_time(:millisecond) + 5_000)
+    drain(state, System.monotonic_time(:millisecond) + 5_000, runner)
   end
 
-  defp drain(state, deadline) do
-    state = collect(state)
+  defp drain(state, deadline, runner) do
+    state = collect(state, runner)
 
     cond do
       state.active == [] ->
@@ -92,18 +93,16 @@ defmodule Alto.Runner.SubagentBatch do
 
       System.monotonic_time(:millisecond) >= deadline ->
         Enum.reduce(state.active, %{state | active: []}, fn {id, handle}, acc ->
-          outcome =
-            case Task.shutdown(handle.task, :brutal_kill) do
-              {:ok, result} -> result
-              _ -> {:error, {:run_process_failed, :cancel_timeout}}
-            end
-
-          complete(acc, id, outcome)
+          complete(acc, id, terminate(runner, handle))
         end)
 
       true ->
         Process.sleep(10)
-        drain(state, deadline)
+        drain(state, deadline, runner)
     end
   end
+
+  defp await(runner, handle), do: runner.await(handle, 0)
+  defp cancel(runner, handle, reason), do: runner.cancel(handle, reason)
+  defp terminate(runner, handle), do: runner.terminate(handle, :cancel_timeout)
 end

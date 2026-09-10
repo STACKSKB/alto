@@ -49,3 +49,10 @@ Initial public release.
 - Provider, tool, command, search, ingress, and transport extension contracts.
 - CLI and optional terminal UI example, plus repository-maintenance and document-intake examples.
 - MIT license.
+
+- Added replaceable runner lifecycle contracts, neutral results, and a Stepped
+  host sharing extracted execution components with Serial.
+- Decoupled workspace integration from Git and journal serialization from runners.
+- Fixed checkpoint bindings across store-process restarts and bounded durable
+  accounting/journal calls by execution deadlines.
+- Bound application command callbacks and report timeout outcomes as uncertain.

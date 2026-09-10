@@ -48,7 +48,12 @@ defmodule Alto.Runner.Budget do
 
   defp attach_account(budget, %Account{} = account) do
     with {:ok, %{packet: packet}} <-
-           Account.tighten(account, budget.max_effects, budget.max_model_requests) do
+           Account.tighten(
+             account,
+             budget.max_effects,
+             budget.max_model_requests,
+             budget.deadline
+           ) do
       {:ok,
        %{
          budget
@@ -65,7 +70,7 @@ defmodule Alto.Runner.Budget do
   @doc "Return a portable, string-key snapshot of counters, caps, and remaining time."
   @spec snapshot(t()) :: map()
   def snapshot(%__MODULE__{account: %Account{} = account} = budget) do
-    case Account.read(account) do
+    case Account.read(account, budget.deadline) do
       {:ok, %{packet: packet}} ->
         packet
         |> Map.take(["effects_used", "model_requests_used"])

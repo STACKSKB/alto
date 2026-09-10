@@ -47,20 +47,45 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     %{name: name}
   end
 
-  test "callbacks are fetched through the registry but run in the caller", %{name: name} do
+  test "callbacks run in a supervised task outside the registry and caller", %{name: name} do
     assert {:ok, %{"value" => 1, "handled" => true}} =
              Registry.command(name, "echo", %{"value" => 1})
 
     assert_receive {:callback_pid, callback_pid}
-    assert callback_pid == self()
+    refute callback_pid == self()
+    refute callback_pid == Process.whereis(name)
     assert {:error, :unknown_command} = Registry.command(name, "missing", %{})
+  end
+
+  test "stalled command is terminated and reports an uncertain outcome" do
+    parent = self()
+    name = :"command_timeout_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {Registry,
+       name: name,
+       config_resolver: fn _ -> {:error, :unused} end,
+       command_timeout: 20,
+       commands: %{
+         "stall" => fn _ ->
+           send(parent, {:command_worker, self()})
+           Process.sleep(:infinity)
+         end
+       }},
+      id: name
+    )
+
+    assert {:error, {:command_outcome_unknown, :timeout}} = Registry.command(name, "stall", %{})
+    assert_receive {:command_worker, worker}
+    refute Process.alive?(worker)
+    assert {:ok, []} = Registry.runs(name)
   end
 
   test "a callback can reenter the registry without deadlocking", %{name: name} do
     assert {:ok, %{"run_id" => run_id}} = Registry.command(name, "reenter", %{})
 
     assert {:error, :invalid_steps,
-            %Alto.Runner.Serial.Result{
+            %Alto.Runner.Result{
               run_id: ^run_id,
               verdict: :rejected_before_dispatch
             }} =
@@ -87,7 +112,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     assert_receive {:DOWN, ^ref, :process, ^owner, _}
 
     assert {:error, {:cancelled, {:owner_down, :normal}},
-            %Alto.Runner.Serial.Result{verdict: :rejected_before_dispatch}} =
+            %Alto.Runner.Result{verdict: :rejected_before_dispatch}} =
              eventually_result(name, run_id)
   end
 

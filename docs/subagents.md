@@ -341,8 +341,14 @@ status and metadata, including the source commit and frozen patch hash.
 `Alto.Workspaces.get/2` inspects it; `patch/2` returns the bounded immutable Git
 diff. Hosts can also use `prepare/2`, `create/3`, `use/4` and `freeze/3` directly
 with an optional backend implementing `snapshot/2`, `checkout/3` and `diff/3`.
-A backend must return bounded JSON snapshot metadata and cannot supply runtime
-credentials in that metadata.
+`prepare/2` returns an `Alto.Workspaces.Snapshot` carrying the expanded source
+separately from provider-owned metadata. A backend that supports reviewed
+integration may additionally implement `prepare_apply/4`, `verify_apply/4`
+and `apply/4`; the manager supplies the retained source to verification and
+dispatch, treats their results as opaque bounded JSON and
+propagates post-dispatch `{:unknown, reason}` outcomes. A backend must return
+bounded JSON snapshot metadata and cannot supply runtime credentials in that
+metadata.
 
 `discard/4` requires the viewed revision and an explanatory note. It holds the
 same operating-system resource lock as worker use, so cleanup cannot remove a

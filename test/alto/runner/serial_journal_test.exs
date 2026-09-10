@@ -104,13 +104,14 @@ defmodule Alto.Runner.SerialJournalTest do
              )
 
     on_exit(fn ->
-      if Process.alive?(parent.task.pid), do: Process.exit(parent.task.pid, :kill)
+      if Process.alive?(Alto.Test.Runner.worker(parent)),
+        do: Process.exit(Alto.Test.Runner.worker(parent), :kill)
     end)
 
     assert_receive {:journal, identity}, 2_000
     assert_receive {:child_entered, provider, worker}, 2_000
     monitor = Process.monitor(worker)
-    assert :erlang.suspend_process(parent.task.pid)
+    assert :erlang.suspend_process(Alto.Test.Runner.worker(parent))
     send(provider, :release)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 2_000
     assert {:ok, batch} = Journal.restore(ledger, identity)
@@ -118,8 +119,8 @@ defmodule Alto.Runner.SerialJournalTest do
     assert saved.output == "retained child output"
     assert saved.model_requests == 1
 
-    parent_monitor = Process.monitor(parent.task.pid)
-    Process.exit(parent.task.pid, :kill)
+    parent_monitor = Process.monitor(Alto.Test.Runner.worker(parent))
+    Process.exit(Alto.Test.Runner.worker(parent), :kill)
     assert_receive {:DOWN, ^parent_monitor, :process, _, :killed}, 2_000
     stop_supervised!(OperationLog)
     restarted = start_supervised!({OperationLog, ledger_opts})
@@ -205,7 +206,7 @@ defmodule Alto.Runner.SerialJournalTest do
     assert_receive {:child_entered, provider, worker}, 2_000
 
     on_exit(fn ->
-      for pid <- [provider, worker, parent.task.pid],
+      for pid <- [provider, worker, Alto.Test.Runner.worker(parent)],
           Process.alive?(pid),
           do: Process.exit(pid, :kill)
     end)

@@ -1,5 +1,5 @@
 defmodule Alto.CLI do
-  @moduledoc "Plain-stdio command-line entry point for the serial runner."
+  @moduledoc "Plain-stdio command-line entry point for the execution host."
 
   alias Alto.Approvals.AllowAll
   alias Alto.Approvals.Interactive

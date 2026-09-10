@@ -446,7 +446,7 @@ defmodule Alto.ConsumerTest do
   end
 
   test "authoritative run verdict survives bounded event eviction" do
-    result = %Alto.Runner.Serial.Result{
+    result = %Alto.Runner.Result{
       output: nil,
       loop_state: nil,
       messages: [],
@@ -463,7 +463,7 @@ defmodule Alto.ConsumerTest do
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do
-    result = %Alto.Runner.Serial.Result{
+    result = %Alto.Runner.Result{
       output: nil,
       loop_state: nil,
       messages: [],

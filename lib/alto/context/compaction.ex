@@ -1,6 +1,6 @@
 defmodule Alto.Context.Compaction do
   @moduledoc """
-  Domain-specific context reduction for the serial runner.
+  Domain-specific context reduction for the execution host.
 
   Configure `compaction: [strategy: {MyReducer, options}]`. The runner selects
   complete transcript groups, bounds source bytes, supervises both callbacks

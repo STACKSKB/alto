@@ -10,7 +10,10 @@ defmodule Alto.Runner.Checkpoint do
   require private storage. Prepared values restore exactly, without preparation.
   """
   alias Alto.Runner.Budget
+  alias Alto.Persistence.Codec
+  alias Alto.OperationLog
   @limit 1_000_000
+  @continuation_format 1
   @fields [
     :messages_rev,
     :transcript_bytes,
@@ -47,6 +50,7 @@ defmodule Alto.Runner.Checkpoint do
       {:ok,
        %{
          "format" => 1,
+         "continuation_format" => @continuation_format,
          "version" => run.checkpoint_version,
          "fingerprint" => fingerprint(run),
          "state" => encoded,
@@ -66,7 +70,12 @@ defmodule Alto.Runner.Checkpoint do
     _ -> {:error, :invalid_loop_checkpoint}
   end
 
-  def restore(run, %{"format" => 1} = packet, decision, opts) do
+  def restore(
+        run,
+        %{"format" => 1, "continuation_format" => @continuation_format} = packet,
+        decision,
+        opts
+      ) do
     with true <-
            packet["version"] == run.checkpoint_version and is_binary(run.checkpoint_version),
          true <- packet["fingerprint"] == fingerprint(run),
@@ -140,9 +149,9 @@ defmodule Alto.Runner.Checkpoint do
       |> Enum.sort()
 
     data =
-      {Alto.Runner.Serial.module_info(:md5), __MODULE__.module_info(:md5), run.spec.driver,
-       run.spec.driver.module_info(:md5), run.spec.driver_options, run.spec.middleware,
-       run.spec.subagents, tools, run.model_tools, run.tool_context.cwd}
+      {@continuation_format, run.spec.driver, run.spec.driver.module_info(:md5),
+       run.spec.driver_options, run.spec.middleware, stable_subagents(run.spec.subagents), tools,
+       run.model_tools, run.tool_context.cwd}
 
     :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))
     |> Base.encode16(case: :lower)
@@ -157,6 +166,18 @@ defmodule Alto.Runner.Checkpoint do
     end)
   end
 
+  defp fingerprint_data(%Alto.Subagents.Bounded{} = policy) do
+    %{
+      "kind" => "alto_subagents_bounded",
+      "max_depth" => policy.max_depth,
+      "max_children" => policy.max_children,
+      "max_concurrency" => policy.max_concurrency,
+      "sessions" => policy.sessions,
+      "workspaces" => stable_resource(policy.workspaces),
+      "journal" => stable_resource(policy.journal)
+    }
+  end
+
   defp fingerprint_data(value) when is_map(value),
     do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
 
@@ -167,22 +188,16 @@ defmodule Alto.Runner.Checkpoint do
   defp fingerprint_data(value), do: value
 
   def encode(term) do
-    with true <- :erlang.external_size(term) <= @limit,
-         true <- portable?(term, 0) do
-      {:ok, Base.encode64(:erlang.term_to_binary(term))}
-    else
-      false -> {:error, :checkpoint_not_portable_or_too_large}
+    case Codec.encode(term, max_bytes: @limit) do
+      {:ok, _} = result -> result
+      {:error, _} -> {:error, :checkpoint_not_portable_or_too_large}
     end
   end
 
   def decode(encoded) when is_binary(encoded) and byte_size(encoded) <= div(@limit * 4, 3) + 4 do
-    with {:ok, <<131, tag, _::binary>> = binary} when tag != 80 <- Base.decode64(encoded),
-         true <- byte_size(binary) <= @limit,
-         term <- :erlang.binary_to_term(binary, [:safe]),
-         true <- portable?(term, 0) do
-      {:ok, term}
-    else
-      _ -> {:error, :invalid_checkpoint_data}
+    case Codec.decode(encoded, max_bytes: @limit) do
+      {:ok, term} -> {:ok, term}
+      {:error, _} -> {:error, :invalid_checkpoint_data}
     end
   rescue
     _ -> {:error, :invalid_checkpoint_data}
@@ -190,20 +205,36 @@ defmodule Alto.Runner.Checkpoint do
 
   def decode(_), do: {:error, :invalid_checkpoint_data}
 
-  defp portable?(_, depth) when depth > 64, do: false
-  defp portable?(value, _) when is_atom(value) or is_binary(value) or is_number(value), do: true
+  defp stable_subagents(%Alto.Subagents.Bounded{} = policy), do: fingerprint_data(policy)
+  defp stable_subagents(value), do: fingerprint_data(value)
 
-  defp portable?(value, depth) when is_list(value),
-    do: Enum.all?(value, &portable?(&1, depth + 1))
+  defp stable_resource(nil), do: nil
 
-  defp portable?(value, depth) when is_tuple(value),
-    do: value |> Tuple.to_list() |> portable?(depth + 1)
+  defp stable_resource(%Alto.Workspaces{} = manager) do
+    %{
+      "kind" => "alto_workspaces",
+      "root" => manager.root,
+      "backend" => manager.backend,
+      "backend_md5" => module_md5(manager.backend),
+      "backend_options" => manager.backend_options,
+      "ledger" => stable_resource(manager.ledger)
+    }
+  end
 
-  defp portable?(value, depth) when is_map(value),
-    do:
-      Enum.all?(Map.to_list(value), fn {k, v} ->
-        portable?(k, depth + 1) and portable?(v, depth + 1)
-      end)
+  defp stable_resource(value) when is_pid(value) or is_atom(value) or is_tuple(value) do
+    case OperationLog.identity(value, 100) do
+      {:ok, identity} -> identity
+      # Preserve an unavailable store reference in the digest. A restarted
+      # or replaced store therefore cannot accidentally compare equal.
+      _ -> value
+    end
+  end
 
-  defp portable?(_, _), do: false
+  defp stable_resource(value), do: fingerprint_data(value)
+
+  defp module_md5(module) when is_atom(module) do
+    if Code.ensure_loaded?(module), do: module.module_info(:md5), else: :unavailable
+  end
+
+  defp module_md5(_), do: :unavailable
 end

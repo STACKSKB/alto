@@ -195,14 +195,20 @@ defmodule Alto.OperationLog do
   @spec record_intent(GenServer.server(), op_key(), binary(), binary() | nil, map() | nil) ::
           :ok | {:error, term()}
   def record_intent(server \\ __MODULE__, op_key, tool, inbox_key, recovery \\ nil) do
-    GenServer.call(server, {:intent, op_key, tool, inbox_key, recovery})
+    call(server, {:intent, op_key, tool, inbox_key, recovery})
   end
+
+  def record_intent(server, op_key, tool, inbox_key, recovery, timeout),
+    do: call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
 
   @doc "Record a dispatch attempt. Requires a prior intent and no live attempt."
   @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_attempt(server \\ __MODULE__, op_key, attempt_id) do
-    GenServer.call(server, {:attempt, op_key, attempt_id})
+    call(server, {:attempt, op_key, attempt_id})
   end
+
+  def record_attempt(server, op_key, attempt_id, timeout),
+    do: call(server, {:attempt, op_key, attempt_id}, timeout)
 
   @doc """
   Record that an attempt was cleanly released back to live work (the
@@ -212,8 +218,11 @@ defmodule Alto.OperationLog do
   """
   @spec record_release(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_release(server \\ __MODULE__, op_key, attempt_id) do
-    GenServer.call(server, {:release, op_key, attempt_id})
+    call(server, {:release, op_key, attempt_id})
   end
+
+  def record_release(server, op_key, attempt_id, timeout),
+    do: call(server, {:release, op_key, attempt_id}, timeout)
 
   @doc "Record outcome evidence for the current attempt. Historical attempts are fenced."
   @spec record_outcome(
@@ -225,59 +234,71 @@ defmodule Alto.OperationLog do
         ) ::
           :ok | {:error, term()}
   def record_outcome(server \\ __MODULE__, op_key, attempt_id, class, evidence \\ %{}) do
-    GenServer.call(server, {:outcome, op_key, attempt_id, class, evidence})
+    call(server, {:outcome, op_key, attempt_id, class, evidence})
   end
+
+  def record_outcome(server, op_key, attempt_id, class, evidence, timeout),
+    do: call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
 
   @doc "Persist a nonterminal continuation checkpoint for the current attempt."
   def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint) do
-    GenServer.call(server, {:checkpoint, op_key, attempt_id, checkpoint})
+    call(server, {:checkpoint, op_key, attempt_id, checkpoint})
   end
+
+  def record_checkpoint(server, op_key, attempt_id, checkpoint, timeout),
+    do: call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
 
   @doc "Update an active checkpoint in place, fenced by its current revision."
   def update_checkpoint(server \\ __MODULE__, op_key, expected_revision, checkpoint) do
-    GenServer.call(server, {:checkpoint_update, op_key, expected_revision, checkpoint})
+    call(server, {:checkpoint_update, op_key, expected_revision, checkpoint})
   end
+
+  def update_checkpoint(server, op_key, expected_revision, checkpoint, timeout),
+    do: call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
 
   @doc "Record a host decision to resume a checkpoint, fenced by revision."
   def resume_checkpoint(server \\ __MODULE__, op_key, expected_revision, decision) do
-    GenServer.call(server, {:resume_checkpoint, op_key, expected_revision, decision})
+    call(server, {:resume_checkpoint, op_key, expected_revision, decision})
   end
+
+  def resume_checkpoint(server, op_key, expected_revision, decision, timeout),
+    do: call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
 
   @doc "Recovery status for `op_key` (see the module recovery table)."
   @spec status(GenServer.server(), op_key()) :: status()
   def status(server \\ __MODULE__, op_key) do
-    GenServer.call(server, {:status, op_key})
+    call(server, {:status, op_key})
   end
 
   @doc "Attempt count for `op_key` (0 when unknown)."
   @spec attempts(GenServer.server(), op_key()) :: non_neg_integer()
   def attempts(server \\ __MODULE__, op_key) do
-    GenServer.call(server, {:attempts, op_key})
+    call(server, {:attempts, op_key})
   end
 
   @doc "Atomically reject an intended operation before dispatch, fenced by revision."
   @spec reject_intended(GenServer.server(), op_key(), pos_integer(), map()) ::
           :ok | {:error, term()}
   def reject_intended(server \\ __MODULE__, op_key, expected_revision, evidence \\ %{}) do
-    GenServer.call(server, {:reject_intended, op_key, expected_revision, evidence})
+    call(server, {:reject_intended, op_key, expected_revision, evidence})
   end
 
   @doc "All retained operation keys, oldest first, including released/intended entries."
   @spec keys(GenServer.server()) :: [op_key()]
   def keys(server \\ __MODULE__) do
-    GenServer.call(server, :keys)
+    call(server, :keys)
   end
 
   @doc "Operation keys with no recorded outcome, oldest first (operator review)."
   @spec list_open(GenServer.server()) :: [op_key()]
   def list_open(server \\ __MODULE__) do
-    GenServer.call(server, :list_open)
+    call(server, :list_open)
   end
 
   @doc "Operation keys parked for an operator, oldest first."
   @spec list_parked(GenServer.server()) :: [op_key()]
   def list_parked(server \\ __MODULE__) do
-    GenServer.call(server, :list_parked)
+    call(server, :list_parked)
   end
 
   @doc """
@@ -287,13 +308,18 @@ defmodule Alto.OperationLog do
   """
   @spec list_decided(GenServer.server()) :: [{op_key(), Alto.Effect.Outcome.class()}]
   def list_decided(server \\ __MODULE__) do
-    GenServer.call(server, :list_decided)
+    call(server, :list_decided)
   end
 
   @doc "Return the bounded recovery envelope and active version for one operation."
   @spec recovery(GenServer.server(), op_key()) :: {:ok, map()} | {:error, :not_found}
-  def recovery(server \\ __MODULE__, op_key) do
-    GenServer.call(server, {:recovery, op_key})
+  def recovery(server \\ __MODULE__, op_key, timeout \\ 5_000) do
+    call(server, {:recovery, op_key}, timeout)
+  end
+
+  @doc "Stable identity of the durable store behind a server reference."
+  def identity(server \\ __MODULE__, timeout \\ 5_000) do
+    call(server, :identity, timeout)
   end
 
   @doc """
@@ -306,7 +332,7 @@ defmodule Alto.OperationLog do
   @spec reconcile(GenServer.server(), op_key(), pos_integer(), atom(), map()) ::
           {:ok, map()} | {:error, term()}
   def reconcile(server \\ __MODULE__, op_key, expected_revision, resolution, evidence \\ %{}) do
-    GenServer.call(server, {:reconcile, op_key, expected_revision, resolution, evidence})
+    call(server, {:reconcile, op_key, expected_revision, resolution, evidence})
   end
 
   @doc "Remove credential-shaped entries from an evidence map before persistence."
@@ -728,6 +754,16 @@ defmodule Alto.OperationLog do
     end
   end
 
+  def handle_call(:identity, _from, state) do
+    {:reply,
+     {:ok,
+      %{
+        "kind" => "alto_operation_log",
+        "id" => state.id,
+        "dir" => Path.expand(state.dir)
+      }}, state}
+  end
+
   def handle_call(
         {:reconcile, op_key, expected_revision, resolution, evidence},
         _from,
@@ -819,6 +855,10 @@ defmodule Alto.OperationLog do
   end
 
   ## Internals
+
+  defp call(server, request, timeout \\ 5_000) do
+    GenServer.call(server, request, timeout)
+  end
 
   defp read_status(state, op_key) do
     case Map.fetch(state.ops, op_key) do

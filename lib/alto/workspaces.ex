@@ -8,6 +8,7 @@ defmodule Alto.Workspaces do
   assignment and integration policy; this module starts no worker or scheduler.
   """
   alias Alto.{DurableLog, OperationLog, Storage}
+  alias Alto.Workspaces.Snapshot
 
   @enforce_keys [:root, :ledger, :backend, :backend_options]
   defstruct [:root, :ledger, :backend, :backend_options]
@@ -39,31 +40,31 @@ defmodule Alto.Workspaces do
   end
 
   @doc "Capture one immutable source for every workspace in a delegation batch."
+  @spec prepare(t(), Path.t()) :: {:ok, Snapshot.t()} | {:error, term()}
   def prepare(%__MODULE__{} = manager, source) when is_binary(source) do
     source = Path.expand(source)
 
     with :ok <- separate_root(manager.root, source),
-         {:ok, snapshot} <- manager.backend.snapshot(source, manager.backend_options),
-         :ok <- json_map(snapshot),
-         true <- snapshot["source"] == source do
-      {:ok, snapshot}
+         {:ok, metadata} <- manager.backend.snapshot(source, manager.backend_options),
+         :ok <- json_map(metadata) do
+      {:ok, %Snapshot{source: source, metadata: metadata}}
     else
-      false -> {:error, :invalid_workspace_snapshot}
       {:error, _} = error -> error
     end
   end
 
   @doc "Create once for an execution-tree identity. Retain incomplete attempts for review."
   def create(%__MODULE__{} = manager, snapshot, identity) do
-    with :ok <- json_map(snapshot),
+    with {:ok, %Snapshot{source: source, metadata: metadata}} <- normalize_snapshot(snapshot),
          :ok <- valid_identity(identity),
-         :ok <- separate_root(manager.root, snapshot["source"]) do
+         :ok <- separate_root(manager.root, source) do
       id = "ws-" <> hash(:erlang.term_to_binary(identity))
 
       workspace = %{
         "id" => id,
         "owner" => Alto.Protocol.encode_term(identity),
-        "snapshot" => snapshot,
+        "source" => source,
+        "snapshot" => metadata,
         "cwd" => Path.join([manager.root, id, "checkout"]),
         "backend" => Atom.to_string(manager.backend),
         "backend_fingerprint" => fingerprint(manager)
@@ -175,24 +176,32 @@ defmodule Alto.Workspaces do
   end
 
   @doc """
-  Prepare read-only approval data for applying a frozen Git patch to its source.
+  Prepare read-only approval data for applying a frozen patch through its backend.
 
   The returned portable manifest binds the resource revision, immutable patch,
-  repository identity and affected files. Store it unchanged through approval;
-  `apply/2` verifies it again before dispatch. No target or ledger writes occur.
+  and backend integration data. Store it unchanged through approval; `apply/2`
+  verifies it again before dispatch. No target or ledger writes occur.
   """
   def prepare_apply(%__MODULE__{} = manager, id, revision) do
     with {:ok, info} <- applicable(manager, id, revision),
+         :ok <- integration_supported(manager),
          {:ok, _patch} <- patch(manager, id),
          {:ok, integration} <-
-           Alto.Workspaces.GitPatch.prepare(
-             info.workspace["snapshot"]["source"],
+           backend_prepare_apply(
+             manager,
+             info.workspace["source"],
              info.workspace["patch_path"],
-             info.workspace["patch_sha256"],
-             manager.backend_options
+             info.workspace["patch_sha256"]
            ),
+         :ok <- json_map(integration),
          {:ok, ^info} <- applicable(manager, id, revision) do
-      {:ok, %{"workspace_id" => id, "revision" => revision, "integration" => integration}}
+      {:ok,
+       %{
+         "workspace_id" => id,
+         "revision" => revision,
+         "patch_sha256" => info.workspace["patch_sha256"],
+         "integration" => integration
+       }}
     else
       {:ok, _} -> {:error, :stale_workspace}
       error -> error
@@ -211,21 +220,27 @@ defmodule Alto.Workspaces do
   """
   def apply(
         %__MODULE__{} = manager,
-        %{"workspace_id" => id, "revision" => revision, "integration" => integration}
+        %{
+          "workspace_id" => id,
+          "revision" => revision,
+          "patch_sha256" => patch_sha256,
+          "integration" => integration
+        }
       )
-      when is_map(integration) and is_map_key(integration, "target") and
-             is_map(:erlang.map_get("target", integration)) do
+      when is_binary(patch_sha256) and is_map(integration) do
     locked(manager, id, fn ->
       with {:ok, info} <- applicable(manager, id, revision),
-           true <- integration["target"]["root"] == info.workspace["snapshot"]["source"],
-           true <- integration["patch_sha256"] == info.workspace["patch_sha256"] do
-        target_locked(manager, info.workspace["snapshot"]["source"], fn ->
+           true <- patch_sha256 == info.workspace["patch_sha256"],
+           :ok <- json_map(integration),
+           :ok <- integration_supported(manager) do
+        target_locked(manager, info.workspace["source"], fn ->
           with {:ok, _} <- patch(manager, id),
                :ok <-
-                 Alto.Workspaces.GitPatch.verify(
+                 backend_verify_apply(
+                   manager,
+                   info.workspace["source"],
                    integration,
-                   info.workspace["patch_path"],
-                   manager.backend_options
+                   info.workspace["patch_path"]
                  ),
                {:ok, attempt} <- activate(manager, info, "apply") do
             apply_dispatched(manager, info, attempt, integration)
@@ -241,10 +256,7 @@ defmodule Alto.Workspaces do
   def apply(%__MODULE__{}, _), do: {:error, :invalid_prepared_patch}
 
   defp applicable(manager, id, revision) do
-    with {:ok, info} <- expect(manager, id, revision, false),
-         true <-
-           manager.backend == Alto.Workspaces.Git and
-             info.workspace["backend"] == Atom.to_string(Alto.Workspaces.Git),
+    with {:ok, info} <- expect(manager, id, revision),
          true <- info.status == "frozen" do
       {:ok, info}
     else
@@ -255,10 +267,11 @@ defmodule Alto.Workspaces do
 
   defp apply_dispatched(manager, info, attempt, integration) do
     with {:ok, evidence} <-
-           Alto.Workspaces.GitPatch.apply(
+           backend_apply(
+             manager,
+             info.workspace["source"],
              integration,
-             info.workspace["patch_path"],
-             manager.backend_options
+             info.workspace["patch_path"]
            ),
          {:ok, updated} <-
            checkpoint(
@@ -362,6 +375,7 @@ defmodule Alto.Workspaces do
   defp expect(manager, id, revision, check_backend? \\ true) do
     with {:ok, info} <- get(manager, id),
          true <- info.revision == revision,
+         true <- is_binary(info.workspace["source"]),
          true <- info.workspace["cwd"] == Path.join([manager.root, id, "checkout"]),
          true <-
            not check_backend? or info.workspace["backend_fingerprint"] == fingerprint(manager),
@@ -407,6 +421,75 @@ defmodule Alto.Workspaces do
   end
 
   defp separate_root(_, _), do: {:error, :invalid_workspace_source}
+
+  defp normalize_snapshot(%Snapshot{source: source, metadata: metadata})
+       when is_binary(source) and is_map(metadata) do
+    with :ok <- json_map(metadata), :ok <- separate_root_for_snapshot(source) do
+      {:ok, %Snapshot{source: Path.expand(source), metadata: metadata}}
+    end
+  end
+
+  # Keep accepting persisted/raw provider snapshots while callers migrate to
+  # the explicit source/metadata wrapper. New providers should omit `source`
+  # from their metadata so the manager does not depend on provider fields.
+  defp normalize_snapshot(snapshot) when is_map(snapshot) do
+    with source when is_binary(source) <- snapshot["source"],
+         :ok <- json_map(snapshot),
+         :ok <- separate_root_for_snapshot(source) do
+      {:ok, %Snapshot{source: Path.expand(source), metadata: snapshot}}
+    else
+      _ -> {:error, :invalid_workspace_snapshot}
+    end
+  end
+
+  defp normalize_snapshot(_), do: {:error, :invalid_workspace_snapshot}
+
+  defp separate_root_for_snapshot(source) do
+    if Path.expand(source) == source and source != "" and safe_path(source) == :ok,
+      do: :ok,
+      else: {:error, :invalid_workspace_source}
+  end
+
+  defp integration_supported(%__MODULE__{backend: backend}) do
+    callbacks = [prepare_apply: 4, verify_apply: 4, apply: 4]
+
+    if Enum.all?(callbacks, fn {function, arity} ->
+         function_exported?(backend, function, arity)
+       end) do
+      :ok
+    else
+      {:error, :workspace_integration_unsupported}
+    end
+  end
+
+  defp backend_prepare_apply(manager, source, patch_path, patch_sha256) do
+    manager.backend.prepare_apply(
+      source,
+      patch_path,
+      patch_sha256,
+      manager.backend_options
+    )
+  rescue
+    error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
+  end
+
+  defp backend_verify_apply(manager, source, integration, patch_path) do
+    manager.backend.verify_apply(source, integration, patch_path, manager.backend_options)
+  rescue
+    error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
+  end
+
+  defp backend_apply(manager, source, integration, patch_path) do
+    manager.backend.apply(source, integration, patch_path, manager.backend_options)
+  rescue
+    error -> {:unknown, {:workspace_application_failed, Exception.message(error)}}
+  catch
+    kind, reason -> {:unknown, {:workspace_application_failed, kind, reason}}
+  end
 
   @doc false
   def safe_path(path) when is_binary(path) do

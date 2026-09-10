@@ -148,7 +148,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     on_exit(fn -> if Process.alive?(provider), do: Process.exit(provider, :kill) end)
     submit(app, "next")
     [run] = Map.values(state(app).runs)
-    Process.exit(run.handle.task.pid, :kill)
+    Process.exit(Alto.Test.Runner.worker(run.handle), :kill)
     eventually(fn -> state(app).runs == %{} end)
     assert State.selected_task(state(app))["status"] == "failed"
     assert State.selected_task(state(app))["session_id"] == session_id

@@ -328,7 +328,8 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert_receive {:tool_ran, "hello"}, @receive_timeout
 
       # Crash the run mid-flight: no snapshot, no completed record.
-      %{task_pid: pid} = :sys.get_state(registry).runs[run_id]
+      %{handle: handle} = :sys.get_state(registry).runs[run_id]
+      pid = Alto.Test.Runner.worker(handle)
       Process.exit(pid, :kill)
       wait_empty(registry)
 

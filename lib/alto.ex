@@ -10,7 +10,7 @@ defmodule Alto do
   alias Alto.Loops.Chat
   alias Alto.Loops.Default
   alias Alto.Loops.Rule
-  alias Alto.Runner.Serial
+  alias Alto.Runner
 
   @doc "Build the shipped default loop as an ordinary, composable value."
   @spec default_loop(keyword()) :: Spec.t()
@@ -43,9 +43,9 @@ defmodule Alto do
   @spec rule_loop(keyword()) :: Spec.t()
   def rule_loop(opts \\ []), do: Spec.new(Rule, opts)
 
-  @doc "Run a task with the sequential effect host."
-  @spec run(term(), keyword()) :: Serial.run_result()
-  def run(task, opts \\ []), do: Serial.run(task, opts)
+  @doc "Run a task with the configured execution host."
+  @spec run(term(), keyword()) :: Runner.outcome()
+  def run(task, opts \\ []), do: Runner.run(task, opts)
 
   @doc """
   Continue a persisted session with a follow-up task.
@@ -56,12 +56,12 @@ defmodule Alto do
   re-resolved by the caller and never read from disk. Prompt options are
   ignored: resumed history carries its own system message.
 
-  Returns a `Serial.run_result()` when a run starts, or a bare
+  Returns a `Runner.outcome()` when a run starts, or a bare
   `{:error, reason}` when the session cannot be loaded — most notably
   `:no_resumable_transcript` for sessions whose runs never completed (the
   crash boundary: Alto records what happened, it does not invent history).
   """
-  @spec resume(String.t(), term(), keyword()) :: Serial.run_result() | {:error, term()}
+  @spec resume(String.t(), term(), keyword()) :: Runner.outcome() | {:error, term()}
   def resume(session_id, task, opts \\ []) do
     dir_opts = Keyword.take(opts, [:session_dir])
 
@@ -74,7 +74,7 @@ defmodule Alto do
           transcript_bytes: bytes,
           revision: revision
         })
-        |> then(&Serial.run(task, &1))
+        |> then(&Runner.run(task, &1))
 
       {:error, reason} ->
         {:error, reason}
@@ -82,20 +82,24 @@ defmodule Alto do
   end
 
   @doc """
-  Start a cancellable serial run without waiting for it.
+  Start a cancellable run without waiting for it.
 
   Pass `owner: pid` to cooperatively cancel when that resident owner exits.
-  Omitting it preserves standalone lifetime semantics. The process that calls
-  `start/2` owns the returned Task and is the process that may call `await/2`.
+  Omitting it preserves standalone lifetime semantics. Handles are opaque and can be awaited or observed from another process.
   """
-  @spec start(term(), keyword()) :: {:ok, Serial.Handle.t()} | {:error, term()}
-  def start(task, opts \\ []), do: Serial.start(task, opts)
+  @spec start(term(), keyword()) :: {:ok, Alto.Runner.Handle.t()} | {:error, term()}
+  def start(task, opts \\ []), do: Runner.start(task, opts)
 
   @doc "Wait for a cancellable run to finish."
-  @spec await(Serial.Handle.t(), timeout()) :: Serial.run_result() | {:error, :await_timeout}
-  def await(handle, timeout \\ :infinity), do: Serial.await(handle, timeout)
+  @spec await(Alto.Runner.Handle.t(), timeout()) :: Runner.outcome() | {:error, :await_timeout}
+  def await(handle, timeout \\ :infinity), do: Runner.await(handle, timeout)
 
-  @doc "Ask a running serial host to cancel its current work."
-  @spec cancel(Serial.Handle.t(), term()) :: :ok | :already_finished
-  def cancel(handle, reason \\ :user), do: Serial.cancel(handle, reason)
+  @doc "Ask a running host to cancel its current work."
+  @spec cancel(Alto.Runner.Handle.t(), term()) :: :ok | :already_finished
+  def cancel(handle, reason \\ :user), do: Runner.cancel(handle, reason)
+  @doc "Subscribe to the runner’s completion notification."
+  defdelegate subscribe(handle, pid \\ self()), to: Runner
+
+  @doc "Force termination after cooperative cancellation fails."
+  defdelegate terminate(handle, reason \\ :cancel_timeout), to: Runner
 end

@@ -1,5 +1,6 @@
 defmodule Alto.Runner.CheckpointTest do
   use ExUnit.Case, async: false
+  alias Alto.OperationLog
   alias Alto.Runner.{Checkpoint, Serial}
 
   defmodule First do
@@ -201,5 +202,69 @@ defmodule Alto.Runner.CheckpointTest do
 
     assert File.read!(Path.join(dir, "guarded")) == "originaloriginal"
     refute File.exists?(Path.join(dir, "first"))
+  end
+
+  test "checkpoint resumes after the configured journal store is restarted", %{
+    opts: opts,
+    dir: dir
+  } do
+    ledger_dir = Path.join(dir, "journal")
+    ledger_opts = [id: "checkpoint-journal", name: nil, dir: ledger_dir]
+    ledger = start_supervised!({OperationLog, ledger_opts}, id: :checkpoint_journal)
+
+    with_journal = fn store ->
+      Keyword.put(
+        opts,
+        :loop,
+        Alto.rule_loop(
+          steps: ["guarded"],
+          subagents: Alto.Subagents.bounded(journal: store)
+        )
+      )
+    end
+
+    assert {:error, :approval_suspended, suspended} = Serial.run("{}", with_journal.(ledger))
+    stop_supervised!(:checkpoint_journal)
+    restarted = start_supervised!({OperationLog, ledger_opts}, id: :checkpoint_journal)
+
+    assert {:ok, result} =
+             Serial.run(
+               "{}",
+               Keyword.put(
+                 with_journal.(restarted),
+                 :checkpoint,
+                 {suspended.checkpoint, :approve}
+               )
+             )
+
+    assert result.verdict == :completed
+  end
+
+  test "checkpoint rejects a different configured journal store", %{opts: opts, dir: dir} do
+    first_dir = Path.join(dir, "first-journal")
+    second_dir = Path.join(dir, "second-journal")
+    first_opts = [id: "checkpoint-journal", name: nil, dir: first_dir]
+    second_opts = [id: "checkpoint-journal", name: nil, dir: second_dir]
+    first = start_supervised!({OperationLog, first_opts}, id: :checkpoint_journal_first)
+    second = start_supervised!({OperationLog, second_opts}, id: :checkpoint_journal_second)
+
+    with_journal = fn store ->
+      Keyword.put(
+        opts,
+        :loop,
+        Alto.rule_loop(
+          steps: ["guarded"],
+          subagents: Alto.Subagents.bounded(journal: store)
+        )
+      )
+    end
+
+    assert {:error, :approval_suspended, suspended} = Serial.run("{}", with_journal.(first))
+
+    assert {:error, :checkpoint_mismatch, _} =
+             Serial.run(
+               "{}",
+               Keyword.put(with_journal.(second), :checkpoint, {suspended.checkpoint, :approve})
+             )
   end
 end
