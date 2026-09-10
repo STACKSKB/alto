@@ -124,8 +124,8 @@ defmodule Alto.Runner.Checkpoint do
 
     data =
       {Alto.Runner.Serial.module_info(:md5), __MODULE__.module_info(:md5), run.spec.driver,
-       run.spec.driver.module_info(:md5), run.spec.driver_options, run.spec.middleware, tools,
-       run.model_tools, run.tool_context.cwd}
+       run.spec.driver.module_info(:md5), run.spec.driver_options, run.spec.middleware,
+       run.spec.subagents, tools, run.model_tools, run.tool_context.cwd}
 
     :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))
     |> Base.encode16(case: :lower)

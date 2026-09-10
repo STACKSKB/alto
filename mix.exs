@@ -46,6 +46,8 @@ defmodule Alto.MixProject do
         "CHANGELOG.md",
         "PROTOCOL.md",
         "docs/delayed-queue.md",
+        "docs/checkpoints.md",
+        "docs/subagents.md",
         "examples/README.md",
         "examples/repository_maintenance",
         "examples/document_intake"

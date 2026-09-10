@@ -324,12 +324,14 @@ defmodule Alto.Runner.Serial do
     do: {:error, :provider_required, run}
 
   defp interpret(%Effect{kind: :request_model, data: request}, run) do
-    with :ok <- Transcript.validate(Enum.reverse(run.messages_rev)),
+    with {:ok, run} <- request_context(request, run),
+         :ok <- Transcript.validate(Enum.reverse(run.messages_rev)),
          {:ok, request} <- model_request(request, run),
          {:ok, request} <- check_context(request, run) do
       exposed = MapSet.new(Enum.map(request.tools, & &1["function"]["name"]))
       request_model(request, %{run | request_model_tools: exposed})
     else
+      {:error, reason, updated} -> {:error, reason, updated}
       {:error, reason} -> {:error, reason, run}
     end
   end
@@ -402,12 +404,56 @@ defmodule Alto.Runner.Serial do
           {:event, Event.durable(:subagent_failed, %{id: spec.id, error: :max_depth_exceeded}),
            run}
         else
-          run_subagent(spec, run)
+          case validate_subagent_tools(spec.tools, run) do
+            :ok -> run_subagent(spec, run)
+            {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
+          end
         end
     end
   end
 
+  defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
+    with {:ok, specs, concurrency} <- validate_batch(data, run) do
+      {status, outcomes} =
+        Alto.Runner.SubagentBatch.run(specs, concurrency, &start_subagent(&1, run), fn ->
+          case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+            {{:cancelled, _} = cancelled, _} -> cancelled
+            {_, {:error, _} = error} -> error
+            _ -> :continue
+          end
+        end)
+
+      {results, run} =
+        Enum.map_reduce(outcomes, run, fn {id, outcome}, acc ->
+          {subagent_data(id, outcome), merge_child_result(acc, outcome)}
+        end)
+
+      case status do
+        :ok -> batch_completed(results, run)
+        {:cancelled, reason} -> {:cancelled, reason, run}
+        {:error, reason} -> {:error, reason, run}
+      end
+    else
+      {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
+    end
+  end
+
   defp interpret(%Effect{} = effect, run), do: {:error, {:unknown_effect, effect.kind}, run}
+
+  defp request_context(request, run) do
+    case Map.fetch(request, :context_message) do
+      :error ->
+        {:ok, run}
+
+      {:ok, content} when is_binary(content) ->
+        if String.valid?(content),
+          do: append_message(run, %{"role" => "user", "content" => content}),
+          else: {:error, :invalid_context_message}
+
+      _ ->
+        {:error, :invalid_context_message}
+    end
+  end
 
   defp request_model(request, run) do
     if run.model_requests >= run.max_steps do
@@ -640,6 +686,7 @@ defmodule Alto.Runner.Serial do
          {:ok, tools} <- spawn_optional(data, [:tools, "tools"], :tools),
          {:ok, loop} <- spawn_optional(data, [:loop, "loop"], :loop),
          {:ok, provider} <- spawn_optional(data, [:provider, "provider"], :provider),
+         {:ok, system_prompt} <- spawn_optional(data, [:system_prompt, "system_prompt"], :text),
          {:ok, model_tools} <-
            spawn_optional(data, [:model_tools, "model_tools"], :model_tools) do
       {:ok,
@@ -650,6 +697,7 @@ defmodule Alto.Runner.Serial do
          tools: tools,
          loop: loop,
          provider: provider,
+         system_prompt: system_prompt,
          model_tools: model_tools
        }}
     end
@@ -721,6 +769,14 @@ defmodule Alto.Runner.Serial do
     end
   end
 
+  defp spawn_optional(data, keys, :text) do
+    case Enum.find_value(keys, &Map.get(data, &1)) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and byte_size(value) in 1..64_000 -> {:ok, value}
+      value -> {:error, {:invalid_spawn_field, keys, value}}
+    end
+  end
+
   defp spawn_optional(data, keys, :provider) do
     case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
       nil ->
@@ -735,10 +791,17 @@ defmodule Alto.Runner.Serial do
   end
 
   defp run_subagent(spec, run) do
+    case start_subagent(spec, run) do
+      {:ok, handle} -> await_subagent(handle, spec, run)
+      {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
+    end
+  end
+
+  defp start_subagent(spec, run) do
     provider = spec.provider || run.provider
 
     if is_nil(provider) and is_nil(spec.loop) do
-      {:event, Event.durable(:subagent_failed, %{id: spec.id, error: :provider_required}), run}
+      {:error, :provider_required}
     else
       # Nil prompt options are dropped, not inherited: an explicit nil would
       # read as "present" to prompt resolution and conflict where absence is
@@ -747,6 +810,15 @@ defmodule Alto.Runner.Serial do
         run.prompt_config
         |> Keyword.take([:prompt, :system_prompt, :project_instructions])
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+      prompt_opts =
+        if spec.system_prompt do
+          prompt_opts
+          |> Keyword.drop([:prompt, :system_prompt])
+          |> Keyword.put(:system_prompt, spec.system_prompt)
+        else
+          prompt_opts
+        end
 
       # A delegated task defaults to a fresh default loop: the parent's
       # driver expects the parent's task shape, which the child task rarely
@@ -770,6 +842,8 @@ defmodule Alto.Runner.Serial do
             cwd: run.tool_context.cwd,
             tool_context_metadata: run.tool_context.metadata,
             budget: run.budget,
+            owner: self(),
+            parent_max_agent_depth: run.max_agent_depth,
             max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
             provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
             tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
@@ -793,10 +867,7 @@ defmodule Alto.Runner.Serial do
           names -> Keyword.put(sub_opts, :model_tools, names)
         end
 
-      case start(spec.task, sub_opts) do
-        {:ok, handle} -> await_subagent(handle, spec, run)
-        {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
-      end
+      start(spec.task, sub_opts)
     end
   end
 
@@ -819,49 +890,141 @@ defmodule Alto.Runner.Serial do
         case cancellation(run.cancel_ref) do
           {:cancelled, reason} ->
             cancel(handle, reason)
-            shutdown_subagent(handle)
-            {:cancelled, reason, run}
+            outcome = shutdown_subagent(handle)
+            {:cancelled, reason, merge_child_result(run, outcome)}
 
           :continue ->
             await_subagent(handle, spec, run)
         end
 
-      {:ok, result} ->
-        {:event,
-         Event.durable(:subagent_completed, %{
-           id: spec.id,
-           status: :ok,
-           output: result.output,
-           model_requests: result.model_requests
-         }), run}
-
-      {:error, {:cancelled, reason}, result} ->
-        {:event,
-         Event.durable(:subagent_completed, %{
-           id: spec.id,
-           status: :cancelled,
-           reason: reason,
-           output: result.output,
-           model_requests: result.model_requests
-         }), run}
-
-      {:error, reason, result} ->
-        {:event,
-         Event.durable(:subagent_failed, %{
-           id: spec.id,
-           error: reason,
-           output: result.output,
-           model_requests: result.model_requests
-         }), run}
+      outcome ->
+        data = subagent_data(spec.id, outcome)
+        type = if data.status == :error, do: :subagent_failed, else: :subagent_completed
+        {:event, Event.durable(type, data), merge_child_result(run, outcome)}
     end
   end
 
-  # Cooperative cancel first so the child finalizes its session records;
-  # brutal shutdown only if it outlives a bounded grace period.
   defp shutdown_subagent(handle) do
     case await(handle, @subagent_cancel_grace_ms) do
-      {:error, :await_timeout} -> Task.shutdown(handle.task, :brutal_kill)
-      _done -> :ok
+      {:error, :await_timeout} ->
+        case Task.shutdown(handle.task, :brutal_kill) do
+          {:ok, outcome} -> outcome
+          _ -> {:error, {:run_process_failed, :cancel_timeout}}
+        end
+
+      outcome ->
+        outcome
+    end
+  end
+
+  defp subagent_data(id, {:ok, result}),
+    do: Map.merge(child_fields(id, result), %{status: :ok})
+
+  defp subagent_data(id, {:error, {:cancelled, reason}, result}),
+    do: Map.merge(child_fields(id, result), %{status: :cancelled, reason: reason})
+
+  defp subagent_data(id, {:error, reason, result}),
+    do: Map.merge(child_fields(id, result), %{status: :error, error: reason})
+
+  defp subagent_data(id, {:error, reason}), do: %{id: id, status: :error, error: reason}
+
+  defp child_fields(id, result) do
+    %{
+      id: id,
+      output: result.output,
+      model_requests: result.model_requests,
+      usage: result.usage,
+      outcome: result.verdict,
+      run_id: result.run_id
+    }
+  end
+
+  defp merge_child_result(run, {:error, {:run_process_failed, _}, _}),
+    do: merge_verdict(run, :unknown)
+
+  defp merge_child_result(run, {:error, {:run_process_failed, _}}),
+    do: merge_verdict(run, :unknown)
+
+  defp merge_child_result(run, {:error, _reason, result}),
+    do: merge_child_result(run, {:ok, result})
+
+  defp merge_child_result(run, {:ok, result}) do
+    run = merge_verdict(run, result.verdict)
+    run = %{run | usage: Usage.merge(run.usage, struct(Usage, result.usage))}
+
+    Enum.reduce(
+      existing_persistence_errors(result),
+      run,
+      &add_persistence_error(&2, {:subagent, &1})
+    )
+  end
+
+  defp merge_child_result(run, _outcome), do: run
+
+  defp batch_completed(results, run) do
+    data = %{results: results}
+
+    with :ok <- check_native_result(data, run.max_tool_result_bytes),
+         {:ok, run} <-
+           append_message(run, %{
+             "role" => "user",
+             "content" =>
+               JSON.encode!(%{
+                 "type" => "alto_subagent_results",
+                 "results" => Alto.Protocol.encode_term(results)
+               })
+           }) do
+      {:event, Event.durable(:subagents_completed, data), run}
+    else
+      {:error, reason, run} -> {:error, reason, run}
+      {:error, reason} -> {:error, reason, run}
+    end
+  end
+
+  defp validate_subagent_tools(:inherit, _run), do: :ok
+
+  defp validate_subagent_tools(tools, run) do
+    inherited = Enum.map(run.tool_specs, &canonical_tool/1)
+
+    if Enum.all?(tools, &(canonical_tool(&1) in inherited)),
+      do: :ok,
+      else: {:error, :tool_scope_exceeded}
+  end
+
+  defp canonical_tool(module) when is_atom(module), do: {module, []}
+  defp canonical_tool(spec), do: spec
+
+  defp validate_batch(%{agents: agents}, run) when is_list(agents) do
+    case run.spec.subagents do
+      %BoundedSubagents{max_children: max, max_concurrency: concurrency}
+      when max in 1..64 and concurrency in 1..max//1 ->
+        cond do
+          run.agent_depth >= run.max_agent_depth -> {:error, :max_depth_exceeded}
+          agents == [] or length(agents) > max -> {:error, :max_children_exceeded}
+          true -> validate_batch_specs(agents, run, concurrency)
+        end
+
+      _ ->
+        {:error, :invalid_subagent_policy}
+    end
+  end
+
+  defp validate_batch(_data, _run), do: {:error, :invalid_agents}
+
+  defp validate_batch_specs(agents, run, concurrency) do
+    Enum.reduce_while(agents, {:ok, []}, fn request, {:ok, specs} ->
+      with {:ok, spec} <- validate_spawn(request),
+           :ok <- validate_subagent_tools(spec.tools, run),
+           false <- Enum.any?(specs, &(&1.id == spec.id)) do
+        {:cont, {:ok, [spec | specs]}}
+      else
+        true -> {:halt, {:error, :duplicate_child_id}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, specs} -> {:ok, Enum.reverse(specs), concurrency}
+      error -> error
     end
   end
 
@@ -2516,7 +2679,11 @@ defmodule Alto.Runner.Serial do
         provider_retries: Keyword.fetch!(extensions, :provider_retries),
         agent_depth: Keyword.fetch!(extensions, :agent_depth),
         resume_snapshot: Keyword.fetch!(extensions, :resume_snapshot),
-        max_agent_depth: max_agent_depth(run.spec),
+        max_agent_depth:
+          min(
+            max_agent_depth(run.spec),
+            Keyword.get(opts, :parent_max_agent_depth, max_agent_depth(run.spec))
+          ),
         tool_specs: Keyword.get(opts, :tools, []),
         prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
     }

@@ -20,10 +20,10 @@ defmodule Alto.Runner.Budget do
     timeout = Keyword.get(opts, :run_timeout, @default_run_timeout)
 
     cond do
-      not is_integer(models) or models < 1 ->
+      not valid_cap?(models) ->
         {:error, {:invalid_option, :max_model_requests, models}}
 
-      not is_integer(max_effects) or max_effects < 1 ->
+      not valid_cap?(max_effects) ->
         {:error, {:invalid_option, :max_effects, max_effects}}
 
       not is_integer(timeout) or timeout < 1 ->
@@ -94,8 +94,8 @@ defmodule Alto.Runner.Budget do
         [effects, models, max_effects, max_models, remaining]
         when is_integer(effects) and effects >= 0 and effects <= @max_uint64 and
                is_integer(models) and models >= 0 and models <= @max_uint64 and
-               is_integer(max_effects) and max_effects >= 1 and
-               is_integer(max_models) and max_models >= 1 and
+               is_integer(max_effects) and max_effects >= 1 and max_effects <= @max_uint64 and
+               is_integer(max_models) and max_models >= 1 and max_models <= @max_uint64 and
                is_integer(remaining) and remaining >= 0 ->
           :ok
 
@@ -110,20 +110,38 @@ defmodule Alto.Runner.Budget do
   end
 
   def take(%__MODULE__{} = budget) do
-    with :ok <- check(budget) do
-      if :atomics.add_get(budget.counter, 1, 1) <= budget.max_effects,
-        do: :ok,
-        else: {:error, {:effect_limit, budget.max_effects}}
-    end
+    reserve(budget, 1, budget.max_effects, {:effect_limit, budget.max_effects})
   end
 
   def take_model(%__MODULE__{} = budget) do
+    reserve(
+      budget,
+      2,
+      budget.max_model_requests,
+      {:model_request_limit, budget.max_model_requests}
+    )
+  end
+
+  defp reserve(%__MODULE__{} = budget, index, cap, limit_error) do
     with :ok <- check(budget) do
-      if :atomics.add_get(budget.counter, 2, 1) <= budget.max_model_requests,
-        do: :ok,
-        else: {:error, {:model_request_limit, budget.max_model_requests}}
+      current = :atomics.get(budget.counter, index)
+
+      cond do
+        current >= cap ->
+          {:error, limit_error}
+
+        :atomics.compare_exchange(budget.counter, index, current, current + 1) == :ok ->
+          :ok
+
+        true ->
+          # A competing reservation won the CAS. Recheck the deadline before
+          # retrying so an expired budget never reserves another slot.
+          reserve(budget, index, cap, limit_error)
+      end
     end
   end
+
+  defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max_uint64
 
   def remaining(%__MODULE__{deadline: deadline}),
     do: max(deadline - System.monotonic_time(:millisecond), 0)

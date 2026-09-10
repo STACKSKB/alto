@@ -142,3 +142,7 @@ Alto is distributed under the [MIT License](./LICENSE).
 Durable hosts can use [approval continuations](docs/checkpoints.md) to persist
 exact prepared operations, release workers while awaiting decisions, and resume
 under preserved budgets with the existing queue and operation ledger.
+
+Trusted loops can request [bounded subagent batches](docs/subagents.md), sharing
+execution budgets and inherited tool authority while running children concurrently.
+Named agent profiles, workspace allocation and communication policy remain host concerns.
