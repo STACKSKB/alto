@@ -34,3 +34,30 @@ due time and executing work early. Do not downgrade a queue containing version
 There are no background timers per record, automatic recurrences, new database,
 or application-level task concepts. Consumer polling and configured capacity
 remain the admission-to-execution mechanism.
+
+
+## Retained queue state
+
+Queues keep append-only history by default. Hosts that need bounded retained
+state rather than historical audit entries can set `auto_compact: true` or call
+`Alto.Queue.compact/1` explicitly. Automatic compaction runs before a new append
+would exceed `max_log_bytes`. It retains every pending and claimed record in
+FIFO order, exact payloads, revisions, generation/operation identities, delayed
+due times and active claim IDs/owners/lease deadlines. It does not reclaim
+leases, acknowledge unread work or cancel records as a cleanup policy.
+
+The newest `max_completed` deduplication keys retain their ordering across
+compaction and restart. Older keys remain expired under the existing bounded
+window: their old log entries are removed, and a later delivery may be admitted
+again. There is no new time-based message expiry. If the retained state plus the
+requested append cannot fit the log bound, the mutation fails explicitly;
+compaction never drops live work or shrinks the configured dedup window to fit.
+
+Replacement uses a file-and-directory-synced atomic rename while holding the
+queue's lifetime lock. A version 3 header preserves the next record ID and
+completed identities, and checks the complete retained prefix's count and hash.
+An incomplete retained snapshot fails closed; only later torn appends receive
+normal tail repair. Existing version 1/2 logs remain readable. Old readers
+reject compacted logs, so do not downgrade queues after enabling compaction.
+`compact/1` reports byte counts and retained live/completed counts. This is a
+queue-state maintenance operation, not an audit-log export.

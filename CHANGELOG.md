@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add opt-in bounded queue compaction with exact live-claim and dedup-window
+  retention. Version 3 snapshots reject incomplete retained state and preserve
+  record ID progression across restarts.
+
 - Add prepared, revision-fenced application of captured workspace patches with
   stale-file checks, retained application evidence and conservative interruption
   recovery. Preparation and application preserve the source Git index.
