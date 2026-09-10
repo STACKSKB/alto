@@ -71,6 +71,15 @@ defmodule Alto.Listeners.Connection do
             error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
         end
 
+      {:ok, {:runs, id}} ->
+        case Registry.runs(registry) do
+          {:ok, runs} ->
+            send_ok(send_line, max_line_bytes, id, %{"runs" => Protocol.encode_term(runs)})
+
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
       {:ok, {:sessions, id}} ->
         case Registry.sessions(registry) do
           {:ok, summaries} ->
@@ -83,6 +92,15 @@ defmodule Alto.Listeners.Connection do
               {:error, :overflow} ->
                 error_reply(send_line, max_line_bytes, id, "internal", :sessions_overflow)
             end
+
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
+      {:ok, {:session_transcript, id, session_id}} ->
+        case Registry.session_transcript(registry, session_id) do
+          {:ok, transcript} ->
+            send_ok(send_line, max_line_bytes, id, Protocol.encode_term(transcript))
 
           {:error, reason} ->
             error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
@@ -390,8 +408,11 @@ defmodule Alto.Listeners.Connection do
 
   defp send_ok(send_line, max_line_bytes, id, payload) do
     case Protocol.ok(id, payload, max_line_bytes) do
-      {:ok, line} -> send_line.(line)
-      {:error, :overflow} -> :ok
+      {:ok, line} ->
+        send_line.(line)
+
+      {:error, :overflow} ->
+        error_reply(send_line, max_line_bytes, id, "internal", :reply_overflow)
     end
   end
 

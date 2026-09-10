@@ -314,6 +314,24 @@ defmodule Alto.ProtocolTest do
       assert {:ok, {:sessions, "c-9"}} = Protocol.decode_command(line)
     end
 
+    test "runs decodes with no payload" do
+      line = JSON.encode!(%{"v" => 1, "type" => "runs", "id" => "c-9"})
+
+      assert {:ok, {:runs, "c-9"}} = Protocol.decode_command(line)
+    end
+
+    test "session_transcript decodes with only a session id" do
+      line =
+        JSON.encode!(%{
+          "v" => 1,
+          "type" => "session_transcript",
+          "id" => "c-9",
+          "session_id" => "sess-1"
+        })
+
+      assert {:ok, {:session_transcript, "c-9", "sess-1"}} = Protocol.decode_command(line)
+    end
+
     test "session_events decodes bounded replay parameters" do
       line =
         JSON.encode!(%{

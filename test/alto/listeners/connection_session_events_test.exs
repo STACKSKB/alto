@@ -101,4 +101,55 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
     assert reply["complete"] == false
     assert reply["high_watermark"] == 2
   end
+
+  test "runs command returns resident summaries" do
+    name = String.to_atom("conn-runs-#{System.unique_integer([:positive])}")
+    {:ok, pid} = Registry.start_link(name: name, config_resolver: fn _ -> {:error, :unknown} end)
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    line = JSON.encode!(%{"v" => 1, "type" => "runs", "id" => "c-runs"})
+    Connection.run_command(line, name, fn output -> send(self(), {:line, output}) end)
+
+    assert_receive {:line, output}
+
+    assert JSON.decode!(IO.iodata_to_binary(output)) == %{
+             "v" => 1,
+             "type" => "ok",
+             "id" => "c-runs",
+             "runs" => []
+           }
+  end
+
+  test "oversized transcript replies fail explicitly instead of timing out" do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "alto-reply-bound-#{Base.encode16(:crypto.strong_rand_bytes(8))}"
+      )
+
+    on_exit(fn -> File.rm_rf!(dir) end)
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    message = %{"role" => "user", "content" => String.duplicate("x", 4_000)}
+    :ok = Session.write_transcript(id, [message], 4_000, session_dir: dir)
+
+    pid =
+      start_supervised!(
+        {Registry, name: nil, session_dir: dir, config_resolver: fn _ -> {:error, :unknown} end}
+      )
+
+    line =
+      JSON.encode!(%{
+        "v" => 1,
+        "type" => "session_transcript",
+        "id" => "bounded",
+        "session_id" => id
+      })
+
+    Connection.run_command(line, pid, fn output -> send(self(), {:line, output}) end, 512)
+    assert_receive {:line, output}
+    reply = JSON.decode!(IO.iodata_to_binary(output))
+    assert reply["type"] == "error"
+    assert reply["id"] == "bounded"
+    assert reply["detail"] == "reply_overflow"
+  end
 end

@@ -296,6 +296,30 @@ the server's session directory — independent of the live-run replay
 window, so evicted and restarted-away runs stay discoverable. An
 unreadable store answers `error` (`internal`).
 
+**`runs`** — list resident run summaries for reconnecting clients.
+
+```json
+{"v": 1, "type": "runs", "id": "c-11"}
+```
+
+The reply is `ok` with `{"runs": [...]}`. Each summary contains `id`,
+`session_id`, `title`, `config`, `status` (`running`, `completed`,
+`cancelled`, or `failed`), `started_at_ms`, `pending_approvals`, and normalized
+`usage` (available after completion).
+Summaries are bounded by the resident finished-run window and ordered newest first.
+
+**`session_transcript`** — read the latest persisted conversation
+messages, including prompts after a resident restart.
+
+```json
+{"v": 1, "type": "session_transcript", "id": "c-12",
+ "session_id": "sess-abc123"}
+```
+
+The reply includes the latest 100 `messages`, `revision`, and `truncated`.
+A session without a resumable transcript returns `error` with code `not_found`.
+A reply that exceeds the connection envelope limit returns an explicit error.
+
 **`session_events`** — read a bounded page of durable events from a session,
 including after the resident registry has restarted.
 

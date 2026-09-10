@@ -1,5 +1,5 @@
 defmodule Alto.CLITest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
 
@@ -277,8 +277,47 @@ defmodule Alto.CLITest do
            end) == "\n"
   end
 
-  test "an omitted provider keeps the default onboarding path" do
-    assert {:error, message} = Alto.CLI.run(["--no-config", "model task"])
+  test "an omitted provider keeps the default onboarding path", %{root: root} do
+    names = [
+      "ALTO_API_KEY",
+      "OPENROUTER_API_KEY",
+      "OPENAI_API_KEY",
+      "ALTO_MODEL",
+      "ALTO_TEST_MISSING"
+    ]
+
+    previous = Map.new(names, &{&1, System.get_env(&1)})
+    Enum.each(names, &System.delete_env/1)
+    previous_state_home = System.get_env("ALTO_STATE_HOME")
+    previous_config_home = System.get_env("XDG_CONFIG_HOME")
+    System.put_env("ALTO_STATE_HOME", root)
+    System.put_env("XDG_CONFIG_HOME", root)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+
+      if previous_state_home,
+        do: System.put_env("ALTO_STATE_HOME", previous_state_home),
+        else: System.delete_env("ALTO_STATE_HOME")
+
+      if previous_config_home,
+        do: System.put_env("XDG_CONFIG_HOME", previous_config_home),
+        else: System.delete_env("XDG_CONFIG_HOME")
+    end)
+
+    assert {:error, message} =
+             Alto.CLI.run([
+               "--no-config",
+               "--model",
+               "test-model",
+               "--api-key-env",
+               "ALTO_TEST_MISSING",
+               "model task"
+             ])
+
     assert message =~ "OpenRouter API key required"
   end
 

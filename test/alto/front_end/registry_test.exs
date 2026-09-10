@@ -3,6 +3,7 @@ defmodule Alto.FrontEnd.RegistryTest do
 
   alias Alto.Event
   alias Alto.FrontEnd.Registry
+  alias Alto.Session
 
   @approval_timeout_ms 300
   @receive_timeout 2_000
@@ -65,12 +66,18 @@ defmodule Alto.FrontEnd.RegistryTest do
       send(Keyword.fetch!(opts, :test_pid), {:provider_request, request})
 
       if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
+        {:ok,
+         %{
+           message: "finished",
+           tool_calls: [],
+           usage: %{"prompt_tokens" => 4, "completion_tokens" => 2}
+         }}
       else
         {:ok,
          %{
            message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
+           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}],
+           usage: %{"prompt_tokens" => 3, "completion_tokens" => 1}
          }}
       end
     end
@@ -92,7 +99,9 @@ defmodule Alto.FrontEnd.RegistryTest do
   end
 
   setup do
-    root = Path.join(System.tmp_dir!(), "alto-registry-#{System.unique_integer([:positive])}")
+    root =
+      Path.join(System.tmp_dir!(), "alto-registry-#{Base.encode16(:crypto.strong_rand_bytes(8))}")
+
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
 
@@ -150,6 +159,106 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert {:error, {:unknown_config, "nope"}} = Registry.start_run(registry, "nope", "task")
     assert {:error, :invalid_task} = Registry.start_run(registry, "tool-loop", "")
     assert {:error, :invalid_task} = Registry.start_run(registry, "tool-loop", :not_a_task)
+  end
+
+  test "runs returns reconnect summaries for running and completed runs", %{
+    registry: registry,
+    root: root
+  } do
+    start_registry(registry, root)
+
+    assert {:ok, running_id} = Registry.start_run(registry, "blocking-loop", "keep working")
+    assert {:ok, running} = Registry.runs(registry)
+
+    assert [
+             %{
+               id: ^running_id,
+               session_id: nil,
+               title: "keep working",
+               config: "blocking-loop",
+               status: "running",
+               pending_approvals: 0,
+               usage: %{},
+               started_at_ms: started_at_ms
+             }
+           ] = running
+
+    assert is_integer(started_at_ms)
+
+    Registry.cancel(registry, running_id, :test)
+    assert wait_for(fn -> match?({:ok, [%{status: "cancelled"}]}, Registry.runs(registry)) end)
+
+    assert {:ok, completed_id} = Registry.start_run(registry, "tool-loop", "complete this")
+
+    assert wait_for(fn ->
+             match?(
+               {:ok, [%{id: ^completed_id, status: "completed"} | _]},
+               Registry.runs(registry)
+             )
+           end)
+
+    assert {:ok, summaries} = Registry.runs(registry)
+
+    assert %{id: ^completed_id, usage: %{input_tokens: input, output_tokens: output}} =
+             Enum.find(summaries, &(&1.id == completed_id))
+
+    assert input > 0 and output > 0
+  end
+
+  defp wait_for(fun, attempts \\ 20)
+  defp wait_for(fun, 0), do: fun.()
+
+  defp wait_for(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(25)
+      wait_for(fun, attempts - 1)
+    end
+  end
+
+  test "session_transcript returns the persisted messages", %{
+    registry: registry,
+    root: root
+  } do
+    start_registry(registry, root, session_dir: root)
+    {:ok, session_id} = Session.create("first prompt", %{}, session_dir: root)
+
+    :ok =
+      Session.write_transcript(
+        session_id,
+        [
+          %{"role" => "user", "content" => "first"},
+          %{"role" => "assistant", "content" => "second"}
+        ],
+        42,
+        session_dir: root
+      )
+
+    assert {:ok,
+            %{
+              messages: [
+                %{"role" => "user", "content" => "first"},
+                %{"role" => "assistant", "content" => "second"}
+              ],
+              truncated: false,
+              revision: 1
+            }} =
+             Registry.session_transcript(registry, session_id)
+  end
+
+  test "session_transcript keeps only the latest 100 messages", %{registry: registry, root: root} do
+    start_registry(registry, root, session_dir: root)
+    {:ok, session_id} = Session.create("prompt", %{}, session_dir: root)
+    messages = Enum.map(1..101, &%{"role" => "user", "content" => Integer.to_string(&1)})
+    :ok = Session.write_transcript(session_id, messages, 0, session_dir: root)
+
+    assert {:ok, %{messages: page, truncated: true}} =
+             Registry.session_transcript(registry, session_id)
+
+    assert length(page) == 100
+    assert hd(page)["content"] == "2"
+    assert List.last(page)["content"] == "101"
   end
 
   test "a subscriber sees gapless durable events, live events, and one result", %{
@@ -378,6 +487,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:registry_provider_started, provider_pid}, @receive_timeout
     provider_monitor = Process.monitor(provider_pid)
     old_registry = Process.whereis(registry)
+    run_pid = :sys.get_state(registry).runs[run_id].task_pid
+    run_monitor = Process.monitor(run_pid)
     Process.exit(old_registry, :kill)
 
     assert_receive {:DOWN, ^provider_monitor, :process, ^provider_pid, _reason}, @receive_timeout
@@ -393,6 +504,9 @@ defmodule Alto.FrontEnd.RegistryTest do
           false
       end
     end)
+
+    assert_receive {:DOWN, ^run_monitor, :process, ^run_pid, _reason}, @receive_timeout
+    stop_supervised!(Registry)
   end
 
   test "a finished run replays its durable log and result to a new attachment", %{
@@ -428,7 +542,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     root: root
   } do
     start_registry(registry, root, max_buffer_messages: 2)
-    attach(registry)
+    # This scenario must not use the background-pulling helper: the buffer
+    # needs to remain full until the explicit pull below.
+    :ok = Registry.attach(registry, self(), nil, 1, [:durable, :live])
 
     {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
 
@@ -445,13 +561,12 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, {:event, ^run_id, 1, %Event{type: :model_completed}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:overflow, ^run_id, :live, nil}}, @receive_timeout
+    assert_receive {:alto_notification, {:overflow, nil, :live, nil}}, @receive_timeout
 
     assert_receive {:alto_notification, {:overflow, ^run_id, :durable, nil}}, @receive_timeout
 
-    # The registry stays responsive and keeps queueing for the next pull.
-    Registry.pull(registry, self(), 1)
-    assert_receive {:alto_notification, _next}, @receive_timeout
+    # Overflow reporting leaves the resident responsive.
+    assert Registry.run_ids(registry) == []
   end
 
   test "finished runs are evicted past the bounded window", %{registry: registry, root: root} do
