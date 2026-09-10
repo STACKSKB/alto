@@ -3,20 +3,31 @@ defmodule Alto.Subagents do
 
   defmodule Bounded do
     @moduledoc false
-    defstruct max_depth: 0, max_children: 16, max_concurrency: 1, workspaces: nil
+    defstruct max_depth: 0,
+              max_children: 16,
+              max_concurrency: 1,
+              workspaces: nil,
+              sessions: :shared
 
     @type t :: %__MODULE__{
             max_depth: non_neg_integer(),
             max_children: pos_integer(),
             max_concurrency: pos_integer(),
-            workspaces: Alto.Workspaces.t() | nil
+            workspaces: Alto.Workspaces.t() | nil,
+            sessions: :shared | :separate
           }
   end
 
   @spec bounded(keyword()) :: Bounded.t()
   def bounded(opts \\ []) do
     opts =
-      Keyword.validate!(opts, max_depth: 0, max_children: 16, max_concurrency: 1, workspaces: nil)
+      Keyword.validate!(opts,
+        max_depth: 0,
+        max_children: 16,
+        max_concurrency: 1,
+        workspaces: nil,
+        sessions: :shared
+      )
 
     max_depth = Keyword.fetch!(opts, :max_depth)
 
@@ -37,11 +48,17 @@ defmodule Alto.Subagents do
     unless is_nil(workspaces) or is_struct(workspaces, Alto.Workspaces),
       do: raise(ArgumentError, "workspaces must be an Alto.Workspaces manager")
 
+    sessions = Keyword.fetch!(opts, :sessions)
+
+    unless sessions in [:shared, :separate],
+      do: raise(ArgumentError, "sessions must be :shared or :separate")
+
     %Bounded{
       max_depth: max_depth,
       max_children: max_children,
       max_concurrency: max_concurrency,
-      workspaces: workspaces
+      workspaces: workspaces,
+      sessions: sessions
     }
   end
 end

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional separate child sessions with independent transcript snapshots,
+  parent/identity links and child session IDs in delegation results. Shared
+  session behavior remains the default; independent child recovery is pending.
+
 - Add opt-in bounded queue compaction with exact live-claim and dedup-window
   retention. Version 3 snapshots reject incomplete retained state and preserve
   record ID progression across restarts.

@@ -959,14 +959,12 @@ defmodule Alto.Runner.Serial do
             max_transcript_bytes: run.max_transcript_bytes,
             max_events: run.max_events,
             event_sink: subagent_sink(run, spec.id),
-            session: run.session,
             session_dir: run.session_dir,
             parent_run_id: run.tool_context.session_id,
             agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
             parent_model_tools: run.model_tools,
-            agent_depth: run.agent_depth + 1,
-            resume_snapshot: false
-          ]
+            agent_depth: run.agent_depth + 1
+          ] ++ child_session_options(run)
 
       sub_opts =
         case spec.model_tools do
@@ -977,6 +975,14 @@ defmodule Alto.Runner.Serial do
       start(spec.task, sub_opts)
     end
   end
+
+  defp child_session_options(%{session: nil}), do: [session: nil, resume_snapshot: false]
+
+  defp child_session_options(%{spec: %{subagents: %BoundedSubagents{sessions: :separate}}} = run),
+    do: [session: :new, resume_snapshot: true, parent_session_id: run.session]
+
+  defp child_session_options(run),
+    do: [session: run.session, resume_snapshot: false, parent_session_id: run.session]
 
   defp subagent_tools(:inherit, run), do: run.tool_specs
   defp subagent_tools(tools, _run), do: tools
@@ -1043,6 +1049,7 @@ defmodule Alto.Runner.Serial do
       usage: result.usage,
       outcome: result.verdict,
       run_id: result.run_id,
+      session_id: result.session_id,
       workspace: result.workspace
     }
   end
@@ -2286,9 +2293,8 @@ defmodule Alto.Runner.Serial do
   defp put_persistence({:error, reason, result}, status),
     do: {:error, reason, %{result | persistence: status}}
 
-  # Only the root run owns the resume snapshot: children share the session
-  # log for audit, but the sidecar has one root-owned revision stream. A child
-  # finalizing inside the cancel grace window must not overwrite the parent.
+  # Shared-session children cannot write the parent's sidecar. A child with
+  # a separate session owns its own snapshot and revision stream.
   defp persist_transcript(%{resume_snapshot: false}, _result), do: :ok
   defp persist_transcript(%{checkpoint_resume: true}, %{loop_state: nil}), do: :ok
 
@@ -2317,6 +2323,7 @@ defmodule Alto.Runner.Serial do
       Session.completed_record(%{
         run_id: run.tool_context.session_id,
         subagent: run.agent_depth > 0,
+        session_owner: run.agent_depth == 0 or run.resume_snapshot,
         outcome: outcome,
         reason: reason,
         output: result.output,
@@ -2835,7 +2842,10 @@ defmodule Alto.Runner.Serial do
         Session.started_record(%{
           run_id: run.tool_context.session_id,
           parent_run_id: Keyword.get(opts, :parent_run_id),
+          parent_session_id: Keyword.get(opts, :parent_session_id),
+          agent_identity: run.agent_identity,
           subagent: Keyword.fetch!(extensions, :agent_depth) > 0,
+          session_owner: run.agent_depth == 0 or run.resume_snapshot,
           task: task,
           provider: provider_module,
           model: model,

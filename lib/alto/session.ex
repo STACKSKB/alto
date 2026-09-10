@@ -42,6 +42,8 @@ defmodule Alto.Session do
           id: session_id(),
           started_at_ms: non_neg_integer() | nil,
           task: String.t() | nil,
+          parent_session_id: session_id() | nil,
+          agent_identity: map() | nil,
           runs: non_neg_integer(),
           completed_runs: non_neg_integer(),
           last_outcome: String.t() | nil
@@ -373,7 +375,10 @@ defmodule Alto.Session do
       "at_ms" => System.system_time(:millisecond),
       "run_id" => Map.get(fields, :run_id),
       "parent_run_id" => Map.get(fields, :parent_run_id),
+      "parent_session_id" => Map.get(fields, :parent_session_id),
+      "agent_identity" => Alto.Protocol.encode_term(Map.get(fields, :agent_identity)),
       "subagent" => Map.get(fields, :subagent, false),
+      "session_owner" => Map.get(fields, :session_owner, not Map.get(fields, :subagent, false)),
       "task" => preview_task(Map.get(fields, :task)),
       "provider" => Map.get(fields, :provider),
       "model" => Map.get(fields, :model),
@@ -415,6 +420,7 @@ defmodule Alto.Session do
       "type" => "completed",
       "run_id" => Map.get(fields, :run_id),
       "subagent" => Map.get(fields, :subagent, false),
+      "session_owner" => Map.get(fields, :session_owner, not Map.get(fields, :subagent, false)),
       "outcome" => Map.get(fields, :outcome),
       "reason" => maybe_term(Map.get(fields, :reason)),
       "output" => maybe_term(Map.get(fields, :output)),
@@ -610,9 +616,12 @@ defmodule Alto.Session do
 
   defp summarize(id, opts) do
     with {:ok, records} <- read(id, opts) do
-      # Subagent runs share the session log for audit, but a session's
-      # resumable history and listing summary belong to its root runs.
-      root? = fn record -> record["subagent"] != true end
+      # Legacy/shared child records do not own this session. Separate children
+      # own their own transcript and listing while retaining their ancestry.
+      root? = fn record ->
+        Map.get(record, "session_owner", record["subagent"] != true) == true
+      end
+
       started = Enum.find(records, &(&1["type"] == "started" and root?.(&1)))
       completed = Enum.filter(records, &(&1["type"] == "completed" and root?.(&1)))
 
@@ -621,6 +630,8 @@ defmodule Alto.Session do
          id: id,
          started_at_ms: started && started["at_ms"],
          task: started && started["task"],
+         parent_session_id: started && started["parent_session_id"],
+         agent_identity: started && started["agent_identity"],
          runs: Enum.count(records, &(&1["type"] == "started" and root?.(&1))),
          completed_runs: length(completed),
          last_outcome: completed |> List.last() |> outcome_of()

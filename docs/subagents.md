@@ -43,7 +43,7 @@ fields as `spawn_agent/1`: required `:id` and `:task`, with optional provider,
 loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
-`reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, and an optional `workspace` resource reference.
+`reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.
 A child that could not start has only `id`, `status: :error`, and `error`. The single-child events are `:subagent_completed` or
 `:subagent_failed`; a batch emits one `:subagents_completed` event containing
 `%{results: results}`.
@@ -88,13 +88,40 @@ does not get to alter runtime capabilities through prompt text. A trusted loop
 may also add a bounded `context_message` to a model request; Alto records it as
 a user message and validates it under the transcript limit.
 
-Child runs share the parent session when one is configured, but a child is not
-an independently durable job ledger entry. Session persistence is best effort
-for the shared run and does not turn a child into a separately recoverable
-queue job. Checkpoints are root-only: an independent child cannot suspend and
-resume a shared parent checkpoint. Checkpoint fingerprints include the
-subagent policy and tool configuration, so changing those trusted settings
-invalidates an old packet.
+## Child sessions
+
+The default `sessions: :shared` policy keeps child audit events in the parent's
+session log. Only the parent owns that session's transcript sidecar. A trusted
+host can instead select independent child logs and transcript snapshots:
+
+```elixir
+Alto.Subagents.bounded(
+  max_depth: 1, max_children: 4, max_concurrency: 2, sessions: :separate)
+```
+
+When the parent has a session, each child receives a fresh session ID in the
+same private session directory. Completed child results expose `session_id`;
+the parent's durable completion event retains these links. Child startup
+records retain `parent_session_id`, `parent_run_id` and the host-derived
+`agent_identity`. Separate children own their transcript revision and listing
+summary, while keeping `subagent: true` as ancestry metadata. Session summaries
+include parent-session and execution-tree identity links. A parent without
+persistence does not create child logs even when separate sessions are selected.
+The policy applies to the children of that loop; a recursively delegating child
+chooses its own session policy through its trusted loop specification.
+
+Separate child conversations are readable after completion without mixing
+sibling transcripts or changing the parent's transcript. Shared budgets,
+tool/depth authority and owned cancellation remain unchanged. Persistence is
+still best effort: child logging failures propagate as degraded persistence in
+the parent result. A session is not a durable dispatch or join ledger. A crash
+before the parent records a result can leave a child log with only its backward
+link; applications must not infer execution or retry eligibility from it.
+
+Checkpoints remain root-only. Independently suspended children, durable shared
+budget accounting and recovered parent joins are not implemented by this
+option. Checkpoint fingerprints include the subagent policy and tool
+configuration, so changing those trusted settings invalidates an old packet.
 
 
 ## Execution-tree identity
