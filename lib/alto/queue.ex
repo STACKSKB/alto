@@ -274,12 +274,21 @@ defmodule Alto.Queue do
   @doc """
   Restore one operator-authorized recovery envelope under its original
   semantic operation identity. The derived recovery delivery key is
-  insert-only, so repeating the same restore is harmless.
+  insert-only, so repeating the same restore is harmless. An optional
+  recovery_revision positive integer derives a distinct key for each later
+  ledger-approved grant; ledger reconciliation remains a separate required
+  authorization step.
   """
   @spec restore(GenServer.server(), binary(), binary(), map()) ::
           {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
   def restore(server \\ __MODULE__, operation_key, generation_id, payload) do
-    GenServer.call(server, {:restore, operation_key, generation_id, payload})
+    restore(server, operation_key, generation_id, payload, [])
+  end
+
+  @spec restore(GenServer.server(), binary(), binary(), map(), keyword()) ::
+          {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
+  def restore(server, operation_key, generation_id, payload, opts) when is_list(opts) do
+    GenServer.call(server, {:restore, operation_key, generation_id, payload, opts})
   end
 
   @doc "Claim up to `count` oldest pending records under a fresh lease."
@@ -328,6 +337,13 @@ defmodule Alto.Queue do
   @spec cancel(GenServer.server(), binary()) :: :ok | {:error, :not_found}
   def cancel(server \\ __MODULE__, key) do
     GenServer.call(server, {:cancel, key})
+  end
+
+  @doc "Cancel key only when every matching live record is pending."
+  @spec cancel_pending(GenServer.server(), binary()) ::
+          :ok | {:error, :not_found | {:key_claimed, binary()} | term()}
+  def cancel_pending(server \\ __MODULE__, key) do
+    GenServer.call(server, {:cancel_pending, key})
   end
 
   @doc "Pending and claimed counts."
@@ -665,13 +681,18 @@ defmodule Alto.Queue do
   end
 
   @impl true
-  def handle_call({:restore, operation_key, generation_id, payload}, _from, state) do
+  def handle_call({:restore, operation_key, generation_id, payload}, from, state) do
+    handle_call({:restore, operation_key, generation_id, payload, []}, from, state)
+  end
+
+  def handle_call({:restore, operation_key, generation_id, payload, opts}, _from, state) do
     reclaimed_state = reclaim_expired(state)
-    key = recovery_key(operation_key)
 
     with :ok <- validate_key(operation_key, reclaimed_state),
          :ok <- validate_generation(generation_id),
          :ok <- validate_payload(payload, reclaimed_state),
+         {:ok, recovery_revision} <- recovery_revision(opts),
+         key <- recovery_key(operation_key, recovery_revision),
          :ok <- check_not_completed(reclaimed_state, key),
          {:ok, record, log, next_id} <-
            build_restore(reclaimed_state, key, operation_key, generation_id, payload),
@@ -763,24 +784,24 @@ defmodule Alto.Queue do
       |> Map.values()
       |> Enum.filter(&(&1.key == key))
 
-    case victims do
-      [] ->
+    cancel_records(state, key, victims)
+  end
+
+  def handle_call({:cancel_pending, key}, _from, state) do
+    victims =
+      state.records
+      |> Map.values()
+      |> Enum.filter(&(&1.key == key))
+
+    cond do
+      victims == [] ->
         {:reply, {:error, :not_found}, state}
 
-      victims ->
-        logs =
-          Enum.map(victims, fn record ->
-            %{"v" => @version, "type" => "blank", "id" => record.id, "reason" => "cancelled"}
-          end)
+      Enum.any?(victims, &(&1.status == :claimed)) ->
+        {:reply, {:error, {:key_claimed, key}}, state}
 
-        case append(state, logs) do
-          :ok ->
-            state = Enum.reduce(victims, state, &drop_record(&2, &1.id))
-            {:reply, :ok, track_completed(state, key)}
-
-          {:error, reason} ->
-            {:reply, {:error, {:queue_write_failed, reason}}, state}
-        end
+      true ->
+        cancel_records(state, key, victims)
     end
   end
 
@@ -840,6 +861,26 @@ defmodule Alto.Queue do
 
     reply = if result, do: {:ok, result}, else: {:error, :not_found}
     {:reply, reply, state}
+  end
+
+  defp cancel_records(state, _key, []) do
+    {:reply, {:error, :not_found}, state}
+  end
+
+  defp cancel_records(state, key, victims) do
+    logs =
+      Enum.map(victims, fn record ->
+        %{"v" => @version, "type" => "blank", "id" => record.id, "reason" => "cancelled"}
+      end)
+
+    case append(state, logs) do
+      :ok ->
+        state = Enum.reduce(victims, state, &drop_record(&2, &1.id))
+        {:reply, :ok, track_completed(state, key)}
+
+      {:error, reason} ->
+        {:reply, {:error, {:queue_write_failed, reason}}, state}
+    end
   end
 
   # Completed-delivery window: newest-first, unique, bounded. Expiry is
@@ -1313,9 +1354,31 @@ defmodule Alto.Queue do
   defp validate_generation(id) when is_binary(id) and byte_size(id) in 1..256, do: :ok
   defp validate_generation(id), do: {:error, {:invalid_generation_id, id}}
 
-  defp recovery_key(operation_key) do
+  defp recovery_key(operation_key, nil) do
     digest = :crypto.hash(:sha256, operation_key) |> Base.url_encode64(padding: false)
     "recovery-" <> digest
+  end
+
+  defp recovery_key(operation_key, revision) do
+    digest =
+      :crypto.hash(:sha256, :erlang.term_to_binary({operation_key, revision}))
+      |> Base.url_encode64(padding: false)
+
+    "recovery-" <> digest
+  end
+
+  defp recovery_revision(opts) do
+    if Keyword.keyword?(opts) and
+         Keyword.keys(opts) |> Enum.uniq() == Keyword.keys(opts) and
+         Enum.all?(Keyword.keys(opts), &(&1 == :recovery_revision)) do
+      case Keyword.get(opts, :recovery_revision) do
+        nil -> {:ok, nil}
+        revision when is_integer(revision) and revision > 0 -> {:ok, revision}
+        other -> {:error, {:invalid_recovery_revision, other}}
+      end
+    else
+      {:error, {:invalid_recovery_revision, opts}}
+    end
   end
 
   defp put_record(state, %Record{} = record) do

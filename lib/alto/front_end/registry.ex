@@ -101,6 +101,9 @@ defmodule Alto.FrontEnd.Registry do
       without an explicit per-call budget (default 1 MiB minus envelope
       reserve); transports pass their own `max_line_bytes`-derived budget
       per call so claims never outgrow the connection;
+    * :commands — optional map of non-empty binary names to trusted arity-one
+      callbacks. A callback receives a map and returns a map, {:ok, map()},
+      or {:error, reason}; it runs outside the registry process;
     * `:disconnect_after_overflow` — `:never` (default) or `:immediately`;
     * `:sessions` — served-run session persistence (, explicit opt-in,
       default `false` keeps served runs unpersisted): `true` persists each
@@ -117,7 +120,9 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   @doc """
-  Start a run from a trusted, resolver-resolvable configuration name.
+  Start a run from a trusted, resolver-resolvable configuration name. An
+  optional owner pid may be supplied in opts; it receives Serial's
+  cancellation guarantee, while the registry process is the default owner.
 
   Options: `:resume` — continue a persisted session id instead of starting
   fresh. The session must exist with a resumable (completed-run) transcript
@@ -130,6 +135,36 @@ defmodule Alto.FrontEnd.Registry do
   def start_run(server \\ __MODULE__, config_name, task, opts \\ []) do
     GenServer.call(server, {:start_run, config_name, task, opts})
   end
+
+  @doc "Return the authoritative stored runner return for a run."
+  @spec run_result(GenServer.server(), String.t()) ::
+          :running | {:ok, Serial.run_result()} | {:error, :unknown_run}
+  def run_result(server \\ __MODULE__, run_id) do
+    GenServer.call(server, {:run_result, run_id})
+  end
+
+  @doc "Invoke a trusted, configured application command callback."
+  @spec command(GenServer.server(), binary(), map()) :: {:ok, map()} | {:error, term()}
+  def command(server \\ __MODULE__, name, payload)
+
+  def command(server, name, payload) when is_binary(name) and is_map(payload) do
+    with {:ok, callback} <- GenServer.call(server, {:command_callback, name}) do
+      try do
+        case callback.(payload) do
+          result when is_map(result) -> {:ok, result}
+          {:ok, result} when is_map(result) -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+          _other -> {:error, :invalid_command_result}
+        end
+      rescue
+        exception -> {:error, {:command_exception, Exception.message(exception)}}
+      catch
+        kind, reason -> {:error, {:command_throw, kind, reason}}
+      end
+    end
+  end
+
+  def command(_server, _name, _payload), do: {:error, :invalid_command}
 
   @doc "The session id owning a run, or `nil` when the run is unpersisted."
   @spec run_session(GenServer.server(), String.t()) :: String.t() | nil
@@ -288,6 +323,7 @@ defmodule Alto.FrontEnd.Registry do
       max_retained_events: Keyword.get(opts, :max_retained_events, @default_max_retained_events),
       max_finished_runs: Keyword.get(opts, :max_finished_runs, @default_max_finished_runs),
       max_claim_bytes: Keyword.get(opts, :max_claim_bytes, @default_max_claim_bytes),
+      commands: Keyword.get(opts, :commands, %{}),
       sessions_enabled: sessions_enabled,
       session_dir: session_dir,
       disconnect_after_overflow:
@@ -299,7 +335,8 @@ defmodule Alto.FrontEnd.Registry do
 
     with :ok <- validate_capacity_options(state),
          :ok <- validate_max_finished_runs(state.max_finished_runs),
-         :ok <- validate_max_claim_bytes(state.max_claim_bytes) do
+         :ok <- validate_max_claim_bytes(state.max_claim_bytes),
+         :ok <- validate_commands(state.commands) do
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
@@ -323,6 +360,21 @@ defmodule Alto.FrontEnd.Registry do
 
   defp validate_max_claim_bytes(n) when is_integer(n) and n >= 0, do: :ok
   defp validate_max_claim_bytes(n), do: {:error, {:invalid_max_claim_bytes, n}}
+
+  defp validate_owner(owner) when is_pid(owner), do: :ok
+  defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
+
+  defp validate_commands(commands) when is_map(commands) do
+    if Enum.all?(commands, fn {name, callback} ->
+         is_binary(name) and name != "" and is_function(callback, 1)
+       end) do
+      :ok
+    else
+      {:error, {:invalid_option, :commands, commands}}
+    end
+  end
+
+  defp validate_commands(commands), do: {:error, {:invalid_option, :commands, commands}}
 
   defp validate_max_finished_runs(n) when is_integer(n) and n >= 0, do: :ok
   defp validate_max_finished_runs(n), do: {:error, {:invalid_max_finished_runs, n}}
@@ -356,7 +408,10 @@ defmodule Alto.FrontEnd.Registry do
 
   @impl true
   def handle_call({:start_run, config_name, task, opts}, _from, state) do
-    with :ok <- active_capacity(state),
+    owner = Keyword.get(opts, :owner, self())
+
+    with :ok <- validate_owner(owner),
+         :ok <- active_capacity(state),
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
          {:ok, session_opts} <- resume_opts(Keyword.get(opts, :resume), state) do
@@ -368,7 +423,7 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
-        |> Keyword.put(:owner, me)
+        |> Keyword.put(:owner, owner)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
         |> Keyword.put(:event_sink, fn event ->
           GenServer.call(me, {:ingest_run_event, run_id, event})
@@ -398,6 +453,21 @@ defmodule Alto.FrontEnd.Registry do
     else
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:run_result, run_id}, _from, state) do
+    case Map.fetch(state.runs, run_id) do
+      {:ok, %{status: :running}} -> {:reply, :running, state}
+      {:ok, %{result: result}} -> {:reply, {:ok, result}, state}
+      :error -> {:reply, {:error, :unknown_run}, state}
+    end
+  end
+
+  def handle_call({:command_callback, name}, _from, state) do
+    case Map.fetch(state.commands, name) do
+      {:ok, callback} -> {:reply, {:ok, callback}, state}
+      :error -> {:reply, {:error, :unknown_command}, state}
     end
   end
 

@@ -126,9 +126,17 @@ defmodule Alto.Storage do
         {:error, {:lock_process_exit, status}}
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
-        Port.close(port)
+        close_port(port)
         {:error, :timeout}
     end
+  end
+
+  # The OS process can exit at the timeout boundary before its exit-status
+  # message is received. Closing an already closed port is harmless cleanup.
+  defp close_port(port) do
+    Port.close(port)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp timeout_seconds(timeout), do: :erlang.float_to_binary(timeout / 1_000, decimals: 3)

@@ -236,6 +236,19 @@ defmodule Alto.OperationLog do
     GenServer.call(server, {:attempts, op_key})
   end
 
+  @doc "Atomically reject an intended operation before dispatch, fenced by revision."
+  @spec reject_intended(GenServer.server(), op_key(), pos_integer(), map()) ::
+          :ok | {:error, term()}
+  def reject_intended(server \\ __MODULE__, op_key, expected_revision, evidence \\ %{}) do
+    GenServer.call(server, {:reject_intended, op_key, expected_revision, evidence})
+  end
+
+  @doc "All retained operation keys, oldest first, including released/intended entries."
+  @spec keys(GenServer.server()) :: [op_key()]
+  def keys(server \\ __MODULE__) do
+    GenServer.call(server, :keys)
+  end
+
   @doc "Operation keys with no recorded outcome, oldest first (operator review)."
   @spec list_open(GenServer.server()) :: [op_key()]
   def list_open(server \\ __MODULE__) do
@@ -454,6 +467,53 @@ defmodule Alto.OperationLog do
       {:ok, entry} -> {:reply, length(entry.attempts), state}
       :error -> {:reply, 0, state}
     end
+  end
+
+  def handle_call({:reject_intended, op_key, expected_revision, evidence}, _from, state) do
+    with :ok <- validate_key(op_key),
+         :ok <- validate_revision(expected_revision),
+         :ok <- validate_evidence(evidence, state),
+         {:ok, entry} <- fetch_op(state, op_key),
+         :ok <- expect_revision(entry, expected_revision) do
+      cond do
+        entry.outcome != nil ->
+          {:reply, {:error, :already_decided}, state}
+
+        active_attempt?(entry) ->
+          {:reply, {:error, :attempt_in_flight}, state}
+
+        true ->
+          attempt = rejection_attempt(op_key)
+          scrubbed = scrub(evidence)
+
+          log = %{
+            "v" => @version,
+            "t" => "reject",
+            "op" => op_key,
+            "expected_revision" => expected_revision,
+            "attempt" => attempt,
+            "evidence" => scrubbed,
+            "at_ms" => System.system_time(:millisecond)
+          }
+
+          case apply_rejection(state, op_key, log) do
+            {:ok, next_state} ->
+              case append(state, log) do
+                :ok -> {:reply, :ok, evict_decided(next_state)}
+                {:error, reason} -> {:reply, {:error, reason}, state}
+              end
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(:keys, _from, state) do
+    {:reply, state.order, state}
   end
 
   def handle_call(:list_open, _from, state) do
@@ -1094,6 +1154,13 @@ defmodule Alto.OperationLog do
     end
   end
 
+  defp log_apply(state, "reject", op, entry) do
+    case apply_rejection(state, op, entry) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> migration_required(state, op, {:invalid_rejection, reason})
+    end
+  end
+
   defp log_apply(state, "reconcile", op, entry) do
     with {:ok, record} <- fetch_op(state, op),
          :ok <- expect_revision(record, entry["expected_revision"]),
@@ -1108,6 +1175,40 @@ defmodule Alto.OperationLog do
 
   defp migration_required(state, op, reason) do
     {:error, {:ledger_migration_required, state.id, op, reason}}
+  end
+
+  defp apply_rejection(state, op, entry) do
+    with {:ok, record} <- fetch_op(state, op),
+         :ok <- validate_revision(entry["expected_revision"]),
+         :ok <- expect_revision(record, entry["expected_revision"]),
+         :ok <- validate_attempt(entry["attempt"], state),
+         :ok <- validate_evidence(entry["evidence"] || %{}, state) do
+      cond do
+        record.outcome != nil ->
+          {:error, :already_decided}
+
+        active_attempt?(record) ->
+          {:error, :attempt_in_flight}
+
+        length(record.attempts) >= state.max_attempts ->
+          {:error, :attempt_history_full}
+
+        entry["attempt"] in record.attempts ->
+          {:error, :duplicate_attempt}
+
+        true ->
+          outcome = {:rejected_before_dispatch, entry["evidence"], entry["attempt"]}
+
+          record = %{
+            record
+            | attempts: record.attempts ++ [entry["attempt"]],
+              outcome: outcome,
+              revision: record.revision + 1
+          }
+
+          {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      end
+    end
   end
 
   defp outcome_class("completed"), do: {:ok, :completed}
@@ -1137,6 +1238,11 @@ defmodule Alto.OperationLog do
     end
   rescue
     error -> {:error, {:ledger_unencodable, Exception.message(error)}}
+  end
+
+  defp rejection_attempt(op_key) do
+    digest = :crypto.hash(:sha256, op_key) |> Base.url_encode64(padding: false)
+    "rejected-" <> digest
   end
 
   defp validate_record_bytes(encoded, state) do

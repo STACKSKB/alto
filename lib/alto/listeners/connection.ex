@@ -174,6 +174,15 @@ defmodule Alto.Listeners.Connection do
           "input is reserved and not implemented in v1"
         )
 
+      {:ok, {:command, id, name, payload}} ->
+        case Registry.command(registry, name, payload) do
+          {:ok, result} ->
+            send_ok(send_line, max_line_bytes, id, result)
+
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
       {:ok, {:reload, id, _config}} ->
         error_reply(
           send_line,
@@ -376,6 +385,11 @@ defmodule Alto.Listeners.Connection do
   end
 
   defp error_code(:unknown_run), do: "unknown_run"
+  defp error_code(:unknown_command), do: "unknown_command"
+  defp error_code(:invalid_command), do: "invalid"
+  defp error_code(:invalid_command_result), do: "internal"
+  defp error_code({:command_exception, _reason}), do: "internal"
+  defp error_code({:command_throw, _kind, _reason}), do: "internal"
   defp error_code({:unknown_config, _config}), do: "not_found"
   defp error_code(:not_found), do: "not_found"
   defp error_code(:invalid), do: "invalid"
