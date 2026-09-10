@@ -145,4 +145,5 @@ under preserved budgets with the existing queue and operation ledger.
 
 Trusted loops can request [bounded subagent batches](docs/subagents.md), sharing
 execution budgets and inherited tool authority while running children concurrently.
-Named agent profiles, workspace allocation and communication policy remain host concerns.
+Hosts can opt into durable isolated Git workspaces and immutable patch capture.
+Named agent profiles, patch integration and communication policy remain host concerns.

@@ -779,26 +779,23 @@ defmodule Alto.OperationLog do
 
   defp read_status(state, op_key) do
     case Map.fetch(state.ops, op_key) do
-      :error ->
-        :no_intent
-
-      {:ok, %{attempts: [], outcome: nil}} ->
-        {:intended}
-
-      {:ok, %{checkpoint_active: true, checkpoint: checkpoint, attempts: attempts}} ->
-        {:checkpointed, checkpoint, List.last(attempts)}
-
-      {:ok, %{attempts: attempts, released: released, outcome: nil}} ->
-        if List.last(attempts) in released do
-          {:intended}
-        else
-          {:dispatched, List.last(attempts)}
-        end
-
-      {:ok, %{outcome: {class, evidence, _attempt}}} ->
-        {:decided, class, evidence}
+      :error -> :no_intent
+      {:ok, entry} -> entry_status(entry)
     end
   end
+
+  defp entry_status(%{attempts: [], outcome: nil}), do: {:intended}
+
+  defp entry_status(%{checkpoint_active: true, checkpoint: checkpoint, attempts: attempts}),
+    do: {:checkpointed, checkpoint, List.last(attempts)}
+
+  defp entry_status(%{attempts: attempts, released: released, outcome: nil}) do
+    if List.last(attempts) in released,
+      do: {:intended},
+      else: {:dispatched, List.last(attempts)}
+  end
+
+  defp entry_status(%{outcome: {class, evidence, _attempt}}), do: {:decided, class, evidence}
 
   defp fetch_op(state, op_key) do
     case Map.fetch(state.ops, op_key) do
@@ -860,6 +857,7 @@ defmodule Alto.OperationLog do
   defp recovery_view(op_key, entry) do
     %{
       operation_key: op_key,
+      status: entry_status(entry),
       revision: entry.revision,
       tool: entry.tool,
       inbox_key: entry.inbox,

@@ -61,7 +61,8 @@ defmodule Alto.DurableLog do
   defp maybe_sync_parent(_path, true), do: :ok
   defp maybe_sync_parent(path, false), do: sync_directory(Path.dirname(path))
 
-  defp sync_directory(dir) do
+  @doc false
+  def sync_directory(dir) do
     case System.cmd("sync", ["-d", dir], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:directory_sync_failed, status, String.trim(output)}}

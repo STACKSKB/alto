@@ -25,6 +25,7 @@ defmodule Alto.Runner.Serial.Result do
     :session_id,
     :run_id,
     :agent_identity,
+    workspace: nil,
     checkpoint: nil,
     usage: %{},
     persistence: :not_requested
@@ -42,6 +43,7 @@ defmodule Alto.Runner.Serial.Result do
           session_id: String.t() | nil,
           run_id: String.t() | nil,
           agent_identity: %{root_run_id: binary(), path: [binary()]} | nil,
+          workspace: map() | nil,
           checkpoint: map() | nil,
           usage: map(),
           persistence: :not_requested | :ok | {:degraded, [term()]}

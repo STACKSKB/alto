@@ -43,7 +43,7 @@ fields as `spawn_agent/1`: required `:id` and `:task`, with optional provider,
 loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
-`reason` for cancellation, `model_requests`, `usage`, `outcome`, and `run_id`.
+`reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, and an optional `workspace` resource reference.
 A child that could not start has only `id`, `status: :error`, and `error`. The single-child events are `:subagent_completed` or
 `:subagent_failed`; a batch emits one `:subagents_completed` event containing
 `%{results: results}`.
@@ -121,3 +121,65 @@ for addressed consumers. A bounded exact map selector filters payload fields
 inside the atomic claim operation, before applying existing due-time, FIFO,
 wire-byte and lease rules. Unrelated records are not claimed. The queue remains
 one bounded store; applications define envelopes, addresses and authorization.
+
+
+## Isolated coding workspaces
+
+A host can opt a bounded subagent policy into independent Git checkouts:
+
+```elixir
+{:ok, ledger} = Alto.OperationLog.start_link(
+  id: "workspaces", name: nil, dir: "/private/alto-state/operations", max_ops: 128)
+manager = Alto.Workspaces.new(
+  root: "/private/alto-state/workspaces", ledger: ledger)
+policy = Alto.Subagents.bounded(
+  max_depth: 1, max_children: 4, max_concurrency: 2, workspaces: manager)
+# Use policy as the parent loop's :subagents option.
+```
+
+The host captures one clean source commit before admitting the batch. Each
+execution-tree child identity gets its own local clone, object store and index.
+The runner sets the child's tool cwd; a spawn request cannot choose another
+cwd. Descendants inherit the manager along with existing authority and budgets.
+Use a unique child ID for each assignment within a root execution: an already
+used workspace is retained for review and cannot execute that assignment again.
+
+The built-in Git backend requires an ordinary repository with a `.git`
+directory and a clean source checkout. Dirty sources, linked source worktrees,
+submodules, source-local filters, alternates and symlinked paths are rejected
+explicitly. Ignored build output is neither cloned nor captured; it does not consume checkout bounds.
+Source bytes, file counts, checkout bytes, patch bytes and command time are
+bounded. Host-global Git configuration and inherited Git environment are
+excluded; hooks and external diff commands are disabled.
+
+Git metadata lives beside the checkout, outside the directory exposed to file
+tools. A frozen patch also lives outside that directory and is checked against
+its recorded hash whenever read. These are separate writable workspaces, not
+an operating-system security sandbox: unrestricted commands and custom tools
+retain their configured authority. Use an appropriate command executor when
+process-level filesystem or network isolation is required.
+
+Creation, worker use and patch capture are resource operations in the existing
+`Alto.OperationLog`. Dispatch is recorded before mutation. Ready, worked and
+frozen resources are nonterminal checkpoints and cannot be evicted to make room
+for another workspace. A process crash leaves its unfinished operation visible;
+Alto does not repeat it automatically. A grant interrupted before dispatch is
+also retained for review. Cooperative child cancellation releases its lock
+once the runner has stopped, while uncertain workspace failures propagate an
+unknown verdict to the parent.
+
+Completed child results contain a `workspace` map with its ID, revision,
+status and metadata, including the source commit and frozen patch hash.
+`Alto.Workspaces.get/2` inspects it; `patch/2` returns the bounded immutable Git
+diff. Hosts can also use `prepare/2`, `create/3`, `use/4` and `freeze/3` directly
+with an optional backend implementing `snapshot/2`, `checkout/3` and `diff/3`.
+A backend must return bounded JSON snapshot metadata and cannot supply runtime
+credentials in that metadata.
+
+`discard/4` requires the viewed revision and an explanatory note. It holds the
+same operating-system resource lock as worker use, so cleanup cannot remove a
+live worker's files. Interrupted resources remain cleanup obligations until
+explicitly discarded. Workspace storage survives ledger restart; it does not
+make the child run independently resumable. Applying a patch to the lead's
+checkout remains a separate reviewed integration operation; capture never
+modifies the source checkout.

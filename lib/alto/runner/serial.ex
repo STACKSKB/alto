@@ -54,6 +54,16 @@ defmodule Alto.Runner.Serial do
 
   @spec run(term(), keyword()) :: run_result()
   def run(task, opts \\ []) do
+    case Keyword.pop(opts, :workspace_assignment) do
+      {nil, opts} ->
+        run_without_workspace(task, opts)
+
+      {{manager, snapshot, identity}, opts} ->
+        run_in_workspace(task, opts, manager, snapshot, identity)
+    end
+  end
+
+  defp run_without_workspace(task, opts) do
     opts = Keyword.put_new_lazy(opts, :session_id, &generate_run_id/0)
 
     opts =
@@ -413,7 +423,8 @@ defmodule Alto.Runner.Serial do
   end
 
   defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
-    with {:ok, specs, concurrency} <- validate_batch(data, run) do
+    with {:ok, specs, concurrency} <- validate_batch(data, run),
+         {:ok, specs} <- prepare_subagent_workspaces(specs, run) do
       {status, outcomes} =
         Alto.Runner.SubagentBatch.run(specs, concurrency, &start_subagent(&1, run), fn ->
           case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
@@ -791,10 +802,103 @@ defmodule Alto.Runner.Serial do
   end
 
   defp run_subagent(spec, run) do
-    case start_subagent(spec, run) do
-      {:ok, handle} -> await_subagent(handle, spec, run)
+    with {:ok, [prepared]} <- prepare_subagent_workspaces([spec], run),
+         {:ok, handle} <- start_subagent(prepared, run) do
+      await_subagent(handle, spec, run)
+    else
       {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
     end
+  end
+
+  defp configured_workspaces(%BoundedSubagents{workspaces: manager}), do: manager
+  defp configured_workspaces(_), do: nil
+
+  defp prepare_subagent_workspaces(specs, %{workspaces: nil}), do: {:ok, specs}
+
+  defp prepare_subagent_workspaces(specs, run) do
+    with {:ok, snapshot} <-
+           workspace_call(
+             fn -> Alto.Workspaces.prepare(run.workspaces, run.tool_context.cwd) end,
+             run.budget,
+             run.tool_timeout,
+             run.cancel_ref
+           ) do
+      {:ok,
+       Enum.map(specs, fn spec ->
+         identity = child_agent_identity(run.tool_context.agent_identity, spec.id)
+         Map.put(spec, :workspace_assignment, {run.workspaces, snapshot, identity})
+       end)}
+    end
+  end
+
+  # Resource setup/capture are bounded, cancellable operations. Worker execution
+  # stays in this owned run process, holding the resource lock until it returns.
+  defp run_in_workspace(task, opts, manager, snapshot, identity) do
+    budget = Keyword.fetch!(opts, :budget)
+    timeout = Keyword.get(opts, :tool_timeout, @default_tool_timeout)
+    cancel_ref = Keyword.get(opts, :cancel_ref)
+
+    with {:ok, ready} <-
+           workspace_call(
+             fn -> Alto.Workspaces.create(manager, snapshot, identity) end,
+             budget,
+             timeout,
+             cancel_ref
+           ),
+         {:ok, outcome, worked} <-
+           Alto.Workspaces.use(manager, ready.id, ready.revision, fn workspace ->
+             run_without_workspace(task, Keyword.put(opts, :cwd, workspace["cwd"]))
+           end) do
+      case workspace_call(
+             fn -> Alto.Workspaces.freeze(manager, worked.id, worked.revision) end,
+             budget,
+             timeout,
+             cancel_ref
+           ) do
+        {:ok, frozen} ->
+          attach_workspace(outcome, frozen)
+
+        {:error, reason} ->
+          info =
+            case Alto.Workspaces.get(manager, worked.id) do
+              {:ok, current} -> current
+              _ -> worked
+            end
+
+          workspace_failure(outcome, info, reason)
+      end
+    else
+      {:error, reason, outcome} ->
+        workspace_failure(outcome, nil, reason)
+
+      {:error, reason} ->
+        {:error, {:workspace_failed, reason},
+         %{empty_result() | verdict: :unknown, agent_identity: identity}}
+    end
+  end
+
+  defp workspace_call(fun, budget, timeout, cancel_ref) do
+    case Budget.check(budget) do
+      :ok ->
+        case supervised_call(fun, Budget.timeout(budget, timeout), cancel_ref) do
+          {:ok, value} -> value
+          {:error, reason} -> {:error, {:workspace_process_failed, reason}}
+          {:cancelled, reason} -> {:error, {:cancelled, reason}}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp attach_workspace({:ok, result}, info), do: {:ok, %{result | workspace: info}}
+
+  defp attach_workspace({:error, reason, result}, info),
+    do: {:error, reason, %{result | workspace: info}}
+
+  defp workspace_failure(outcome, info, reason) do
+    result = elem(outcome, tuple_size(outcome) - 1)
+    {:error, {:workspace_failed, reason}, %{result | verdict: :unknown, workspace: info}}
   end
 
   defp start_subagent(spec, run) do
@@ -840,6 +944,8 @@ defmodule Alto.Runner.Serial do
           prompt_opts ++
           [
             cwd: run.tool_context.cwd,
+            workspace_assignment: Map.get(spec, :workspace_assignment),
+            parent_workspaces: run.workspaces,
             tool_context_metadata: run.tool_context.metadata,
             budget: run.budget,
             owner: self(),
@@ -936,7 +1042,8 @@ defmodule Alto.Runner.Serial do
       model_requests: result.model_requests,
       usage: result.usage,
       outcome: result.verdict,
-      run_id: result.run_id
+      run_id: result.run_id,
+      workspace: result.workspace
     }
   end
 
@@ -2410,6 +2517,9 @@ defmodule Alto.Runner.Serial do
       agent_depth: 0,
       agent_identity: agent_identity,
       max_agent_depth: 0,
+      workspaces:
+        Keyword.get(opts, :parent_workspaces) ||
+          configured_workspaces(settings.spec.subagents),
       resume_snapshot: true,
       tool_specs: [],
       prompt_config: []
