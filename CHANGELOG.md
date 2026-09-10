@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add persisted due times and fenced delayed release to the existing queue.
+  Scheduled records use log version 2 so old readers cannot execute them early.
+  See [delayed queue semantics](docs/delayed-queue.md).
 - Add bounded session event replay over the frontend protocol, with stable
   ordinals, readable payloads and detection of cursors beyond stored history.
 - Add optional owner-bound asynchronous runs. Resident registry termination

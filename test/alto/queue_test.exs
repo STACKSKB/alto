@@ -128,6 +128,83 @@ defmodule Alto.QueueTest do
     end
   end
 
+  describe "delayed scheduling" do
+    defp controlled_clock do
+      {:ok, clock} = Agent.start_link(fn -> 10_000 end)
+      {clock, fn -> Agent.get(clock, & &1) end}
+    end
+
+    test "future work is skipped while later due work remains claimable", %{dir: dir, id: id} do
+      {clock, now} = controlled_clock()
+      %{name: name} = start_queue!(id: id, dir: dir, clock: now)
+      {:ok, _} = Queue.put(name, "future", %{}, delay_ms: 100)
+      {:ok, _} = Queue.put(name, "now", %{})
+
+      assert {:ok, [%{key: "now"}]} = Queue.claim(name, 1)
+      Agent.update(clock, &(&1 + 100))
+      assert {:ok, [%{key: "future"}]} = Queue.claim(name, 1)
+    end
+
+    test "admission dedup is first wins including its schedule", %{dir: dir, id: id} do
+      {_clock, now} = controlled_clock()
+      %{name: name} = start_queue!(id: id, dir: dir, clock: now)
+      assert {:ok, _} = Queue.admit(name, "delivery-1", %{v: 1}, delay_ms: 100)
+      assert {:error, :duplicate} = Queue.admit(name, "delivery-1", %{v: 2}, delay_ms: 0)
+      assert {:ok, []} = Queue.claim(name)
+    end
+
+    test "a delayed record keeps its due time across restart", %{dir: dir, id: id} do
+      {clock, now} = controlled_clock()
+      %{name: name, pid: pid} = start_queue!(id: id, dir: dir, clock: now)
+      due = now.() + 100
+      {:ok, _} = Queue.put(name, "restart", %{}, not_before_ms: due)
+      GenServer.stop(pid)
+      %{name: name2} = start_queue!(id: id, dir: dir, clock: now)
+
+      assert {:ok, []} = Queue.claim(name2)
+      Agent.update(clock, &(&1 + 100))
+      assert {:ok, [%{key: "restart"}]} = Queue.claim(name2)
+    end
+
+    test "delayed release persists and stale owners cannot change the schedule", %{
+      dir: dir,
+      id: id
+    } do
+      {clock, now} = controlled_clock()
+      %{name: queue, pid: pid} = start_queue!(id: id, dir: dir, clock: now, lease_ms: 100)
+      {:ok, _} = Queue.put(queue, "retry", %{})
+      {:ok, [first]} = Queue.claim(queue)
+      Agent.update(clock, &(&1 + 100))
+      assert {:error, :lease_expired} = Queue.reschedule(queue, first.claim_id, 500)
+      {:ok, [second]} = Queue.claim(queue)
+      assert {:error, :not_found} = Queue.reschedule(queue, first.claim_id, 500)
+      assert :ok = Queue.reschedule(queue, second.claim_id, 300)
+      GenServer.stop(pid)
+      %{name: restarted} = start_queue!(id: id, dir: dir, clock: now)
+      assert {:ok, []} = Queue.claim_bounded(restarted, 1, "consumer", 10_000)
+      Agent.update(clock, &(&1 + 300))
+
+      assert {:ok, [%{key: "retry", not_before_ms: 10_400}]} =
+               Queue.claim_bounded(restarted, 1, "consumer", 10_000)
+    end
+
+    test "scheduled transitions use a version that older readers reject", %{dir: dir, id: id} do
+      {_clock, now} = controlled_clock()
+      %{name: queue} = start_queue!(id: id, dir: dir, clock: now)
+      {:ok, _} = Queue.put(queue, "immediate", %{})
+      {:ok, _} = Queue.put(queue, "scheduled", %{}, delay_ms: 100)
+
+      [immediate, scheduled] =
+        Path.join(dir, id <> ".jsonl")
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.map(&JSON.decode!/1)
+
+      assert immediate["v"] == 1
+      assert scheduled["v"] == 2
+    end
+  end
+
   describe "key dedup semantics" do
     test "business generations survive updates and rotate after completion", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
@@ -494,6 +571,34 @@ defmodule Alto.QueueTest do
       assert_raise ArgumentError, ~r/invalid queue id/, fn ->
         Queue.start_link(id: "../escape", dir: tmp_root(), name: unique_id())
       end
+    end
+  end
+
+  describe "scheduling input validation" do
+    test "invalid scheduling options return errors and keep queue alive", %{dir: dir, id: id} do
+      %{name: name} = start_queue!(id: id, dir: dir)
+
+      assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, unknown: 1)
+      assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, [:delay_ms])
+
+      assert {:error, {:invalid_clock, :bad}} =
+               Queue.start_link(id: unique_id(), dir: dir, name: unique_id(), clock: :bad)
+
+      assert {:ok, _} = Queue.put(name, "good", %{})
+      assert {:ok, [%{key: "good"}]} = Queue.claim(name)
+    end
+
+    test "invalid persisted release schedule fails startup", %{dir: dir, id: id} do
+      path = Path.join(dir, id <> ".jsonl")
+      File.mkdir_p!(dir)
+
+      File.write!(
+        path,
+        JSON.encode!(%{"v" => 1, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
+          "\n"
+      )
+
+      assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
     end
   end
 end
