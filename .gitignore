@@ -1,0 +1,14 @@
+/_build/
+/cover/
+/deps/
+**/deps/
+**/_build/
+/doc/
+/.elixir_ls/
+/erl_crash.dump
+*.ez
+*.tar
+/alto
+/.zcode/
+/alto-[0-9]*/
+/packages/alto_tui/alto_tui-[0-9]*/
