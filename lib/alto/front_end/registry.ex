@@ -414,7 +414,7 @@ defmodule Alto.FrontEnd.Registry do
          :ok <- active_capacity(state),
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
-         {:ok, session_opts} <- resume_opts(Keyword.get(opts, :resume), state) do
+         {:ok, session_opts} <- execution_session_opts(opts, state) do
       run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
       me = self()
 
@@ -740,6 +740,7 @@ defmodule Alto.FrontEnd.Registry do
     {status, result} =
       case run.status do
         :running -> {"running", nil}
+        {:done, {:error, :approval_suspended}, _, _} -> {"suspended", run.result}
         {:done, :ok, _, _} -> {"completed", run.result}
         {:done, {:cancelled, _}, _, _} -> {"cancelled", run.result}
         _ -> {"failed", run.result}
@@ -1161,6 +1162,23 @@ defmodule Alto.FrontEnd.Registry do
   # Reads the resumable transcript up front so an unrestorable session
   # fails the start instead of running with invented history. Mirrors
   # Alto.resume/3 over the registry's session directory.
+  # Checkpoint packets are accepted only through this trusted Elixir API.
+  # Socket start_run never accepts continuation state or approval decisions.
+  defp execution_session_opts(opts, state) do
+    case Keyword.get(opts, :checkpoint) do
+      nil ->
+        resume_opts(Keyword.get(opts, :resume), state)
+
+      {%{"session_id" => session} = packet, decision} when decision in [:approve, :deny] ->
+        with :ok <- Alto.Session.validate_id(session) do
+          {:ok, [session: session, checkpoint: {packet, decision}]}
+        end
+
+      _ ->
+        {:error, :invalid_checkpoint}
+    end
+  end
+
   defp resume_opts(nil, state) do
     if state.sessions_enabled do
       {:ok, [session: Alto.Session.generate_id()]}

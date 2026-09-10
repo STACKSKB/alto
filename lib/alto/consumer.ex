@@ -232,6 +232,10 @@ defmodule Alto.Consumer do
       {:intended} ->
         dispatch(op, claim_id, record.payload, state)
 
+      {:checkpointed, _checkpoint, _attempt} ->
+        ack_quietly(state, claim_id)
+        :acked_checkpoint
+
       {:dispatched, attempt} ->
         park_existing(
           op,
@@ -282,7 +286,15 @@ defmodule Alto.Consumer do
   end
 
   defp attempt_count(state, op) do
-    {:ok, Alto.OperationLog.attempts(ledger(state), op)}
+    total = Alto.OperationLog.attempts(ledger(state), op)
+
+    checkpointed =
+      case Alto.OperationLog.recovery(ledger(state), op) do
+        {:ok, %{checkpointed_attempts: attempts}} -> length(attempts)
+        _ -> 0
+      end
+
+    {:ok, max(total - checkpointed, 0)}
   catch
     :exit, reason -> {:error, {:ledger_unavailable, reason}}
   end
@@ -355,11 +367,28 @@ defmodule Alto.Consumer do
       {:retry, _reason} ->
         retry(op, claim_id, state)
 
+      {:checkpoint, checkpoint} when is_map(checkpoint) ->
+        checkpoint(op, claim_id, checkpoint, state)
+
       {:park, reason} ->
         park(op, claim_id, :parked_by_handler, %{reason: inspect(reason, limit: 5)}, state)
 
       other ->
         park(op, claim_id, :invalid_verdict, %{verdict: inspect(other, limit: 3)}, state)
+    end
+  end
+
+  defp checkpoint(op, claim_id, data, state) do
+    with :ok <-
+           ledger_call(state, fn ->
+             Alto.OperationLog.record_checkpoint(ledger(state), op, claim_id, data)
+           end) do
+      ack_quietly(state, claim_id)
+      :checkpointed
+    else
+      {:error, reason} ->
+        release_quietly(state, claim_id)
+        {:error, reason}
     end
   end
 

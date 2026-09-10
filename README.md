@@ -138,3 +138,7 @@ external side effects in the host application while Alto enforces its own
 execution and resource boundaries.
 
 Alto is distributed under the [MIT License](./LICENSE).
+
+Durable hosts can use [approval continuations](docs/checkpoints.md) to persist
+exact prepared operations, release workers while awaiting decisions, and resume
+under preserved budgets with the existing queue and operation ledger.

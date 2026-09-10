@@ -16,6 +16,7 @@ defmodule Alto.Config do
     :tools,
     :model_tools,
     :approval,
+    :checkpoint_version,
     :prompt,
     :system_prompt,
     :project_instructions,

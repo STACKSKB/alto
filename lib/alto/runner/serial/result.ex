@@ -24,6 +24,7 @@ defmodule Alto.Runner.Serial.Result do
     :transcript_bytes,
     :session_id,
     :run_id,
+    checkpoint: nil,
     usage: %{},
     persistence: :not_requested
   ]
@@ -39,6 +40,7 @@ defmodule Alto.Runner.Serial.Result do
           transcript_bytes: non_neg_integer(),
           session_id: String.t() | nil,
           run_id: String.t() | nil,
+          checkpoint: map() | nil,
           usage: map(),
           persistence: :not_requested | :ok | {:degraded, [term()]}
         }

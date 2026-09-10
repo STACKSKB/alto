@@ -27,6 +27,8 @@ defmodule Alto.OperationLog do
     * `{:dispatched, attempt}` + live work → MUST reconcile with the
       authoritative participant or park as `:requires_operator` — never
       re-dispatch blindly and never ack;
+    * `{:checkpointed, packet, attempt}` + live work → ack without execution;
+      a revision-fenced host decision is required before a continuation;
     * `{:decided, class, _}` + live work → ack *without* re-running (the
       evidence stands; success is never invented from a transcript, it is
       read from the recorded outcome);
@@ -37,8 +39,9 @@ defmodule Alto.OperationLog do
   key, the tool name, and the inbox key. Attempt keeps the attempt id
   (consumers pass the queue `claim_id`, which already rotates per owner).
   Evidence is scrubbed of credential-shaped keys before persistence. Raw
-  tool arguments, credentials, and unrelated external domain state are
-  never written here.
+  continuation and recovery packets are exact and are not scrubbed; their
+  messages and tool values require private storage. Hosts exclude provider
+  credentials and live capabilities from continuation packets.
 
   Bounds: indexed operations ≤ `max_ops` (default 10,000); only *decided*
   operations are evicted (oldest first), undecided work is never dropped —
@@ -96,6 +99,7 @@ defmodule Alto.OperationLog do
           :no_intent
           | {:intended}
           | {:dispatched, String.t()}
+          | {:checkpointed, map(), String.t()}
           | {:decided, Alto.Effect.Outcome.class(), map()}
 
   ## Client API
@@ -224,6 +228,16 @@ defmodule Alto.OperationLog do
     GenServer.call(server, {:outcome, op_key, attempt_id, class, evidence})
   end
 
+  @doc "Persist a nonterminal continuation checkpoint for the current attempt."
+  def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint) do
+    GenServer.call(server, {:checkpoint, op_key, attempt_id, checkpoint})
+  end
+
+  @doc "Record a host decision to resume a checkpoint, fenced by revision."
+  def resume_checkpoint(server \\ __MODULE__, op_key, expected_revision, decision) do
+    GenServer.call(server, {:resume_checkpoint, op_key, expected_revision, decision})
+  end
+
   @doc "Recovery status for `op_key` (see the module recovery table)."
   @spec status(GenServer.server(), op_key()) :: status()
   def status(server \\ __MODULE__, op_key) do
@@ -344,6 +358,11 @@ defmodule Alto.OperationLog do
                   attempts: [],
                   released: [],
                   outcome: nil,
+                  checkpoint: nil,
+                  checkpoint_decision: nil,
+                  checkpoint_active: false,
+                  checkpointed_attempts: [],
+                  checkpoint_grant_revision: nil,
                   revision: 1
                 }
 
@@ -369,6 +388,9 @@ defmodule Alto.OperationLog do
       cond do
         entry.outcome != nil ->
           {:reply, {:error, :already_decided}, state}
+
+        entry.checkpoint_active ->
+          {:reply, {:error, :checkpoint_active}, state}
 
         attempt_id in entry.attempts ->
           if attempt_id == current_attempt(entry) and active_attempt?(entry) do
@@ -397,6 +419,7 @@ defmodule Alto.OperationLog do
               entry = %{
                 entry
                 | attempts: entry.attempts ++ [attempt_id],
+                  checkpoint_active: false,
                   revision: entry.revision + 1
               }
 
@@ -424,6 +447,9 @@ defmodule Alto.OperationLog do
         entry.outcome != nil and not outcome_can_be_escalated?(entry.outcome, class) ->
           {:reply, {:error, :already_decided}, state}
 
+        entry.checkpoint_active ->
+          {:reply, {:error, :checkpoint_active}, state}
+
         attempt_id != current_attempt(entry) or attempt_id in entry.released ->
           {:reply, {:error, :stale_attempt}, state}
 
@@ -448,6 +474,98 @@ defmodule Alto.OperationLog do
 
               state = %{state | ops: Map.put(state.ops, op_key, entry)}
               {:reply, :ok, evict_decided(state)}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:checkpoint, op_key, attempt_id, checkpoint}, _from, state) do
+    with :ok <- validate_key(op_key),
+         :ok <- validate_attempt(attempt_id, state),
+         :ok <- validate_checkpoint(checkpoint, state),
+         {:ok, entry} <- fetch_op(state, op_key) do
+      cond do
+        entry.outcome != nil ->
+          {:reply, {:error, :already_decided}, state}
+
+        entry.checkpoint_active ->
+          {:reply, {:error, :checkpoint_active}, state}
+
+        attempt_id != current_attempt(entry) or attempt_id in entry.released ->
+          {:reply, {:error, :stale_attempt}, state}
+
+        true ->
+          log = %{
+            "v" => @version,
+            "t" => "checkpoint",
+            "op" => op_key,
+            "expected_revision" => entry.revision,
+            "attempt" => attempt_id,
+            "checkpoint" => checkpoint,
+            "at_ms" => System.system_time(:millisecond)
+          }
+
+          case append(state, log) do
+            :ok ->
+              entry = %{
+                entry
+                | checkpoint: checkpoint,
+                  checkpoint_active: true,
+                  checkpoint_decision: nil,
+                  checkpointed_attempts: Enum.uniq(entry.checkpointed_attempts ++ [attempt_id]),
+                  checkpoint_grant_revision: nil,
+                  revision: entry.revision + 1
+              }
+
+              {:reply, :ok, %{state | ops: Map.put(state.ops, op_key, entry)}}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:resume_checkpoint, op_key, expected_revision, decision}, _from, state) do
+    with :ok <- validate_key(op_key),
+         :ok <- validate_revision(expected_revision),
+         :ok <- validate_checkpoint_decision(decision, state),
+         {:ok, entry} <- fetch_op(state, op_key),
+         :ok <- expect_revision(entry, expected_revision) do
+      cond do
+        not entry.checkpoint_active ->
+          {:reply, {:error, :not_checkpointed}, state}
+
+        true ->
+          log = %{
+            "v" => @version,
+            "t" => "checkpoint_resume",
+            "op" => op_key,
+            "expected_revision" => expected_revision,
+            "decision" => decision,
+            "at_ms" => System.system_time(:millisecond)
+          }
+
+          case append(state, log) do
+            :ok ->
+              entry = %{
+                entry
+                | checkpoint_decision: decision,
+                  checkpoint_active: false,
+                  checkpoint_grant_revision: entry.revision + 1,
+                  released: Enum.uniq(entry.released ++ [current_attempt(entry)]),
+                  revision: entry.revision + 1
+              }
+
+              state = %{state | ops: Map.put(state.ops, op_key, entry)}
+              {:reply, {:ok, recovery_view(op_key, entry)}, state}
 
             {:error, reason} ->
               {:reply, {:error, reason}, state}
@@ -626,6 +744,9 @@ defmodule Alto.OperationLog do
         attempt_id in entry.released ->
           {:reply, :ok, state}
 
+        entry.checkpoint_active ->
+          {:reply, {:error, :checkpoint_active}, state}
+
         true ->
           log = %{
             "v" => @version,
@@ -663,6 +784,9 @@ defmodule Alto.OperationLog do
 
       {:ok, %{attempts: [], outcome: nil}} ->
         {:intended}
+
+      {:ok, %{checkpoint_active: true, checkpoint: checkpoint, attempts: attempts}} ->
+        {:checkpointed, checkpoint, List.last(attempts)}
 
       {:ok, %{attempts: attempts, released: released, outcome: nil}} ->
         if List.last(attempts) in released do
@@ -741,7 +865,11 @@ defmodule Alto.OperationLog do
       inbox_key: entry.inbox,
       recovery: entry.recovery,
       current_attempt: current_attempt_or_nil(entry),
-      outcome: entry.outcome
+      outcome: entry.outcome,
+      checkpoint: entry.checkpoint,
+      checkpoint_decision: entry.checkpoint_decision,
+      checkpoint_grant_revision: entry.checkpoint_grant_revision,
+      checkpointed_attempts: entry.checkpointed_attempts
     }
   end
 
@@ -751,6 +879,7 @@ defmodule Alto.OperationLog do
   defp expect_revision(%{revision: revision}, revision), do: :ok
   defp expect_revision(_entry, _expected), do: {:error, :stale_revision}
 
+  defp ensure_reconcilable(%{checkpoint_active: true}), do: {:error, :checkpoint_active}
   defp ensure_reconcilable(%{outcome: nil, attempts: [_ | _]}), do: :ok
 
   defp ensure_reconcilable(%{outcome: {class, _evidence, _attempt}})
@@ -863,6 +992,26 @@ defmodule Alto.OperationLog do
   end
 
   defp validate_recovery(recovery, _state), do: {:error, {:invalid_recovery, recovery}}
+
+  defp validate_checkpoint(value, state) when is_map(value) do
+    if :erlang.external_size(value) <= state.max_recovery_bytes do
+      try do
+        json = JSON.encode!(value)
+
+        case JSON.decode(json) do
+          {:ok, ^value} -> :ok
+          _ -> {:error, :invalid_checkpoint}
+        end
+      rescue
+        _ -> {:error, :invalid_checkpoint}
+      end
+    else
+      {:error, :invalid_checkpoint}
+    end
+  end
+
+  defp validate_checkpoint(_value, _state), do: {:error, :invalid_checkpoint}
+  defp validate_checkpoint_decision(value, state), do: validate_checkpoint(value, state)
 
   defp encode_recovery(nil), do: nil
   defp encode_recovery(recovery), do: SessionStore.encode_term(recovery)
@@ -1040,6 +1189,11 @@ defmodule Alto.OperationLog do
           attempts: [],
           released: [],
           outcome: nil,
+          checkpoint: nil,
+          checkpoint_decision: nil,
+          checkpoint_active: false,
+          checkpointed_attempts: [],
+          checkpoint_grant_revision: nil,
           revision: 1
         }
 
@@ -1057,6 +1211,9 @@ defmodule Alto.OperationLog do
           cond do
             record.outcome != nil ->
               migration_required(state, op, {:attempt_after_outcome, attempt})
+
+            record.checkpoint_active ->
+              migration_required(state, op, :attempt_during_checkpoint)
 
             attempt in record.attempts ->
               if attempt == current_attempt(record) and active_attempt?(record) do
@@ -1100,6 +1257,9 @@ defmodule Alto.OperationLog do
             record.outcome != nil ->
               migration_required(state, op, {:release_after_outcome, attempt})
 
+            record.checkpoint_active ->
+              migration_required(state, op, :release_during_checkpoint)
+
             attempt != current_attempt(record) ->
               migration_required(state, op, {:stale_release, attempt})
 
@@ -1134,6 +1294,9 @@ defmodule Alto.OperationLog do
               record.attempts == [] ->
                 {:error, :orphan_outcome}
 
+              record.checkpoint_active ->
+                migration_required(state, op, :outcome_during_checkpoint)
+
               attempt != current_attempt(record) or attempt in record.released ->
                 migration_required(state, op, {:stale_outcome, attempt})
 
@@ -1158,6 +1321,52 @@ defmodule Alto.OperationLog do
     case apply_rejection(state, op, entry) do
       {:ok, state} -> {:ok, state}
       {:error, reason} -> migration_required(state, op, {:invalid_rejection, reason})
+    end
+  end
+
+  defp log_apply(state, "checkpoint", op, entry) do
+    with {:ok, record} <- fetch_op(state, op),
+         :ok <- validate_attempt(entry["attempt"], state),
+         :ok <- validate_revision(entry["expected_revision"]),
+         :ok <- validate_checkpoint(entry["checkpoint"], state),
+         :ok <- expect_revision(record, entry["expected_revision"]) do
+      if record.outcome == nil and not record.checkpoint_active and
+           entry["attempt"] == current_attempt(record) and
+           entry["attempt"] not in record.released do
+        record = %{
+          record
+          | checkpoint: entry["checkpoint"],
+            checkpoint_active: true,
+            checkpoint_decision: nil,
+            checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [entry["attempt"]]),
+            revision: record.revision + 1
+        }
+
+        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      else
+        migration_required(state, op, :invalid_checkpoint)
+      end
+    end
+  end
+
+  defp log_apply(state, "checkpoint_resume", op, entry) do
+    with {:ok, record} <- fetch_op(state, op),
+         :ok <- expect_revision(record, entry["expected_revision"]),
+         :ok <- validate_checkpoint(entry["decision"], state) do
+      if record.checkpoint_active do
+        record = %{
+          record
+          | checkpoint_decision: entry["decision"],
+            checkpoint_active: false,
+            checkpoint_grant_revision: record.revision + 1,
+            released: Enum.uniq(record.released ++ [current_attempt(record)]),
+            revision: record.revision + 1
+        }
+
+        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      else
+        migration_required(state, op, :not_checkpointed)
+      end
     end
   end
 

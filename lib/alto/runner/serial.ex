@@ -56,6 +56,12 @@ defmodule Alto.Runner.Serial do
   def run(task, opts \\ []) do
     opts = Keyword.put_new_lazy(opts, :session_id, &generate_run_id/0)
 
+    opts =
+      case Keyword.get(opts, :checkpoint) do
+        {%{"session_id" => session}, _decision} -> Keyword.put(opts, :session, session)
+        _ -> opts
+      end
+
     case normalize_session_opt(Keyword.get(opts, :session)) do
       {:ok, session} ->
         opts = Keyword.put(opts, :session, session)
@@ -63,10 +69,19 @@ defmodule Alto.Runner.Serial do
         case new_run(task, opts) do
           {:ok, run} ->
             outcome =
-              case call_policy(fn -> Runtime.init(run.spec, task) end, run) do
-                {:ok, transition} -> drive(transition, run, [])
-                {:cancelled, reason} -> cancelled(reason, run)
-                {:error, reason} -> {:error, reason, result(run, nil, :error)}
+              case Keyword.get(opts, :checkpoint) do
+                nil ->
+                  case call_policy(fn -> Runtime.init(run.spec, task) end, run) do
+                    {:ok, transition} -> drive(transition, run, [])
+                    {:cancelled, reason} -> cancelled(reason, run)
+                    {:error, reason} -> {:error, reason, result(run, nil, :error)}
+                  end
+
+                {packet, decision} ->
+                  resume_checkpoint(run, packet, decision, opts)
+
+                _ ->
+                  {:error, :invalid_checkpoint, result(run, nil, :error)}
               end
 
             persist_session_outcome(run, outcome)
@@ -189,7 +204,24 @@ defmodule Alto.Runner.Serial do
   defp do_execute([effect | rest], run, terminal) do
     interpreted = with :ok <- Budget.take(run.budget), do: interpret(effect, run)
 
+    finish_effect(interpreted, rest, run, terminal)
+  end
+
+  defp finish_effect(interpreted, rest, run, terminal) do
     case interpreted do
+      {:suspend, pending, next_run} ->
+        case checkpoint_call(
+               fn -> Alto.Runner.Checkpoint.capture(next_run, pending, rest, terminal) end,
+               next_run
+             ) do
+          {:ok, packet} ->
+            value = %{result(next_run, nil, :checkpoint) | checkpoint: packet}
+            {:error, :approval_suspended, value}
+
+          {:error, reason} ->
+            {:error, reason, result(next_run, nil, :error)}
+        end
+
       {:error, reason} ->
         {:error, reason, result(run, nil, :error)}
 
@@ -223,6 +255,53 @@ defmodule Alto.Runner.Serial do
 
       {:cancelled, reason, next_run} ->
         cancelled(reason, next_run)
+    end
+  end
+
+  defp resume_checkpoint(run, packet, decision, opts) do
+    with {:ok, restored, frame} <-
+           checkpoint_call(
+             fn -> Alto.Runner.Checkpoint.restore(run, packet, decision, opts) end,
+             run
+           ),
+         :ok <- Budget.check(restored.budget),
+         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool) do
+      pending = frame.pending
+
+      interpreted =
+        if decision == :approve do
+          run_tool(
+            pending.request.call_id,
+            pending.request.tool,
+            pending.prepared,
+            tool,
+            restored,
+            pending.request.operation_id,
+            pending.origin
+          )
+        else
+          tool_failure(
+            pending.request.call_id,
+            pending.request.tool,
+            {:approval_denied, :user},
+            restored,
+            pending.request.operation_id,
+            Outcome.pre_dispatch(:user),
+            pending.origin
+          )
+        end
+
+      finish_effect(interpreted, frame.remaining, restored, frame.terminal)
+    else
+      {:error, reason} -> {:error, reason, result(run, nil, :error)}
+    end
+  end
+
+  defp checkpoint_call(fun, run) do
+    case supervised_call(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
+      {:ok, value} -> value
+      {:error, reason} -> {:error, {:checkpoint_process_failed, reason}}
+      {:cancelled, reason} -> {:error, {:cancelled, reason}}
     end
   end
 
@@ -868,6 +947,9 @@ defmodule Alto.Runner.Serial do
             :ok ->
               run_tool(call_id, name, prepared, tool, run, op_id, origin)
 
+            {:suspend, request} ->
+              {:suspend, %{request: request, prepared: prepared, origin: origin}, run}
+
             {:deny, reason} ->
               tool_failure(
                 call_id,
@@ -1021,6 +1103,7 @@ defmodule Alto.Runner.Serial do
     decision =
       case outcome do
         {:ok, :approve} -> :ok
+        {:ok, :suspend} -> {:suspend, request}
         {:ok, {:deny, reason}} -> {:deny, reason}
         {:ok, other} -> {:error, {:invalid_decision, other}}
         {:error, reason} -> {:error, {:policy_process_failed, reason}}
@@ -1104,6 +1187,7 @@ defmodule Alto.Runner.Serial do
     module.run(arguments, context, opts)
   end
 
+  defp approval_event_decision({:suspend, _request}), do: :suspended
   defp approval_event_decision(:ok), do: :approved
   defp approval_event_decision({:deny, reason}), do: {:denied, reason}
   defp approval_event_decision({:error, reason}), do: {:error, reason}
@@ -1889,6 +1973,16 @@ defmodule Alto.Runner.Serial do
     put_persistence({:ok, result}, persistence_status(errors))
   end
 
+  defp persist_session_outcome(run, {:error, :approval_suspended, result}) do
+    # A paused run has no completed transcript. Its exact continuation is
+    # persisted by the host ledger before acknowledging its claim.
+    errors =
+      existing_persistence_errors(result) ++
+        persistence_errors([persist_completed(run, "suspended", nil, result)])
+
+    put_persistence({:error, :approval_suspended, result}, persistence_status(errors))
+  end
+
   defp persist_session_outcome(run, {:error, reason, result}) do
     completion =
       case reason do
@@ -1925,6 +2019,7 @@ defmodule Alto.Runner.Serial do
   # log for audit, but the sidecar has one root-owned revision stream. A child
   # finalizing inside the cancel grace window must not overwrite the parent.
   defp persist_transcript(%{resume_snapshot: false}, _result), do: :ok
+  defp persist_transcript(%{checkpoint_resume: true}, %{loop_state: nil}), do: :ok
 
   defp persist_transcript(run, result) do
     case Session.write_transcript(
@@ -2116,6 +2211,8 @@ defmodule Alto.Runner.Serial do
 
     initial = %{
       loop_state: nil,
+      checkpoint_version: Keyword.get(opts, :checkpoint_version),
+      checkpoint_resume: not is_nil(Keyword.get(opts, :checkpoint)),
       tool_context: %Context{
         session_id: session_id,
         cwd: cwd,
@@ -2176,6 +2273,17 @@ defmodule Alto.Runner.Serial do
   end
 
   defp resume_revision(opts) do
+    case Keyword.get(opts, :checkpoint) do
+      {%{"transcript_revision" => revision}, _decision}
+      when is_integer(revision) and revision >= 0 ->
+        revision
+
+      _ ->
+        transcript_resume_revision(opts)
+    end
+  end
+
+  defp transcript_resume_revision(opts) do
     case Keyword.get(opts, :resume) do
       %{revision: revision} when is_integer(revision) and revision >= 1 -> revision
       _other -> :any

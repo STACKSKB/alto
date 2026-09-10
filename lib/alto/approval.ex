@@ -4,7 +4,7 @@ defmodule Alto.Approval do
   alias Alto.Approval.Request
   alias Alto.Tool.Context
 
-  @type decision :: :approve | {:deny, term()}
+  @type decision :: :approve | :suspend | {:deny, term()}
 
   @callback decide(Request.t(), Context.t(), keyword()) :: decision()
 end
