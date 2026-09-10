@@ -12,6 +12,15 @@ defmodule Alto.TUI.App do
   alias Alto.TUI.{Backend, State, View}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
+  @submission_selection [
+    :selected_task_id,
+    :selected_project_id,
+    :selected_backend,
+    :selected_provider_id,
+    :selected_model,
+    :approval_level
+  ]
+
   @approval_items [
     %{label: "ASK · prompt for each prepared mutation", value: :ask},
     %{label: "READ · deny prepared mutations", value: :read_only},
@@ -130,8 +139,14 @@ defmodule Alto.TUI.App do
         {:stop, state}
 
       {_id, run} ->
-        cancel_run(run)
-        {:noreply, %{state | notice: "cancelling run…"}}
+        {:noreply, stop_active_run(state, run)}
+    end
+  end
+
+  def handle_event(%Key{code: "esc"}, state) do
+    case active_run(state) do
+      nil -> {:noreply, state}
+      {_id, run} -> {:noreply, stop_active_run(state, run)}
     end
   end
 
@@ -170,6 +185,11 @@ defmodule Alto.TUI.App do
   end
 
   def handle_info({:alto_approval_request, local_id, request, waiter}, state) do
+    local_id =
+      Enum.find_value(state.runs, local_id, fn {id, run} ->
+        if MapSet.member?(Map.get(run, :approval_ids, MapSet.new()), request.id), do: id
+      end)
+
     pending = %{local_id: local_id, request: request, waiter: waiter}
 
     {:noreply, show_pending_approval(state, pending, "approval required · F8 approve / F9 deny")}
@@ -374,6 +394,10 @@ defmodule Alto.TUI.App do
   def handle_info({:codex_browser_opened, _result}, state),
     do: {:noreply, state, render?: false}
 
+  def handle_info({:alto_tui_send_queued, task_id}, state) do
+    {:noreply, send_queued(state, task_id)}
+  end
+
   # Alto's async task sends its result directly to the process that started it.
   def handle_info({ref, result}, state) when is_reference(ref) do
     case find_run(state, ref: ref) do
@@ -388,15 +412,7 @@ defmodule Alto.TUI.App do
         {:noreply, state, render?: false}
 
       {local_id, run} ->
-        next =
-          state
-          |> State.append_entry(run.task_id, %{
-            kind: :error,
-            text: "run exited: #{short_inspect(reason)}"
-          })
-          |> drop_run(local_id)
-
-        {:noreply, %{next | notice: "run failed"}}
+        {:noreply, finish_run(state, local_id, run, {:error, {:run_exited, reason}})}
     end
   end
 
@@ -412,18 +428,92 @@ defmodule Alto.TUI.App do
     prompt = state.textarea |> ExRatatui.textarea_get_value() |> String.trim()
 
     cond do
-      map_size(state.runs) >= 32 ->
-        %{state | notice: "too many active runs; finish or cancel one first"}
+      prompt == "" and not task_running?(state, state.selected_task_id) and
+          Map.has_key?(state.queued_messages, state.selected_task_id) ->
+        send_queued(state, state.selected_task_id)
 
       prompt == "" ->
         %{state | notice: "write a message first"}
 
       task_running?(state, state.selected_task_id) ->
-        %{state | notice: "this task already has a run in flight"}
+        queue_message(state, prompt)
+
+      map_size(state.runs) >= 32 ->
+        %{state | notice: "too many active runs; finish or cancel one first"}
 
       true ->
         submit_backend(state, prompt)
     end
+  end
+
+  defp queue_message(state, prompt) do
+    cond do
+      Map.has_key?(state.queued_messages, state.selected_task_id) ->
+        %{state | notice: "one message already queued · draft kept · Esc stops current run"}
+
+      map_size(state.queued_messages) >= 32 or byte_size(prompt) > 64_000 ->
+        %{state | notice: "queued message limit reached · draft kept"}
+
+      true ->
+        submission = %{prompt: prompt, selection: Map.take(state, @submission_selection)}
+        ExRatatui.textarea_set_value(state.textarea, "")
+
+        state
+        |> Map.update!(:queued_messages, &Map.put(&1, state.selected_task_id, submission))
+        |> State.append_entry(state.selected_task_id, %{
+          kind: :system,
+          text: "Queued message: " <> prompt
+        })
+        |> Map.put(:notice, "message queued for the next turn · Esc stops current run")
+    end
+  end
+
+  defp send_queued(state, task_id) do
+    case {task_running?(state, task_id), Map.get(state.queued_messages, task_id)} do
+      {false, %{prompt: prompt, selection: selection}} when map_size(state.runs) < 32 ->
+        draft = ExRatatui.textarea_get_value(state.textarea)
+
+        foreground =
+          Map.take(state, @submission_selection ++ [:transcript_scroll, :transcript_follow?])
+
+        next = state |> Map.merge(selection) |> submit_backend(prompt)
+        ExRatatui.textarea_set_value(state.textarea, draft)
+        next = Map.merge(next, foreground)
+
+        if task_running?(next, task_id),
+          do: %{next | queued_messages: Map.delete(next.queued_messages, task_id)},
+          else: next
+
+      {false, %{}} ->
+        %{state | notice: "too many active runs · queued message paused (Enter sends)"}
+
+      _ ->
+        state
+    end
+  end
+
+  defp finish_queued(state, task_id, true) do
+    if Map.has_key?(state.queued_messages, task_id),
+      do: send(self(), {:alto_tui_send_queued, task_id})
+
+    state
+  end
+
+  defp finish_queued(state, task_id, false) do
+    if Map.has_key?(state.queued_messages, task_id),
+      do: %{state | notice: state.notice <> " · queued message paused (Enter sends)"},
+      else: state
+  end
+
+  defp stop_active_run(state, run) do
+    cancel_run(run)
+
+    runs =
+      Map.new(state.runs, fn {id, candidate} ->
+        {id, if(candidate == run, do: Map.put(candidate, :phase, "cancelling"), else: candidate)}
+      end)
+
+    %{state | runs: runs, notice: "cancelling run · draft and queued message kept"}
   end
 
   defp submit_backend(%{selected_backend: :codex} = state, prompt),
@@ -559,6 +649,8 @@ defmodule Alto.TUI.App do
       task_id: task["id"],
       ref: handle.task.ref,
       monitor: monitor,
+      phase: "starting",
+      approval_ids: MapSet.new(),
       started_at_ms: System.system_time(:millisecond)
     }
 
@@ -730,7 +822,8 @@ defmodule Alto.TUI.App do
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
 
-    changes = %{"status" => status, "session_id" => session_id}
+    changes = %{"status" => status}
+    changes = if session_id, do: Map.put(changes, "session_id", session_id), else: changes
 
     state =
       case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
@@ -743,6 +836,10 @@ defmodule Alto.TUI.App do
     state
     |> drop_run(local_id)
     |> Map.put(:notice, notice)
+    |> finish_queued(
+      run.task_id,
+      status == "completed" and not match?({:degraded, _}, persistence)
+    )
   end
 
   defp persistence_feedback(entry, notice, {:degraded, errors}) do
@@ -754,9 +851,59 @@ defmodule Alto.TUI.App do
 
   defp ingest_event(state, local_id, %Event{} = event) do
     case Map.get(state.runs, local_id) do
-      nil -> state
-      run -> do_ingest_event(state, run.task_id, event)
+      nil ->
+        state
+
+      run ->
+        state = update_run_phase(state, local_id, event)
+        do_ingest_event(state, run.task_id, event)
     end
+  end
+
+  defp update_run_phase(state, local_id, %Event{} = event) do
+    run = Map.fetch!(state.runs, local_id)
+
+    phase =
+      case event.type do
+        :model_started -> "waiting for model"
+        :model_delta -> "receiving response"
+        :model_completed -> "processing response"
+        :tool_started -> "running tool"
+        :tool_completed -> "processing tool result"
+        :approval_requested -> "waiting for approval"
+        :approval_resolved -> "processing approval"
+        _ -> Map.get(run, :phase, "working")
+      end
+
+    run = if Map.get(run, :phase) == "cancelling", do: run, else: Map.put(run, :phase, phase)
+
+    run =
+      case event do
+        %Event{type: :approval_requested, data: %{request: request}} ->
+          Map.update(run, :approval_ids, MapSet.new([request.id]), &MapSet.put(&1, request.id))
+
+        _ ->
+          run
+      end
+
+    state = put_in(state.runs[local_id], run)
+
+    case event do
+      %Event{type: :approval_resolved, data: %{request: request}} ->
+        clear_approvals(state, &(&1.request.id == request.id))
+
+      _ ->
+        state
+    end
+  end
+
+  defp clear_approvals(state, predicate) do
+    pending = Enum.reject(state.pending_approvals, predicate)
+    state = %{state | pending_approvals: pending}
+
+    if pending == [] and state.details_drawer_auto_opened?,
+      do: State.close_details_drawer(state),
+      else: state
   end
 
   defp do_ingest_event(state, task_id, %Event{type: :model_delta, data: %{text: text}}),
@@ -1313,7 +1460,16 @@ defmodule Alto.TUI.App do
     end)
   end
 
-  defp drop_run(state, local_id), do: %{state | runs: Map.delete(state.runs, local_id)}
+  defp drop_run(state, local_id) do
+    case Map.get(state.runs, local_id) do
+      %{monitor: monitor} -> Process.demonitor(monitor, [:flush])
+      _ -> :ok
+    end
+
+    state
+    |> Map.update!(:runs, &Map.delete(&1, local_id))
+    |> clear_approvals(&(Map.get(&1, :local_id) == local_id))
+  end
 
   defp put_overlay_index(state, row) do
     index = row |> max(0) |> min(max(length(state.overlay.items) - 1, 0))
@@ -2041,6 +2197,7 @@ defmodule Alto.TUI.App do
     |> drop_run(local_id)
     |> Map.put(:notice, if(completed?, do: "Codex run completed", else: "Codex run failed"))
     |> refresh_limits_after_turn()
+    |> finish_queued(run.task_id, completed?)
   end
 
   defp refresh_limits_after_turn(%{codex: %{client: client}} = state) when is_pid(client) do

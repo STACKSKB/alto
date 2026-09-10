@@ -53,6 +53,7 @@ defmodule Alto.TUI.State do
     details_scroll: 0,
     pending_approvals: [],
     runs: %{},
+    queued_messages: %{},
     usage: %{},
     catalog_opts: []
   ]
@@ -132,6 +133,21 @@ defmodule Alto.TUI.State do
       }
 
       {:ok, hydrate_selected(state)}
+    end
+  end
+
+  @doc "Visible execution stage and recovery controls for the selected task."
+  def run_label(state) do
+    queued? = Map.has_key?(state.queued_messages, state.selected_task_id)
+
+    case Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end) do
+      nil ->
+        if queued?, do: "message queued · Enter send", else: "idle"
+
+      {_id, run} ->
+        Map.get(run, :phase, "working") <>
+          " · Esc stop" <>
+          if(queued?, do: " · 1 queued", else: "")
     end
   end
 

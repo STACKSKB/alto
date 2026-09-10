@@ -160,7 +160,7 @@ defmodule Alto.TUI.View do
     title =
       if state.leader?,
         do: gear_title(state),
-        else: composer_title(state.composer_mode)
+        else: composer_title(state)
 
     if state.composer_mode == :code do
       native_composer(state, title)
@@ -359,11 +359,19 @@ defmodule Alto.TUI.View do
     {max(composer.width - 2, 1), max(composer.height - 2, 1)}
   end
 
-  defp composer_title(:code),
-    do: " code entry · NOWRAP · F6 prose · Enter send "
+  defp composer_title(%{composer_mode: :code} = state),
+    do: " code entry · NOWRAP · F6 prose" <> composer_activity_hint(state) <> " "
 
-  defp composer_title(_mode),
-    do: " message · WRAP · F6 code · Enter send "
+  defp composer_title(state),
+    do: " message · WRAP · F6 code" <> composer_activity_hint(state) <> " "
+
+  defp composer_activity_hint(state) do
+    if active_run?(state), do: " · Enter queue · Esc stop", else: " · Enter send"
+  end
+
+  defp active_run?(state) do
+    Enum.any?(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end)
+  end
 
   defp gear_title(state) do
     {width, _height} = composer_inner_size(state)
@@ -440,7 +448,7 @@ defmodule Alto.TUI.View do
     usage = State.current_usage(state)
     project = State.selected_project(state)
     task = State.selected_task(state)
-    running? = Enum.any?(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end)
+    activity = State.run_label(state)
 
     left =
       " alto │ " <>
@@ -449,7 +457,7 @@ defmodule Alto.TUI.View do
         short(project && project["name"], 18) <>
         " / " <>
         short((task && task["title"]) || "new task", 28) <>
-        if(running?, do: " │ ● working", else: " │ idle")
+        " │ " <> activity
 
     right =
       "tok #{compact(usage.total_tokens)}  ↑#{compact(usage.input_tokens)}  ↓#{compact(usage.output_tokens)}" <>
@@ -462,9 +470,14 @@ defmodule Alto.TUI.View do
     text =
       if width > String.length(right) + 12 do
         left_width = width - String.length(right)
-        String.pad_trailing(short(left, left_width), left_width) <> right
+
+        if left_width >= String.length(left) do
+          String.pad_trailing(short(left, left_width), left_width) <> right
+        else
+          compact_status_line(activity, message, right, width)
+        end
       else
-        String.slice(right, 0, width)
+        compact_status_line(activity, message, right, width)
       end
 
     %Paragraph{
@@ -473,12 +486,19 @@ defmodule Alto.TUI.View do
     }
   end
 
+  defp compact_status_line(activity, message, right, width) do
+    prefix = " " <> activity <> message
+    remaining = max(width - String.length(prefix) - 3, 0)
+    suffix = if remaining > 0, do: " │ " <> String.slice(right, 0, remaining), else: ""
+    String.slice(prefix <> suffix, 0, width)
+  end
+
   defp add_overlay(widgets, nil, _root), do: widgets
 
   defp add_overlay(widgets, %{kind: :provider_form} = overlay, root) do
     popup = %Popup{
       content: %Paragraph{
-        text: provider_form_text(overlay),
+        text: provider_form_text(overlay, root.width),
         wrap: false,
         style: style(fg: :white, bg: @panel_alt)
       },
@@ -498,13 +518,12 @@ defmodule Alto.TUI.View do
 
   defp add_overlay(widgets, %{kind: :model_form} = overlay, root) do
     value = ExRatatui.text_input_get_value(overlay.input)
+    cursor = ExRatatui.text_input_cursor(overlay.input)
     error = if overlay.error, do: "  ! " <> overlay.error, else: ""
 
     popup = %Popup{
       content: %Paragraph{
-        text:
-          "  Use the provider's exact model identifier.\n\n" <>
-            "› Model ID  " <> value <> "\n" <> error <> "\n\n  [ Use model ]\n  [ Cancel ]",
+        text: model_form_text(value, cursor, error, root.width),
         wrap: false,
         style: style(fg: :white, bg: @panel_alt)
       },
@@ -568,38 +587,160 @@ defmodule Alto.TUI.View do
     widgets ++ [{popup, root}]
   end
 
-  defp provider_form_text(overlay) do
+  defp provider_form_text(overlay, root_width) do
     values = Map.new(overlay.fields, &{&1.key, ExRatatui.text_input_get_value(&1.input)})
     active = overlay.field_index
     key = Map.get(values, :api_key, "")
 
     key_display =
       cond do
-        key != "" -> String.duplicate("•", min(String.length(key), 32))
+        key != "" -> String.duplicate("•", min(length(String.codepoints(key)), 32))
         overlay.key_saved? -> "(saved — leave blank to keep)"
         true -> "(optional for local providers)"
       end
 
     lines = [
-      "  Credentials are saved privately outside the workspace.",
-      "",
-      form_line(active, 0, "ID", Map.get(values, :id, ""), locked?(overlay, :id)),
-      form_line(active, 1, "Name", Map.get(values, :label, "")),
-      form_line(active, 2, "Base URL", Map.get(values, :base_url, "")),
-      form_line(active, 3, "API key", key_display),
-      form_line(active, 4, "Default model", Map.get(values, :model, "")),
-      if(overlay.error, do: "  ! " <> overlay.error, else: ""),
-      "  [ Save provider ]",
-      "  [ Cancel ]"
+      plain_line("  Credentials are saved privately outside the workspace."),
+      plain_line(""),
+      form_line(overlay, active, 0, :id, "ID", Map.get(values, :id, ""),
+        locked?: locked?(overlay, :id),
+        max_width: provider_value_width(root_width, locked?(overlay, :id))
+      ),
+      form_line(overlay, active, 1, :label, "Name", Map.get(values, :label, ""),
+        max_width: provider_value_width(root_width, false)
+      ),
+      form_line(overlay, active, 2, :base_url, "Base URL", Map.get(values, :base_url, ""),
+        max_width: provider_value_width(root_width, false)
+      ),
+      form_line(overlay, active, 3, :api_key, "API key", key_display,
+        placeholder?: key == "",
+        raw_value: key,
+        max_width: provider_value_width(root_width, false)
+      ),
+      form_line(overlay, active, 4, :model, "Default model", Map.get(values, :model, ""),
+        max_width: provider_value_width(root_width, false)
+      ),
+      plain_line(if(overlay.error, do: "  ! " <> overlay.error, else: "")),
+      plain_line("  [ Save provider ]"),
+      plain_line("  [ Cancel ]")
     ]
 
-    Enum.join(lines, "\n")
+    Text.new(lines)
   end
 
-  defp form_line(active, index, label, value, locked? \\ false) do
+  defp model_form_text(value, cursor, error, root_width) do
+    max_width = max(div(root_width * 62, 100) - 2 - String.length("› Model ID  "), 1)
+
+    Text.new([
+      plain_line("  Use the provider's exact model identifier."),
+      plain_line(""),
+      Line.new([Span.new("› Model ID  ") | editable_value_spans(value, cursor, max_width)]),
+      plain_line(error),
+      plain_line(""),
+      plain_line("  [ Use model ]"),
+      plain_line("  [ Cancel ]")
+    ])
+  end
+
+  defp plain_line(value), do: Line.new([Span.new(value)])
+
+  defp form_line(overlay, active, index, key, label, value, opts) do
+    locked? = Keyword.get(opts, :locked?, false)
+    placeholder? = Keyword.get(opts, :placeholder?, false)
+    raw_value = Keyword.get(opts, :raw_value, value)
+    max_width = Keyword.get(opts, :max_width, 40)
     marker = if active == index, do: "›", else: " "
     suffix = if locked?, do: "  (fixed)", else: ""
-    marker <> " " <> String.pad_trailing(label, 14) <> value <> suffix
+    prefix = marker <> " " <> String.pad_trailing(label, 14)
+
+    value_spans =
+      if active == index and not locked? do
+        field = Enum.find(overlay.fields, &(&1.key == key))
+        cursor = if field, do: ExRatatui.text_input_cursor(field.input), else: 0
+
+        if placeholder? do
+          editable_value_spans("", cursor, max_width) ++
+            [Span.new(value, style: style(fg: @muted))]
+        else
+          if key == :api_key do
+            masked_value_spans(raw_value, cursor, max_width)
+          else
+            editable_value_spans(value, cursor, max_width)
+          end
+        end
+      else
+        [Span.new(value)]
+      end
+
+    Line.new([Span.new(prefix) | value_spans ++ [Span.new(suffix)]])
+  end
+
+  defp provider_value_width(root_width, locked?) do
+    popup_content_width = max(div(root_width * 72, 100) - 2, 1)
+    suffix_width = if locked?, do: String.length("  (fixed)"), else: 0
+    max(popup_content_width - String.length("› ") - 14 - suffix_width, 1)
+  end
+
+  # Keep the insertion point visible when a URL or model identifier is longer
+  # than the popup. The displayed value is still the real value (or its mask);
+  # only the far end away from the cursor is elided.
+  defp editable_value_spans(value, cursor, max_width) do
+    editable_codepoint_spans(String.codepoints(value), cursor, max_width)
+  end
+
+  defp masked_value_spans(value, cursor, max_width) do
+    value
+    |> String.codepoints()
+    |> Enum.map(fn _grapheme -> "•" end)
+    |> editable_codepoint_spans(cursor, max_width)
+  end
+
+  defp editable_codepoint_spans(graphemes, cursor, max_width) do
+    cursor = min(max(cursor, 0), length(graphemes))
+    max_width = max(max_width, 1)
+
+    if length(graphemes) + 1 <= max_width do
+      caret_spans(graphemes, cursor)
+    else
+      bounded_caret_spans(graphemes, cursor, max_width)
+    end
+  end
+
+  defp bounded_caret_spans(_graphemes, _cursor, 1), do: caret_spans([], 0)
+
+  defp bounded_caret_spans(graphemes, cursor, max_width) do
+    edge_width = max_width - 2
+
+    cond do
+      cursor <= edge_width ->
+        visible = Enum.take(graphemes, edge_width)
+        caret_spans(visible, cursor) ++ [Span.new("…")]
+
+      cursor >= length(graphemes) - edge_width ->
+        start = max(length(graphemes) - edge_width, 0)
+        visible = Enum.slice(graphemes, start, edge_width)
+        [Span.new("…") | caret_spans(visible, cursor - start)]
+
+      max_width < 4 ->
+        caret_spans([], 0)
+
+      true ->
+        content_width = max_width - 3
+        start = max(cursor - div(content_width, 2), 1)
+        start = min(start, length(graphemes) - content_width - 1)
+        visible = Enum.slice(graphemes, start, content_width)
+        [Span.new("…") | caret_spans(visible, cursor - start)] ++ [Span.new("…")]
+    end
+  end
+
+  defp caret_spans(graphemes, column) do
+    {before, trailing} = Enum.split(graphemes, column)
+
+    [
+      Span.new(Enum.join(before)),
+      Span.new("▏", style: style(fg: :black, bg: @accent)),
+      Span.new(Enum.join(trailing))
+    ]
   end
 
   defp locked?(overlay, key) do

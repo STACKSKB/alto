@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Show TUI run phases and keep pending approval controls visible while composing.
+- Queue one follow-up per task and allow Esc cancellation without losing drafts.
+- Clear expired approval prompts and release tasks after abnormal run exits.
+- Show insertion cursors in provider and model forms while masking API keys.
+
 ## 0.0.1
 
 Initial public release.
