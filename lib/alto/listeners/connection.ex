@@ -88,6 +88,26 @@ defmodule Alto.Listeners.Connection do
             error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
         end
 
+      {:ok, {:session_events, id, session_id, limit, cursor, run_id}} ->
+        with {:ok, page} <-
+               Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
+             {:ok, events} <- session_events_payload(page.events) do
+          payload = %{
+            "session_id" => session_id,
+            "events" => events,
+            "next_cursor" => page.next_cursor,
+            "last_cursor" => page.last_cursor,
+            "high_watermark" => page.high_watermark,
+            "complete" => page.complete,
+            "gap" => page.gap
+          }
+
+          send_ok(send_line, max_line_bytes, id, payload)
+        else
+          {:error, reason} ->
+            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+        end
+
       {:ok, {:cancel, id, run_id, reason}} ->
         reply(
           send_line,
@@ -159,6 +179,23 @@ defmodule Alto.Listeners.Connection do
           "unsupported",
           "overrides are not accepted in v1"
         )
+    end
+  end
+
+  defp session_events_payload(records) do
+    Enum.reduce_while(records, {:ok, []}, fn record, {:ok, acc} ->
+      case Alto.Session.decode_term(record["data"]) do
+        {:ok, data} ->
+          event = record |> Map.put("data", Protocol.encode_term(data)) |> Protocol.encode_term()
+          {:cont, {:ok, [event | acc]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:session_event_payload, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, events} -> {:ok, Enum.reverse(events)}
+      error -> error
     end
   end
 
@@ -325,6 +362,9 @@ defmodule Alto.Listeners.Connection do
   defp error_code(:ops_overflow), do: "internal"
   defp error_code({:invalid_limit, _}), do: "invalid"
   defp error_code({:invalid_cursor, _}), do: "invalid"
+  defp error_code({:invalid_event_cursor, _}), do: "invalid"
+  defp error_code({:invalid_event_limit, _}), do: "invalid"
+  defp error_code({:invalid_event_run_id, _}), do: "invalid"
   defp error_code({:invalid_filter, _}), do: "invalid"
   # resume failures: unknown or unrestorable sessions are `not_found`
   # with the reason in the detail; unreadable stores are `internal`, and a

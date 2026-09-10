@@ -83,7 +83,10 @@ defmodule Alto.FrontEnd.RegistryTest do
     def describe(_opts), do: %{}
 
     @impl true
-    def stream(_request, _sink, _opts) do
+    def stream(_request, _sink, opts) do
+      if test_pid = Keyword.get(opts, :test_pid),
+        do: send(test_pid, {:registry_provider_started, self()})
+
       receive(do: (:never -> {:ok, %{message: nil, tool_calls: []}}))
     end
   end
@@ -126,7 +129,7 @@ defmodule Alto.FrontEnd.RegistryTest do
          ]}
 
       "blocking-loop" ->
-        {:ok, [provider: BlockingProvider, tools: [], max_steps: 1]}
+        {:ok, [provider: {BlockingProvider, test_pid: parent}, tools: [], max_steps: 1]}
 
       other ->
         {:error, {:unknown_config, other}}
@@ -366,6 +369,29 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert :ok = Registry.cancel(registry, blocking_id, :cleanup)
 
     wait_until(fn -> Registry.run_ids(registry) == [] end)
+  end
+
+  test "registry crash cancels its owned provider run", %{registry: registry, root: root} do
+    start_registry(registry, root, sessions: [session_dir: root])
+    {:ok, run_id} = Registry.start_run(registry, "blocking-loop", "block forever")
+    session_id = Registry.run_session(registry, run_id)
+    assert_receive {:registry_provider_started, provider_pid}, @receive_timeout
+    provider_monitor = Process.monitor(provider_pid)
+    old_registry = Process.whereis(registry)
+    Process.exit(old_registry, :kill)
+
+    assert_receive {:DOWN, ^provider_monitor, :process, ^provider_pid, _reason}, @receive_timeout
+    wait_until(fn -> Process.whereis(registry) != old_registry end)
+
+    wait_until(fn ->
+      case Alto.Session.read(session_id, session_dir: root) do
+        {:ok, records} ->
+          Enum.any?(records, &(&1["type"] == "event" and &1["event"] == "run_cancelled"))
+
+        _ ->
+          false
+      end
+    end)
   end
 
   test "a finished run replays its durable log and result to a new attachment", %{

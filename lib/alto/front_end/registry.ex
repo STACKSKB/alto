@@ -143,6 +143,19 @@ defmodule Alto.FrontEnd.Registry do
     GenServer.call(server, :sessions)
   end
 
+  @doc "Read a bounded page of durable session events, independent of live runs."
+  @spec session_events(
+          GenServer.server(),
+          String.t(),
+          pos_integer(),
+          non_neg_integer(),
+          String.t() | nil
+        ) ::
+          {:ok, map()} | {:error, term()}
+  def session_events(server \\ __MODULE__, session_id, limit, cursor, run_id \\ nil) do
+    GenServer.call(server, {:session_events, session_id, limit, cursor, run_id})
+  end
+
   @doc "Live run ids, for the `hello` message."
   @spec run_ids(GenServer.server()) :: [String.t()]
   def run_ids(server \\ __MODULE__) do
@@ -341,6 +354,7 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
+        |> Keyword.put(:owner, me)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
         |> Keyword.put(:event_sink, fn event ->
           GenServer.call(me, {:ingest_run_event, run_id, event})
@@ -378,6 +392,16 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_call(:sessions, _from, state) do
     {:reply, Alto.Session.list(session_dir: state.session_dir), state}
+  end
+
+  def handle_call({:session_events, session_id, limit, cursor, run_id}, _from, state) do
+    {:reply,
+     Alto.Session.events(session_id,
+       session_dir: state.session_dir,
+       limit: limit,
+       cursor: cursor,
+       run_id: run_id
+     ), state}
   end
 
   def handle_call(:run_ids, _from, state) do

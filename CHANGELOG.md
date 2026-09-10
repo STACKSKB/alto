@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add bounded session event replay over the frontend protocol, with stable
+  ordinals, readable payloads and detection of cursors beyond stored history.
+- Add optional owner-bound asynchronous runs. Resident registry termination
+  cooperatively cancels its executions and in-flight provider/tool callbacks.
+
 ## 0.0.1
 
 Initial public release.

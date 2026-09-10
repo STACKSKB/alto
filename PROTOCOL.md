@@ -296,6 +296,30 @@ the server's session directory — independent of the live-run replay
 window, so evicted and restarted-away runs stay discoverable. An
 unreadable store answers `error` (`internal`).
 
+**`session_events`** — read a bounded page of durable events from a session,
+including after the resident registry has restarted.
+
+```json
+{"v": 1, "type": "session_events", "id": "c-10",
+ "session_id": "sess-1", "limit": 100, "cursor": 0, "run_id": "run-41"}
+```
+
+`cursor` is a stable durable event ordinal, independent of the live registry
+`seq` values used by `attach`. The `ok` reply contains `events`, each with an
+`ordinal`, plus `next_cursor`, `last_cursor`, `high_watermark`, `complete`,
+and `gap`. `complete` means the page reached the current end of the session
+log; it does not mean the run completed. Clients can retain `last_cursor` and
+poll again later when the high watermark advances. `gap` is true when the
+requested cursor is beyond the stored high watermark (for example, after a
+state rollback). Corrupt logs and logs over 16 MB or 20,000 records fail
+closed. Event `data` uses the same readable, lossy JSON term encoding as live
+notifications; the session log retains the exact source terms.
+
+Replay describes successfully persisted records. Session logging is
+best-effort, and this cursor cannot prove that every execution event was
+written. Persistence degradation remains part of the run result; `gap: false`
+is not a claim that an execution had no persistence failures.
+
 **`cancel`** — cooperative cancellation via the existing handle API.
 
 ```json
