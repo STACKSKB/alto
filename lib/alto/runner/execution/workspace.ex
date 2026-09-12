@@ -18,24 +18,7 @@ defmodule Alto.Runner.Execution.Workspace do
            Alto.Workspaces.use(manager, ready.id, ready.revision, fn workspace ->
              execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
            end) do
-      case call(
-             fn -> Alto.Workspaces.freeze(manager, worked.id, worked.revision) end,
-             budget,
-             timeout,
-             cancel_ref
-           ) do
-        {:ok, frozen} ->
-          attach_workspace(outcome, frozen)
-
-        {:error, reason} ->
-          info =
-            case Alto.Workspaces.get(manager, worked.id) do
-              {:ok, current} -> current
-              _ -> worked
-            end
-
-          workspace_failure(outcome, info, reason)
-      end
+      finish(outcome, worked, opts, manager)
     else
       {:error, reason, outcome} ->
         workspace_failure(outcome, nil, reason)
@@ -43,6 +26,46 @@ defmodule Alto.Runner.Execution.Workspace do
       {:error, reason} ->
         {:error, {:workspace_failed, reason},
          %{empty_result() | verdict: :unknown, agent_identity: identity}}
+    end
+  end
+
+  @doc "Reuse an existing worked workspace without preparing or creating it again."
+  def resume(task, opts, manager, id, revision, execute) do
+    case Alto.Workspaces.resume(manager, id, revision, fn workspace ->
+           execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
+         end) do
+      {:ok, outcome, worked} ->
+        finish(outcome, worked, opts, manager)
+
+      {:error, reason, outcome} ->
+        workspace_failure(outcome, nil, reason)
+
+      {:error, reason} ->
+        {:error, {:workspace_failed, reason}, %{empty_result() | verdict: :unknown}}
+    end
+  end
+
+  defp finish({:error, :approval_suspended, _} = outcome, worked, _opts, _manager),
+    do: attach_workspace(outcome, worked)
+
+  defp finish(outcome, worked, opts, manager) do
+    case call(
+           fn -> Alto.Workspaces.freeze(manager, worked.id, worked.revision) end,
+           Keyword.fetch!(opts, :budget),
+           Keyword.get(opts, :tool_timeout, @default_tool_timeout),
+           Keyword.get(opts, :cancel_ref)
+         ) do
+      {:ok, frozen} ->
+        attach_workspace(outcome, frozen)
+
+      {:error, reason} ->
+        info =
+          case Alto.Workspaces.get(manager, worked.id) do
+            {:ok, current} -> current
+            _ -> worked
+          end
+
+        workspace_failure(outcome, info, reason)
     end
   end
 

@@ -126,6 +126,10 @@ defmodule Alto.Runner.Execution.Setup do
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       runner_options: Keyword.get(opts, :runner_options, []),
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
+      subagent_ticket: Keyword.get(opts, :subagent_ticket),
+      child_profile: Keyword.get(opts, :child_profile),
+      child_resume: Keyword.get(opts, :child_resume),
+      parent_expires_at_ms: Keyword.get(opts, :parent_expires_at_ms),
       continuation_store: Keyword.get(opts, :continuation_store),
       continuation_key: Keyword.get(opts, :continuation_key),
       checkpoint_resume:

@@ -50,9 +50,11 @@ work.
 Start a fresh run with the original trusted configuration and
 `continuation: identity`. Alto resolves the saved session and restores the
 parent without calling loop initialization, preparing workspaces, or
-dispatching any children. A pending cell uses only `Journal.restore/3` and
-`join/1`; all children must have retained outcomes. A ready cell already holds
-the exact consuming frame. Recovery never approves a pending tool operation.
+issuing new child dispatches. A pending cell restores its journal and resumes
+only children with explicitly retained approval decisions before joining. All
+children must have retained outcomes before the parent consumes its frame. A
+ready cell already holds the exact consuming frame. Recovery never invents an
+approval decision; see [independent child approvals](child-continuations.md).
 
 An incomplete journal returns `{:error, {:children_pending, reason}, result}`.
 The result's checkpoint identifies the parent cell. Other ungranted parent
@@ -71,8 +73,8 @@ pausable active-time accounting for independent children.
 ## Limits
 
 This path covers root `spawn_agents` batches, including a one-child batch.
-It does not make standalone `spawn_agent` calls or independently suspended
-children recoverable. A dispatched child without a saved result remains
+It does not make standalone `spawn_agent` calls or recursive parent continuations
+recoverable. A dispatched child without a saved result or approval checkpoint remains
 uncertain. Joining may not invoke provider-backed transcript compaction before
 a grant: an oversized result transcript fails instead. Custom loop checkpoint
 and transition callbacks must remain pure.
@@ -86,9 +88,10 @@ work. Retention exhaustion fails closed.
 
 ## Qualification
 
-On 2026-09-12, all 833 Alto tests pass at bounded concurrency, including the
-new retained-cell, parent checkpoint, live/restarted runner and concurrent
-transcript preservation tests. Production compilation with warnings as errors
+On 2026-09-12, all 853 Alto tests pass at bounded concurrency, including the
+new retained-cell, parent checkpoint, live/restarted runner, independent child
+approval, cancellation, provider resolution and concurrent transcript preservation
+tests. Production compilation with warnings as errors
 and formatting pass. Downstream Zekkyou checks additionally recover through its
 resident CLI across three independent service VMs with Serial and Stepped,
 observing exactly one planner call, one child effect and one integration effect.

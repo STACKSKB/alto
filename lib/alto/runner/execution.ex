@@ -51,12 +51,25 @@ defmodule Alto.Runner.Execution do
     opts = Keyword.put(opts, :execution_scheduler, scheduler)
 
     outcome =
-      case Keyword.pop(opts, :workspace_assignment) do
-        {nil, opts} ->
-          run_without_workspace(task, opts)
+      case Keyword.get(opts, :workspace_resume) do
+        {manager, id, revision} ->
+          Alto.Runner.Execution.Workspace.resume(
+            task,
+            opts,
+            manager,
+            id,
+            revision,
+            &run_without_workspace/2
+          )
 
-        {{manager, snapshot, identity}, opts} ->
-          run_in_workspace(task, opts, manager, snapshot, identity)
+        nil ->
+          case Keyword.pop(opts, :workspace_assignment) do
+            {nil, opts} ->
+              run_without_workspace(task, opts)
+
+            {{manager, snapshot, identity}, opts} ->
+              run_in_workspace(task, opts, manager, snapshot, identity)
+          end
       end
 
     retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
@@ -203,7 +216,11 @@ defmodule Alto.Runner.Execution do
     case interpreted do
       {:suspend, pending, next_run} ->
         case checkpoint_call(
-               fn -> Alto.Runner.Checkpoint.capture(next_run, pending, rest, terminal) end,
+               fn ->
+                 if next_run.agent_depth > 0,
+                   do: Alto.Runner.Checkpoint.capture_child(next_run, pending, rest, terminal),
+                   else: Alto.Runner.Checkpoint.capture(next_run, pending, rest, terminal)
+               end,
                next_run
              ) do
           {:ok, packet} ->
@@ -253,11 +270,16 @@ defmodule Alto.Runner.Execution do
   defp resume_checkpoint(run, packet, decision, opts) do
     with {:ok, restored, frame} <-
            checkpoint_call(
-             fn -> Alto.Runner.Checkpoint.restore(run, packet, decision, opts) end,
+             fn ->
+               if run.child_resume,
+                 do: Alto.Runner.Checkpoint.restore_child(run, packet, decision, opts),
+                 else: Alto.Runner.Checkpoint.restore(run, packet, decision, opts)
+             end,
              run
            ),
          :ok <- Budget.check(restored.budget),
-         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool) do
+         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool),
+         :ok <- claim_child_checkpoint(restored, decision) do
       pending = frame.pending
 
       interpreted =
@@ -285,7 +307,33 @@ defmodule Alto.Runner.Execution do
 
       finish_effect(interpreted, frame.remaining, restored, frame.terminal)
     else
-      {:error, reason} -> {:error, reason, result(run, nil, :error)}
+      {:error, reason} ->
+        value = result(run, nil, :error)
+
+        value =
+          if run.child_resume,
+            do: %{value | checkpoint: %{"kind" => "child", "ungranted" => true}},
+            else: value
+
+        {:error, reason, value}
+    end
+  end
+
+  defp claim_child_checkpoint(%{child_resume: nil}, _decision), do: :ok
+
+  defp claim_child_checkpoint(run, decision) do
+    case checkpoint_call(
+           fn ->
+             Alto.Subagents.Journal.claim_child(
+               run.subagent_ticket,
+               run.child_resume,
+               decision
+             )
+           end,
+           run
+         ) do
+      {:ok, _} -> :ok
+      error -> error
     end
   end
 

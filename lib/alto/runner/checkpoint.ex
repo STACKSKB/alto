@@ -79,6 +79,7 @@ defmodule Alto.Runner.Checkpoint do
     with true <-
            packet["version"] == run.checkpoint_version and is_binary(run.checkpoint_version),
          true <- packet["fingerprint"] == fingerprint(run),
+         true <- is_nil(packet["kind"]),
          true <- decision in [:approve, :deny],
          true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
          {:ok,
@@ -263,6 +264,86 @@ defmodule Alto.Runner.Checkpoint do
   end
 
   def restore_parent(_, _, _), do: {:error, :invalid_parent_checkpoint}
+
+  @doc "Capture an independently suspended child with immutable inherited authority."
+  def capture_child(run, pending, remaining, terminal) do
+    with %Alto.Subagents.Journal.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
+         true <- run.agent_depth > 0,
+         true <- is_map(run.child_profile) and is_nil(run.child_profile.provider),
+         true <- is_struct(run.budget.account, Budget.Account),
+         {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
+         {:ok, packet} <- capture(%{run | agent_depth: 0}, pending, remaining, terminal),
+         authority <- Map.take(run, @authority_fields),
+         true <- valid_authority?(authority),
+         expiry <- parent_expiry(run),
+         :ok <- unexpired(expiry),
+         binding <- %{
+           journal: Alto.Subagents.Journal.identity(ticket.batch),
+           store: store,
+           id: ticket.id,
+           attempt: ticket.attempt,
+           profile: run.child_profile,
+           authority: authority,
+           expires_at_ms: expiry,
+           agent_depth: run.agent_depth,
+           cwd: run.tool_context.cwd,
+           resume_snapshot: run.resume_snapshot,
+           budget: packet["budget"],
+           session_id: run.session
+         },
+         {:ok, child} <- encode(binding),
+         result <- Map.merge(packet, %{"kind" => "child", "child" => child}),
+         {:ok, _} <- encode(result) do
+      {:ok, result}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :child_checkpoint_not_supported}
+    end
+  rescue
+    _ -> {:error, :child_checkpoint_not_supported}
+  end
+
+  @doc "Inspect the bounded saved child profile; grants remain owned by its journal."
+  def child_binding(%{"kind" => "child", "child" => child}), do: decode(child)
+  def child_binding(_), do: {:error, :invalid_child_checkpoint}
+
+  @doc "Validate the exact child checkpoint before consuming its explicit decision."
+  def restore_child(run, packet, decision, opts) do
+    with {:ok, binding} <- child_binding(packet),
+         %Alto.Subagents.Journal.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
+         {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
+         true <- binding.journal == Alto.Subagents.Journal.identity(ticket.batch),
+         true <-
+           binding.store == store and binding.id == ticket.id and
+             binding.attempt == ticket.attempt,
+         true <- binding.agent_depth == run.agent_depth and run.agent_depth > 0,
+         true <- binding.session_id == run.session and packet["session_id"] == run.session,
+         true <-
+           binding.budget == packet["budget"] and is_struct(run.budget.account, Budget.Account),
+         true <- binding.profile == run.child_profile and binding.cwd == run.tool_context.cwd,
+         true <- binding.resume_snapshot == run.resume_snapshot,
+         true <- valid_authority?(binding.authority),
+         :ok <- parent_budget_binding(run, binding.budget),
+         :ok <- unexpired(binding.expires_at_ms),
+         {:ok, restored, frame} <-
+           restore(run, Map.drop(packet, ["kind", "child"]), decision, opts),
+         true <- length(restored.agent_identity.path) == binding.agent_depth,
+         authority <- narrow_authority(run, binding.authority),
+         true <- restored.transcript_bytes <= authority.max_transcript_bytes,
+         budget <- clamp_parent_deadline(restored.budget, binding.expires_at_ms),
+         :ok <- Budget.check(budget) do
+      {:ok,
+       restored
+       |> Map.merge(authority)
+       |> Map.put(:budget, budget)
+       |> Map.put(:parent_expires_at_ms, binding.expires_at_ms), frame}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :child_checkpoint_mismatch}
+    end
+  rescue
+    _ -> {:error, :invalid_child_checkpoint}
+  end
 
   defp parent_capabilities(run) do
     cond do

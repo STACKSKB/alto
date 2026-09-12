@@ -94,6 +94,9 @@ defmodule Alto.Runner.Execution.Parent do
 
           {kind, reason, Children.merge(run, state)}
 
+        {:error, {:subagent_journal_failed, {:child_pending, _, _}}, _state} ->
+          join(cell, snapshot, journal, run, rest, terminal, complete)
+
         {:error, reason, state} ->
           {:error, reason, Children.merge(run, state)}
       end
@@ -135,7 +138,8 @@ defmodule Alto.Runner.Execution.Parent do
                true <- saved.packet["ids"] == ids,
                true <-
                  saved.packet["metadata"]["agent_identity"] ==
-                   Alto.Protocol.encode_term(restored.agent_identity) do
+                   Alto.Protocol.encode_term(restored.agent_identity),
+               :ok <- Children.resume_decided(journal, Children.project(restored)) do
             join(cell, snapshot, journal, restored, frame.remaining, frame.terminal, complete)
           else
             false -> {:error, :parent_journal_mismatch, restored}

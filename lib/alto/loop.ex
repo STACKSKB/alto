@@ -22,7 +22,11 @@ defmodule Alto.Loop do
   @callback load_checkpoint(checkpoint :: term(), Spec.t()) ::
               {:ok, state :: term()} | {:error, term()}
 
-  @optional_callbacks dump_checkpoint: 2, load_checkpoint: 2
+  @doc "Resolve a named child's current trusted provider without persisting provider credentials."
+  @callback resolve_child_provider(profile_key :: binary(), Spec.t()) ::
+              {:ok, module() | {module(), keyword()} | nil} | {:error, term()}
+
+  @optional_callbacks dump_checkpoint: 2, load_checkpoint: 2, resolve_child_provider: 2
 
   @doc "Run a hook after a lifecycle event has occurred and before continuation effects execute."
   @spec after_event(Spec.t(), atom(), Alto.Hook.handler()) :: Spec.t()

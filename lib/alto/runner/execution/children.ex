@@ -7,6 +7,9 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.Runner.Execution.Events
 
   @fields [
+    :spec,
+    :checkpoint_version,
+    :parent_expires_at_ms,
     :runner,
     :runner_options,
     :provider,
@@ -39,6 +42,9 @@ defmodule Alto.Runner.Execution.Children do
   defmodule State do
     @moduledoc "Parent authority and child lifecycle services, independent of its scheduler."
     defstruct [
+      :spec,
+      :checkpoint_version,
+      :parent_expires_at_ms,
       :runner,
       :runner_options,
       :provider,
@@ -93,6 +99,7 @@ defmodule Alto.Runner.Execution.Children do
          {:ok, tools} <- spawn_optional(data, [:tools, "tools"], :tools),
          {:ok, loop} <- spawn_optional(data, [:loop, "loop"], :loop),
          {:ok, provider} <- spawn_optional(data, [:provider, "provider"], :provider),
+         {:ok, profile_key} <- spawn_optional(data, [:profile_key, "profile_key"], :profile_key),
          {:ok, system_prompt} <- spawn_optional(data, [:system_prompt, "system_prompt"], :text),
          {:ok, model_tools} <-
            spawn_optional(data, [:model_tools, "model_tools"], :model_tools) do
@@ -104,6 +111,7 @@ defmodule Alto.Runner.Execution.Children do
          tools: tools,
          loop: loop,
          provider: provider,
+         profile_key: profile_key,
          system_prompt: system_prompt,
          model_tools: model_tools
        }}
@@ -184,6 +192,14 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
+  defp spawn_optional(data, keys, :profile_key) do
+    case Enum.find_value(keys, &Map.get(data, &1)) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and byte_size(value) in 1..256 -> {:ok, value}
+      value -> {:error, {:invalid_spawn_field, keys, value}}
+    end
+  end
+
   defp spawn_optional(data, keys, :provider) do
     case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
       nil ->
@@ -228,6 +244,9 @@ defmodule Alto.Runner.Execution.Children do
 
     case durable_call(fn -> finish_child_journal(journal, outcomes) end, run) do
       :ok ->
+        {:ok, status, outcomes, journal, run}
+
+      {:error, {:child_pending, _, state}} when state in ["suspended", "decided", "resuming"] ->
         {:ok, status, outcomes, journal, run}
 
       {:error, reason} ->
@@ -368,12 +387,27 @@ defmodule Alto.Runner.Execution.Children do
 
   def retain_child_outcome(nil, outcome), do: outcome
 
+  def retain_child_outcome(
+        _ticket,
+        {:error, _, %{checkpoint: %{"kind" => "child", "ungranted" => true}}} = outcome
+      ),
+      do: outcome
+
   def retain_child_outcome(%Journal.Ticket{} = ticket, outcome) do
     data = subagent_data(ticket.id, outcome)
     result = elem(outcome, tuple_size(outcome) - 1)
     retained = Map.put(data, :persistence, result.persistence)
 
-    case Journal.complete(ticket, retained) do
+    stored =
+      case outcome do
+        {:error, :approval_suspended, %{checkpoint: %{"kind" => "child"} = checkpoint}} ->
+          Journal.suspend(ticket, checkpoint, result.workspace)
+
+        _ ->
+          Journal.complete(ticket, retained)
+      end
+
+    case stored do
       {:ok, _} ->
         outcome
 
@@ -468,6 +502,9 @@ defmodule Alto.Runner.Execution.Children do
       sub_opts =
         [
           provider: provider,
+          checkpoint_version: run.checkpoint_version,
+          parent_expires_at_ms: run.parent_expires_at_ms,
+          child_profile: checkpoint_profile(spec, run),
           runner_options: run.runner_options,
           tools: subagent_tools(spec.tools, run),
           approval: run.approval,
@@ -482,6 +519,10 @@ defmodule Alto.Runner.Execution.Children do
             subagent_ticket: Map.get(spec, :subagent_ticket),
             tool_context_metadata: run.tool_context.metadata,
             budget: run.budget,
+            budget_account: run.budget.account,
+            max_effects: run.budget.max_effects,
+            max_model_requests: run.budget.max_model_requests,
+            run_timeout: Budget.remaining(run.budget),
             owner: self(),
             parent_max_agent_depth: run.max_agent_depth,
             max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
@@ -506,7 +547,143 @@ defmodule Alto.Runner.Execution.Children do
           names -> Keyword.put(sub_opts, :model_tools, names)
         end
 
-      Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+      with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run) do
+        Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+      end
+    end
+  end
+
+  # Retain only the profile key, never the resolved provider configuration.
+  # Unnamed overrides remain executable but cannot independently checkpoint.
+  defp checkpoint_profile(spec, run) do
+    profile =
+      spec
+      |> Map.drop([:workspace_assignment, :subagent_ticket, :resume_data])
+      |> Map.put(:provider, nil)
+
+    case {spec.provider, spec.profile_key} do
+      {nil, nil} ->
+        profile
+
+      {_, nil} ->
+        :child_provider_requires_profile_key
+
+      {provider, key} ->
+        case resolve_named_provider(key, run) do
+          {:ok, ^provider} -> profile
+          _ -> :child_provider_profile_mismatch
+        end
+    end
+  end
+
+  defp resolve_child_profile(%{profile_key: nil, provider: nil} = spec, _run), do: {:ok, spec}
+
+  defp resolve_child_profile(%{profile_key: key, provider: nil} = spec, run)
+       when is_binary(key) do
+    with {:ok, provider} <- resolve_named_provider(key, run),
+         do: {:ok, %{spec | provider: provider}}
+  end
+
+  defp resolve_child_profile(_, _), do: {:error, :invalid_child_profile}
+
+  defp resolve_named_provider(key, run) do
+    driver = run.spec.driver
+
+    if function_exported?(driver, :resolve_child_provider, 2) do
+      case Alto.Runner.Execution.Call.run(
+             fn -> driver.resolve_child_provider(key, run.spec) end,
+             Budget.timeout(run.budget, 30_000),
+             run.cancel_ref
+           ) do
+        {:ok, {:ok, provider}} ->
+          normalize_provider(provider, [])
+
+        {:ok, {:error, _} = error} ->
+          error
+
+        {:cancelled, reason} ->
+          send(self(), {:alto_cancel, run.cancel_ref, reason})
+          {:error, {:cancelled, reason}}
+
+        _ ->
+          {:error, :child_provider_resolution_failed}
+      end
+    else
+      {:error, :child_provider_resolver_required}
+    end
+  end
+
+  @doc "Resume only explicitly decided retained children using current inherited parent capabilities."
+  def resume_decided(journal, run) do
+    with {:ok, entries} <- durable_call(fn -> Journal.suspended(journal) end, run) do
+      decided = Enum.filter(entries, &(&1.state == :decided))
+
+      {status, _outcomes} =
+        Alto.Runner.SubagentBatch.run(
+          decided,
+          run.policy.max_concurrency,
+          &resume_child(&1, journal, run),
+          fn ->
+            case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+              {{:cancelled, _} = cancelled, _} -> cancelled
+              {_, {:error, _} = error} -> error
+              _ -> :continue
+            end
+          end
+        )
+
+      # Each child retains its own terminal outcome before collection. A failed
+      # start or losing grant leaves the durable entry parked for inspection.
+      case status do
+        :ok -> :ok
+        {:cancelled, reason} -> {:error, {:cancelled, reason}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp resume_child(entry, journal, run) do
+    with {:ok, binding} <- Alto.Runner.Checkpoint.child_binding(entry.checkpoint),
+         {:ok, spec} <- validate_spawn(binding.profile),
+         {:ok, spec} <- resolve_child_profile(spec, run),
+         :ok <- validate_subagent_tools(spec.tools, run),
+         true <- spec.id == entry.id,
+         {:ok, handle} <-
+           start_subagent(Map.put(spec, :resume_data, {journal, entry, binding}), run) do
+      {:ok, handle}
+    else
+      false -> {:error, :child_profile_mismatch}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp resumed_options(opts, nil, _run), do: {:ok, opts}
+
+  defp resumed_options(opts, {journal, entry, binding}, run) do
+    ticket = Journal.resume_ticket(journal, entry.identity)
+    decision = if entry.decision == "approve", do: :approve, else: :deny
+
+    opts =
+      opts
+      |> Keyword.delete(:workspace_assignment)
+      |> Keyword.put(:checkpoint, {entry.checkpoint, decision})
+      |> Keyword.put(:child_resume, entry.identity)
+      |> Keyword.put(:subagent_ticket, ticket)
+      |> Keyword.put(:session, entry.checkpoint["session_id"])
+      |> Keyword.put(:resume_snapshot, binding.resume_snapshot)
+      |> Keyword.put(:cwd, binding.cwd)
+      |> Keyword.put(:agent_depth, binding.agent_depth)
+      |> Keyword.put(:parent_expires_at_ms, binding.expires_at_ms)
+
+    case entry.workspace do
+      nil ->
+        {:ok, opts}
+
+      %{id: id, revision: revision, status: "worked"} when not is_nil(run.workspaces) ->
+        {:ok, Keyword.put(opts, :workspace_resume, {run.workspaces, id, revision})}
+
+      _ ->
+        {:error, :child_workspace_mismatch}
     end
   end
 

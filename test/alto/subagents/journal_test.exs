@@ -225,4 +225,43 @@ defmodule Alto.Subagents.JournalTest do
     assert joined.results == Enum.map(ids, &{&1, &1})
     assert OperationLog.attempts(ledger, "many") == 1
   end
+
+  test "approval decisions and grants are fenced independently from sibling changes", %{
+    dir: dir,
+    id: id
+  } do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    batch = open!(ledger, "approval-batch", ["one", "two"])
+    {:ok, one} = Journal.dispatch(batch, "one")
+    {:ok, two} = Journal.dispatch(batch, "two")
+    checkpoint = %{"kind" => "child", "request" => %{"tool" => "write"}, "state" => "opaque"}
+    assert {:ok, _} = Journal.suspend(one, checkpoint)
+    assert {:ok, _} = Journal.suspend(two, checkpoint)
+    assert {:ok, [%{identity: first}, %{identity: second}]} = Journal.suspended(batch)
+    {:ok, viewed} = Journal.read(batch)
+    assert {:ok, _} = Journal.decide(batch, viewed.revision, first, :approve)
+    assert {:error, :stale_child_decision} = Journal.decide(batch, viewed.revision, second, :deny)
+    {:ok, viewed} = Journal.read(batch)
+    assert {:ok, _} = Journal.decide(batch, viewed.revision, second, :deny)
+    tasks = for _ <- 1..2, do: Task.async(fn -> Journal.claim_child(batch, first, :approve) end)
+    results = Enum.map(tasks, &Task.await/1)
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :child_resume_not_granted})) == 1
+    assert {:error, :child_result_conflict} = Journal.complete(one, %{value: "stale worker"})
+
+    assert {:ok, _} =
+             Journal.complete(
+               Enum.find_value(results, fn
+                 {:ok, ticket} -> ticket
+                 _ -> nil
+               end),
+               %{value: "approved"}
+             )
+
+    assert {:ok, second_ticket} = Journal.claim_child(batch, second, :deny)
+    assert {:ok, _} = Journal.complete(second_ticket, %{value: "denied"})
+
+    assert {:ok, %{results: [{"one", %{value: "approved"}}, {"two", %{value: "denied"}}]}} =
+             Journal.join(batch)
+  end
 end

@@ -17,13 +17,14 @@ defmodule Alto.Subagents.Journal do
   defmodule Ticket do
     @moduledoc "A dispatch identity returned only after durable admission."
     @enforce_keys [:batch, :id, :attempt]
-    defstruct [:batch, :id, :attempt]
+    defstruct [:batch, :id, :attempt, :suspension, :grant]
   end
 
   @kind "alto_subagent_batch"
   @initialize "initialize-batch"
   @retire "retire-batch"
   @max_result_bytes 64_000
+  @max_checkpoint_bytes 2_000_000
 
   @doc "Create or reconnect an ordered batch with immutable JSON metadata."
   def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
@@ -121,20 +122,166 @@ defmodule Alto.Subagents.Journal do
   end
 
   @doc "Retain an exact portable result before the worker reports completion."
-  def complete(%Ticket{batch: batch, id: id, attempt: attempt}, result) do
+  def complete(%Ticket{} = ticket, result) do
     with {:ok, encoded} <- encode_result(result) do
-      change_child(batch, id, fn
-        %{"state" => "dispatched", "attempt" => ^attempt} = child ->
-          {:ok, %{child | "state" => "completed", "result" => encoded}}
+      change_child(ticket.batch, ticket.id, fn child ->
+        cond do
+          owns_dispatch?(child, ticket) ->
+            {:ok,
+             child
+             |> Map.drop(["suspension"])
+             |> Map.merge(%{"state" => "completed", "result" => encoded})}
 
-        %{"state" => "completed", "attempt" => ^attempt, "result" => ^encoded} = child ->
-          {:ok, child}
+          child["state"] == "completed" and child["attempt"] == ticket.attempt and
+              child["result"] == encoded ->
+            {:ok, child}
 
-        _ ->
-          {:error, :child_result_conflict}
+          true ->
+            {:error, :child_result_conflict}
+        end
       end)
     end
   end
+
+  @doc "Retain an exact approval checkpoint before a child reports suspension."
+  def suspend(%Ticket{} = ticket, checkpoint, workspace \\ nil) do
+    with {:ok, encoded} <-
+           Codec.encode(%{"checkpoint" => checkpoint, "workspace" => workspace},
+             max_bytes: @max_checkpoint_bytes
+           ) do
+      change_child(ticket.batch, ticket.id, fn child ->
+        if owns_dispatch?(child, ticket) do
+          {:ok,
+           Map.merge(child, %{
+             "state" => "suspended",
+             "suspension" => %{
+               "token" => nonce(),
+               "checkpoint" => encoded,
+               "decision" => nil,
+               "grant" => nil
+             }
+           })}
+        else
+          {:error, :child_result_conflict}
+        end
+      end)
+    end
+  end
+
+  @doc "Inspect retained approvals and explicit decisions without granting execution."
+  def suspended(%__MODULE__{} = batch) do
+    with {:ok, snapshot} <- read(batch) do
+      Enum.reduce_while(snapshot.packet["children"], {:ok, []}, fn child, {:ok, acc} ->
+        if child["state"] in ["suspended", "decided"] do
+          with {:ok, saved} <-
+                 Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes) do
+            entry =
+              Map.merge(%{checkpoint: saved["checkpoint"], workspace: saved["workspace"]}, %{
+                id: child["id"],
+                state: if(child["state"] == "suspended", do: :suspended, else: :decided),
+                identity: child_identity(batch, child),
+                decision: child["suspension"]["decision"]
+              })
+
+            {:cont, {:ok, [entry | acc]}}
+          else
+            error -> {:halt, error}
+          end
+        else
+          {:cont, {:ok, acc}}
+        end
+      end)
+      |> case do
+        {:ok, entries} -> {:ok, Enum.reverse(entries)}
+        error -> error
+      end
+    end
+  end
+
+  @doc "Persist an explicit approval decision at the exact viewed batch revision."
+  def decide(%__MODULE__{} = batch, revision, identity, decision)
+      when decision in [:approve, :deny] do
+    with {:ok, snapshot} <- read(batch),
+         :ok <- active(snapshot),
+         true <- snapshot.revision == revision,
+         child when not is_nil(child) <-
+           Enum.find(snapshot.packet["children"], &(child_identity(batch, &1) == identity)),
+         true <- child["state"] == "suspended" and is_nil(snapshot.packet["join"]) do
+      children =
+        Enum.map(snapshot.packet["children"], fn current ->
+          if current == child,
+            do:
+              current
+              |> Map.put("state", "decided")
+              |> put_in(["suspension", "decision"], Atom.to_string(decision)),
+            else: current
+        end)
+
+      replace(batch, snapshot, Map.put(snapshot.packet, "children", children))
+    else
+      false -> {:error, :stale_child_decision}
+      nil -> {:error, :stale_child_decision}
+      {:error, _} = error -> error
+    end
+  end
+
+  def decide(_, _, _, _), do: {:error, :invalid_child_decision}
+
+  @doc "Grant one decided checkpoint after the runner validates its complete restore."
+  def claim_child(%__MODULE__{} = batch, identity, decision) when decision in [:approve, :deny] do
+    ticket = resume_ticket(batch, identity)
+    with {:ok, _} <- claim_child(ticket, identity, decision), do: {:ok, ticket}
+  end
+
+  def claim_child(%Ticket{batch: batch, grant: grant} = ticket, identity, decision)
+      when decision in [:approve, :deny] do
+    change_child(batch, ticket.id, fn child ->
+      if child_identity(batch, child) == identity and child["state"] == "decided" and
+           child["suspension"]["decision"] == Atom.to_string(decision) and nonce?(grant) do
+        {:ok, child |> Map.put("state", "resuming") |> put_in(["suspension", "grant"], grant)}
+      else
+        {:error, :child_resume_not_granted}
+      end
+    end)
+  end
+
+  @doc false
+  def resume_ticket(batch, identity) do
+    %Ticket{
+      batch: batch,
+      id: identity["id"],
+      attempt: identity["attempt"],
+      suspension: identity["suspension"],
+      grant: nonce()
+    }
+  end
+
+  defp child_identity(batch, child) do
+    %{
+      "journal" => identity(batch),
+      "id" => child["id"],
+      "attempt" => child["attempt"],
+      "suspension" => get_in(child, ["suspension", "token"])
+    }
+  end
+
+  defp owns_dispatch?(%{"state" => "dispatched", "attempt" => attempt}, %Ticket{
+         attempt: attempt,
+         suspension: nil
+       }),
+       do: true
+
+  defp owns_dispatch?(
+         %{
+           "state" => "resuming",
+           "attempt" => attempt,
+           "suspension" => %{"token" => token, "grant" => grant}
+         },
+         %Ticket{attempt: attempt, suspension: token, grant: grant}
+       ),
+       do: true
+
+  defp owns_dispatch?(_, _), do: false
 
   @doc "Record known non-dispatch (for example cancellation of a queued child)."
   def skip(%__MODULE__{} = batch, id, result) do
@@ -423,6 +570,28 @@ defmodule Alto.Subagents.Journal do
         _ ->
           false
       end
+  end
+
+  defp valid_child?(
+         %{
+           "id" => id,
+           "state" => state,
+           "attempt" => attempt,
+           "result" => nil,
+           "suspension" => suspension
+         } = child
+       )
+       when map_size(child) == 5 and state in ["suspended", "decided", "resuming"] do
+    valid_id?(id) and nonce?(attempt) and is_map(suspension) and
+      Enum.sort(Map.keys(suspension)) == Enum.sort(~w(token checkpoint decision grant)) and
+      nonce?(suspension["token"]) and
+      if(state == "resuming", do: nonce?(suspension["grant"]), else: is_nil(suspension["grant"])) and
+      is_binary(suspension["checkpoint"]) and
+      byte_size(suspension["checkpoint"]) <= div(@max_checkpoint_bytes * 4, 3) + 8 and
+      if(state == "suspended",
+        do: is_nil(suspension["decision"]),
+        else: suspension["decision"] in ["approve", "deny"]
+      )
   end
 
   defp valid_child?(_), do: false

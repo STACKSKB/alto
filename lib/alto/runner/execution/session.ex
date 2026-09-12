@@ -115,8 +115,9 @@ defmodule Alto.Runner.Execution.Session do
 
   def persist_session_outcome(
         %__MODULE__{} = state,
-        {:error, reason, %{checkpoint: %{"kind" => "parent"}} = result}
-      ) do
+        {:error, reason, %{checkpoint: %{"kind" => kind}} = result}
+      )
+      when kind in ["parent", "child"] do
     status =
       case reason do
         {:cancelled, _} -> "cancelled"
