@@ -16,6 +16,7 @@ defmodule Alto.Runner.Budget.Account do
   @max 18_446_744_073_709_551_615
   @kind "alto_budget_account"
   @attempt "initialize-budget"
+  @close "close-budget"
   @limits ["max_effects", "max_model_requests"]
   @counters ["effects_used", "model_requests_used"]
 
@@ -53,7 +54,7 @@ defmodule Alto.Runner.Budget.Account do
   def identity(%__MODULE__{key: key, generation: generation}),
     do: %{"key" => key, "generation" => generation}
 
-  @doc "Read one consistent revision and both counters."
+  @doc "Read one consistent revision, both counters, and the closure state."
   def read(%__MODULE__{} = account), do: read(account, :infinity)
 
   def read(%__MODULE__{} = account, deadline) do
@@ -61,9 +62,9 @@ defmodule Alto.Runner.Budget.Account do
       with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
            :ok <- valid_initial(entry),
            true <- entry.recovery["generation"] == account.generation,
-           true <- match?({:checkpointed, _, @attempt}, entry.status),
-           :ok <- valid_packet(entry.checkpoint, entry.recovery) do
-        {:ok, %{revision: entry.revision, packet: entry.checkpoint}}
+           :ok <- valid_packet(entry.checkpoint, entry.recovery),
+           {:ok, state} <- lifecycle(entry) do
+        {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
       else
         false -> {:error, :budget_account_mismatch}
         {:error, _} = error -> error
@@ -131,46 +132,82 @@ defmodule Alto.Runner.Budget.Account do
 
   @doc "Close an account at the viewed revision, denying future reservations. Never refunds counts."
   def close(%__MODULE__{} = account, expected_revision) do
-    safe(fn ->
-      with :ok <- Retained.deadline_ok(:infinity),
-           {:ok, %{revision: revision, packet: packet}} <- read(account),
-           true <- revision == expected_revision,
-           {:ok, _} <-
-             Retained.resume(
-               account.ledger,
-               account.key,
-               revision,
-               %{"action" => "close_budget", "generation" => account.generation},
-               :infinity
-             ),
-           :ok <-
-             Retained.record_attempt(
-               account.ledger,
-               account.key,
-               "close-budget",
-               :infinity
-             ),
-           :ok <-
-             Retained.record_outcome(
-               account.ledger,
-               account.key,
-               "close-budget",
-               :completed,
-               Map.take(packet, @limits ++ @counters),
-               :infinity
-             ) do
+    if is_integer(expected_revision) and expected_revision >= 1 do
+      safe(fn ->
+        with {:ok, snapshot} <- read(account),
+             true <- snapshot.revision == expected_revision,
+             :ok <- begin_close(account, snapshot),
+             :ok <- finish_close(account) do
+          :ok
+        else
+          false -> {:error, :stale_revision}
+          {:error, _} = error -> error
+        end
+      end)
+    else
+      {:error, :invalid_budget_account_revision}
+    end
+  end
+
+  defp begin_close(account, %{state: :active, revision: revision}) do
+    with {:ok, _} <-
+           Retained.resume(
+             account.ledger,
+             account.key,
+             revision,
+             %{"action" => "close_budget", "generation" => account.generation},
+             :infinity
+           ),
+         do: :ok
+  end
+
+  defp begin_close(_, %{state: state}) when state in [:closing, :closed], do: :ok
+
+  defp finish_close(account) do
+    with {:ok, snapshot} <- read(account) do
+      if snapshot.state == :closed do
         :ok
       else
-        false -> {:error, :stale_revision}
-        {:error, _} = error -> error
+        evidence = Map.take(snapshot.packet, @limits ++ @counters)
+
+        case Retained.record_attempt(account.ledger, account.key, @close, :infinity) do
+          :ok ->
+            case Retained.record_outcome(
+                   account.ledger,
+                   account.key,
+                   @close,
+                   :completed,
+                   evidence,
+                   :infinity
+                 ) do
+              :ok -> :ok
+              {:error, :already_decided} -> closed_after_race(account)
+              error -> error
+            end
+
+          {:error, :already_decided} ->
+            closed_after_race(account)
+
+          error ->
+            error
+        end
       end
-    end)
+    end
+  end
+
+  defp closed_after_race(account) do
+    case read(account) do
+      {:ok, %{state: :closed}} -> :ok
+      {:ok, _} -> {:error, :budget_account_not_closed}
+      error -> error
+    end
   end
 
   defp update(account, fun, deadline) do
     safe(fn ->
       with :ok <- Retained.deadline_ok(deadline),
-           {:ok, %{revision: revision, packet: packet} = current} <- read(account, deadline),
+           {:ok, %{revision: revision, packet: packet, state: :active} = current} <-
+             active_read(account, deadline),
            {:ok, replacement} <- fun.(packet) do
         if replacement == packet do
           {:ok, current}
@@ -183,6 +220,14 @@ defmodule Alto.Runner.Budget.Account do
         end
       end
     end)
+  end
+
+  defp active_read(account, deadline) do
+    case read(account, deadline) do
+      {:ok, %{state: :active} = snapshot} -> {:ok, snapshot}
+      {:ok, _} -> {:error, :budget_account_closed}
+      error -> error
+    end
   end
 
   # Initialization records only counter state, never external dispatch. Its
@@ -246,6 +291,34 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   defp valid_packet(_, _), do: {:error, :invalid_budget_account}
+
+  defp lifecycle(%{status: {:checkpointed, _, @attempt}}), do: {:ok, :active}
+
+  defp lifecycle(
+         %{
+           checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
+           recovery: %{"generation" => generation},
+           checkpoint: packet
+         } = entry
+       ) do
+    case entry.status do
+      {:intended} ->
+        {:ok, :closing}
+
+      {:dispatched, @close} ->
+        {:ok, :closing}
+
+      {:decided, :completed, evidence} ->
+        if evidence == Map.take(packet, @limits ++ @counters),
+          do: {:ok, :closed},
+          else: {:error, :invalid_budget_account}
+
+      _ ->
+        {:error, :invalid_budget_account}
+    end
+  end
+
+  defp lifecycle(_), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
     keys = if Keyword.keyword?(opts), do: Keyword.keys(opts), else: []

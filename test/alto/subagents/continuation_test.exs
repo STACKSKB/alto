@@ -91,6 +91,104 @@ defmodule Alto.Subagents.ContinuationTest do
     assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
   end
 
+  test "only a claimed frame can retire, and retirement survives restart", %{dir: dir, id: id} do
+    %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
+    cell = open!(ledger, "retire")
+    identity = Continuation.identity(cell)
+    {:ok, pending} = Continuation.read(cell)
+    assert pending.state == :active
+
+    assert {:error, :invalid_continuation_phase} =
+             Continuation.retire(cell, pending.revision)
+
+    {:ok, ready} = Continuation.ready(cell, pending.revision, %{"frame" => "ready"})
+    assert {:error, :invalid_continuation_phase} = Continuation.retire(cell, ready.revision)
+    {:ok, claimed} = Continuation.claim(cell, ready.revision)
+    assert {:error, :stale_revision} = Continuation.retire(cell, ready.revision)
+    assert {:error, :invalid_continuation_revision} = Continuation.retire(cell, 0)
+    assert :ok = Continuation.retire(cell, claimed.revision)
+
+    assert {:ok, %{state: :retired, phase: :claimed, packet: %{"frame" => "ready"}}} =
+             Continuation.read(cell)
+
+    stop_supervised!(child_id)
+    %{ledger: restarted} = start_ledger!(dir, id)
+    {:ok, restored} = Continuation.restore(restarted, identity)
+    {:ok, retired} = Continuation.read(restored)
+    assert retired.state == :retired
+    assert :ok = Continuation.retire(restored, retired.revision)
+
+    assert {:error, :continuation_already_claimed} =
+             Continuation.claim(restored, retired.revision)
+
+    assert OperationLog.attempts(restarted, "retire") == 2
+  end
+
+  test "interrupted retirement resumes from both durable intermediate states", %{
+    dir: dir,
+    id: id
+  } do
+    %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
+
+    for {key, record_attempt?} <- [{"after-decision", false}, {"after-attempt", true}] do
+      cell = open!(ledger, key)
+      {:ok, pending} = Continuation.read(cell)
+      {:ok, ready} = Continuation.ready(cell, pending.revision, %{"frame" => key})
+      {:ok, claimed} = Continuation.claim(cell, ready.revision)
+
+      assert {:ok, _} =
+               OperationLog.resume_checkpoint(ledger, key, claimed.revision, %{
+                 "action" => "retire-parent-continuation",
+                 "generation" => cell.generation
+               })
+
+      if record_attempt?,
+        do: :ok = OperationLog.record_attempt(ledger, key, "retire-parent-continuation")
+    end
+
+    stop_supervised!(child_id)
+    %{ledger: restarted} = start_ledger!(dir, id)
+
+    for key <- ["after-decision", "after-attempt"] do
+      {:ok, entry} = OperationLog.recovery(restarted, key)
+      identity = %{"key" => key, "generation" => entry.recovery["generation"]}
+      {:ok, restored} = Continuation.restore(restarted, identity)
+      {:ok, retiring} = Continuation.read(restored)
+      assert retiring.state == :retiring
+      assert retiring.phase == :claimed
+      assert :ok = Continuation.retire(restored, retiring.revision)
+      assert {:ok, %{state: :retired}} = Continuation.read(restored)
+      assert OperationLog.attempts(restarted, key) == 2
+    end
+  end
+
+  test "retirement is generation fenced", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    cell = open!(ledger, "retire-generation")
+    {:ok, pending} = Continuation.read(cell)
+    {:ok, ready} = Continuation.ready(cell, pending.revision, %{"ready" => true})
+    {:ok, claimed} = Continuation.claim(cell, ready.revision)
+    forged = %{cell | generation: String.duplicate("b", 32)}
+
+    assert {:error, :continuation_generation_mismatch} =
+             Continuation.retire(forged, claimed.revision)
+
+    assert {:ok, %{state: :active, revision: revision}} = Continuation.read(cell)
+    assert revision == claimed.revision
+  end
+
+  test "retirement makes the cell eligible for bounded ledger eviction", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id, max_ops: 1)
+    old = open!(ledger, "old")
+    {:ok, pending} = Continuation.read(old)
+    {:ok, ready} = Continuation.ready(old, pending.revision, %{"ready" => true})
+    {:ok, claimed} = Continuation.claim(old, ready.revision)
+    assert {:error, :ledger_full} = Continuation.open(ledger, "new", %{}, metadata())
+    assert :ok = Continuation.retire(old, claimed.revision)
+    assert {:ok, _new} = Continuation.open(ledger, "new", %{}, metadata())
+    assert {:error, :not_found} = Continuation.read(old)
+  end
+
   test "stale revision, old generation, and repeated transitions cannot mutate state", %{
     dir: dir,
     id: id

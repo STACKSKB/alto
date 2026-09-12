@@ -15,6 +15,7 @@ defmodule Alto.Subagents.Continuation do
 
   @kind "alto_subagent_parent_continuation"
   @initialize "initialize-parent-continuation"
+  @retire "retire-parent-continuation"
   @max_packet_bytes 2_000_000
   @max_metadata_bytes 64_000
   @identity_keys ~w(key generation)
@@ -74,14 +75,15 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  @doc "Read the exact retained frame and its current revision."
+  @doc "Read the exact retained frame, revision, and retirement state."
   def read(%__MODULE__{} = cell) do
     safe(fn ->
       with {:ok, entry} <- Retained.read(cell.ledger, cell.key, cell.deadline),
            :ok <- valid_initial(entry),
            true <- entry.recovery["generation"] == cell.generation,
-           :ok <- valid_checkpoint_entry(entry) do
-        {:ok, snapshot(entry)}
+           :ok <- valid_checkpoint_entry(entry),
+           {:ok, state} <- lifecycle(entry) do
+        {:ok, snapshot(entry, state)}
       else
         false -> {:error, :continuation_generation_mismatch}
         {:error, _} = error -> error
@@ -112,14 +114,29 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
+  @doc "Retire a claimed frame at its viewed revision. An interrupted retirement can be finished at its new revision."
+  def retire(%__MODULE__{} = cell, expected_revision) do
+    with :ok <- valid_revision(expected_revision) do
+      safe(fn ->
+        with {:ok, current} <- read(cell),
+             :ok <- expected_retirement(current, expected_revision),
+             :ok <- begin_retirement(cell, current),
+             :ok <- finish_retirement(cell) do
+          :ok
+        end
+      end)
+    end
+  end
+
   defp replace(cell, revision, replacement) do
     safe(fn ->
       with {:ok, entry} <-
              Retained.cas(cell.ledger, cell.key, revision, replacement, cell.deadline),
            :ok <- valid_initial(entry),
            true <- entry.recovery["generation"] == cell.generation,
-           :ok <- valid_checkpoint_entry(entry) do
-        {:ok, snapshot(entry)}
+           :ok <- valid_checkpoint_entry(entry),
+           {:ok, state} <- lifecycle(entry) do
+        {:ok, snapshot(entry, state)}
       else
         false -> {:error, :continuation_generation_mismatch}
         {:error, _} = error -> error
@@ -138,6 +155,66 @@ defmodule Alto.Subagents.Continuation do
 
   defp expected(%{phase: :ready}, _revision, :pending), do: {:error, :continuation_already_ready}
   defp expected(_, _, _), do: {:error, :invalid_continuation_phase}
+
+  defp expected_retirement(%{revision: revision}, expected_revision)
+       when revision != expected_revision,
+       do: {:error, :stale_revision}
+
+  defp expected_retirement(%{phase: :claimed}, _revision), do: :ok
+  defp expected_retirement(_, _revision), do: {:error, :invalid_continuation_phase}
+
+  defp begin_retirement(cell, %{state: :active} = snapshot) do
+    with {:ok, _} <-
+           Retained.resume(
+             cell.ledger,
+             cell.key,
+             snapshot.revision,
+             %{"action" => @retire, "generation" => cell.generation},
+             cell.deadline
+           ),
+         do: :ok
+  end
+
+  defp begin_retirement(_, %{state: state}) when state in [:retiring, :retired], do: :ok
+
+  # Retirement only writes deterministic ledger records; no parent grant is reissued.
+  defp finish_retirement(cell) do
+    with {:ok, snapshot} <- read(cell) do
+      if snapshot.state == :retired do
+        :ok
+      else
+        case Retained.record_attempt(cell.ledger, cell.key, @retire, cell.deadline) do
+          :ok ->
+            case Retained.record_outcome(
+                   cell.ledger,
+                   cell.key,
+                   @retire,
+                   :completed,
+                   %{"generation" => cell.generation, "claimed" => true},
+                   cell.deadline
+                 ) do
+              :ok -> :ok
+              {:error, :already_decided} -> retired_after_race(cell)
+              error -> error
+            end
+
+          {:error, :already_decided} ->
+            retired_after_race(cell)
+
+          error ->
+            error
+        end
+      end
+    end
+  end
+
+  defp retired_after_race(cell) do
+    case read(cell) do
+      {:ok, %{state: :retired}} -> :ok
+      {:ok, _} -> {:error, :continuation_not_retired}
+      error -> error
+    end
+  end
 
   defp same_opening(recovery, opening) do
     if recovery["pending_digest"] == opening["pending_digest"] and
@@ -186,20 +263,18 @@ defmodule Alto.Subagents.Continuation do
     }
   end
 
-  defp snapshot(entry) do
+  defp snapshot(entry, state) do
     %{
       revision: entry.revision,
+      state: state,
       phase: String.to_existing_atom(entry.checkpoint["phase"]),
       packet: entry.checkpoint["packet"],
       metadata: entry.checkpoint["metadata"]
     }
   end
 
-  defp valid_checkpoint_entry(%{status: {:checkpointed, _, @initialize}} = entry)
+  defp valid_checkpoint_entry(%{checkpoint: packet, recovery: initial} = entry)
        when is_integer(entry.revision) and entry.revision >= 1 do
-    packet = entry.checkpoint
-    initial = entry.recovery
-
     if is_map(packet) and Enum.sort(Map.keys(packet)) == Enum.sort(@checkpoint_keys) and
          packet["kind"] == @kind and packet["version"] == 1 and
          packet["generation"] == initial["generation"] and
@@ -214,6 +289,32 @@ defmodule Alto.Subagents.Continuation do
   end
 
   defp valid_checkpoint_entry(_), do: {:error, :invalid_continuation}
+
+  defp lifecycle(%{status: {:checkpointed, _, @initialize}}), do: {:ok, :active}
+
+  defp lifecycle(
+         %{
+           checkpoint_decision: %{"action" => @retire, "generation" => generation},
+           recovery: %{"generation" => generation},
+           checkpoint: %{"phase" => "claimed"}
+         } = entry
+       ) do
+    case entry.status do
+      {:intended} ->
+        {:ok, :retiring}
+
+      {:dispatched, @retire} ->
+        {:ok, :retiring}
+
+      {:decided, :completed, %{"generation" => ^generation, "claimed" => true}} ->
+        {:ok, :retired}
+
+      _ ->
+        {:error, :invalid_continuation}
+    end
+  end
+
+  defp lifecycle(_), do: {:error, :invalid_continuation}
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
     if Enum.sort(Map.keys(initial)) == Enum.sort(@initial_keys) and initial["kind"] == @kind and

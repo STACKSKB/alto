@@ -91,4 +91,100 @@ defmodule Alto.Runner.BudgetAccountTest do
     GenServer.stop(ledger)
     assert {:error, _reason} = Account.take(account, :effect, 1)
   end
+
+  test "closing preserves counters, denies further grants, and is idempotent after restart", %{
+    ledger: ledger,
+    ledger_opts: opts
+  } do
+    {:ok, account} = Account.open(ledger, "closed", max_effects: 3, max_model_requests: 2)
+    assert :ok = Account.take(account, :effect, 3)
+    assert :ok = Account.take(account, :model, 2)
+    {:ok, active} = Account.read(account)
+    assert active.state == :active
+    assert {:error, :stale_revision} = Account.close(account, active.revision - 1)
+    assert {:error, :invalid_budget_account_revision} = Account.close(account, 0)
+    assert :ok = Account.close(account, active.revision)
+    {:ok, closed} = Account.read(account)
+    assert closed.state == :closed
+    assert closed.packet["effects_used"] == 1
+    assert closed.packet["model_requests_used"] == 1
+    assert {:error, :budget_account_closed} = Account.take(account, :effect, 3)
+    assert {:error, :budget_account_closed} = Account.tighten(account, 1, 1)
+
+    stop_supervised!(OperationLog)
+    restarted = start_supervised!({OperationLog, opts})
+    restored = %{account | ledger: restarted}
+    {:ok, after_restart} = Account.read(restored)
+    assert after_restart.state == :closed
+    assert after_restart.packet == closed.packet
+    assert :ok = Account.close(restored, after_restart.revision)
+    assert OperationLog.attempts(restarted, "closed") == 2
+  end
+
+  test "interrupted closure recovers after decision and after attempt", %{
+    ledger: ledger,
+    ledger_opts: opts
+  } do
+    for {key, record_attempt?} <- [{"closing-decision", false}, {"closing-attempt", true}] do
+      {:ok, account} = Account.open(ledger, key, max_effects: 2, max_model_requests: 2)
+      assert :ok = Account.take(account, :effect, 2)
+      {:ok, active} = Account.read(account)
+
+      assert {:ok, _} =
+               OperationLog.resume_checkpoint(ledger, key, active.revision, %{
+                 "action" => "close_budget",
+                 "generation" => account.generation
+               })
+
+      if record_attempt?, do: :ok = OperationLog.record_attempt(ledger, key, "close-budget")
+      assert {:ok, %{state: :closing}} = Account.read(account)
+      assert {:error, :budget_account_closed} = Account.take(account, :effect, 2)
+    end
+
+    stop_supervised!(OperationLog)
+    restarted = start_supervised!({OperationLog, opts})
+
+    for key <- ["closing-decision", "closing-attempt"] do
+      {:ok, entry} = OperationLog.recovery(restarted, key)
+
+      account = %Account{
+        ledger: restarted,
+        key: key,
+        generation: entry.recovery["generation"]
+      }
+
+      {:ok, closing} = Account.read(account)
+      assert closing.state == :closing
+      assert :ok = Account.close(account, closing.revision)
+
+      assert {:ok, %{state: :closed, packet: %{"effects_used" => 1}}} =
+               Account.read(account)
+
+      assert OperationLog.attempts(restarted, key) == 2
+    end
+  end
+
+  test "an old account generation cannot close a replacement", %{ledger: ledger} do
+    {:ok, account} = Account.open(ledger, "closure-fence", max_effects: 2, max_model_requests: 2)
+    {:ok, active} = Account.read(account)
+    forged = %{account | generation: String.duplicate("f", 32)}
+    assert {:error, :budget_account_mismatch} = Account.close(forged, active.revision)
+    assert Account.read(account) == {:ok, active}
+  end
+
+  test "closure frees capacity only after the terminal outcome", %{dir: dir} do
+    {:ok, ledger} = OperationLog.start_link(id: "close-capacity", name: nil, dir: dir, max_ops: 1)
+    {:ok, account} = Account.open(ledger, "first", max_effects: 1, max_model_requests: 1)
+    {:ok, active} = Account.read(account)
+
+    assert {:error, :ledger_full} =
+             Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
+
+    assert :ok = Account.close(account, active.revision)
+
+    assert {:ok, _second} =
+             Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
+
+    assert {:error, :not_found} = Account.read(account)
+  end
 end
