@@ -113,6 +113,24 @@ defmodule Alto.Runner.Execution.Session do
     put_persistence({:error, :approval_suspended, result}, persistence_status(errors))
   end
 
+  def persist_session_outcome(
+        %__MODULE__{} = state,
+        {:error, reason, %{checkpoint: %{"kind" => "parent"}} = result}
+      ) do
+    status =
+      case reason do
+        {:cancelled, _} -> "cancelled"
+        {:children_pending, _} -> "suspended"
+        _ -> "error"
+      end
+
+    errors =
+      existing_persistence_errors(result) ++
+        persistence_errors([persist_completed(state, status, reason, result)])
+
+    put_persistence({:error, reason, result}, persistence_status(errors))
+  end
+
   def persist_session_outcome(%__MODULE__{} = state, {:error, reason, result}) do
     completion =
       case reason do

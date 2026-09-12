@@ -198,45 +198,119 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   def run_children(specs, concurrency, run) do
-    with {:ok, specs} <- prepare_subagent_workspaces(specs, run),
-         {:ok, journal, run} <- open_child_journal(specs, run) do
-      {status, outcomes} =
-        Alto.Runner.SubagentBatch.run(
-          specs,
-          concurrency,
-          &dispatch_subagent(&1, run, journal),
-          fn ->
-            case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
-              {{:cancelled, _} = cancelled, _} -> cancelled
-              {_, {:error, _} = error} -> error
-              _ -> :continue
-            end
-          end
-        )
-
-      case durable_call(fn -> finish_child_journal(journal, outcomes) end, run) do
-        :ok ->
-          {:ok, status, outcomes, journal, run}
-
-        {:error, reason} ->
-          run =
-            run |> merge_verdict(:unknown) |> add_persistence_error({:subagent_journal, reason})
-
-          if status == :ok do
-            run =
-              Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
-                merge_child_result(acc, outcome)
-              end)
-
-            {:error, {:subagent_journal_failed, reason}, run}
-          else
-            # Cancellation/timeout is still the parent disposition. Preserve
-            # unresolved dispatch evidence instead of claiming a joined result.
-            {:ok, status, outcomes, journal, run}
-          end
-      end
+    with {:ok, specs, journal, run} <- prepare_children(specs, run) do
+      run_prepared_children(specs, concurrency, journal, run)
     end
   end
+
+  @doc "Prepare resources and journal without granting any child dispatch."
+  def prepare_children(specs, run) do
+    with {:ok, specs} <- prepare_subagent_workspaces(specs, run),
+         {:ok, journal, run} <- open_child_journal(specs, run),
+         do: {:ok, specs, journal, run}
+  end
+
+  @doc "Execute an already prepared batch; callers may persist its parent first."
+  def run_prepared_children(specs, concurrency, journal, run) do
+    {status, outcomes} =
+      Alto.Runner.SubagentBatch.run(
+        specs,
+        concurrency,
+        &dispatch_subagent(&1, run, journal),
+        fn ->
+          case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+            {{:cancelled, _} = cancelled, _} -> cancelled
+            {_, {:error, _} = error} -> error
+            _ -> :continue
+          end
+        end
+      )
+
+    case durable_call(fn -> finish_child_journal(journal, outcomes) end, run) do
+      :ok ->
+        {:ok, status, outcomes, journal, run}
+
+      {:error, reason} ->
+        run =
+          run |> merge_verdict(:unknown) |> add_persistence_error({:subagent_journal, reason})
+
+        if status == :ok do
+          run =
+            Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
+              merge_child_result(acc, outcome)
+            end)
+
+          {:error, {:subagent_journal_failed, reason}, run}
+        else
+          # Cancellation/timeout is still the parent disposition. Preserve
+          # unresolved dispatch evidence instead of claiming a joined result.
+          {:ok, status, outcomes, journal, run}
+        end
+    end
+  end
+
+  @doc "Validate and merge retained native child summaries without redispatch."
+  def merge_retained(results, run) when is_list(results) do
+    Enum.reduce_while(results, {:ok, [], run}, fn {id, data}, {:ok, values, acc} ->
+      case retained_outcome(id, data) do
+        {:ok, outcome} ->
+          {:cont,
+           {:ok, [Map.delete(data, :persistence) | values], merge_child_result(acc, outcome)}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, values, run} -> {:ok, Enum.reverse(values), run}
+      error -> error
+    end
+  end
+
+  defp retained_outcome(id, %{id: id, status: status} = data)
+       when status in [:ok, :error, :cancelled] do
+    if Map.has_key?(data, :usage) do
+      usage = data.usage
+      fields = Map.keys(Usage.to_map(Usage.new()))
+
+      with true <- is_map(usage) and Enum.sort(Map.keys(usage)) == Enum.sort(fields),
+           true <- Enum.all?(usage, fn {_, value} -> is_integer(value) and value >= 0 end),
+           true <-
+             data[:outcome] in [
+               :empty,
+               :completed,
+               :rejected_before_dispatch,
+               :failed_known,
+               :unknown
+             ],
+           true <- is_integer(data[:model_requests]) and data.model_requests >= 0,
+           true <- valid_persistence?(Map.get(data, :persistence, :ok)) do
+        result = %{
+          Alto.Runner.Result.empty()
+          | usage: usage,
+            verdict: data.outcome,
+            persistence: Map.get(data, :persistence, :ok)
+        }
+
+        {:ok,
+         if(status == :ok,
+           do: {:ok, result},
+           else: {:error, data[:error] || data[:reason], result}
+         )}
+      else
+        _ -> {:error, :invalid_retained_child_result}
+      end
+    else
+      if status == :error and Map.has_key?(data, :error),
+        do: {:ok, {:error, data.error}},
+        else: {:error, :invalid_retained_child_result}
+    end
+  end
+
+  defp retained_outcome(_, _), do: {:error, :invalid_retained_child_result}
+  defp valid_persistence?(value) when value in [:ok, :not_requested], do: true
+  defp valid_persistence?({:degraded, errors}) when is_list(errors), do: true
+  defp valid_persistence?(_), do: false
 
   defp open_child_journal(_specs, %{subagent_journal: nil} = run), do: {:ok, nil, run}
 

@@ -427,12 +427,13 @@ defmodule Alto.FrontEnd.Registry do
          :ok <- active_capacity(state),
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
-         {:ok, session_opts} <- execution_session_opts(opts, state) do
+         {:ok, session_opts} <- execution_session_opts(opts, config_opts, state) do
       run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
       me = self()
 
       run_opts =
         config_opts
+        |> Keyword.merge(Keyword.take(opts, [:continuation_key, :budget_account]))
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
@@ -1153,7 +1154,29 @@ defmodule Alto.FrontEnd.Registry do
   # Alto.resume/3 over the registry's session directory.
   # Checkpoint packets are accepted only through this trusted Elixir API.
   # Socket start_run never accepts continuation state or approval decisions.
-  defp execution_session_opts(opts, state) do
+  defp execution_session_opts(opts, config_opts, state) do
+    case Keyword.get(opts, :continuation) do
+      nil ->
+        checkpoint_session_opts(opts, state)
+
+      identity ->
+        with true <-
+               is_nil(Keyword.get(opts, :checkpoint)) and is_nil(Keyword.get(opts, :resume)),
+             {:ok, resolved} <-
+               Alto.Runner.Execution.Parent.options(
+                 Keyword.put(config_opts, :continuation, identity)
+               ),
+             session = Keyword.get(resolved, :session),
+             :ok <- Alto.Session.validate_id(session) do
+          {:ok, [session: session, continuation: identity]}
+        else
+          false -> {:error, :conflicting_continuation_options}
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  defp checkpoint_session_opts(opts, state) do
     case Keyword.get(opts, :checkpoint) do
       nil ->
         resume_opts(Keyword.get(opts, :resume), state)

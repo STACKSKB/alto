@@ -126,7 +126,10 @@ defmodule Alto.Runner.Execution.Setup do
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       runner_options: Keyword.get(opts, :runner_options, []),
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
-      checkpoint_resume: not is_nil(Keyword.get(opts, :checkpoint)),
+      continuation_store: Keyword.get(opts, :continuation_store),
+      continuation_key: Keyword.get(opts, :continuation_key),
+      checkpoint_resume:
+        not is_nil(Keyword.get(opts, :checkpoint)) or not is_nil(Keyword.get(opts, :continuation)),
       tool_context: %Context{
         session_id: session_id,
         cwd: cwd,
@@ -196,6 +199,14 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp resume_revision(opts) do
+    if Keyword.has_key?(opts, :parent_transcript_revision) do
+      Keyword.fetch!(opts, :parent_transcript_revision)
+    else
+      ordinary_resume_revision(opts)
+    end
+  end
+
+  defp ordinary_resume_revision(opts) do
     case Keyword.get(opts, :checkpoint) do
       {%{"transcript_revision" => revision}, _decision}
       when is_integer(revision) and revision >= 0 ->

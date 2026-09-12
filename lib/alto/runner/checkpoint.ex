@@ -114,6 +114,285 @@ defmodule Alto.Runner.Checkpoint do
 
   def restore(_, _, _, _), do: {:error, :invalid_checkpoint}
 
+  @parent_fields @fields ++ [:persistence_errors]
+  @authority_fields [
+    :max_steps,
+    :max_agent_depth,
+    :max_tool_result_bytes,
+    :max_transcript_bytes,
+    :max_approval_details_bytes,
+    :max_events,
+    :provider_timeout,
+    :tool_timeout,
+    :approval_timeout
+  ]
+  @parent_packet_fields ~w(format continuation_format kind stage version fingerprint state budget usage agent_identity session_id transcript_revision store authority expires_at_ms)
+
+  @doc """
+  Capture a root parent's pending child join or its exact next frame.
+
+  This only constructs a portable packet; the host must save it before child
+  dispatch and fence consumption durably. Descendant reservations require a
+  shared durable budget account. Carry `expires_at_ms` into the live run's
+  `parent_expires_at_ms` before capturing its subsequent frame.
+  """
+  def capture_parent(run, pending, remaining, terminal) do
+    with :ok <- parent_capabilities(run),
+         true <- valid_parent_pending?(pending),
+         true <- valid_frame?(remaining, terminal),
+         {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
+         {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
+         {:ok, revision} <- transcript_revision(run),
+         true <- run.transcript_revision in [:any, revision],
+         saved <- Map.take(%{run | transcript_revision: revision}, @parent_fields),
+         authority <- Map.take(run, @authority_fields),
+         true <- valid_authority?(authority),
+         true <- valid_parent_saved?(saved, authority),
+         expires <- parent_expiry(run),
+         true <- is_integer(expires),
+         :ok <- unexpired(expires),
+         budget <- Budget.snapshot(run.budget),
+         binding <- %{
+           store: store,
+           authority: authority,
+           expires_at_ms: expires,
+           budget: budget,
+           session_id: run.session
+         },
+         {:ok, encoded} <-
+           encode(%{
+             run: saved,
+             loop: loop,
+             pending: pending,
+             remaining: remaining,
+             terminal: terminal,
+             binding: binding
+           }) do
+      packet = %{
+        "format" => 1,
+        "continuation_format" => @continuation_format,
+        "kind" => "parent",
+        "stage" => Atom.to_string(pending.kind),
+        "version" => run.checkpoint_version,
+        "fingerprint" => fingerprint(run),
+        "state" => encoded,
+        "budget" => budget,
+        "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
+        "agent_identity" => Alto.Protocol.encode_term(saved.agent_identity),
+        "session_id" => run.session,
+        "transcript_revision" => revision,
+        "store" => store,
+        "authority" => Alto.Protocol.encode_term(authority),
+        "expires_at_ms" => expires
+      }
+
+      # Bound the envelope too, not merely its encoded state.
+      with {:ok, _} <- encode(packet), do: {:ok, packet}
+    else
+      false -> {:error, :invalid_parent_checkpoint}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_parent_checkpoint}
+    end
+  rescue
+    _ -> {:error, :invalid_parent_checkpoint}
+  catch
+    :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
+  end
+
+  @doc "Restore a saved root parent without dispatching children or consuming its frame."
+  def restore_parent(run, packet, opts) when is_map(packet) and is_list(opts) do
+    with :ok <- parent_capabilities(run),
+         true <- Enum.sort(Map.keys(packet)) == Enum.sort(@parent_packet_fields),
+         true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
+         true <- packet["kind"] == "parent" and packet["stage"] in ["children", "frame"],
+         true <- packet["version"] == run.checkpoint_version,
+         true <- packet["fingerprint"] == fingerprint(run),
+         {:ok, _} <- encode(packet),
+         {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
+         true <- store == packet["store"],
+         {:ok,
+          %{
+            run: saved,
+            loop: loop,
+            pending: pending,
+            remaining: remaining,
+            terminal: terminal,
+            binding: binding
+          } = decoded} <- decode(packet["state"]),
+         true <- map_size(decoded) == 6,
+         true <- valid_parent_binding?(binding, packet),
+         :ok <- parent_budget_binding(run, packet["budget"]),
+         true <- valid_parent_pending?(pending),
+         true <- Atom.to_string(pending.kind) == packet["stage"],
+         true <- valid_frame?(remaining, terminal),
+         true <- valid_parent_saved?(saved, binding.authority),
+         true <- valid_authority?(Map.take(run, @authority_fields)),
+         authority <- narrow_authority(run, binding.authority),
+         true <- saved.transcript_bytes <= authority.max_transcript_bytes,
+         true <- saved.transcript_revision == packet["transcript_revision"],
+         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
+         true <- packet["usage"] == Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
+         true <- packet["session_id"] == run.session,
+         {:ok, revision} <- transcript_revision(run),
+         true <- revision == saved.transcript_revision,
+         :ok <- unexpired(binding.expires_at_ms),
+         {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
+         {:ok, budget} <- Budget.restore(opts, packet["budget"]),
+         budget <- clamp_parent_deadline(budget, binding.expires_at_ms),
+         :ok <- Budget.check(budget),
+         true <- within_budget?(budget) do
+      restored =
+        run
+        |> Map.merge(saved)
+        |> Map.merge(authority)
+        |> Map.put(:loop_state, state)
+        |> Map.put(:budget, budget)
+        |> Map.put(:parent_expires_at_ms, binding.expires_at_ms)
+        |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
+
+      {:ok, restored, %{pending: pending, remaining: remaining, terminal: terminal}}
+    else
+      false -> {:error, :checkpoint_mismatch}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_parent_checkpoint}
+    end
+  rescue
+    _ -> {:error, :invalid_parent_checkpoint}
+  catch
+    :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
+  end
+
+  def restore_parent(_, _, _), do: {:error, :invalid_parent_checkpoint}
+
+  defp parent_capabilities(run) do
+    cond do
+      not match?(%Budget{account: %Budget.Account{}}, run.budget) ->
+        {:error, :parent_checkpoint_requires_budget_account}
+
+      run.agent_depth != 0 or is_nil(Map.get(run, :continuation_store)) or
+        not is_binary(run.checkpoint_version) or run.checkpoint_version == "" or
+        not Code.ensure_loaded?(run.spec.driver) or
+        not function_exported?(run.spec.driver, :dump_checkpoint, 2) or
+          not function_exported?(run.spec.driver, :load_checkpoint, 2) ->
+        {:error, :checkpoint_not_supported}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp parent_expiry(run) do
+    latest = System.system_time(:millisecond) + Budget.remaining(run.budget)
+
+    case Map.get(run, :parent_expires_at_ms) do
+      nil -> latest
+      expiry when is_integer(expiry) -> min(expiry, latest)
+      _ -> :invalid
+    end
+  end
+
+  defp unexpired(expiry) when is_integer(expiry) do
+    if expiry > System.system_time(:millisecond), do: :ok, else: {:error, :run_timeout}
+  end
+
+  defp unexpired(_), do: {:error, :invalid_parent_checkpoint}
+
+  defp clamp_parent_deadline(budget, expiry) do
+    remaining = max(expiry - System.system_time(:millisecond), 0)
+    %{budget | deadline: min(budget.deadline, System.monotonic_time(:millisecond) + remaining)}
+  end
+
+  defp valid_parent_binding?(binding, packet) when is_map(binding) do
+    map_size(binding) == 5 and valid_authority?(binding.authority) and
+      binding.store == packet["store"] and binding.budget == packet["budget"] and
+      binding.session_id == packet["session_id"] and
+      binding.expires_at_ms == packet["expires_at_ms"] and
+      Alto.Protocol.encode_term(binding.authority) == packet["authority"]
+  end
+
+  defp valid_parent_binding?(_, _), do: false
+
+  defp parent_budget_binding(run, snapshot) do
+    if Budget.Account.identity(run.budget.account) == snapshot["account"],
+      do: :ok,
+      else: {:error, :budget_account_mismatch}
+  end
+
+  defp valid_authority?(authority) when is_map(authority) do
+    Enum.sort(Map.keys(authority)) == Enum.sort(@authority_fields) and
+      Enum.all?(authority, fn {key, value} ->
+        is_integer(value) and value >= if(key in [:max_agent_depth, :max_events], do: 0, else: 1)
+      end)
+  end
+
+  defp valid_authority?(_), do: false
+
+  defp narrow_authority(run, saved),
+    do: Map.new(saved, fn {key, value} -> {key, min(Map.fetch!(run, key), value)} end)
+
+  defp valid_parent_saved?(saved, authority) when is_map(saved) do
+    Enum.sort(Map.keys(saved)) == Enum.sort(@parent_fields) and
+      valid_agent_identity?(saved.agent_identity) and saved.agent_identity.path == [] and
+      is_list(saved.messages_rev) and Enum.all?(saved.messages_rev, &is_map/1) and
+      is_integer(saved.transcript_bytes) and saved.transcript_bytes >= 0 and
+      saved.transcript_bytes <= authority.max_transcript_bytes and
+      Alto.Context.Transcript.bytes(saved.messages_rev) == saved.transcript_bytes and
+      is_integer(saved.transcript_revision) and saved.transcript_revision >= 0 and
+      is_integer(saved.model_requests) and saved.model_requests >= 0 and
+      is_integer(saved.op_seq) and saved.op_seq >= 0 and
+      valid_usage?(saved.usage) and is_list(saved.persistence_errors) and
+      is_boolean(saved.compacted?) and valid_pending_calls?(saved.pending_provider_calls) and
+      (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
+      saved.verdict in [:empty, :completed, :rejected_before_dispatch, :failed_known, :unknown]
+  end
+
+  defp valid_parent_saved?(_, _), do: false
+
+  defp valid_usage?(%Alto.Usage{} = usage),
+    do: Enum.all?(Map.from_struct(usage), fn {_, value} -> is_integer(value) and value >= 0 end)
+
+  defp valid_usage?(_), do: false
+
+  defp valid_pending_calls?(calls) when is_map(calls) do
+    Enum.all?(calls, fn
+      {{id, name}, count} -> is_binary(id) and is_binary(name) and is_integer(count) and count > 0
+      _ -> false
+    end)
+  end
+
+  defp valid_pending_calls?(_), do: false
+
+  defp valid_parent_pending?(%{kind: :frame} = pending), do: map_size(pending) == 1
+
+  defp valid_parent_pending?(%{kind: :children, journal: journal, ids: ids} = pending) do
+    map_size(pending) == 3 and valid_journal_identity?(journal) and
+      is_list(ids) and length(ids) in 1..64 and length(Enum.uniq(ids)) == length(ids) and
+      Enum.all?(ids, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1)))
+  end
+
+  defp valid_parent_pending?(_), do: false
+
+  defp valid_journal_identity?(%{"key" => key, "generation" => generation} = identity) do
+    map_size(identity) == 2 and is_binary(key) and byte_size(key) in 1..256 and
+      String.valid?(key) and is_binary(generation) and
+      String.match?(generation, ~r/\A[0-9a-f]{32}\z/)
+  end
+
+  defp valid_journal_identity?(_), do: false
+
+  defp valid_frame?(remaining, terminal) do
+    is_list(remaining) and
+      Enum.all?(remaining, fn
+        %Alto.Effect{kind: kind, data: data} ->
+          kind in [:emit, :request_model, :run_tool, :invoke_tool, :spawn_agent, :spawn_agents] and
+            is_map(data)
+
+        _ ->
+          false
+      end) and
+      (terminal == :continue or match?({:stop, _}, terminal) or match?({:error, _}, terminal))
+  end
+
   defp transcript_revision(%{session: nil}), do: {:ok, 0}
 
   defp transcript_revision(run) do

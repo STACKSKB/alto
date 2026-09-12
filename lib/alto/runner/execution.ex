@@ -63,6 +63,13 @@ defmodule Alto.Runner.Execution do
   end
 
   defp run_without_workspace(task, opts) do
+    case Alto.Runner.Execution.Parent.options(opts) do
+      {:ok, opts} -> run_with_options(task, opts)
+      {:error, reason} -> {:error, reason, empty_result(nil)}
+    end
+  end
+
+  defp run_with_options(task, opts) do
     opts = Keyword.put_new_lazy(opts, :session_id, &generate_run_id/0)
 
     opts =
@@ -78,15 +85,24 @@ defmodule Alto.Runner.Execution do
         case new_run(task, opts) do
           {:ok, run} ->
             outcome =
-              case Keyword.get(opts, :checkpoint) do
-                nil ->
+              case {Keyword.get(opts, :continuation), Keyword.get(opts, :checkpoint)} do
+                {identity, nil} when not is_nil(identity) ->
+                  Alto.Runner.Execution.Parent.resume(
+                    run,
+                    identity,
+                    opts,
+                    &complete_retained_batch/5
+                  )
+                  |> parent_outcome()
+
+                {nil, nil} ->
                   case call_policy(fn -> Runtime.init(run.spec, task) end, run) do
                     {:ok, transition} -> drive(transition, run, [])
                     {:cancelled, reason} -> cancelled(reason, run)
                     {:error, reason} -> {:error, reason, result(run, nil, :error)}
                   end
 
-                {packet, decision} ->
+                {nil, {packet, decision}} ->
                   resume_checkpoint(run, packet, decision, opts)
 
                 _ ->
@@ -145,6 +161,22 @@ defmodule Alto.Runner.Execution do
 
   defp do_execute([], run, :continue),
     do: {:done, {:error, :loop_stalled, result(run, nil, :error)}}
+
+  defp do_execute(
+         [%Effect{kind: :spawn_agents, data: data} | rest],
+         %{continuation_store: store} = run,
+         terminal
+       )
+       when not is_nil(store) do
+    case reserve_effect(run) do
+      :ok ->
+        Alto.Runner.Execution.Parent.start(data, rest, terminal, run, &complete_retained_batch/5)
+        |> parent_outcome()
+
+      error ->
+        finish_effect(error, rest, run, terminal)
+    end
+  end
 
   defp do_execute([effect | rest], run, terminal) do
     interpreted = with :ok <- reserve_effect(run), do: interpret(effect, run)
@@ -263,6 +295,41 @@ defmodule Alto.Runner.Execution do
       {:error, reason} -> {:error, {:checkpoint_process_failed, reason}}
       {:cancelled, reason} -> {:error, {:cancelled, reason}}
     end
+  end
+
+  defp complete_retained_batch(results, journal, run, rest, terminal) do
+    # Joining retained work cannot trigger an ungranted provider compaction.
+    compaction = run.compaction
+    interpreted = batch_completed(results, %{run | compaction: false}, journal)
+
+    interpreted =
+      case interpreted do
+        {:event, event, next} -> {:event, event, %{next | compaction: compaction}}
+        other -> other
+      end
+
+    finish_effect(interpreted, rest, run, terminal)
+  end
+
+  defp parent_outcome({:error, reason, run}),
+    do: ungranted_parent({:error, reason, result(run, nil, :error)})
+
+  defp parent_outcome({:cancelled, reason, run}), do: ungranted_parent(cancelled(reason, run))
+  defp parent_outcome({:done, {:error, _, _} = outcome}), do: ungranted_parent(outcome)
+
+  defp parent_outcome({:suspended, reason, identity, run}) do
+    value = %{
+      result(run, nil, :checkpoint)
+      | checkpoint: %{"kind" => "parent", "continuation" => identity}
+    }
+
+    {:done, {:error, {:children_pending, reason}, value}}
+  end
+
+  defp parent_outcome(other), do: other
+
+  defp ungranted_parent({:error, reason, value}) do
+    {:done, {:error, reason, %{value | checkpoint: %{"kind" => "parent", "ungranted" => true}}}}
   end
 
   defp call_policy(fun, run) do
