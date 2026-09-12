@@ -289,6 +289,9 @@ defmodule Alto.OperationLog do
     call(server, :keys)
   end
 
+  @spec keys(GenServer.server(), timeout()) :: [op_key()]
+  def keys(server, timeout), do: call(server, :keys, timeout)
+
   @doc "Operation keys with no recorded outcome, oldest first (operator review)."
   @spec list_open(GenServer.server()) :: [op_key()]
   def list_open(server \\ __MODULE__) do

@@ -56,15 +56,20 @@ defmodule Alto.Runner.ChildContinuationTest do
     def dump_checkpoint(state, spec), do: Alto.Loops.Rule.dump_checkpoint(state, spec)
 
     def load_checkpoint(state, spec) do
-      if observer = :persistent_term.get({__MODULE__, :observer}, nil) do
-        send(observer, {:restoring_child, self()})
+      if :persistent_term.get({__MODULE__, :reject_restore}, false) do
+        :persistent_term.erase({__MODULE__, :reject_restore})
+        {:error, :forced_restore_failure}
+      else
+        if observer = :persistent_term.get({__MODULE__, :observer}, nil) do
+          send(observer, {:restoring_child, self()})
 
-        receive do
-          :release -> :ok
+          receive do
+            :release -> :ok
+          end
         end
-      end
 
-      Alto.Loops.Rule.load_checkpoint(state, spec)
+        Alto.Loops.Rule.load_checkpoint(state, spec)
+      end
     end
   end
 
@@ -395,6 +400,58 @@ defmodule Alto.Runner.ChildContinuationTest do
     assert File.read!(Path.join(source, "snapshots")) == "1"
     assert File.read!(Path.join(source, "checkouts")) == "1"
     assert File.read!(Path.join(source, "diffs")) == "1"
+  end
+
+  for runner <- [Alto.Runner.Serial, Alto.Runner.Stepped] do
+    test "a failed child restore preserves its worked workspace for retry with #{runner}",
+         context do
+      source = Path.join(context.dir, "source")
+      File.mkdir_p!(source)
+      File.cp!(Path.join(context.dir, "input"), Path.join(source, "input"))
+      options = Keyword.put(opts(context, unquote(runner)), :cwd, source)
+
+      manager =
+        Alto.Workspaces.new(
+          root: Path.join(context.dir, "workspaces"),
+          ledger: context.ledger,
+          backend: WorkspaceBackend
+        )
+
+      loop = options[:loop]
+
+      options =
+        Keyword.put(options, :loop, %{loop | subagents: %{loop.subagents | workspaces: manager}})
+
+      agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
+      assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent]}, options)
+      {identity, batch} = journal(context, parked)
+      {:ok, [entry]} = Journal.suspended(batch)
+      assert entry.state == :suspended
+      assert entry.workspace.status == "worked"
+      worked = entry.workspace
+      decide(batch, "one", :approve)
+
+      :persistent_term.put({ChildLoop, :reject_restore}, true)
+
+      on_exit(fn -> :persistent_term.erase({ChildLoop, :reject_restore}) end)
+
+      options = Keyword.put(options, :continuation, identity)
+
+      assert {:error, {:children_pending, {:child_pending, "one", "decided"}}, _failed} =
+               Alto.run(:ignored, options)
+
+      assert {:ok, current} = Alto.Workspaces.get(manager, worked.id)
+      assert current == worked
+      assert {:ok, [%{state: :decided, workspace: ^worked}]} = Journal.suspended(batch)
+      refute File.exists?(Path.join(worked.workspace["cwd"], "effect-one"))
+
+      assert {:ok, result} = Alto.run(:ignored, options)
+      assert [child] = result.output
+      assert child.workspace.status == "frozen"
+      assert child.workspace.id == worked.id
+      assert File.read!(Path.join(worked.workspace["cwd"], "effect-one")) == "original"
+      assert File.read!(Path.join(worked.workspace["cwd"], "prepared-one")) == "1"
+    end
   end
 
   test "a claimed child with uncertain dispatch remains parked and cannot be approved again",

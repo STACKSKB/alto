@@ -47,6 +47,8 @@ defmodule Alto.MixProject do
         "PROTOCOL.md",
         "docs/delayed-queue.md",
         "docs/checkpoints.md",
+        "docs/parent-continuations.md",
+        "docs/child-continuations.md",
         "docs/runners.md",
         "docs/subagents.md",
         "examples/README.md",

@@ -21,12 +21,16 @@ defmodule Alto.Subagents.ContinuationTest do
     %{ledger: ledger, child_id: child_id}
   end
 
-  defp metadata do
-    %{"journal" => %{"key" => "children", "generation" => String.duplicate("a", 32)}}
+  defp metadata(extra \\ %{}) do
+    Map.put(
+      extra,
+      "journal",
+      %{"key" => "children", "generation" => String.duplicate("a", 32)}
+    )
   end
 
-  defp open!(ledger, key, pending \\ %{"frame" => "pending"}) do
-    {:ok, cell} = Continuation.open(ledger, key, pending, metadata())
+  defp open!(ledger, key, pending \\ %{"frame" => "pending"}, extra_metadata \\ %{}) do
+    {:ok, cell} = Continuation.open(ledger, key, pending, metadata(extra_metadata))
     cell
   end
 
@@ -116,6 +120,9 @@ defmodule Alto.Subagents.ContinuationTest do
     {:ok, restored} = Continuation.restore(restarted, identity)
     {:ok, retired} = Continuation.read(restored)
     assert retired.state == :retired
+    assert {:ok, looked_up, lookup_snapshot} = Continuation.lookup(restarted, "retire")
+    assert Continuation.identity(looked_up) == identity
+    assert lookup_snapshot == retired
     assert :ok = Continuation.retire(restored, retired.revision)
 
     assert {:error, :continuation_already_claimed} =
@@ -249,6 +256,81 @@ defmodule Alto.Subagents.ContinuationTest do
     assert OperationLog.attempts(ledger, "same") == 1
   end
 
+  test "lookup is read-only, returns the exact revision, and rejects missing or foreign records",
+       %{
+         dir: dir,
+         id: id
+       } do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    cell = open!(ledger, "lookup")
+    {:ok, pending} = Continuation.read(cell)
+    {:ok, ready} = Continuation.ready(cell, pending.revision, %{"frame" => "ready"})
+    attempts = OperationLog.attempts(ledger, "lookup")
+
+    assert {:ok, looked_up, snapshot} = Continuation.lookup(ledger, "lookup")
+    assert Continuation.identity(looked_up) == Continuation.identity(cell)
+    assert snapshot == ready
+    assert OperationLog.attempts(ledger, "lookup") == attempts
+    assert Continuation.read(cell) == {:ok, ready}
+
+    assert {:error, :not_found} = Continuation.lookup(ledger, "missing")
+
+    assert {:error, :invalid_continuation_options} =
+             Continuation.lookup(ledger, "lookup", typo: 1)
+
+    assert :ok = OperationLog.record_intent(ledger, "foreign", "other_kind", nil, %{})
+    assert {:error, :invalid_continuation} = Continuation.lookup(ledger, "foreign")
+  end
+
+  test "list filters metadata in deterministic key order and skips unrelated records", %{
+    dir: dir,
+    id: id
+  } do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    z = open!(ledger, "z", %{"frame" => "z"}, %{"group" => "match"})
+    _a = open!(ledger, "a", %{"frame" => "a"}, %{"group" => "match"})
+    _m = open!(ledger, "m", %{"frame" => "m"}, %{"group" => "other"})
+    assert :ok = OperationLog.record_intent(ledger, "foreign", "other_kind", nil, %{})
+    attempts = OperationLog.attempts(ledger, "z")
+
+    assert {:ok, entries} = Continuation.list(ledger, %{"group" => "match"})
+    assert Enum.map(entries, & &1.identity["key"]) == ["a", "z"]
+    assert Enum.map(entries, & &1.snapshot.metadata["group"]) == ["match", "match"]
+    assert OperationLog.attempts(ledger, "z") == attempts
+    assert Continuation.read(z) |> elem(1) |> Map.get(:phase) == :pending
+
+    assert {:ok, []} = Continuation.list(ledger, %{"group" => "missing"})
+    assert {:error, :invalid_continuation_options} = Continuation.list(ledger, %{}, typo: 1)
+  end
+
+  test "list fails closed on malformed own records and skips evicted records", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id)
+
+    assert :ok =
+             OperationLog.record_intent(
+               ledger,
+               "malformed",
+               "alto_subagent_parent_continuation",
+               nil,
+               %{}
+             )
+
+    assert {:error, :invalid_continuation} = Continuation.list(ledger)
+    assert {:error, :invalid_continuation} = Continuation.lookup(ledger, "malformed")
+
+    %{ledger: ledger} =
+      start_ledger!(Path.join(dir, "eviction"), id <> "-eviction", max_ops: 1)
+
+    cell = open!(ledger, "evicted")
+    {:ok, pending} = Continuation.read(cell)
+    {:ok, ready} = Continuation.ready(cell, pending.revision, %{"frame" => "ready"})
+    {:ok, claimed} = Continuation.claim(cell, ready.revision)
+    assert :ok = Continuation.retire(cell, claimed.revision)
+    assert {:ok, _} = Continuation.open(ledger, "replacement", %{"frame" => 1}, metadata())
+    assert {:ok, entries} = Continuation.list(ledger)
+    assert Enum.map(entries, & &1.identity["key"]) == ["replacement"]
+  end
+
   test "invalid packets and metadata fail without changing the retained frame", %{
     dir: dir,
     id: id
@@ -327,5 +409,8 @@ defmodule Alto.Subagents.ContinuationTest do
 
     assert {:error, :invalid_continuation} =
              Continuation.restore(ledger, %{"key" => "foreign", "generation" => cell.generation})
+
+    assert {:error, :run_timeout} = Continuation.lookup(ledger, "valid", deadline: past)
+    assert {:error, :run_timeout} = Continuation.list(ledger, %{}, deadline: past)
   end
 end

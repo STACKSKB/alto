@@ -76,6 +76,30 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert Account.read(account) == before
   end
 
+  test "lookup is read-only, preserves the exact revision, and validates records and options", %{
+    ledger: ledger
+  } do
+    assert {:ok, account} =
+             Account.open(ledger, "lookup", max_effects: 2, max_model_requests: 2)
+
+    assert :ok = Account.take(account, :effect, 2)
+    {:ok, before} = Account.read(account)
+    attempts = OperationLog.attempts(ledger, "lookup")
+
+    assert {:ok, looked_up, snapshot} = Account.lookup(ledger, "lookup")
+    assert Account.identity(looked_up) == Account.identity(account)
+    assert snapshot == before
+    assert OperationLog.attempts(ledger, "lookup") == attempts
+    assert Account.read(account) == {:ok, before}
+
+    assert {:error, :not_found} = Account.lookup(ledger, "missing")
+    assert {:error, :invalid_budget_account_options} = Account.lookup(ledger, "lookup", typo: 1)
+    assert :ok = OperationLog.record_intent(ledger, "foreign", "other_kind", nil, %{})
+    assert {:error, :invalid_budget_account} = Account.lookup(ledger, "foreign")
+    assert :ok = OperationLog.record_intent(ledger, "malformed", "alto_budget_account", nil, %{})
+    assert {:error, :invalid_budget_account} = Account.lookup(ledger, "malformed")
+  end
+
   test "a full ledger rejects another account without reserving budget", %{dir: dir} do
     {:ok, ledger} = OperationLog.start_link(id: "full", name: nil, dir: dir, max_ops: 1)
     assert {:ok, _account} = Account.open(ledger, "first", max_effects: 1, max_model_requests: 1)
@@ -110,6 +134,12 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert closed.packet["model_requests_used"] == 1
     assert {:error, :budget_account_closed} = Account.take(account, :effect, 3)
     assert {:error, :budget_account_closed} = Account.tighten(account, 1, 1)
+
+    assert {:ok, looked_up, %{state: :closed, revision: closed_revision}} =
+             Account.lookup(ledger, "closed")
+
+    assert Account.identity(looked_up) == Account.identity(account)
+    assert closed_revision == closed.revision
 
     stop_supervised!(OperationLog)
     restarted = start_supervised!({OperationLog, opts})
@@ -186,5 +216,14 @@ defmodule Alto.Runner.BudgetAccountTest do
              Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
 
     assert {:error, :not_found} = Account.read(account)
+  end
+
+  test "lookup rejects expired deadlines before reading", %{ledger: ledger} do
+    assert {:ok, _account} =
+             Account.open(ledger, "deadline", max_effects: 1, max_model_requests: 1)
+
+    past = System.monotonic_time(:millisecond) - 1
+    assert {:error, :run_timeout} = Account.lookup(ledger, "deadline", deadline: past)
+    assert {:error, :run_timeout} = Account.lookup(ledger, "missing", deadline: past)
   end
 end

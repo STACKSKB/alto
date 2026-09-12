@@ -111,3 +111,24 @@ contract or reject checkpoint input; it must never silently start over.
 
 These are execution mechanisms. Task/team policy, model assignment, messaging,
 memory, and skill formation remain application responsibilities.
+
+## Retained resources in application hosts
+
+`Subagents.Continuation.lookup/3`, `Subagents.Journal.lookup/3`, and
+`Runner.Budget.Account.lookup/3` return `{:ok, handle, snapshot}` from one
+validated ledger entry. They never initialize missing records or issue grants.
+`Continuation.list/3` discovers cells by a literal metadata subset and returns
+their identities and snapshots. Each API accepts an optional absolute monotonic
+`deadline:`; account handles do not retain that per-operation deadline.
+
+For approval displays, `Journal.inspect_approval(batch, revision, child_id)`
+returns the selected approval and its revision from one snapshot. Another
+operator may change the journal afterwards: a decision must still carry that
+viewed revision and the returned child identity.
+
+Applications choose which resources belong to a task, whether a budget account
+is shared, and when terminal work may be cleaned up. Those decisions should use
+the public lookup/read and generation-fenced retirement APIs rather than
+reconstructing handles from private operation-log envelopes. Discovery does not
+authorize execution, replacement-generation adoption, or automatic retries of
+uncertain effects.

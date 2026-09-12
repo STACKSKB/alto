@@ -51,25 +51,12 @@ defmodule Alto.Runner.Execution do
     opts = Keyword.put(opts, :execution_scheduler, scheduler)
 
     outcome =
-      case Keyword.get(opts, :workspace_resume) do
-        {manager, id, revision} ->
-          Alto.Runner.Execution.Workspace.resume(
-            task,
-            opts,
-            manager,
-            id,
-            revision,
-            &run_without_workspace/2
-          )
+      case Keyword.pop(opts, :workspace_assignment) do
+        {nil, opts} ->
+          run_without_workspace(task, opts)
 
-        nil ->
-          case Keyword.pop(opts, :workspace_assignment) do
-            {nil, opts} ->
-              run_without_workspace(task, opts)
-
-            {{manager, snapshot, identity}, opts} ->
-              run_in_workspace(task, opts, manager, snapshot, identity)
-          end
+        {{manager, snapshot, identity}, opts} ->
+          run_in_workspace(task, opts, manager, snapshot, identity)
       end
 
     retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
@@ -122,17 +109,7 @@ defmodule Alto.Runner.Execution do
                   {:error, :invalid_checkpoint, result(run, nil, :error)}
               end
 
-            outcome =
-              case outcome do
-                {:continue, frame, context} ->
-                  Keyword.fetch!(opts, :execution_scheduler).(frame, context)
-
-                {:done, result} ->
-                  result
-
-                result ->
-                  result
-              end
+            outcome = schedule_outcome(outcome, opts)
 
             persist_session_outcome(run, outcome)
 
@@ -144,6 +121,12 @@ defmodule Alto.Runner.Execution do
         {:error, reason, empty_result(nil)}
     end
   end
+
+  defp schedule_outcome({:continue, frame, context}, opts),
+    do: Keyword.fetch!(opts, :execution_scheduler).(frame, context)
+
+  defp schedule_outcome({:done, outcome}, _opts), do: outcome
+  defp schedule_outcome(outcome, _opts), do: outcome
 
   defp drive(%Transition{} = transition, run, remaining_effects) do
     run = %{run | loop_state: transition.state}
@@ -278,45 +261,85 @@ defmodule Alto.Runner.Execution do
              run
            ),
          :ok <- Budget.check(restored.budget),
-         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool),
-         :ok <- claim_child_checkpoint(restored, decision) do
-      pending = frame.pending
+         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool) do
+      resume_validated(restored, frame, tool, decision, opts)
+    else
+      {:error, reason} -> ungranted_checkpoint(run, reason)
+    end
+  end
 
-      interpreted =
-        if decision == :approve do
-          run_tool(
-            pending.request.call_id,
-            pending.request.tool,
-            pending.prepared,
-            tool,
-            restored,
-            pending.request.operation_id,
-            pending.origin
-          )
-        else
-          tool_failure(
-            pending.request.call_id,
-            pending.request.tool,
-            {:approval_denied, :user},
-            restored,
-            pending.request.operation_id,
-            Outcome.pre_dispatch(:user),
-            pending.origin
-          )
+  defp resume_validated(run, frame, tool, decision, opts) do
+    case Keyword.get(opts, :workspace_resume) do
+      nil ->
+        case claim_child_checkpoint(run, decision) do
+          :ok -> execute_checkpoint(run, frame, tool, decision)
+          {:error, reason} -> ungranted_checkpoint(run, reason)
         end
 
-      finish_effect(interpreted, frame.remaining, restored, frame.terminal)
-    else
-      {:error, reason} ->
-        value = result(run, nil, :error)
-
-        value =
-          if run.child_resume,
-            do: %{value | checkpoint: %{"kind" => "child", "ungranted" => true}},
-            else: value
-
-        {:error, reason, value}
+      {manager, id, revision} ->
+        Alto.Runner.Execution.Workspace.resume_checkpoint(
+          opts,
+          manager,
+          id,
+          revision,
+          fn workspace ->
+            with true <- workspace["cwd"] == run.tool_context.cwd,
+                 :ok <- claim_child_checkpoint(run, decision) do
+              {:ok, nil}
+            else
+              false -> {:error, {:checkpoint_admission_failed, :child_workspace_mismatch}}
+              {:error, reason} -> {:error, {:checkpoint_admission_failed, reason}}
+            end
+          end,
+          fn _, _ ->
+            execute_checkpoint(run, frame, tool, decision) |> schedule_outcome(opts)
+          end
+        )
+        |> case do
+          {:error, {:checkpoint_admission_failed, reason}} -> ungranted_checkpoint(run, reason)
+          outcome -> outcome
+        end
     end
+  end
+
+  defp execute_checkpoint(run, frame, tool, decision) do
+    pending = frame.pending
+
+    interpreted =
+      if decision == :approve do
+        run_tool(
+          pending.request.call_id,
+          pending.request.tool,
+          pending.prepared,
+          tool,
+          run,
+          pending.request.operation_id,
+          pending.origin
+        )
+      else
+        tool_failure(
+          pending.request.call_id,
+          pending.request.tool,
+          {:approval_denied, :user},
+          run,
+          pending.request.operation_id,
+          Outcome.pre_dispatch(:user),
+          pending.origin
+        )
+      end
+
+    finish_effect(interpreted, frame.remaining, run, frame.terminal)
+  end
+
+  defp ungranted_checkpoint(run, reason) do
+    value = result(run, nil, :error)
+
+    value =
+      if run.child_resume,
+        do: %{value | checkpoint: %{"kind" => "child", "ungranted" => true}},
+        else: value
+
+    {:error, reason, value}
   end
 
   defp claim_child_checkpoint(%{child_resume: nil}, _decision), do: :ok

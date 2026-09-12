@@ -70,6 +70,11 @@ defmodule Alto.Runner.ParentCheckpointTest do
     tail = [Effect.request_model(%{context_message: "integrate"})]
     assert :ok = Budget.take(run.budget)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
+
+    assert {:ok, same_packet} =
+             Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
+
+    assert same_packet["fingerprint"] == packet["fingerprint"]
     assert packet["kind"] == "parent"
     assert packet["stage"] == "children"
     refute Map.has_key?(packet, "request")
@@ -144,6 +149,29 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
     assert {:error, :checkpoint_mismatch} =
              Checkpoint.restore_parent(%{run | continuation_store: other}, packet, opts)
+  end
+
+  test "unavailable durable policy resources fail capture and restore", context do
+    %{run: run, pending: pending, opts: opts} = context
+    missing = Alto.Subagents.bounded(journal: :missing_checkpoint_journal)
+    unavailable = %{run | spec: %{run.spec | subagents: missing}}
+
+    assert {:error, {:durable_identity_unavailable, _}} =
+             Checkpoint.capture_parent(unavailable, pending, [], :continue)
+
+    {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
+
+    assert {:error, {:durable_identity_unavailable, _}} =
+             Checkpoint.restore_parent(unavailable, packet, opts)
+
+    dead = spawn(fn -> :ok end)
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
+    nested = Alto.Subagents.bounded(journal: dead)
+    nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
+
+    assert {:error, {:durable_identity_unavailable, _}} =
+             Checkpoint.capture_parent(nested_options, pending, [], :continue)
   end
 
   test "restored authority is the intersection of saved and current ceilings", context do

@@ -56,12 +56,13 @@ absolute expiry.
 
 A crash after consuming a decision leaves that child `"resuming"`, which is
 uncertain work. Recovery parks it; it cannot approve it again or repeat dispatch.
-A missing or invalid checkpoint likewise grants no execution. A resumed workspace
-acquires its own use grant before child checkpoint validation. A pregrant child
-restore validation failure can therefore advance or freeze workspace metadata
-while leaving the child decision parked. No child tool effect is granted in that
-case, and the operator must reconcile the workspace before another attempt;
-transparent retry across changed child configuration is not supported.
+A missing or invalid checkpoint likewise grants no execution. Child checkpoint
+validation finishes before entering a retained workspace. The workspace then
+checks its exact revision and admits the child's decision under its lock, before
+activating use. Rejected validation or admission leaves the worked workspace
+unchanged for a later valid attempt. A failure after admission remains uncertain
+and requires reconciliation. Custom hosts can compose this boundary through
+`Alto.Workspaces.resume/5`, supplying separate admission and execution callbacks.
 Standalone `spawn_agent` recovery and recursive parent continuations are outside this path.
 Custom loop checkpoint and transition callbacks must be pure. Lifecycle retirement
 remains explicit host work after every child is joined and the parent is settled.

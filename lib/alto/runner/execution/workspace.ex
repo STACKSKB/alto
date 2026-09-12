@@ -31,19 +31,28 @@ defmodule Alto.Runner.Execution.Workspace do
 
   @doc "Reuse an existing worked workspace without preparing or creating it again."
   def resume(task, opts, manager, id, revision, execute) do
-    case Alto.Workspaces.resume(manager, id, revision, fn workspace ->
-           execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
-         end) do
-      {:ok, outcome, worked} ->
-        finish(outcome, worked, opts, manager)
-
-      {:error, reason, outcome} ->
-        workspace_failure(outcome, nil, reason)
-
-      {:error, reason} ->
-        {:error, {:workspace_failed, reason}, %{empty_result() | verdict: :unknown}}
-    end
+    Alto.Workspaces.resume(manager, id, revision, fn workspace ->
+      execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
+    end)
+    |> finish_resume(opts, manager)
   end
+
+  @doc "Admit an already validated checkpoint before activating its retained workspace."
+  def resume_checkpoint(opts, manager, id, revision, admit, execute) do
+    Alto.Workspaces.resume(manager, id, revision, admit, execute)
+    |> finish_resume(opts, manager)
+  end
+
+  defp finish_resume({:ok, outcome, worked}, opts, manager),
+    do: finish(outcome, worked, opts, manager)
+
+  defp finish_resume({:error, {:checkpoint_admission_failed, _}} = error, _, _), do: error
+
+  defp finish_resume({:error, reason, outcome}, _, _),
+    do: workspace_failure(outcome, nil, reason)
+
+  defp finish_resume({:error, reason}, _, _),
+    do: {:error, {:workspace_failed, reason}, %{empty_result() | verdict: :unknown}}
 
   defp finish({:error, :approval_suspended, _} = outcome, worked, _opts, _manager),
     do: attach_workspace(outcome, worked)

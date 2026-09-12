@@ -40,10 +40,14 @@ retained; automatic retirement is not part of this contract.
 
 ## Explicit recovery
 
-After establishing that the original execution has stopped, inspect the
-continuation ledger with `Alto.OperationLog.keys/1` and `recovery/2`. Recover a
-cell using its saved key and generation, and inspect it with
-`Alto.Subagents.Continuation.read/1`. Hosts choose the matching logical task;
+After establishing that the original execution has stopped, discover retained
+cells with `Alto.Subagents.Continuation.list/3`, filtering by literal metadata
+such as `%{"host_key" => task_id}`. `lookup/3` reads one key and returns its
+validated handle and snapshot without creating state. Recover a previously
+selected generation with `restore/3` and inspect it with `read/1`.
+Discovery is read-only and is not an execution grant or a transaction across
+all records; use the returned generation and revision to fence any mutation.
+Hosts choose the matching logical task;
 they must not select an unrelated generation or turn a missing cell into new
 work.
 

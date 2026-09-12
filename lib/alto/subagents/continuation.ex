@@ -75,6 +75,44 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
+  @doc "Look up one retained continuation without initializing or mutating it."
+  def lookup(ledger, key, opts \\ []) do
+    with :ok <- valid_key(key),
+         {:ok, deadline} <- deadline_option(opts) do
+      safe(fn ->
+        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+             :ok <- valid_initial(entry),
+             :ok <- valid_checkpoint_entry(entry),
+             {:ok, state} <- lifecycle(entry) do
+          cell = %__MODULE__{
+            ledger: ledger,
+            key: key,
+            generation: entry.recovery["generation"],
+            deadline: deadline
+          }
+
+          {:ok, cell, snapshot(entry, state)}
+        end
+      end)
+    end
+  end
+
+  @doc "List valid retained continuations matching a literal metadata subset."
+  def list(ledger, metadata_filter \\ %{}, opts \\ []) do
+    with :ok <- valid_metadata_filter(metadata_filter),
+         {:ok, deadline} <- deadline_option(opts) do
+      safe(fn ->
+        case Retained.keys(ledger, deadline) do
+          keys when is_list(keys) ->
+            scan(keys |> Enum.sort(), ledger, metadata_filter, deadline, [])
+
+          {:error, _} = error ->
+            error
+        end
+      end)
+    end
+  end
+
   @doc "Read the exact retained frame, revision, and retirement state."
   def read(%__MODULE__{} = cell) do
     safe(fn ->
@@ -273,6 +311,49 @@ defmodule Alto.Subagents.Continuation do
     }
   end
 
+  defp scan([], _ledger, _metadata_filter, _deadline, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp scan([key | rest], ledger, metadata_filter, deadline, acc) do
+    with :ok <- Retained.deadline_ok(deadline) do
+      case Retained.read(ledger, key, deadline) do
+        {:ok, %{tool: @kind} = entry} ->
+          with {:ok, item} <- list_item(ledger, key, entry, deadline),
+               true <- metadata_matches?(item.snapshot.metadata, metadata_filter) do
+            scan(rest, ledger, metadata_filter, deadline, [item | acc])
+          else
+            false -> scan(rest, ledger, metadata_filter, deadline, acc)
+            {:error, _} = error -> error
+          end
+
+        {:ok, _unrelated} ->
+          scan(rest, ledger, metadata_filter, deadline, acc)
+
+        {:error, :not_found} ->
+          scan(rest, ledger, metadata_filter, deadline, acc)
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp list_item(ledger, key, entry, deadline) do
+    with :ok <- valid_initial(entry),
+         :ok <- valid_checkpoint_entry(entry),
+         {:ok, state} <- lifecycle(entry) do
+      cell = %__MODULE__{
+        ledger: ledger,
+        key: key,
+        generation: entry.recovery["generation"],
+        deadline: deadline
+      }
+
+      {:ok, %{identity: identity(cell), snapshot: snapshot(entry, state)}}
+    end
+  end
+
+  defp metadata_matches?(metadata, filter), do: Map.take(metadata, Map.keys(filter)) == filter
+
   defp valid_checkpoint_entry(%{checkpoint: packet, recovery: initial} = entry)
        when is_integer(entry.revision) and entry.revision >= 1 do
     if is_map(packet) and Enum.sort(Map.keys(packet)) == Enum.sort(@checkpoint_keys) and
@@ -364,6 +445,14 @@ defmodule Alto.Subagents.Continuation do
   end
 
   defp valid_metadata(_), do: {:error, :invalid_continuation_metadata}
+
+  defp valid_metadata_filter(filter) when is_map(filter) do
+    if portable_json?(filter, @max_metadata_bytes),
+      do: :ok,
+      else: {:error, :invalid_continuation_metadata_filter}
+  end
+
+  defp valid_metadata_filter(_), do: {:error, :invalid_continuation_metadata_filter}
 
   defp deadline_option(opts) do
     if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do

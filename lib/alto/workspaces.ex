@@ -108,12 +108,39 @@ defmodule Alto.Workspaces do
   def resume(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
     do: use_at(manager, id, revision, fun, "worked")
 
+  @doc """
+  Validate and admit a continuation while holding its workspace lock, before
+  changing the workspace revision. `admit` returns `{:ok, value}` or an error;
+  only a successful admission activates the workspace and calls `execute` with
+  that value. An admission error leaves the retained workspace unchanged.
+
+  Admission may grant another durable resource. Failure after admission must
+  therefore be reconciled, never treated as permission to repeat execution.
+  """
+  def resume(%__MODULE__{} = manager, id, revision, admit, execute)
+      when is_function(admit, 1) and is_function(execute, 2),
+      do: use_at(manager, id, revision, admit, execute, "worked")
+
   defp use_at(manager, id, revision, fun, expected_status) do
+    use_at(
+      manager,
+      id,
+      revision,
+      fn _ -> {:ok, nil} end,
+      fn workspace, _ ->
+        fun.(workspace)
+      end,
+      expected_status
+    )
+  end
+
+  defp use_at(manager, id, revision, admit, execute, expected_status) do
     locked(manager, id, fn ->
       with {:ok, info} <- expect(manager, id, revision),
            true <- info.status == expected_status,
+           {:ok, admitted} <- admit.(info.workspace),
            {:ok, attempt} <- activate(manager, info, "use") do
-        result = fun.(info.workspace)
+        result = execute.(info.workspace, admitted)
 
         recorded =
           try do

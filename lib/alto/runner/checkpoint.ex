@@ -39,6 +39,7 @@ defmodule Alto.Runner.Checkpoint do
          {:ok, revision} <- transcript_revision(run),
          true <- run.transcript_revision in [:any, revision],
          run <- %{run | transcript_revision: revision},
+         {:ok, fingerprint} <- fingerprint(run),
          state <- %{
            run: Map.take(run, @fields),
            loop: loop,
@@ -52,7 +53,7 @@ defmodule Alto.Runner.Checkpoint do
          "format" => 1,
          "continuation_format" => @continuation_format,
          "version" => run.checkpoint_version,
-         "fingerprint" => fingerprint(run),
+         "fingerprint" => fingerprint,
          "state" => encoded,
          "budget" => Budget.snapshot(run.budget),
          "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(run.usage)),
@@ -78,7 +79,8 @@ defmodule Alto.Runner.Checkpoint do
       ) do
     with true <-
            packet["version"] == run.checkpoint_version and is_binary(run.checkpoint_version),
-         true <- packet["fingerprint"] == fingerprint(run),
+         {:ok, fingerprint} <- fingerprint(run),
+         true <- packet["fingerprint"] == fingerprint,
          true <- is_nil(packet["kind"]),
          true <- decision in [:approve, :deny],
          true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
@@ -146,6 +148,7 @@ defmodule Alto.Runner.Checkpoint do
          {:ok, revision} <- transcript_revision(run),
          true <- run.transcript_revision in [:any, revision],
          saved <- Map.take(%{run | transcript_revision: revision}, @parent_fields),
+         {:ok, fingerprint} <- fingerprint(run),
          authority <- Map.take(run, @authority_fields),
          true <- valid_authority?(authority),
          true <- valid_parent_saved?(saved, authority),
@@ -175,7 +178,7 @@ defmodule Alto.Runner.Checkpoint do
         "kind" => "parent",
         "stage" => Atom.to_string(pending.kind),
         "version" => run.checkpoint_version,
-        "fingerprint" => fingerprint(run),
+        "fingerprint" => fingerprint,
         "state" => encoded,
         "budget" => budget,
         "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
@@ -207,7 +210,8 @@ defmodule Alto.Runner.Checkpoint do
          true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
          true <- packet["kind"] == "parent" and packet["stage"] in ["children", "frame"],
          true <- packet["version"] == run.checkpoint_version,
-         true <- packet["fingerprint"] == fingerprint(run),
+         {:ok, fingerprint} <- fingerprint(run),
+         true <- packet["fingerprint"] == fingerprint,
          {:ok, _} <- encode(packet),
          {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
          true <- store == packet["store"],
@@ -513,8 +517,12 @@ defmodule Alto.Runner.Checkpoint do
        run.spec.driver_options, run.spec.middleware, stable_subagents(run.spec.subagents), tools,
        run.model_tools, run.tool_context.cwd}
 
-    :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))
-    |> Base.encode16(case: :lower)
+    {:ok,
+     :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))
+     |> Base.encode16(case: :lower)}
+  catch
+    {__MODULE__, :durable_identity_unavailable, reason} ->
+      {:error, {:durable_identity_unavailable, reason}}
   end
 
   # Fun ETF includes its creating process. Bind the code and closed-over
@@ -582,11 +590,17 @@ defmodule Alto.Runner.Checkpoint do
   end
 
   defp stable_resource(value) when is_pid(value) or is_atom(value) or is_tuple(value) do
-    case OperationLog.identity(value, 100) do
+    result =
+      try do
+        OperationLog.identity(value, 100)
+      catch
+        :exit, reason -> {:error, reason}
+      end
+
+    case result do
       {:ok, identity} -> identity
-      # Preserve an unavailable store reference in the digest. A restarted
-      # or replaced store therefore cannot accidentally compare equal.
-      _ -> value
+      {:error, reason} -> throw({__MODULE__, :durable_identity_unavailable, reason})
+      other -> throw({__MODULE__, :durable_identity_unavailable, other})
     end
   end
 

@@ -55,6 +55,22 @@ defmodule Alto.Subagents.JournalTest do
              Journal.join(restored)
   end
 
+  test "lookup reads an existing batch without initializing it", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    batch = open!(ledger, "batch-lookup", ["child-a"])
+    {:ok, before} = Journal.read(batch)
+
+    assert {:ok, looked_up, snapshot} = Journal.lookup(ledger, "batch-lookup")
+    assert looked_up.generation == batch.generation
+    assert snapshot == before
+    assert Journal.read(batch) == {:ok, before}
+
+    assert {:error, :not_found} = Journal.lookup(ledger, "missing-batch")
+    assert {:error, :invalid_batch_options} = Journal.lookup(ledger, "batch-lookup", typo: true)
+    assert :ok = OperationLog.record_intent(ledger, "wrong-kind", "other", nil, %{})
+    assert {:error, :invalid_batch} = Journal.lookup(ledger, "wrong-kind")
+  end
+
   test "a dispatched child remains pending after restart and cannot be redispatched", %{
     dir: dir,
     id: id
@@ -176,6 +192,28 @@ defmodule Alto.Subagents.JournalTest do
     assert 2 == OperationLog.attempts(restarted, "batch-interrupted-retire")
   end
 
+  test "concurrent finishers converge after an interrupted retirement", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    batch = open!(ledger, "batch-retire-race", ["child-a"])
+    {:ok, ticket} = Journal.dispatch(batch, "child-a")
+    assert {:ok, _} = Journal.complete(ticket, :done)
+    {:ok, joined} = Journal.join(batch)
+    {:ok, acknowledged} = Journal.acknowledge(batch, joined.revision, %{"saved" => true})
+
+    {:ok, resumed} =
+      OperationLog.resume_checkpoint(ledger, "batch-retire-race", acknowledged.revision, %{
+        "action" => "retire-batch",
+        "generation" => batch.generation
+      })
+
+    tasks = for _ <- 1..2, do: Task.async(fn -> Journal.retire(batch, resumed.revision) end)
+    results = Enum.map(tasks, &Task.await(&1, 1_000))
+    assert :ok in results
+    refute Enum.any?(results, &match?({:error, :already_decided}, &1))
+    assert Enum.all?(results, &(&1 in [:ok, {:error, :invalid_or_stale_join}]))
+    assert {:ok, %{state: :retired}} = Journal.read(batch)
+  end
+
   test "nonportable and oversized results never replace the dispatched state", %{dir: dir, id: id} do
     %{ledger: ledger} = start_ledger!(dir, id)
     batch = open!(ledger, "bounds", ["worker"])
@@ -239,6 +277,15 @@ defmodule Alto.Subagents.JournalTest do
     assert {:ok, _} = Journal.suspend(two, checkpoint)
     assert {:ok, [%{identity: first}, %{identity: second}]} = Journal.suspended(batch)
     {:ok, viewed} = Journal.read(batch)
+    assert {:ok, inspected} = Journal.inspect_approval(batch, viewed.revision, "one")
+    assert inspected.id == "one"
+    assert inspected.state == :suspended
+    assert inspected.checkpoint == checkpoint
+    assert inspected.revision == viewed.revision
+
+    assert {:error, :stale_child_approval} =
+             Journal.inspect_approval(batch, viewed.revision - 1, "one")
+
     assert {:ok, _} = Journal.decide(batch, viewed.revision, first, :approve)
     assert {:error, :stale_child_decision} = Journal.decide(batch, viewed.revision, second, :deny)
     {:ok, viewed} = Journal.read(batch)

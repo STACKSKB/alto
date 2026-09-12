@@ -79,6 +79,53 @@ defmodule Alto.WorkspacesTest do
 
   defp owner(path), do: %{root_run_id: "root", path: [path]}
 
+  test "rejected resume admission preserves the workspace and can be retried", %{
+    manager: m,
+    snapshot: s
+  } do
+    {:ok, ready} = Workspaces.create(m, s, owner("resume"))
+    {:ok, :paused, worked} = Workspaces.use(m, ready.id, ready.revision, fn _ -> :paused end)
+
+    assert {:error, :grant_lost} =
+             Workspaces.resume(
+               m,
+               worked.id,
+               worked.revision,
+               fn _ -> {:error, :grant_lost} end,
+               fn _, _ -> flunk("rejected continuation executed") end
+             )
+
+    assert {:ok, ^worked} = Workspaces.get(m, worked.id)
+
+    assert {:ok, :finished, updated} =
+             Workspaces.resume(
+               m,
+               worked.id,
+               worked.revision,
+               fn workspace ->
+                 assert workspace == worked.workspace
+                 assert {:ok, ^worked} = Workspaces.get(m, worked.id)
+                 {:ok, :single_use_grant}
+               end,
+               fn _, :single_use_grant ->
+                 assert {:ok, %{status: "in_progress"}} = Workspaces.get(m, worked.id)
+                 :finished
+               end
+             )
+
+    assert updated.status == "worked"
+    assert updated.revision > worked.revision
+
+    assert {:error, :stale_workspace} =
+             Workspaces.resume(
+               m,
+               worked.id,
+               worked.revision,
+               fn _ -> flunk("stale workspace received an admission grant") end,
+               fn _, _ -> flunk("stale workspace executed") end
+             )
+  end
+
   test "retained resources stay nonterminal, freeze immutably and discard under a revision fence",
        %{manager: m, snapshot: s} do
     assert {:ok, first} = Workspaces.create(m, s, owner("a"))

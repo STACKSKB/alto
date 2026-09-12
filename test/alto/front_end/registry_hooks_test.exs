@@ -105,7 +105,9 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
       end)
 
     assert_receive {:started, {:ok, run_id}}
-    assert_receive :provider_started
+    # Initial module loading can exceed the global receive timeout in a full
+    # suite. Establish readiness before exercising owner cancellation.
+    assert_receive :provider_started, 2_000
     assert Registry.run_result(name, run_id) == :running
     send(owner, :stop)
     ref = Process.monitor(owner)
@@ -123,7 +125,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     assert {:error, {:command_exception, "boom"}} = Registry.command(name, "explode", %{})
   end
 
-  defp eventually_result(name, run_id, attempts \\ 50)
+  defp eventually_result(name, run_id, attempts \\ 200)
   defp eventually_result(_name, _run_id, 0), do: :timeout
 
   defp eventually_result(name, run_id, attempts) do

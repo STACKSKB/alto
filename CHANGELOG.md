@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add durable parent-batch continuations and independently approved child
+  continuations, with single-use grants and explicit retirement/cleanup hooks.
+- Validate child checkpoints before workspace activation; rejected recovery
+  preserves the exact worked workspace for a later valid attempt.
+- Add read-only retained-resource lookup and continuation discovery, plus
+  revision-fenced child approval inspection for application hosts.
+- Reject unavailable durable identities during checkpoint capture instead of
+  retaining a process-dependent fingerprint; converge concurrent journal retirement.
+
 - Add optional child dispatch journals with exact retained results, revision-fenced
   join acknowledgement and explicit retirement. Children persist their own results
   before returning; uncertain dispatches are never automatically repeated.
@@ -13,7 +22,7 @@
 
 - Add optional separate child sessions with independent transcript snapshots,
   parent/identity links and child session IDs in delegation results. Shared
-  session behavior remains the default; independent child recovery is pending.
+  session behavior remains the default.
 
 - Add opt-in bounded queue compaction with exact live-claim and dedup-window
   retention. Version 3 snapshots reject incomplete retained state and preserve

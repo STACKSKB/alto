@@ -88,21 +88,49 @@ defmodule Alto.Subagents.Journal do
 
   def restore(_, _, _), do: {:error, :invalid_batch_identity}
 
+  @doc "Read and validate an existing batch without initializing or mutating it."
+  def lookup(ledger, key, opts \\ []) do
+    with {:ok, deadline} <- lookup_options(opts),
+         :ok <- valid_key(key) do
+      safe(fn ->
+        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+             :ok <- valid_initial(entry),
+             batch = %__MODULE__{
+               ledger: ledger,
+               key: key,
+               generation: entry.recovery["generation"],
+               deadline: deadline
+             },
+             {:ok, snapshot} <- snapshot(entry, batch.generation) do
+          {:ok, batch, snapshot}
+        end
+      end)
+    else
+      {:error, _} = error -> error
+    end
+  end
+
   @doc "Read an exact retained packet and its revision, including retirement state."
   def read(%__MODULE__{} = batch) do
-    safe(fn ->
-      with {:ok, entry} <-
-             Retained.read(batch.ledger, batch.key, batch.deadline),
-           :ok <- valid_initial(entry),
-           true <- entry.recovery["generation"] == batch.generation,
-           :ok <- valid_packet(entry.checkpoint, entry.recovery),
-           {:ok, state} <- lifecycle(entry) do
-        {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-      else
-        false -> {:error, :batch_generation_mismatch}
-        {:error, _} = error -> error
-      end
-    end)
+    safe(fn -> snapshot_read(batch) end)
+  end
+
+  @doc "Inspect one approval from a single validated batch snapshot."
+  def inspect_approval(%__MODULE__{} = batch, expected_revision, child_id) do
+    with :ok <- valid_revision(expected_revision),
+         :ok <- valid_approval_child_id(child_id),
+         {:ok, snapshot} <- read(batch),
+         true <- snapshot.revision == expected_revision,
+         child when not is_nil(child) <-
+           Enum.find(snapshot.packet["children"], &(&1["id"] == child_id)),
+         true <- child["state"] in ["suspended", "decided"],
+         {:ok, entry} <- decode_approval(batch, child) do
+      {:ok, Map.put(entry, :revision, snapshot.revision)}
+    else
+      false -> {:error, :stale_child_approval}
+      nil -> {:error, :unknown_child}
+      {:error, _} = error -> error
+    end
   end
 
   @doc "Persist a single dispatch grant. A repeated call never reissues permission."
@@ -173,19 +201,12 @@ defmodule Alto.Subagents.Journal do
     with {:ok, snapshot} <- read(batch) do
       Enum.reduce_while(snapshot.packet["children"], {:ok, []}, fn child, {:ok, acc} ->
         if child["state"] in ["suspended", "decided"] do
-          with {:ok, saved} <-
-                 Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes) do
-            entry =
-              Map.merge(%{checkpoint: saved["checkpoint"], workspace: saved["workspace"]}, %{
-                id: child["id"],
-                state: if(child["state"] == "suspended", do: :suspended, else: :decided),
-                identity: child_identity(batch, child),
-                decision: child["suspension"]["decision"]
-              })
+          case decode_approval(batch, child) do
+            {:ok, entry} ->
+              {:cont, {:ok, [entry | acc]}}
 
-            {:cont, {:ok, [entry | acc]}}
-          else
-            error -> {:halt, error}
+            error ->
+              {:halt, error}
           end
         else
           {:cont, {:ok, acc}}
@@ -475,22 +496,81 @@ defmodule Alto.Subagents.Journal do
       if snapshot.state == :retired do
         :ok
       else
-        with :ok <-
-               Retained.record_attempt(batch.ledger, batch.key, @retire, batch.deadline),
-             :ok <-
-               Retained.record_outcome(
-                 batch.ledger,
-                 batch.key,
-                 @retire,
-                 :completed,
-                 %{
-                   "generation" => batch.generation,
-                   "joined" => true
-                 },
-                 batch.deadline
-               ),
-             do: :ok
+        case Retained.record_attempt(batch.ledger, batch.key, @retire, batch.deadline) do
+          :ok ->
+            case Retained.record_outcome(
+                   batch.ledger,
+                   batch.key,
+                   @retire,
+                   :completed,
+                   %{
+                     "generation" => batch.generation,
+                     "joined" => true
+                   },
+                   batch.deadline
+                 ) do
+              :ok -> :ok
+              {:error, :already_decided} -> retired_after_race(batch)
+              error -> error
+            end
+
+          {:error, :already_decided} ->
+            retired_after_race(batch)
+
+          error ->
+            error
+        end
       end
+    end
+  end
+
+  defp retired_after_race(batch) do
+    case read(batch) do
+      {:ok, %{state: :retired}} -> :ok
+      {:ok, _} -> {:error, :batch_not_retired}
+      error -> error
+    end
+  end
+
+  defp snapshot_read(batch) do
+    with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
+         :ok <- valid_initial(entry),
+         {:ok, snapshot} <- snapshot(entry, batch.generation) do
+      {:ok, snapshot}
+    else
+      {:error, _} = error -> error
+    end
+  end
+
+  defp snapshot(entry, generation) do
+    with true <- entry.recovery["generation"] == generation,
+         :ok <- valid_packet(entry.checkpoint, entry.recovery),
+         {:ok, state} <- lifecycle(entry) do
+      {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
+    else
+      false -> {:error, :batch_generation_mismatch}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp decode_approval(batch, child) do
+    with {:ok, saved} <-
+           Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes),
+         true <-
+           is_map(saved) and
+             Enum.sort(Map.keys(saved)) == Enum.sort(["checkpoint", "workspace"]) do
+      {:ok,
+       %{
+         checkpoint: saved["checkpoint"],
+         workspace: saved["workspace"],
+         id: child["id"],
+         state: if(child["state"] == "suspended", do: :suspended, else: :decided),
+         identity: child_identity(batch, child),
+         decision: child["suspension"]["decision"]
+       }}
+    else
+      false -> {:error, :invalid_batch}
+      {:error, _} = error -> error
     end
   end
 
@@ -601,6 +681,32 @@ defmodule Alto.Subagents.Journal do
          Enum.uniq(ids) == ids and is_map(metadata) and json?(metadata),
        do: :ok,
        else: {:error, :invalid_batch_plan}
+  end
+
+  defp valid_key(key) when is_binary(key) and byte_size(key) in 1..256 do
+    if String.valid?(key), do: :ok, else: {:error, :invalid_batch_key}
+  end
+
+  defp valid_key(_), do: {:error, :invalid_batch_key}
+
+  defp lookup_options(opts) do
+    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
+      deadline = Keyword.get(opts, :deadline, :infinity)
+
+      case Retained.deadline_ok(deadline) do
+        :ok -> {:ok, deadline}
+        {:error, _} = error -> error
+      end
+    else
+      {:error, :invalid_batch_options}
+    end
+  end
+
+  defp valid_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
+  defp valid_revision(_), do: {:error, :invalid_approval_revision}
+
+  defp valid_approval_child_id(child_id) do
+    if valid_id?(child_id), do: :ok, else: {:error, :unknown_child}
   end
 
   defp valid_id?(id), do: is_binary(id) and byte_size(id) in 1..256 and String.valid?(id)

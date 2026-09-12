@@ -54,6 +54,29 @@ defmodule Alto.Runner.Budget.Account do
   def identity(%__MODULE__{key: key, generation: generation}),
     do: %{"key" => key, "generation" => generation}
 
+  @doc "Look up one retained account without initializing or mutating it."
+  def lookup(ledger, key, opts \\ []) do
+    with {:ok, deadline} <- deadline_option(opts) do
+      safe(fn ->
+        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+             :ok <- valid_initial(entry),
+             :ok <- valid_packet(entry.checkpoint, entry.recovery),
+             {:ok, state} <- lifecycle(entry) do
+          account = %__MODULE__{
+            ledger: ledger,
+            key: key,
+            generation: entry.recovery["generation"]
+          }
+
+          {:ok, account, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
+        else
+          false -> {:error, :budget_account_mismatch}
+          {:error, _} = error -> error
+        end
+      end)
+    end
+  end
+
   @doc "Read one consistent revision, both counters, and the closure state."
   def read(%__MODULE__{} = account), do: read(account, :infinity)
 
@@ -336,6 +359,19 @@ defmodule Alto.Runner.Budget.Account do
           |> Keyword.take([:max_effects, :max_model_requests])
           |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)},
        else: {:error, :invalid_budget_account_limits}
+  end
+
+  defp deadline_option(opts) do
+    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
+      deadline = Keyword.get(opts, :deadline, :infinity)
+
+      case Retained.deadline_ok(deadline) do
+        :ok -> {:ok, deadline}
+        {:error, _} = error -> error
+      end
+    else
+      {:error, :invalid_budget_account_options}
+    end
   end
 
   defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max
