@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Load model discovery providers before checking optional callbacks, fixing first-run catalogs.
+- Cap context scrolling using the renderer's exact wrapping and available text area.
+- Make new tasks a direct sidebar / Ctrl+G N action; route folder changes through
+  Ctrl+G W with highlighted directory suggestions and Tab completion.
+- Remove per-cell mouse-down snapshot exports, freeze mutable widget state, index
+  only selection boundaries during dragging, and reuse native capture buffers.
+
 - Reset context scroll when the displayed approval changes and present commands,
   folders, file changes and execution constraints without Elixir map syntax.
 - Reuse highlighted row caches and coalesce ordered mouse-motion bursts so large
@@ -12,11 +19,10 @@
   probes. Default to content selection, with Alt+drag for UI text, and replace
   the selection toolbar/dialog with an unframed right-click menu and muted shortcut.
 
-- Confine text drags to the starting box. Add desktop clipboard helpers and a
-  fixed-width New workspace label.
+- Confine text drags to the starting box and add desktop clipboard helpers.
 
-- Add a visible New workspace action and F7 folder dialog, remembered workspace
-  folders, and a full working-folder display. Trusted registry callers can select
+- Add remembered workspace folders and a full working-folder display.
+  Trusted registry callers can select
   a per-run working folder without changing the registry default.
 
 - Select and copy rendered text anywhere in the TUI, including popups and status

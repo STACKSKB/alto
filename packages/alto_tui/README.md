@@ -44,9 +44,10 @@ not open a popup or toolbar. Esc dismisses the menu, then clears selection.
 Ctrl+C without a selection retains its cancel/quit behavior. Ctrl+Shift+A selects
 visible content; adding Alt explicitly includes UI text.
 
-The screen is captured once per selection. Dragging reuses that frame and updates
-only the highlight, without rebuilding conversation history or one styled span
-per terminal cell. Run `mix run scripts/tui_selection_bench.exs` from the Alto
+Selection freezes the rendered widgets and captures compact text once per gesture.
+It reuses native buffers between gestures and indexes only boundary rows during
+dragging. This avoids exporting every terminal cell or rebuilding conversation
+history on mouse-down or motion. Run `mix run scripts/tui_selection_bench.exs` from the Alto
 repository root to measure event handling plus native drawing.
 
 Copy uses `wl-copy`, `xclip`, `xsel`, or `pbcopy` when available. Otherwise it sends
@@ -63,7 +64,8 @@ when available; otherwise it inserts the last selection copied in this TUI.
 Start a task in the current folder with **Ctrl+G, N** or **+ New task** above the
 task list. **Ctrl+G, T** also includes a New task action.
 
-Open a different folder through **Ctrl+G, W → Open another folder**. Enter an existing folder path and press Enter (or click Open workspace).
+Open a different folder through **Ctrl+G, W → Open another folder**. Enter an
+existing folder path and press Enter (or click Open folder).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
 your draft. Up/Down highlights folder suggestions; Tab completes the selected path
@@ -75,10 +77,14 @@ Approval requests start at the top of the context pane, including when the next
 queued request becomes active. Commands show the prepared command line, folder,
 reason and execution limits. File changes show paths, replacement text and a
 preview; other tools use readable labels. Approval still authorizes the original
-prepared operation, not the display text.
+prepared operation, not the display text. Context scrolling stops at the last
+useful wrapped row, including after resizing or changing requests.
 
-Large selections reuse cached full rows and slice only their two boundary rows.
+Large selections reuse cached interior-row rectangles and index their two boundary rows.
 Highlighting changes cell colors without redrawing the selected text.
 Consecutive mouse-motion events are coalesced before drawing, including remote
 terminal sessions; releases, key presses, resize events and other messages keep
 their order.
+
+Model discovery loads provider modules before checking their capabilities, so a
+fresh process can fetch the catalogue without a manual configuration round-trip.

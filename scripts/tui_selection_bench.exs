@@ -23,13 +23,14 @@ for {w, h} <- [{160, 50}, {240, 70}, {400, 120}] do
   end
 
   down = %Mouse{kind: "down", button: "left", x: 1, y: 1}
-  # Report first capture separately from reuse of the same native buffers.
+  # A running TUI has already initialized and painted its native renderer.
+  terminal = CellSession.new(w, h)
+  :ok = CellSession.draw(terminal, widgets.())
+  # Report first selection capture separately from reuse of its native buffers.
   {cold_start, _} = :timer.tc(fn -> Selection.event(Selection.new(), down, {w, h}, widgets) end)
 
   {start, {:handled, pressed}} =
     :timer.tc(fn -> Selection.event(Selection.new(), down, {w, h}, widgets) end)
-
-  terminal = CellSession.new(w, h)
 
   {down_draw, :ok} =
     :timer.tc(fn -> CellSession.draw(terminal, Selection.widgets(pressed, widgets)) end)
