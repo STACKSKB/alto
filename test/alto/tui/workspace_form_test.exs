@@ -40,7 +40,6 @@ defmodule Alto.TUI.WorkspaceFormTest do
     form = WorkspaceForm.new(root) |> WorkspaceForm.paste("a")
     assert form.suggestions == [root <> "/alpha/", root <> "/another folder/"]
     {:edit, chosen} = WorkspaceForm.key(form, %Key{code: "down"})
-    {:edit, chosen} = WorkspaceForm.key(chosen, %Key{code: "down"})
     assert chosen.suggestion_index == 1
     assert WorkspaceForm.path(chosen) == "a"
     widgets = WorkspaceForm.widgets(chosen, %{width: 100, height: 30})
@@ -69,7 +68,9 @@ defmodule Alto.TUI.WorkspaceFormTest do
     assert form.suggestions == ["/remote/saved/"]
     form = WorkspaceForm.paste(form, "pro")
     assert form.suggestions == []
-    form = WorkspaceForm.suggest(form, {:ok, ["/remote/project/"]})
+    form = WorkspaceForm.suggest(form, {:ok, ["/remote/probe/", "/remote/project/"]})
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "down"})
+    form = WorkspaceForm.suggest(form, {:ok, ["/remote/project/", "/remote/probe/"]})
     {:edit, completed} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(completed) == "/remote/project/"
   end

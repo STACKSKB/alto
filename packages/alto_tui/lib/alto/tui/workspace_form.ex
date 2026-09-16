@@ -32,10 +32,7 @@ defmodule Alto.TUI.WorkspaceForm do
       when code in ["up", "down", "back_tab"] do
     delta = if code == "down", do: 1, else: -1
 
-    index =
-      if form.choose?,
-        do: Integer.mod(form.suggestion_index + delta, length(form.suggestions)),
-        else: 0
+    index = Integer.mod(form.suggestion_index + delta, length(form.suggestions))
 
     {:edit, %{form | suggestion_index: index, choose?: true, error: nil}}
   end
@@ -95,7 +92,10 @@ defmodule Alto.TUI.WorkspaceForm do
       Enum.uniq(Enum.map(saved, &(String.trim_trailing(&1, "/") <> "/")) ++ found)
       |> Enum.take(50)
 
-    %{form | suggestions: suggestions, suggestion_index: 0}
+    index =
+      if form.choose?, do: Enum.find_index(suggestions, &(&1 == selected(form))) || 0, else: 0
+
+    %{form | suggestions: suggestions, suggestion_index: index}
   end
 
   def rect(width, height) do
