@@ -27,6 +27,17 @@ defmodule Alto.Providers.AnthropicTest do
     [api_key: "test-secret", model: "configured-model", req_options: [adapter: Adapter]]
   end
 
+  defp configure_stream(events, status \\ 200) do
+    wire =
+      Enum.map_join(events, "", fn event ->
+        "event: " <> event["type"] <> "\ndata: " <> JSON.encode!(event) <> "\n\n"
+      end)
+
+    Process.put(:anthropic_test, %{owner: self(), status: status, chunks: String.codepoints(wire)})
+
+    [api_key: "test-secret", model: "configured-model", req_options: [adapter: Adapter]]
+  end
+
   test "native messages carry system policy, tool schemas and correlated tool results" do
     opts =
       configure(%{
@@ -175,5 +186,151 @@ defmodule Alto.Providers.AnthropicTest do
              Anthropic.stream(request, fn _ -> :ok end, opts)
 
     refute_received {:request, _}
+  end
+
+  test "streams text, thinking, usage, and tool JSON incrementally" do
+    events = [
+      %{"type" => "message_start", "message" => %{"usage" => %{"input_tokens" => 3}}},
+      %{
+        "type" => "content_block_start",
+        "index" => 0,
+        "content_block" => %{"type" => "thinking", "thinking" => ""}
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 0,
+        "delta" => %{"type" => "thinking_delta", "thinking" => "inspect "}
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 0,
+        "delta" => %{"type" => "thinking_delta", "thinking" => "first"}
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 0,
+        "delta" => %{"type" => "signature_delta", "signature" => "sig"}
+      },
+      %{"type" => "content_block_stop", "index" => 0},
+      %{
+        "type" => "content_block_start",
+        "index" => 1,
+        "content_block" => %{"type" => "text", "text" => ""}
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 1,
+        "delta" => %{"type" => "text_delta", "text" => "Done"}
+      },
+      %{"type" => "content_block_stop", "index" => 1},
+      %{
+        "type" => "content_block_start",
+        "index" => 2,
+        "content_block" => %{
+          "type" => "tool_use",
+          "id" => "call-1",
+          "name" => "read_file",
+          "input" => %{}
+        }
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 2,
+        "delta" => %{"type" => "input_json_delta", "partial_json" => ~s({"path":)}
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 2,
+        "delta" => %{"type" => "input_json_delta", "partial_json" => ~s("README.md"})}
+      },
+      %{"type" => "content_block_stop", "index" => 2},
+      %{
+        "type" => "message_delta",
+        "delta" => %{"stop_reason" => "tool_use"},
+        "usage" => %{"output_tokens" => 7}
+      },
+      %{"type" => "message_stop"}
+    ]
+
+    opts = configure_stream(events)
+    owner = self()
+
+    assert {:ok, completion} =
+             Anthropic.stream(%{messages: [], tools: []}, &send(owner, {:event, &1}), opts)
+
+    assert completion.message == "Done"
+    assert completion.reasoning == "inspect first"
+
+    assert completion.tool_calls == [
+             %{id: "call-1", name: "read_file", arguments_json: ~s({"path":"README.md"})}
+           ]
+
+    assert completion.usage == %{"input_tokens" => 3, "output_tokens" => 7}
+    assert_received {:event, %Alto.Event{type: :model_reasoning_delta, data: %{text: "inspect "}}}
+    assert_received {:event, %Alto.Event{type: :model_reasoning_delta, data: %{text: "first"}}}
+    assert_received {:event, %Alto.Event{type: :model_delta, data: %{text: "Done"}}}
+
+    assert completion.provider_fields["alto_anthropic_content"] == [
+             %{"type" => "thinking", "thinking" => "inspect first", "signature" => "sig"},
+             %{"type" => "text", "text" => "Done"},
+             %{
+               "type" => "tool_use",
+               "id" => "call-1",
+               "name" => "read_file",
+               "input" => %{"path" => "README.md"}
+             }
+           ]
+
+    assert_received {:request, request}
+    assert JSON.decode!(request.body)["stream"] == true
+  end
+
+  test "bounds an unfinished Anthropic SSE event while receiving" do
+    events = [
+      %{
+        "type" => "content_block_start",
+        "index" => 0,
+        "content_block" => %{"type" => "text", "text" => String.duplicate("x", 100)}
+      }
+    ]
+
+    opts = configure_stream(events)
+
+    assert {:error, {:sse_event_too_large, 32}} =
+             Anthropic.stream(
+               %{messages: [], tools: []},
+               fn _ -> :ok end,
+               Keyword.put(opts, :max_event_bytes, 32)
+             )
+  end
+
+  test "does not complete tool JSON before a valid final response" do
+    events = [
+      %{"type" => "message_start", "message" => %{"usage" => %{}}},
+      %{
+        "type" => "content_block_start",
+        "index" => 0,
+        "content_block" => %{
+          "type" => "tool_use",
+          "id" => "call-1",
+          "name" => "read_file",
+          "input" => %{}
+        }
+      },
+      %{
+        "type" => "content_block_delta",
+        "index" => 0,
+        "delta" => %{"type" => "input_json_delta", "partial_json" => "not-json"}
+      },
+      %{"type" => "message_delta", "delta" => %{"stop_reason" => "max_tokens"}},
+      %{"type" => "message_stop"}
+    ]
+
+    assert {:error, {:incomplete_model_response, "max_tokens"}} =
+             Anthropic.stream(
+               %{messages: [], tools: []},
+               fn _ -> :ok end,
+               configure_stream(events)
+             )
   end
 end
