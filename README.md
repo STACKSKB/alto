@@ -149,7 +149,8 @@ reduction at 85% of the available input window. Settled session history keeps
 complete conversation boundaries for recovery. Set `ALTO_VISION=1` only when
 the selected model supports vision; this enables the bounded image reader and
 passes images to the provider adapter. Library defaults remain conservative,
-with serial tools, no automatic image capability, and one context reduction.
+with serial tools, no automatic image capability, and compaction disabled unless
+the host opts in. When enabled, compaction permits one reduction by default.
 Team composition is explicit: trusted loops request children, each child
 inherits an exact subset of the parent's tools and authority, and
 `Alto.Subagents.bounded/1` sets depth, child-count, and concurrency ceilings.

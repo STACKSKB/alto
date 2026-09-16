@@ -25,7 +25,8 @@ each success consumes the configured compaction allowance. Provider reductions
 also consume the shared model budget. Compaction never refreshes deadlines or
 execution budgets, and its count is preserved in approval checkpoints.
 
-The default allowance remains one reduction per run. Custom reducers may use
+Compaction is disabled by default. When enabled, the default allowance is one
+reduction per run. Custom reducers may use
 the existing supervised request/decode contract, or implement deterministic
 `Alto.Context.Compaction.reduce/3` without a provider. A session is required to
 retain the facts replaced by a reduction. Complete call/reply groups and recent
