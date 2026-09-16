@@ -1,7 +1,8 @@
 defmodule Alto.Session do
   @moduledoc """
   Append-only JSONL session records for the execution host, plus a revisioned
-  transcript sidecar for resume.
+  transcript sidecar for fast resume and immutable conversation revisions for
+  settled-turn recovery and branching.
 
   One directory per state home, one `<id>.jsonl` log per session. Records are
   small JSON envelopes; arbitrary Elixir terms (event data, outcomes, outputs)
@@ -17,11 +18,12 @@ defmodule Alto.Session do
   content and are protected by private state files; resume re-resolves
   credentials through the normal caller-owned path.
 
-  Crash boundary: a run that dies mid-flight leaves events without a
-  transcript snapshot or `completed` record. Resume then reports
-  `:no_resumable_transcript` rather than inventing history. Logging itself is
-  best-effort from the host's perspective: append failures must never change
-  the run outcome, and the serial result reports them as degraded persistence.
+  Crash boundary: settled transcript revisions are resumable before a run
+  completes. A revision-bound dispatch fence blocks ordinary resume while any
+  dispatched tool outcome is unknown, so effects are never replayed from an
+  older safe snapshot. Logging itself is best-effort from the host's
+  perspective: append failures must never change the run outcome, and the
+  serial result reports them as degraded persistence.
 
   Bounds: record payloads inherit the host's bounds (tool results,
   transcripts, summaries). `list/1` returns at most 100 sessions,
@@ -33,8 +35,9 @@ defmodule Alto.Session do
   @max_list_entries 100
   @max_task_preview 120
   @max_log_bytes 16_000_000
-  @max_transcript_file_bytes 16_000_000
   @max_records 20_000
+
+  alias Alto.Session.Conversation
 
   @type session_id :: String.t()
   @type record :: map()
@@ -119,86 +122,34 @@ defmodule Alto.Session do
           :ok | {:error, term()}
   def write_transcript(id, messages, transcript_bytes, opts \\ [])
       when is_list(messages) and is_integer(transcript_bytes) do
-    with :ok <- validate_id(id) do
-      path = transcript_path(dir(opts), id)
-      expected_revision = Keyword.get(opts, :expected_revision, :any)
-
-      Alto.Storage.with_lock(lock_path(path), fn ->
-        write_transcript_revision(
-          path,
-          id,
-          messages,
-          transcript_bytes,
-          expected_revision
-        )
-      end)
+    case Conversation.persist(
+           id,
+           messages,
+           transcript_bytes,
+           Keyword.put(opts, :allow_pending, true)
+         ) do
+      {:ok, _snapshot} -> :ok
+      {:error, _} = error -> error
     end
   end
 
-  defp write_transcript_revision(path, id, messages, transcript_bytes, expected_revision) do
-    with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
-         {:ok, current_revision} <- snapshot_revision(path, id),
-         :ok <- check_expected_revision(id, expected_revision, current_revision),
-         {:ok, line} <-
-           encode_line(%{
-             "v" => @version,
-             "revision" => current_revision + 1,
-             "messages" => messages,
-             "transcript_bytes" => transcript_bytes
-           }),
-         :ok <- write_snapshot(path, line <> "\n") do
-      :ok
-    else
-      {:error, {:session_conflict, _fields}} = conflict -> conflict
-      {:error, {:session_corrupt, _id, :transcript}} = corrupt -> corrupt
-      {:error, {:session_unencodable, _reason}} = unencodable -> unencodable
-      {:error, reason} -> {:error, {:session_write_failed, reason}}
-    end
-  end
+  @doc "Persist a safe settled boundary and return its new immutable revision."
+  @spec persist_settled(session_id(), [map()], non_neg_integer(), keyword()) ::
+          {:ok, Conversation.snapshot()} | {:error, term()}
+  def persist_settled(id, messages, transcript_bytes, opts \\ []),
+    do: Conversation.persist(id, messages, transcript_bytes, opts)
 
-  defp snapshot_revision(path, id) do
-    case bounded_read(path, @max_transcript_file_bytes) do
-      {:ok, contents} ->
-        case decode_line(String.trim(contents), id, 1) do
-          {:ok, %{"revision" => revision}} when is_integer(revision) and revision >= 1 ->
-            {:ok, revision}
+  @doc "Fence a settled revision before dispatching any tool in the batch."
+  @spec mark_dispatched(session_id(), [String.t()], keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def mark_dispatched(id, tool_call_ids, opts \\ []),
+    do: Conversation.mark_dispatched(id, tool_call_ids, opts)
 
-          # Version-one snapshots predate explicit revisions. Treat their one
-          # committed value as revision one for a compatible first CAS.
-          {:ok, %{"messages" => messages, "transcript_bytes" => bytes}}
-          when is_list(messages) and is_integer(bytes) ->
-            {:ok, 1}
-
-          _other ->
-            {:error, {:session_corrupt, id, :transcript}}
-        end
-
-      {:error, :enoent} ->
-        {:ok, 0}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp check_expected_revision(_id, :any, _current), do: :ok
-  defp check_expected_revision(_id, expected, expected) when is_integer(expected), do: :ok
-
-  defp check_expected_revision(id, expected, current) do
-    {:error,
-     {:session_conflict,
-      %{session_id: id, expected_revision: expected, current_revision: current}}}
-  end
-
-  # The sidecar is the only thing resume depends on, so a crash or kill
-  # mid-overwrite must leave the previous snapshot intact: temp file plus
-  # rename, fully old or fully new, never partial.
-  defp write_snapshot(path, content) do
-    case Alto.Tools.AtomicWrite.write(path, content, 0o600) do
-      :ok -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  @doc "Fetch one retained conversation revision without following its ancestry."
+  @spec conversation(session_id(), :latest | pos_integer(), keyword()) ::
+          {:ok, Conversation.snapshot()} | {:error, term()}
+  def conversation(id, revision \\ :latest, opts \\ []),
+    do: Conversation.fetch(id, revision, opts)
 
   @doc "Read and decode every record of a session log, oldest first."
   @spec read(session_id(), keyword()) :: {:ok, [record()]} | {:error, term()}
@@ -272,39 +223,107 @@ defmodule Alto.Session do
            }}
           | {:error, term()}
   def transcript(id, opts \\ []) do
-    with :ok <- validate_id(id) do
-      path = transcript_path(dir(opts), id)
+    case Conversation.resume(id, opts) do
+      {:ok, snapshot} ->
+        {:ok, Map.take(snapshot, [:messages, :transcript_bytes, :revision, :unsettled])}
 
-      case bounded_read(path, @max_transcript_file_bytes) do
-        {:ok, contents} ->
-          with {:ok, %{"messages" => messages, "transcript_bytes" => bytes} = snapshot}
-               when is_list(messages) and is_integer(bytes) <-
-                 decode_line(String.trim(contents), id, 1) do
-            revision = Map.get(snapshot, "revision", 1)
+      {:error, :enoent} ->
+        if File.exists?(log_path(dir(opts), id)) do
+          {:error, :no_resumable_transcript}
+        else
+          {:error, {:session_not_found, id}}
+        end
 
-            if is_integer(revision) and revision >= 1 do
-              {:ok, %{messages: messages, transcript_bytes: bytes, revision: revision}}
-            else
-              {:error, {:session_corrupt, id, :transcript}}
-            end
-          else
-            {:ok, _other} -> {:error, {:session_corrupt, id, :transcript}}
-            {:error, reason} -> {:error, reason}
-          end
+      {:error, {:too_large, size, max}} ->
+        {:error, {:session_too_large, id, size, max}}
 
-        {:error, :enoent} ->
-          if File.exists?(log_path(dir(opts), id)) do
-            {:error, :no_resumable_transcript}
-          else
-            {:error, {:session_not_found, id}}
-          end
+      {:error, {:session_corrupt, _, _}} = corrupt ->
+        corrupt
 
-        {:error, reason} ->
-          case reason do
-            {:too_large, size, max} -> {:error, {:session_too_large, id, size, max}}
-            _other -> {:error, {:session_read_failed, reason}}
-          end
-      end
+      {:error, {:invalid_session_id, _}} = invalid ->
+        invalid
+
+      {:error, {:session_unsettled_tool_dispatch, _}} = unsettled ->
+        unsettled
+
+      {:error, reason} ->
+        {:error, {:session_read_failed, reason}}
+    end
+  end
+
+  @doc "Fork a retained complete revision into a new isolated session."
+  @spec fork(session_id(), keyword()) :: {:ok, map()} | {:error, term()}
+  def fork(id, opts \\ [])
+
+  def fork(id, opts) when is_list(opts) do
+    {revision, opts} = Keyword.pop(opts, :revision, :latest)
+    fork(id, revision, opts)
+  end
+
+  def fork(id, revision) when revision == :latest or is_integer(revision),
+    do: fork(id, revision, [])
+
+  @doc "Fork a specific retained complete revision into a new isolated session."
+  @spec fork(session_id(), :latest | pos_integer(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def fork(id, revision, opts) when is_list(opts) do
+    with {:ok, opts} <-
+           Keyword.validate(opts,
+             session_dir: nil,
+             expected_revision: :any,
+             summary: nil,
+             session_id: nil,
+             max_conversation_bytes: 128_000_000
+           ),
+         {:ok, source} <-
+           Conversation.fetch(
+             id,
+             revision,
+             Keyword.take(opts, [:session_dir, :expected_revision])
+           ),
+         destination <- Keyword.get(opts, :session_id) || generate_id(),
+         :ok <- validate_id(destination),
+         :ok <- branch_destination_available(destination, opts),
+         summary <- Keyword.get(opts, :summary),
+         :ok <- validate_fork_summary(summary),
+         :ok <- validate_fork_storage_limit(Keyword.fetch!(opts, :max_conversation_bytes)),
+         true <- source.settled,
+         :ok <-
+           append(
+             destination,
+             started_record(%{
+               run_id: nil,
+               parent_session_id: id,
+               task: "Fork of #{id} at revision #{source.revision}",
+               provider: nil,
+               model: nil,
+               cwd: nil
+             }),
+             opts
+           ),
+         :ok <- append(destination, forked_record(id, source.revision, summary), opts),
+         {:ok, branch} <-
+           Conversation.persist(
+             destination,
+             source.messages,
+             source.transcript_bytes,
+             session_dir: Keyword.get(opts, :session_dir),
+             expected_revision: 0,
+             parent: %{session_id: id, revision: source.revision},
+             summary: summary,
+             max_conversation_bytes: Keyword.fetch!(opts, :max_conversation_bytes)
+           ) do
+      {:ok,
+       %{
+         session_id: destination,
+         source: %{session_id: id, revision: source.revision},
+         summary: summary,
+         transcript: Map.take(branch, [:messages, :transcript_bytes, :revision])
+       }}
+    else
+      {:error, keys} when is_list(keys) -> {:error, {:invalid_fork_options, keys}}
+      {:error, _} = error -> error
+      false -> {:error, {:conversation_revision_unsettled, id, revision}}
     end
   end
 
@@ -460,6 +479,19 @@ defmodule Alto.Session do
     }
   end
 
+  @doc false
+  @spec forked_record(session_id(), pos_integer(), String.t() | nil) :: record()
+  def forked_record(parent_session_id, parent_revision, summary) do
+    %{
+      "v" => @version,
+      "type" => "forked",
+      "at_ms" => System.system_time(:millisecond),
+      "parent_session_id" => parent_session_id,
+      "parent_revision" => parent_revision,
+      "summary" => summary
+    }
+  end
+
   ## Internals
 
   defp event_cursor(cursor) when is_integer(cursor) and cursor >= 0, do: {:ok, cursor}
@@ -511,6 +543,33 @@ defmodule Alto.Session do
   defp preview_task(task), do: task |> inspect() |> String.slice(0, @max_task_preview)
 
   defp valid_id?(id), do: is_binary(id) and Regex.match?(@id_pattern, id)
+
+  defp branch_destination_available(id, opts) do
+    root = dir(opts)
+    conversation_dir = Path.join([root, "conversations", id])
+
+    if File.exists?(log_path(root, id)) or File.exists?(transcript_path(root, id)) or
+         File.exists?(conversation_dir) do
+      {:error, {:session_already_exists, id}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_fork_summary(nil), do: :ok
+
+  defp validate_fork_summary(summary) when is_binary(summary) do
+    if summary != "" and String.valid?(summary) and byte_size(summary) <= 64_000,
+      do: :ok,
+      else: {:error, {:invalid_branch_summary, byte_size(summary)}}
+  end
+
+  defp validate_fork_summary(summary), do: {:error, {:invalid_branch_summary, summary}}
+
+  defp validate_fork_storage_limit(max) when is_integer(max) and max > 0, do: :ok
+
+  defp validate_fork_storage_limit(max),
+    do: {:error, {:invalid_max_conversation_bytes, max}}
 
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
   defp transcript_path(dir, id), do: Path.join(dir, id <> ".transcript.json")

@@ -200,6 +200,11 @@ defmodule Alto.SessionTest do
       assert {:error, {:invalid_session_id, ^bad}} = Session.append(bad, %{}, session_dir: dir)
       assert {:error, {:invalid_session_id, ^bad}} = Session.read(bad, session_dir: dir)
       assert {:error, {:invalid_session_id, ^bad}} = Session.transcript(bad, session_dir: dir)
+
+      assert {:error, {:invalid_session_id, ^bad}} =
+               Session.conversation(bad, :latest, session_dir: dir)
+
+      assert {:error, {:invalid_session_id, ^bad}} = Session.fork(bad, session_dir: dir)
     end
 
     refute File.exists?(Path.join(dir, "evil"))
