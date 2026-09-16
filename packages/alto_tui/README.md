@@ -47,7 +47,8 @@ visible content; adding Alt explicitly includes UI text.
 Selection freezes the rendered widgets and captures compact text once per gesture.
 It reuses native buffers between gestures and indexes only boundary rows during
 dragging. This avoids exporting every terminal cell or rebuilding conversation
-history on mouse-down or motion. Run `mix run scripts/tui_selection_bench.exs` from the Alto
+history on mouse-down or motion. Long scrolled paragraphs are frozen to their
+visible rows, so dragging does not reflow off-screen history. Run `mix run scripts/tui_selection_bench.exs` from the Alto
 repository root to measure event handling plus native drawing.
 
 Copy uses `wl-copy`, `xclip`, `xsel`, or `pbcopy` when available. Otherwise it sends

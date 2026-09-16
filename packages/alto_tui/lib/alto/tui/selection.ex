@@ -347,8 +347,42 @@ defmodule Alto.TUI.Selection do
         }
       end
 
-    %{rows: List.to_tuple(rows), width: width, widgets: widgets}
+    rows = List.to_tuple(rows)
+    widgets = Enum.map(widgets, &crop_history(&1, rows))
+    %{rows: rows, width: width, widgets: widgets}
   end
+
+  # A frozen Paragraph can still reflow thousands of off-screen lines in Rust
+  # on every paint. Replace large plain paragraphs with their already-rendered
+  # viewport, retaining the original block and style. Rich text keeps its spans.
+  defp crop_history({%Paragraph{text: text, scroll: {offset, _}} = widget, rect}, rows)
+       when is_binary(text) do
+    if byte_size(text) > max(rect.width * rect.height * 2, 4096) or
+         (offset > 0 and byte_size(text) > 4096) do
+      inner = SelectionRegions.content_rect(widget, rect)
+      bottom = min(inner.y + inner.height, tuple_size(rows))
+
+      if bottom > inner.y and inner.width > 0 do
+        text =
+          Enum.map_join(inner.y..(bottom - 1), "\n", fn y ->
+            row = elem(rows, y)
+            right = min(inner.x + inner.width, row.width)
+            ranges = if right > inner.x, do: [{inner.x, right}], else: []
+
+            segments(%{row | ranges: ranges}, inner.x, right - 1)
+            |> Enum.map_join(fn {_, _, text} -> text end)
+          end)
+
+        {%{widget | text: text, scroll: {0, 0}, wrap: false, alignment: :left}, rect}
+      else
+        {widget, rect}
+      end
+    else
+      {widget, rect}
+    end
+  end
+
+  defp crop_history(other, _rows), do: other
 
   # Reuse native buffers between gestures instead of allocating an entire second
   # terminal on each click. Every capture still redraws the current widgets.

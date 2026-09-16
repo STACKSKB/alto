@@ -229,6 +229,32 @@ defmodule Alto.TUI.SelectionTest do
     assert Selection.text(selected) == "changed"
   end
 
+  test "scrolled history is frozen to its visible viewport without changing Unicode or borders" do
+    widgets = fn ->
+      [
+        {%Paragraph{
+           text: String.duplicate("A猫👩‍💻 long history that wraps across the pane\n", 2000),
+           scroll: {3990, 0},
+           wrap: true,
+           style: %ExRatatui.Style{fg: :green},
+           block: %Block{title: "History", borders: [:all]}
+         }, %Rect{width: 32, height: 12}}
+      ]
+    end
+
+    before = render_cells(widgets.(), {32, 12})
+    selected = drag(widgets, {32, 12}, {1, 1}, {30, 10})
+    [{frozen, _} | _] = Selection.widgets(selected, [])
+    assert byte_size(frozen.text) < 2000
+    assert frozen.scroll == {0, 0}
+    refute frozen.wrap
+    after_cells = render_cells(Selection.widgets(selected, []), {32, 12})
+    assert Enum.map(before, & &1.symbol) == Enum.map(after_cells, & &1.symbol)
+
+    assert Enum.find(after_cells, &(&1.symbol == "H")).fg ==
+             Enum.find(before, &(&1.symbol == "H")).fg
+  end
+
   test "non-content controls neither capture a frame nor activate when dragged; Alt opts in" do
     widgets = fn ->
       send(self(), :captured)

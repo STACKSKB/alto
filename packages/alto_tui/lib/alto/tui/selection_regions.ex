@@ -4,6 +4,8 @@ defmodule Alto.TUI.SelectionRegions do
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Widgets.{Block, Popup}
 
+  def content_rect(widget, rect), do: inner(Map.get(widget, :block), rect)
+
   # Follow paint order, using the same rectangles as the renderer. Borders are
   # independently selectable; a drag inside a box never includes its chrome.
   def at(widgets, {x, y}, {width, height}) do

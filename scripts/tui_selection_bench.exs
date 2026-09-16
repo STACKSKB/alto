@@ -89,3 +89,42 @@ for {w, h} <- [{160, 50}, {240, 70}, {400, 120}] do
 
   CellSession.close(terminal)
 end
+
+# Scrolling deep into a long transcript must not reflow its hidden history while dragging.
+for count <- [200, 2_000, 10_000] do
+  widgets = fn ->
+    [
+      {%Paragraph{
+         text: String.duplicate("a moderately long line of transcript content\n", count),
+         wrap: true,
+         scroll: {count - 60, 0}
+       }, %Rect{width: 180, height: 60}}
+    ]
+  end
+
+  down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
+
+  {press, {:handled, selection}} =
+    :timer.tc(fn -> Selection.event(Selection.new(), down, {180, 60}, widgets) end)
+
+  {:handled, selection} =
+    Selection.event(selection, %{down | kind: "drag", x: 179, y: 59}, {180, 60}, widgets)
+
+  terminal = CellSession.new(180, 60)
+
+  samples =
+    for _ <- 1..30 do
+      {time, :ok} =
+        :timer.tc(fn -> CellSession.draw(terminal, Selection.widgets(selection, widgets)) end)
+
+      time
+    end
+
+  IO.inspect(%{
+    history_rows: count,
+    down_us: press,
+    drag_render_median_us: samples |> Enum.sort() |> Enum.at(15)
+  })
+
+  CellSession.close(terminal)
+end
