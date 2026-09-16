@@ -51,6 +51,7 @@ defmodule Alto.MixProject do
         "docs/child-continuations.md",
         "docs/runners.md",
         "docs/subagents.md",
+        "docs/extensions.md",
         "examples/README.md",
         "examples/repository_maintenance",
         "examples/document_intake"

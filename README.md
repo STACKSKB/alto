@@ -154,6 +154,9 @@ edits invalidate the saved approval. Applied patches remain available for review
 until explicitly discarded. Named agent profiles, approval and integration
 selection, and communication policy remain host concerns.
 
+Host extension boundaries, input transforms, and provider-aware context
+estimates are described in [docs/extensions.md](docs/extensions.md).
+
 Preparation is read-only. Application serializes callers sharing the same workspace
 manager; it does not exclude unrelated editors or Git processes. Errors before
 dispatch are known refusals. Failures after Git starts, including incomplete durable
