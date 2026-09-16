@@ -132,7 +132,7 @@ defmodule Alto.TUI.View do
     widgets ++
       [
         {block(" workspaces ", state.focus == :rail), rect},
-        {%Paragraph{text: "＋ New workspace · F7", style: style(fg: @accent, bg: @panel)},
+        {%Paragraph{text: "+ New workspace · F7", style: style(fg: @accent, bg: @panel)},
          %{inner | y: rect.y + 1, height: 1}},
         {rail_widget(state), inner}
       ]

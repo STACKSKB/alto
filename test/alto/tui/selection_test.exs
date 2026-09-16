@@ -5,7 +5,7 @@ defmodule Alto.TUI.SelectionTest do
   alias ExRatatui.CellSession
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
-  alias ExRatatui.Widgets.{Clear, Paragraph}
+  alias ExRatatui.Widgets.{Block, Clear, Paragraph, Popup}
 
   test "selects final visible cells anywhere, including borders, overlays and status" do
     widgets = fn ->
@@ -36,11 +36,11 @@ defmodule Alto.TUI.SelectionTest do
   end
 
   test "reverse drags and Unicode use display cells without copying wide-cell filler" do
-    widgets = fn -> [{%Paragraph{text: "A猫👩‍💻éZ\nnext"}, %Rect{width: 12, height: 2}}] end
-    selected = drag(widgets, {12, 2}, {7, 0}, {2, 0})
+    widgets = fn -> [{%Paragraph{text: "A猫👩‍💻éZ\nnext"}, %Rect{width: 12, height: 3}}] end
+    selected = drag(widgets, {12, 3}, {7, 0}, {2, 0})
     assert Selection.text(selected) == "猫👩‍💻éZ"
 
-    terminal = CellSession.new(12, 2)
+    terminal = CellSession.new(12, 3)
     on_exit(fn -> CellSession.close(terminal) end)
     :ok = CellSession.draw(terminal, Selection.widgets(selected, []))
     cells = CellSession.take_cells(terminal).cells
@@ -53,7 +53,7 @@ defmodule Alto.TUI.SelectionTest do
     widgets = fn -> [{%Paragraph{text: "old text"}, %Rect{width: 10, height: 1}}] end
     selected = drag(widgets, {10, 1}, {0, 0}, {7, 0})
 
-    [{paragraph, _}] =
+    [{paragraph, _} | _] =
       Selection.widgets(selected, [{%Paragraph{text: "new text"}, %Rect{width: 10, height: 1}}])
 
     assert Enum.map_join(paragraph.text.lines, "\n", fn line ->
@@ -107,6 +107,95 @@ defmodule Alto.TUI.SelectionTest do
   test "clipboard payload is base64 and cannot inject terminal escapes" do
     text = "hello\n猫\e]52;c;bad\a"
     assert Clipboard.sequence(text) == "\e]52;c;" <> Base.encode64(text) <> "\a"
+  end
+
+  test "a multirow drag stays inside its box even when the mouse crosses adjacent panes" do
+    widgets = fn ->
+      [
+        {%Paragraph{text: "left text", block: %Block{title: "left", borders: [:all]}},
+         %Rect{width: 12, height: 6}},
+        {%Paragraph{
+           text: "first\nsecond\nthird",
+           block: %Block{title: "center", borders: [:all]}
+         }, %Rect{x: 12, width: 12, height: 6}},
+        {%Paragraph{text: "right text", block: %Block{title: "right", borders: [:all]}},
+         %Rect{x: 24, width: 12, height: 6}}
+      ]
+    end
+
+    selected = drag(widgets, {36, 7}, {13, 1}, {35, 3})
+    assert Selection.text(selected) == "first\nsecond\nthird"
+    reverse = drag(widgets, {36, 7}, {22, 3}, {0, 1})
+    assert Selection.text(reverse) == "first\nsecond\nthird"
+    cells = render_cells(Selection.widgets(selected, []), {36, 7})
+
+    assert Enum.filter(cells, &(&1.bg == :light_blue and &1.row < 6))
+           |> Enum.all?(&(&1.col in 13..22 and &1.row in 1..3))
+  end
+
+  test "popups own their content and remain excluded from selections behind them" do
+    widgets = fn ->
+      [
+        {%Paragraph{text: "background\nbackground\nbackground\nbackground"},
+         %Rect{width: 40, height: 6}},
+        {%Popup{
+           content: %Paragraph{text: "popup\nonly"},
+           block: %Block{borders: [:all]},
+           fixed_width: 12,
+           fixed_height: 4
+         }, %Rect{width: 40, height: 6}}
+      ]
+    end
+
+    assert Selection.text(drag(widgets, {40, 6}, {15, 2}, {39, 5})) == "popup\nonly"
+    refute Selection.text(drag(widgets, {40, 6}, {0, 0}, {39, 5})) =~ "popup"
+  end
+
+  test "Copy is visible and clickable, and right-click exposes a keyboard-accessible menu" do
+    widgets = fn -> [{%Paragraph{text: "copy me"}, %Rect{width: 60, height: 6}}] end
+    selected = drag(widgets, {60, 6}, {0, 0}, {6, 0})
+
+    assert render_cells(Selection.widgets(selected, []), {60, 6})
+           |> Enum.any?(&(&1.row == 5 and &1.symbol == "C"))
+
+    down = %Mouse{kind: "down", button: "left", x: 2, y: 5}
+    {:handled, pressed} = Selection.event(selected, down, {60, 6}, widgets)
+
+    assert {:copy, "copy me", _} =
+             Selection.event(pressed, %{down | kind: "up"}, {60, 6}, widgets)
+
+    {:handled, menu} =
+      Selection.event(
+        selected,
+        %Mouse{kind: "down", button: "right", x: 59, y: 5},
+        {60, 6},
+        widgets
+      )
+
+    assert menu.menu.x + menu.menu.width <= 60
+    assert menu.menu.y + menu.menu.height <= 6
+    assert {:copy, "copy me", _} = Selection.event(menu, %Key{code: "enter"}, {60, 6}, widgets)
+    down = %{down | x: menu.menu.x + 2, y: menu.menu.y + 1}
+    {:handled, pressed} = Selection.event(menu, down, {60, 6}, widgets)
+
+    assert {:copy, "copy me", _} =
+             Selection.event(pressed, %{down | kind: "up"}, {60, 6}, widgets)
+  end
+
+  test "dragging outside a one-cell region cannot activate its click action" do
+    widgets = fn -> [{%Paragraph{text: "X"}, %Rect{width: 1, height: 1}}] end
+    assert drag(widgets, {20, 3}, {0, 0}, {19, 0}).active?
+  end
+
+  defp render_cells(widgets, {width, height}) do
+    terminal = CellSession.new(width, height)
+
+    try do
+      :ok = CellSession.draw(terminal, widgets)
+      CellSession.take_cells(terminal).cells
+    after
+      CellSession.close(terminal)
+    end
   end
 
   defp drag(widgets, dimensions, {ax, ay}, {hx, hy}) do

@@ -63,7 +63,8 @@ defmodule Alto.TUI.App do
 
     # Pane seams retain their resize gesture; Alt+drag can select their text too.
     seam? =
-      match?(%Mouse{kind: "down", button: "left", modifiers: []}, event) and
+      not state.selection.active? and
+        match?(%Mouse{kind: "down", button: "left", modifiers: []}, event) and
         View.hit_target(state, width, height, event.x, event.y) in [:left_seam, :right_seam]
 
     if seam? or state.dragging in [:left_seam, :right_seam] do
@@ -86,10 +87,7 @@ defmodule Alto.TUI.App do
         {:copy, text, selection} ->
           result = state.clipboard_write.(text)
 
-          notice =
-            if result == :ok,
-              do: "Copied selection",
-              else: "Clipboard unavailable; Ctrl+V pastes copy"
+          notice = Alto.TUI.Clipboard.notice(result)
 
           {:noreply, %{state | selection: selection, clipboard_text: text, notice: notice}}
       end
@@ -1133,7 +1131,7 @@ defmodule Alto.TUI.App do
 
   defp overlay_items(state, :project) do
     items =
-      [%{label: "＋ New workspace… (F7)", value: :new_workspace}] ++
+      [%{label: "+ New workspace… (F7)", value: :new_workspace}] ++
         Enum.map(state.projects, &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]})
 
     {:ok, "workspaces · type to filter", items, state.selected_project_id}

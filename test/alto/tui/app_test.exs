@@ -275,6 +275,53 @@ defmodule Alto.TUI.AppTest do
     assert {:stop, _} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, state)
   end
 
+  test "workspace action stays at fixed cells through redraw, selection and copying", context do
+    {:ok, initial} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials,
+        clipboard_write: fn _ -> :ok end
+      )
+
+    for width <- [80, 150, 240] do
+      frame = %{width: width, height: 42}
+      state = %{initial | dimensions: {width, 42}}
+      layout = View.layout(state, width, 42)
+      terminal = ExRatatui.CellSession.new(width, 42)
+
+      try do
+        :ok = ExRatatui.CellSession.draw(terminal, App.render(state, frame))
+
+        row = fn ->
+          ExRatatui.CellSession.take_cells(terminal).cells
+          |> Enum.filter(&(&1.row == 1 and &1.col < layout.rail.width))
+          |> Enum.map(&{&1.col, &1.symbol})
+        end
+
+        baseline = row.()
+        assert Enum.map_join(baseline, &elem(&1, 1)) =~ "+ New workspace"
+        down = %Mouse{kind: "down", button: "left", x: layout.transcript.x + 1, y: 1}
+
+        events = [
+          down,
+          %{down | kind: "drag", x: width - 1, y: 3},
+          %{down | kind: "up", x: width - 1, y: 3},
+          %Key{code: "c", modifiers: ["ctrl"]}
+        ]
+
+        Enum.reduce(events, state, fn event, current ->
+          {:noreply, next} = App.handle_event(event, current)
+          :ok = ExRatatui.CellSession.draw(terminal, App.render(next, frame))
+          assert row.() == baseline
+          next
+        end)
+      after
+        ExRatatui.CellSession.close(terminal)
+      end
+    end
+  end
+
   test "popup selection copies only masked API keys and paste edits the current form", context do
     {:ok, state} =
       State.new(context.config,

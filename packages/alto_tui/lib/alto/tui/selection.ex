@@ -12,9 +12,20 @@ defmodule Alto.TUI.Selection do
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.Paragraph
+  alias ExRatatui.Widgets.{Block, Paragraph}
+  alias Alto.TUI.{Layout, SelectionRegions}
 
-  defstruct [:snapshot, :anchor, :head, :press, active?: false]
+  defstruct [
+    :snapshot,
+    :anchor,
+    :head,
+    :press,
+    :region,
+    :menu,
+    copy_press: false,
+    covered: [],
+    active?: false
+  ]
 
   def new, do: %__MODULE__{}
 
@@ -34,7 +45,7 @@ defmodule Alto.TUI.Selection do
       code == "esc" and (selection.active? or selection.press != nil) ->
         {:handled, new()}
 
-      copy? and selection.active? ->
+      (copy? or (selection.menu != nil and code in ["enter", "c"])) and selection.active? ->
         {:copy, text(selection), new()}
 
       copy? and ("shift" in modifiers or "alt" in modifiers) ->
@@ -57,22 +68,47 @@ defmodule Alto.TUI.Selection do
     end
   end
 
-  def event(_selection, %Mouse{kind: "down", button: "left"} = mouse, dimensions, widgets) do
-    point = clamp({mouse.x, mouse.y}, dimensions)
+  def event(
+        %{active?: true} = selection,
+        %Mouse{kind: "down", button: "right", x: x, y: y},
+        {width, height},
+        _
+      ) do
+    menu = %Rect{
+      x: max(min(x, width - 26), 0),
+      y: max(min(y, height - 3), 0),
+      width: min(width, 26),
+      height: min(height, 3)
+    }
 
-    {:handled,
-     %__MODULE__{
-       snapshot: capture(widgets.(), dimensions),
-       anchor: point,
-       head: point,
-       press: mouse
-     }}
+    {:handled, %{selection | menu: menu, press: nil}}
   end
 
-  def event(%{press: %Mouse{}} = selection, %Mouse{kind: kind, x: x, y: y}, dimensions, _)
+  def event(%{active?: true} = selection, %Mouse{button: "right"}, _, _),
+    do: {:handled, selection}
+
+  def event(%{copy_press: true} = selection, %Mouse{kind: "up", button: "left", x: x, y: y}, _, _) do
+    if copy_target?(selection, x, y),
+      do: {:copy, text(selection), new()},
+      else: {:handled, %{selection | copy_press: false}}
+  end
+
+  def event(%{copy_press: true} = selection, %Mouse{}, _, _), do: {:handled, selection}
+
+  def event(selection, %Mouse{kind: "down", button: "left"} = mouse, dimensions, widgets) do
+    if selection.active? and copy_target?(selection, mouse.x, mouse.y) do
+      {:handled, %{selection | copy_press: true}}
+    else
+      if selection.menu,
+        do: {:handled, %{selection | menu: nil}},
+        else: start_selection(mouse, dimensions, widgets)
+    end
+  end
+
+  def event(%{press: %Mouse{}} = selection, %Mouse{kind: kind, x: x, y: y}, _dimensions, _)
       when kind in ["drag", "up"] do
-    point = clamp({x, y}, dimensions)
-    moved? = selection.active? or point != selection.anchor
+    point = clamp_region({x, y}, selection.region)
+    moved? = selection.active? or {x, y} != selection.anchor
     next = %{selection | head: point, active?: moved?}
 
     cond do
@@ -86,6 +122,22 @@ defmodule Alto.TUI.Selection do
     do: {:pass, new()}
 
   def event(selection, _event, _dimensions, _widgets), do: {:pass, selection}
+
+  defp start_selection(mouse, dimensions, widgets) do
+    point = clamp({mouse.x, mouse.y}, dimensions)
+    rendered = widgets.()
+    {region, covered} = SelectionRegions.at(rendered, point, dimensions)
+
+    {:handled,
+     %__MODULE__{
+       snapshot: capture(rendered, dimensions),
+       region: region,
+       covered: covered,
+       anchor: point,
+       head: point,
+       press: mouse
+     }}
+  end
 
   @doc "Render the frozen screen with a visible selection, or use the live widgets."
   def widgets(%{active?: true, snapshot: snapshot} = selection, _live) do
@@ -103,7 +155,8 @@ defmodule Alto.TUI.Selection do
         )
       end)
 
-    [{%Paragraph{text: Text.new(lines)}, %Rect{width: snapshot.width, height: snapshot.height}}]
+    [{%Paragraph{text: Text.new(lines)}, %Rect{width: snapshot.width, height: snapshot.height}}] ++
+      copy_controls(selection)
   end
 
   def widgets(_selection, live), do: live
@@ -128,7 +181,55 @@ defmodule Alto.TUI.Selection do
 
   defp selected?(selection, cell, width) do
     {first, last} = bounds(selection)
-    {cell.row, cell.col + width - 1} >= first and {cell.row, cell.col} <= last
+    inside? = is_nil(selection.region) or Layout.contains?(selection.region, cell.col, cell.row)
+    visible? = not Enum.any?(selection.covered, &Layout.contains?(&1, cell.col, cell.row))
+
+    inside? and visible? and {cell.row, cell.col + width - 1} >= first and
+      {cell.row, cell.col} <= last
+  end
+
+  defp clamp_region({x, y}, rect),
+    do:
+      {max(rect.x, min(x, rect.x + rect.width - 1)),
+       max(rect.y, min(y, rect.y + rect.height - 1))}
+
+  defp copy_target?(selection, x, y) do
+    Layout.contains?(copy_button(selection), x, y) or
+      (selection.menu != nil and
+         Layout.contains?(%{selection.menu | y: selection.menu.y + 1, height: 1}, x, y))
+  end
+
+  defp copy_button(selection),
+    do: %Rect{
+      x: 0,
+      y: selection.snapshot.height - 1,
+      width: min(8, selection.snapshot.width),
+      height: 1
+    }
+
+  defp copy_controls(%{press: press}) when not is_nil(press), do: []
+
+  defp copy_controls(selection) do
+    style = %Style{fg: :black, bg: :light_blue, modifiers: [:bold]}
+
+    toolbar =
+      {%Paragraph{
+         text: "[ Copy ] Ctrl+C / Alt+C | Right-click for Copy | Esc cancel",
+         style: style
+       }, %{copy_button(selection) | width: selection.snapshot.width}}
+
+    menu =
+      if selection.menu,
+        do: [
+          {%Paragraph{
+             text: " Copy   Ctrl+C / Alt+C",
+             style: style,
+             block: %Block{title: " Selection ", borders: [:all], style: style}
+           }, selection.menu}
+        ],
+        else: []
+
+    [toolbar | menu]
   end
 
   defp clamp({x, y}, {width, height}),

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Confine text drags to the starting box, with independently selectable titles
+  and controls. Add a visible Copy button and right-click Copy menu, desktop
+  clipboard helpers, and a fixed-width New workspace label.
+
 - Add a visible New workspace action and F7 folder dialog, remembered workspace
   folders, and a full working-folder display. Trusted registry callers can select
   a per-run working folder without changing the registry default.
