@@ -497,13 +497,25 @@ defmodule Alto.TUI.View do
     inner_width = max(transcript.width - 2, 1)
     inner_height = max(transcript.height - 2, 1)
 
+    text = transcript_text(state)
+    cache_key = {__MODULE__, :transcript_rows}
+
     row_count =
-      state
-      |> transcript_text()
-      |> String.split("\n", trim: false)
-      |> Enum.reduce(0, fn line, count ->
-        count + length(wrap_prose_line(String.graphemes(line), inner_width))
-      end)
+      case Process.get(cache_key) do
+        {^text, ^inner_width, count} ->
+          count
+
+        _ ->
+          count =
+            text
+            |> String.split("\n", trim: false)
+            |> Enum.reduce(0, fn line, count ->
+              count + length(wrap_prose_line(String.graphemes(line), inner_width))
+            end)
+
+          Process.put(cache_key, {text, inner_width, count})
+          count
+      end
 
     max(row_count - inner_height, 0)
   end

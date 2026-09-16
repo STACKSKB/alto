@@ -333,6 +333,39 @@ defmodule Alto.TUI.AppTest do
     end
   end
 
+  test "transcript selection scrolls from follow mode and retains its position after copying",
+       context do
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials,
+        clipboard_write: fn _ -> :ok end
+      )
+
+    state =
+      State.put_entries(%{state | dimensions: {150, 42}}, nil, [
+        %{kind: :assistant, text: Enum.map_join(0..99, "\n", &"line #{&1}")}
+      ])
+
+    rect = View.layout(state, 150, 42).transcript
+    down = %Mouse{kind: "down", button: "left", x: rect.x + 1, y: rect.y + 3}
+    {:noreply, state} = App.handle_event(down, state)
+    offset = state.selection.scroll.offset
+    assert offset > 0
+    {:noreply, state} = App.handle_event(%{down | kind: "drag", y: rect.y}, state)
+
+    {:noreply, state} =
+      App.handle_info({:tui_selection_scroll, state.selection.scroll.token}, state)
+
+    assert state.transcript_scroll < offset
+    refute state.transcript_follow?
+    text = Alto.TUI.Selection.text(state.selection)
+    {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, state)
+    assert copied.clipboard_text == text
+    assert copied.transcript_scroll == state.transcript_scroll
+  end
+
   test "ordinary selection excludes chrome and placeholders but includes content", context do
     {:ok, state} =
       State.new(context.config,

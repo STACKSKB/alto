@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Autoscroll conversation/context panes while selecting at their edges or using
+  the wheel; preserve off-screen selected text and stop on release or content bounds.
+
 - Load model discovery providers before checking optional callbacks, fixing first-run catalogs.
 - Cap context scrolling using the renderer's exact wrapping and available text area.
 - Make new tasks a direct sidebar / Ctrl+G N action; route folder changes through

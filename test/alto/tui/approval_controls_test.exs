@@ -201,6 +201,58 @@ defmodule Alto.TUI.ApprovalControlsTest do
     end
   end
 
+  test "approval selection autoscrolls wide panes and compact drawers without activating controls",
+       context do
+    for {width, height} = dimensions <- [{140, 40}, {80, 24}] do
+      state = pending_state(context, dimensions)
+      [pending] = state.pending_approvals
+
+      request = %{
+        pending.request
+        | details: %{preview: Enum.map_join(0..99, "\n", &"line #{&1}")}
+      }
+
+      state = %{
+        state
+        | pending_approvals: [%{pending | request: request}],
+          clipboard_write: fn _ -> :ok end
+      }
+
+      rect =
+        View.context_overlay_rect(state, width, height) ||
+          View.layout(state, width, height).details
+
+      down = %Mouse{kind: "down", button: "left", x: rect.x + 1, y: rect.y + 2}
+      {:noreply, state} = App.handle_event(down, state)
+      assert state.selection.scroll != nil
+
+      {:noreply, state} =
+        App.handle_event(%{down | kind: "drag", x: width - 1, y: height - 1}, state)
+
+      before = Alto.TUI.Selection.text(state.selection)
+      token = state.selection.scroll.token
+      {:noreply, state} = App.handle_info({:tui_selection_scroll, token}, state)
+      assert state.details_scroll > 0
+      assert String.starts_with?(Alto.TUI.Selection.text(state.selection), before)
+      token = state.selection.scroll.token
+
+      {:noreply, state} =
+        App.handle_event(%{down | kind: "up", x: width - 1, y: height - 1}, state)
+
+      assert {:noreply, ^state, render?: false} =
+               App.handle_info({:tui_selection_scroll, token}, state)
+
+      refute_receive {:alto_approval_decision, _, _}, 10
+
+      {:noreply, copied} =
+        App.handle_event(%ExRatatui.Event.Key{code: "c", modifiers: ["ctrl"]}, state)
+
+      assert copied.details_scroll == state.details_scroll
+      assert copied.clipboard_text =~ "line 0"
+      refute copied.clipboard_text =~ "Approve F8"
+    end
+  end
+
   defp pending_state(context, dimensions) do
     assert {:ok, state} =
              State.new(context.config,

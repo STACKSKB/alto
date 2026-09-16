@@ -7,7 +7,7 @@ defmodule Alto.TUI.Selection do
 
   alias Alto.TUI.{Layout, SelectionRegions}
   alias ExRatatui.{CellSession, Style}
-  alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
+  alias ExRatatui.Event.{FocusLost, Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Text.{Line, Span}
   alias ExRatatui.Widgets.{Block, Paragraph, TextInput, Textarea, Image, Popup}
@@ -19,6 +19,7 @@ defmodule Alto.TUI.Selection do
     :press,
     :region,
     :menu,
+    :scroll,
     copy_press: false,
     dragged?: false,
     active?: false,
@@ -31,6 +32,10 @@ defmodule Alto.TUI.Selection do
   def event(selection, event, dimensions, widgets, opts \\ [])
   def event(_, %Resize{}, _, _, _), do: {:pass, new()}
   def event(_, %Paste{}, _, _, _), do: {:pass, new()}
+
+  def event(selection, %FocusLost{}, _, _, _),
+    do: {:pass, %{stop_scroll(selection) | press: nil}}
+
   def event(selection, %Key{kind: "release"}, _, _, _), do: {:pass, selection}
 
   def event(selection, %Key{code: code, modifiers: modifiers}, dimensions, widgets, opts) do
@@ -153,10 +158,25 @@ defmodule Alto.TUI.Selection do
         else: highlight(%{selection | head: point, active?: moved?})
 
     cond do
-      kind == "drag" -> {:handled, next}
-      moved? -> {:handled, %{next | press: nil}}
+      kind == "drag" -> {:handled, track_scroll(next, {x, y})}
+      moved? -> {:handled, %{stop_scroll(next) | press: nil}}
       true -> {:click, selection.press, new()}
     end
+  end
+
+  def event(
+        %{press: %Mouse{}, scroll: scroll} = selection,
+        %Mouse{kind: kind, x: x, y: y},
+        _,
+        _,
+        _
+      )
+      when not is_nil(scroll) and kind in ["scroll_up", "scroll_down"] do
+    delta = if kind == "scroll_up", do: -3, else: 3
+    selection = %{selection | head: clamp_region({x, y}, selection.region), active?: true}
+
+    {:handled,
+     selection |> stop_scroll() |> highlight() |> scroll_by(delta) |> track_scroll({x, y})}
   end
 
   def event(_, %Mouse{kind: kind}, _, _, _) when kind in ["scroll_up", "scroll_down"],
@@ -186,9 +206,156 @@ defmodule Alto.TUI.Selection do
       {region, covered} = SelectionRegions.at(rendered, point, dimensions)
       region = if allowed == :all, do: region, else: intersection(region, allowed)
 
-      {:handled,
-       %{pressed | region: region, snapshot: capture(rendered, dimensions, [region], covered)}}
+      snapshot = capture(rendered, dimensions, [region], covered)
+      selection = %{pressed | region: region, snapshot: snapshot}
+      {:handled, %{selection | scroll: scroll_source(selection, dimensions, covered, opts)}}
     end
+  end
+
+  # Scroll only the paragraph that owns the gesture. Keep its source frozen,
+  # and retain visited logical rows so copying includes text outside the viewport.
+  defp scroll_source(selection, dimensions, covered, opts) do
+    selection.snapshot.source_widgets
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      {{%Paragraph{text: text, scroll: {offset, _}} = widget, rect}, index}
+      when is_binary(text) ->
+        inner = SelectionRegions.content_rect(widget, rect)
+
+        if inner == selection.region do
+          limit =
+            Keyword.get(opts, :scroll_limit, fn _point ->
+              if widget.wrap,
+                do: Alto.TUI.Scroll.bottom(text, inner.width, inner.height, :selection),
+                else:
+                  max(length(String.split(String.trim_trailing(text), "\n")) - inner.height, 0)
+            end)
+
+          %{
+            index: index,
+            offset: offset,
+            limit: fn -> limit.(selection.anchor) end,
+            dimensions: dimensions,
+            covered: covered,
+            history: nil,
+            pointer: selection.anchor,
+            token: nil,
+            timer: nil,
+            origin: selection.anchor
+          }
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp track_scroll(%{scroll: nil} = selection, _point), do: selection
+
+  defp track_scroll(selection, point) do
+    selection = %{selection | scroll: %{selection.scroll | pointer: point}}
+    if edge_delta(selection) == 0, do: stop_scroll(selection), else: arm_scroll(selection)
+  end
+
+  defp edge_delta(%{press: %Mouse{}, active?: true, scroll: %{pointer: {_x, y}}, region: rect}) do
+    cond do
+      y <= rect.y -> -min(1 + div(rect.y - y, 2), 5)
+      y >= rect.y + rect.height - 1 -> min(1 + div(y - rect.y - rect.height + 1, 2), 5)
+      true -> 0
+    end
+  end
+
+  defp edge_delta(_), do: 0
+
+  defp arm_scroll(%{scroll: %{token: nil}} = selection) do
+    token = make_ref()
+    timer = Process.send_after(self(), {:tui_selection_scroll, token}, 50)
+    %{selection | scroll: %{selection.scroll | token: token, timer: timer}}
+  end
+
+  defp arm_scroll(selection), do: selection
+
+  defp stop_scroll(%{scroll: nil} = selection), do: selection
+
+  defp stop_scroll(selection) do
+    if selection.scroll.timer, do: Process.cancel_timer(selection.scroll.timer)
+    %{selection | scroll: %{selection.scroll | token: nil, timer: nil}}
+  end
+
+  @doc "Advance an edge-held drag; stale timers cannot move a released selection."
+  def autoscroll(%{scroll: %{token: token}} = selection, token) when not is_nil(token) do
+    delta = edge_delta(selection)
+    selection = stop_scroll(selection)
+    next = if delta == 0, do: selection, else: scroll_by(selection, delta)
+
+    if next.scroll.offset == selection.scroll.offset,
+      do: {:idle, next},
+      else: {:scrolled, arm_scroll(next)}
+  end
+
+  def autoscroll(selection, _token), do: {:idle, selection}
+
+  @doc "Current scroll position and original hit point for the owning client's pane."
+  def scroll_position(%{scroll: %{history: history, origin: origin, offset: offset}})
+      when not is_nil(history),
+      do: {origin, offset}
+
+  def scroll_position(_), do: nil
+
+  defp scroll_by(selection, delta) do
+    scroll = selection.scroll
+    limit = if is_function(scroll.limit), do: scroll.limit.(), else: scroll.limit
+    scroll = %{scroll | limit: limit}
+
+    offset =
+      if is_integer(limit), do: min(max(scroll.offset + delta, 0), limit), else: scroll.offset
+
+    # Never skip rows when traversing a small viewport.
+    offset =
+      min(
+        max(offset, scroll.offset - selection.region.height),
+        scroll.offset + selection.region.height
+      )
+
+    if offset == scroll.offset do
+      %{selection | scroll: scroll}
+    else
+      history =
+        remember_rows(scroll.history || %{}, selection.snapshot, selection.region, scroll.offset)
+
+      widgets =
+        List.update_at(selection.snapshot.source_widgets, scroll.index, fn {widget, rect} ->
+          {_, horizontal} = widget.scroll
+          {%{widget | scroll: {offset, horizontal}}, rect}
+        end)
+
+      snapshot = capture(widgets, scroll.dimensions, [selection.region], scroll.covered)
+      history = remember_rows(history, snapshot, selection.region, offset)
+      {ax, ay} = selection.anchor
+
+      %{
+        selection
+        | anchor: {ax, ay - (offset - scroll.offset)},
+          snapshot: snapshot,
+          scroll: %{scroll | offset: offset, history: history}
+      }
+      |> highlight()
+    end
+  end
+
+  defp remember_rows(history, snapshot, rect, offset) do
+    Enum.reduce(rect.y..(rect.y + rect.height - 1), history, fn y, rows ->
+      key = y + offset - rect.y
+
+      if Map.has_key?(rows, key) do
+        rows
+      else
+        row = elem(snapshot.rows, y)
+        # Do not retain a full frame binary for each off-screen line.
+        Map.put(rows, key, %{row | raw: :binary.copy(row.raw)})
+      end
+    end)
   end
 
   defp intersection(a, b) do
@@ -235,6 +402,22 @@ defmodule Alto.TUI.Selection do
   end
 
   defp bounds(%{anchor: {ax, ay}, head: {hx, hy}}), do: Enum.min_max([{ay, ax}, {hy, hx}])
+
+  defp selected_rows(%{scroll: %{history: history, offset: offset}, region: region} = selection)
+       when not is_nil(history) do
+    {{fy, fx}, {ly, lx}} = bounds(selection)
+
+    for y <- fy..ly do
+      row = Map.fetch!(history, y + offset - region.y)
+
+      {y,
+       segments(
+         row,
+         if(y == fy, do: fx, else: 0),
+         if(y == ly, do: lx, else: selection.snapshot.width)
+       )}
+    end
+  end
 
   defp selected_rows(selection) do
     {{fy, fx}, {ly, lx}} = bounds(selection)
@@ -294,7 +477,7 @@ defmodule Alto.TUI.Selection do
     {{fy, fx}, {ly, lx}} = bounds(selection)
 
     widgets =
-      Enum.flat_map(fy..ly, fn y ->
+      Enum.flat_map(max(fy, 0)..min(ly, tuple_size(selection.snapshot.rows) - 1), fn y ->
         row = elem(selection.snapshot.rows, y)
 
         if y > fy and y < ly do
@@ -328,6 +511,9 @@ defmodule Alto.TUI.Selection do
     # Exporting 48,000 cell maps just to start a drag causes a visible pause.
     widgets = Enum.map(widgets, fn {widget, rect} -> {freeze(widget), rect} end)
     terminal = capture_terminal(max(width, 1), max(height, 1))
+    # TestBackend retains cells skipped by wide-glyph diffs. Blank the frame
+    # before reuse so moving a double-width glyph cannot leave stale copy text.
+    :ok = ExRatatui.draw(terminal, [])
     :ok = ExRatatui.draw(terminal, widgets)
     lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
     lines = List.to_tuple(lines)
@@ -348,8 +534,8 @@ defmodule Alto.TUI.Selection do
       end
 
     rows = List.to_tuple(rows)
-    widgets = Enum.map(widgets, &crop_history(&1, rows))
-    %{rows: rows, width: width, widgets: widgets}
+    painted = Enum.map(widgets, &crop_history(&1, rows))
+    %{rows: rows, width: width, widgets: painted, source_widgets: widgets}
   end
 
   # A frozen Paragraph can still reflow thousands of off-screen lines in Rust

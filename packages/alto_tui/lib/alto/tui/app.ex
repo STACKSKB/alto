@@ -77,13 +77,20 @@ defmodule Alto.TUI.App do
       route_event(event, %{state | selection: Selection.new()})
     else
       case Selection.event(state.selection, event, state.dimensions, widgets,
-             content: fn -> View.selection_content(state, width, height) end
+             content: fn -> View.selection_content(state, width, height) end,
+             scroll_limit: fn {x, y} ->
+               case View.hit_target(state, width, height, x, y) do
+                 :transcript -> View.transcript_bottom_scroll(state)
+                 :details -> View.details_bottom_scroll(state)
+                 _ -> nil
+               end
+             end
            ) do
         {:pass, selection} ->
           route_event(event, %{state | selection: selection})
 
         {:handled, selection} ->
-          {:noreply, %{state | selection: selection}}
+          {:noreply, apply_selection_scroll(state, selection)}
 
         {:click, mouse, selection} ->
           state = %{state | selection: selection}
@@ -99,6 +106,23 @@ defmodule Alto.TUI.App do
 
           {:noreply, %{state | selection: selection, clipboard_text: text, notice: notice}}
       end
+    end
+  end
+
+  defp apply_selection_scroll(state, selection) do
+    state = %{state | selection: selection}
+    {width, height} = state.dimensions
+
+    case Selection.scroll_position(selection) do
+      {{x, y}, offset} ->
+        case View.hit_target(state, width, height, x, y) do
+          :transcript -> %{state | transcript_scroll: offset, transcript_follow?: false}
+          :details -> %{state | details_scroll: offset}
+          _ -> state
+        end
+
+      nil ->
+        state
     end
   end
 
@@ -237,6 +261,13 @@ defmodule Alto.TUI.App do
 
   @impl true
   def handle_info({:tui_deferred_input, event}, state), do: handle_event(event, state)
+
+  def handle_info({:tui_selection_scroll, token}, state) do
+    case Selection.autoscroll(state.selection, token) do
+      {:scrolled, selection} -> {:noreply, apply_selection_scroll(state, selection)}
+      {:idle, selection} -> {:noreply, %{state | selection: selection}, render?: false}
+    end
+  end
 
   def handle_info({:alto_tui_event, local_id, %Event{} = event, sender, ref}, state) do
     next = ingest_event(state, local_id, event)
