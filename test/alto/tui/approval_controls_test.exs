@@ -104,7 +104,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert decided.pending_approvals == []
   end
 
-  test "dragging approval labels selects text without sending a decision", context do
+  test "dragging approval labels does not select UI text or send a decision", context do
     state = pending_state(context, {140, 40})
     {buffer, _terminal} = render(state, 140, 40)
     {:ok, approve} = label_position(buffer, "[ Approve F8 ]")
@@ -112,7 +112,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
     {:noreply, pressed} = App.handle_event(down, state)
     {:noreply, selected} = App.handle_event(%{down | kind: "up", x: approve.x + 13}, pressed)
     assert selected.pending_approvals == state.pending_approvals
-    assert Alto.TUI.Selection.text(selected.selection) =~ "Approve F8"
+    refute selected.selection.active?
+    assert Alto.TUI.Selection.text(selected.selection) == ""
     refute_receive {:alto_approval_decision, _, _}, 10
   end
 

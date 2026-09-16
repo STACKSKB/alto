@@ -213,7 +213,7 @@ defmodule Alto.TUI.AppTest do
     assert cancelled.selected_project_id == state.selected_project_id
   end
 
-  test "copies visible text in every pane and pastes through the composer", context do
+  test "Alt opts into copying UI text in every pane; paste edits the composer", context do
     owner = self()
 
     {:ok, state} =
@@ -284,6 +284,11 @@ defmodule Alto.TUI.AppTest do
         clipboard_write: fn _ -> :ok end
       )
 
+    initial =
+      State.put_entries(initial, nil, [
+        %{kind: :assistant, text: "Selectable content\nsecond line"}
+      ])
+
     for width <- [80, 150, 240] do
       frame = %{width: width, height: 42}
       state = %{initial | dimensions: {width, 42}}
@@ -320,6 +325,47 @@ defmodule Alto.TUI.AppTest do
         ExRatatui.CellSession.close(terminal)
       end
     end
+  end
+
+  test "ordinary selection excludes chrome and placeholders but includes content", context do
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials,
+        clipboard_write: fn _ -> :ok end
+      )
+
+    state = %{state | dimensions: {150, 42}}
+    layout = View.layout(state, 150, 42)
+
+    for {x, y} <- [
+          {1, 1},
+          {layout.settings.x + 2, layout.settings.y},
+          {1, 41},
+          {layout.transcript.x + 2, 0},
+          {layout.transcript.x + 2, 1},
+          {layout.composer.x + 2, layout.composer.y + 1}
+        ] do
+      down = %Mouse{kind: "down", button: "left", x: x, y: y}
+      {:noreply, pressed} = App.handle_event(down, state)
+      assert pressed.selection.snapshot == nil
+      {:noreply, dragged} = App.handle_event(%{down | kind: "up", x: x + 4}, pressed)
+      refute dragged.selection.active?
+      assert dragged.overlay == nil
+    end
+
+    state = State.put_entries(state, nil, [%{kind: :assistant, text: "answer text"}])
+    ExRatatui.textarea_insert_str(state.textarea, "draft text")
+    {:noreply, selected} = App.handle_event(%Key{code: "a", modifiers: ["ctrl", "shift"]}, state)
+    copied = Alto.TUI.Selection.text(selected.selection)
+    assert copied =~ "answer text"
+    assert copied =~ "draft text"
+    refute copied =~ "New workspace"
+    refute copied =~ "new task"
+    refute copied =~ "tok "
+    {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, selected)
+    assert copied.clipboard_text =~ "answer text"
   end
 
   test "popup selection copies only masked API keys and paste edits the current form", context do

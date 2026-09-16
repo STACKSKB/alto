@@ -32,18 +32,22 @@ failure pauses the queued follow-up; press Enter with an empty composer to send 
 Provider and model forms show a cursor in the focused field. Type to edit, use
 Left/Right to move the cursor, and Tab to move between fields. API keys stay masked.
 
-Drag with the left mouse button to select visible text anywhere: conversations,
-workspaces, details, settings, the composer, borders, and popups. The selection
-stays inside the box where the drag starts and excludes its borders and adjacent
-boxes. Titles and button labels can be selected separately. Click actions happen
-on release, so dragging a button's label does not activate it. Pane seams still
-resize; use Alt+drag to select a seam. Scroll to older content before selecting it.
-Selection freezes the displayed screen while background work continues.
+Drag with the left mouse button to select conversation text, context data, your
+composer draft, or entered form values. Selection stays inside its starting box.
+Controls, titles, status bars, and placeholder hints are not selectable by
+default. Hold **Alt** while dragging to deliberately select UI text. Ordinary
+clicks still operate controls, and dragging over a button never activates it.
 
-After selecting, click **[ Copy ]** in the bottom bar, press **Ctrl+C** or **Alt+C**,
-or **right-click without Shift** to open the Copy menu. Ctrl+C without a selection
-retains its cancel/quit behavior. Ctrl+Shift+A selects the entire visible screen
-when the terminal forwards that chord. Esc clears selection first.
+**Ctrl+C** or **Alt+C** copies selected text. **Right-click without Shift** opens
+a compact Copy menu with the shortcut shown in muted text. Selecting text does
+not open a popup or toolbar. Esc dismisses the menu, then clears selection.
+Ctrl+C without a selection retains its cancel/quit behavior. Ctrl+Shift+A selects
+visible content; adding Alt explicitly includes UI text.
+
+The screen is captured once per selection. Dragging reuses that frame and updates
+only the highlight, without rebuilding conversation history or one styled span
+per terminal cell. Run `mix run scripts/tui_selection_bench.exs` from the Alto
+repository root to measure event handling plus native drawing.
 
 Copy uses `wl-copy`, `xclip`, `xsel`, or `pbcopy` when available. Otherwise it sends
 an OSC 52 request, including over SSH and through tmux; the terminal must allow

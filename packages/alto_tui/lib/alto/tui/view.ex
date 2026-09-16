@@ -40,6 +40,87 @@ defmodule Alto.TUI.View do
     )
   end
 
+  @doc "Content that supports ordinary selection; chrome requires Alt+drag."
+  def selection_content(%State{overlay: %{kind: :workspace_form} = form}, width, height),
+    do: WorkspaceForm.selection_content(form, width, height)
+
+  def selection_content(%State{overlay: %{kind: :provider_form} = form}, width, height) do
+    rect = content_rect(overlay_rect(form, width, height))
+
+    form.fields
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {field, row} ->
+      if ExRatatui.text_input_get_value(field.input) == "" or row + 2 >= rect.height,
+        do: [],
+        else: [
+          %Rect{x: rect.x + 16, y: rect.y + 2 + row, width: max(rect.width - 16, 0), height: 1}
+        ]
+    end)
+  end
+
+  def selection_content(%State{overlay: %{kind: :model_form} = form}, width, height) do
+    rect = content_rect(overlay_rect(form, width, height))
+    prefix = String.length("› Model ID  ")
+
+    if ExRatatui.text_input_get_value(form.input) == "" or rect.height <= 2,
+      do: [],
+      else: [
+        %Rect{x: rect.x + prefix, y: rect.y + 2, width: max(rect.width - prefix, 0), height: 1}
+      ]
+  end
+
+  def selection_content(%State{overlay: overlay}, _, _) when not is_nil(overlay), do: []
+
+  def selection_content(state, width, height) do
+    layout = layout(state, width, height)
+    drawer = context_overlay_rect(state, width, height)
+    details = drawer || layout.details
+
+    details_content =
+      if details do
+        rect = content_rect(details)
+        # Approval actions sit below the data, outside the selectable area.
+        [
+          %{
+            rect
+            | height:
+                max(
+                  rect.height -
+                    if(state.pending_approvals == [],
+                      do: 0,
+                      else: length(approval_controls(details))
+                    ),
+                  0
+                )
+          }
+        ]
+      else
+        []
+      end
+
+    if drawer do
+      details_content
+    else
+      transcript =
+        if State.current_entries(state) == [], do: [], else: [content_rect(layout.transcript)]
+
+      composer =
+        if ExRatatui.textarea_get_value(state.textarea) == "",
+          do: [],
+          else: [content_rect(layout.composer)]
+
+      transcript ++ composer ++ details_content
+    end
+  end
+
+  defp content_rect(rect),
+    do: %Rect{
+      x: rect.x + 1,
+      y: rect.y + 1,
+      width: max(rect.width - 2, 0),
+      height: max(rect.height - 2, 0)
+    }
+
   @doc "Resolve mouse coordinates to a semantic UI target."
   def hit_target(%State{overlay: overlay}, width, height, x, y) when not is_nil(overlay) do
     popup = overlay_rect(overlay, width, height)
@@ -921,7 +1002,7 @@ defmodule Alto.TUI.View do
     {" approval required ", text}
   end
 
-  defp details_content(state, presentation) do
+  defp details_content(state, _presentation) do
     recent =
       state
       |> State.current_entries()
@@ -938,22 +1019,9 @@ defmodule Alto.TUI.View do
       end)
       |> Enum.join("\n\n")
 
-    text =
-      if recent == "" do
-        instruction =
-          if presentation == :drawer,
-            do: "Esc, ^G D, the title, or a click outside closes context.",
-            else: "^G D hides this pane. Drag either vertical seam to resize."
-
-        "Contextual details appear here: approvals, tool activity, diffs, and generated handoff pointers.\n\n" <>
-          instruction
-      else
-        recent
-      end
-
     project = State.selected_project(state)
-    root = if project, do: project["root"], else: "No folder selected"
-    {" context ", "Workspace folder\n" <> root <> "\nF7 New workspace\n\n" <> text}
+    root = if project, do: project["root"], else: ""
+    {" context ", root <> "\n\n" <> recent}
   end
 
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text

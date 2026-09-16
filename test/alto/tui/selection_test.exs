@@ -151,18 +151,11 @@ defmodule Alto.TUI.SelectionTest do
     refute Selection.text(drag(widgets, {40, 6}, {0, 0}, {39, 5})) =~ "popup"
   end
 
-  test "Copy is visible and clickable, and right-click exposes a keyboard-accessible menu" do
+  test "selection adds no toolbar; right-click opens an unframed menu with a muted shortcut" do
     widgets = fn -> [{%Paragraph{text: "copy me"}, %Rect{width: 60, height: 6}}] end
     selected = drag(widgets, {60, 6}, {0, 0}, {6, 0})
-
-    assert render_cells(Selection.widgets(selected, []), {60, 6})
-           |> Enum.any?(&(&1.row == 5 and &1.symbol == "C"))
-
-    down = %Mouse{kind: "down", button: "left", x: 2, y: 5}
-    {:handled, pressed} = Selection.event(selected, down, {60, 6}, widgets)
-
-    assert {:copy, "copy me", _} =
-             Selection.event(pressed, %{down | kind: "up"}, {60, 6}, widgets)
+    cells = render_cells(Selection.widgets(selected, []), {60, 6})
+    assert Enum.filter(cells, &(&1.row > 0)) |> Enum.all?(&(&1.symbol == " "))
 
     {:handled, menu} =
       Selection.event(
@@ -174,12 +167,81 @@ defmodule Alto.TUI.SelectionTest do
 
     assert menu.menu.x + menu.menu.width <= 60
     assert menu.menu.y + menu.menu.height <= 6
+    assert menu.menu.height == 1
+    rendered = Selection.widgets(menu, [])
+    {paragraph, _} = List.last(rendered)
+    assert paragraph.block == nil
+
+    assert [%{content: " Copy         "}, %{content: "Ctrl+C  ", style: shortcut}] =
+             paragraph.text.spans
+
+    assert :dim in shortcut.modifiers
+    assert shortcut.fg == {:rgb, 155, 162, 174}
     assert {:copy, "copy me", _} = Selection.event(menu, %Key{code: "enter"}, {60, 6}, widgets)
-    down = %{down | x: menu.menu.x + 2, y: menu.menu.y + 1}
+    down = %Mouse{kind: "down", button: "left", x: menu.menu.x + 2, y: menu.menu.y}
     {:handled, pressed} = Selection.event(menu, down, {60, 6}, widgets)
 
     assert {:copy, "copy me", _} =
              Selection.event(pressed, %{down | kind: "up"}, {60, 6}, widgets)
+
+    {:handled, dismissed} = Selection.event(menu, %Key{code: "esc"}, {60, 6}, widgets)
+    assert dismissed.active?
+    assert dismissed.menu == nil
+  end
+
+  test "drag motion and repaint reuse the frame without rebuilding the live view" do
+    widgets = fn ->
+      send(self(), :built)
+      [{%Paragraph{text: String.duplicate("content\n", 60)}, %Rect{width: 240, height: 70}}]
+    end
+
+    down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
+    {:handled, pressed} = Selection.event(Selection.new(), down, {240, 70}, widgets)
+    assert_receive :built
+
+    for row <- 1..60 do
+      {:handled, selected} =
+        Selection.event(pressed, %{down | kind: "drag", x: 100, y: row}, {240, 70}, widgets)
+
+      frozen = Selection.widgets(selected, fn -> flunk("drag rebuilt the live view") end)
+      [{background, _} | _] = frozen
+      # One run per row, not one span per screen cell; cap native serialization.
+      assert Enum.sum(Enum.map(background.text.lines, &length(&1.spans))) <= 70
+      assert length(frozen) <= 62
+    end
+
+    refute_receive :built, 0
+  end
+
+  test "non-content controls neither capture a frame nor activate when dragged; Alt opts in" do
+    widgets = fn ->
+      send(self(), :captured)
+      [{%Paragraph{text: "Button"}, %Rect{width: 20, height: 3}}]
+    end
+
+    down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
+    opts = [content: fn -> [] end]
+    {:handled, pressed} = Selection.event(Selection.new(), down, {20, 3}, widgets, opts)
+    assert pressed.snapshot == nil
+
+    assert {:click, ^down, _} =
+             Selection.event(pressed, %{down | kind: "up"}, {20, 3}, widgets, opts)
+
+    {:handled, moved} =
+      Selection.event(pressed, %{down | kind: "drag", x: 3}, {20, 3}, widgets, opts)
+
+    assert {:handled, %{active?: false}} =
+             Selection.event(moved, %{down | kind: "up"}, {20, 3}, widgets, opts)
+
+    refute_receive :captured, 0
+
+    {:handled, pressed} =
+      Selection.event(Selection.new(), %{down | modifiers: ["alt"]}, {20, 3}, widgets, opts)
+
+    {:handled, selected} =
+      Selection.event(pressed, %{down | kind: "up", x: 5}, {20, 3}, widgets, opts)
+
+    assert Selection.text(selected) == "Button"
   end
 
   test "dragging outside a one-cell region cannot activate its click action" do

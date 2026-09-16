@@ -98,6 +98,22 @@ defmodule Alto.TUI.WorkspaceForm do
     ]
   end
 
+  @doc "Only the entered path is selectable by default, not dialog instructions."
+  def selection_content(form, width, height) do
+    rect = rect(width, height)
+
+    if path(form) == "",
+      do: [],
+      else: [
+        %Rect{
+          x: rect.x + 1,
+          y: rect.y + 3,
+          width: max(rect.width - 2, 0),
+          height: min(max(rect.height - 2, 0), 1)
+        }
+      ]
+  end
+
   # Rows are relative to the dialog's inner rectangle.
   def click(form, row, column) do
     cond do

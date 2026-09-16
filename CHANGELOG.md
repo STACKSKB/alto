@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- Confine text drags to the starting box, with independently selectable titles
-  and controls. Add a visible Copy button and right-click Copy menu, desktop
-  clipboard helpers, and a fixed-width New workspace label.
+- Cache the TUI selection frame and highlight only changed content runs, avoiding
+  full-view and per-cell span reconstruction on every drag. Batch Unicode width
+  probes. Default to content selection, with Alt+drag for UI text, and replace
+  the selection toolbar/dialog with an unframed right-click menu and muted shortcut.
+
+- Confine text drags to the starting box. Add desktop clipboard helpers and a
+  fixed-width New workspace label.
 
 - Add a visible New workspace action and F7 folder dialog, remembered workspace
   folders, and a full working-folder display. Trusted registry callers can select

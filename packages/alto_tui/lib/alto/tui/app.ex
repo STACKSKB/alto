@@ -54,7 +54,7 @@ defmodule Alto.TUI.App do
 
   @impl true
   def render(state, frame),
-    do: Selection.widgets(state.selection, View.widgets(state, frame))
+    do: Selection.widgets(state.selection, fn -> View.widgets(state, frame) end)
 
   @impl true
   def handle_event(event, state) do
@@ -70,7 +70,9 @@ defmodule Alto.TUI.App do
     if seam? or state.dragging in [:left_seam, :right_seam] do
       route_event(event, %{state | selection: Selection.new()})
     else
-      case Selection.event(state.selection, event, state.dimensions, widgets) do
+      case Selection.event(state.selection, event, state.dimensions, widgets,
+             content: fn -> View.selection_content(state, width, height) end
+           ) do
         {:pass, selection} ->
           route_event(event, %{state | selection: selection})
 
