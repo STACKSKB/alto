@@ -50,10 +50,17 @@ defmodule Alto.Providers.Anthropic.Stream do
       state = %{state | bytes: bytes}
 
       case JSON.decode(payload) do
-        {:ok, %{"type" => _type} = event} -> consume_event(state, event, sink)
-        {:ok, %{"error" => error}} -> %{state | error: {:provider_error, error}}
-        {:ok, other} -> %{state | error: {:unexpected_stream_payload, other}}
-        {:error, error} -> %{state | error: {:invalid_stream_json, Exception.message(error)}}
+        {:ok, %{"type" => _type} = event} ->
+          consume_event(state, event, sink)
+
+        {:ok, %{"error" => error}} ->
+          %{state | error: {:provider_error, error}}
+
+        {:ok, other} ->
+          %{state | error: {:unexpected_stream_payload, other}}
+
+        {:error, _error} ->
+          %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
       end
     end
   end

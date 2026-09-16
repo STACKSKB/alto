@@ -50,8 +50,8 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
         {:ok, decoded} when is_map(decoded) ->
           consume_chunk(state, decoded, sink)
 
-        {:error, error} ->
-          %{state | error: {:invalid_stream_json, Exception.message(error)}}
+        {:error, _error} ->
+          %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
 
         {:ok, other} ->
           %{state | error: {:unexpected_stream_payload, other}}
