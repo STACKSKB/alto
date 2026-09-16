@@ -78,6 +78,15 @@ defmodule Alto.Display do
     do: render(message, mode, depth + 1)
 
   defp render(%Alto.Credentials{}, _, _), do: "Credentials hidden"
+
+  defp render(%Alto.Content{blocks: blocks}, mode, depth),
+    do: Enum.map_join(blocks, "\n", &render(&1, mode, depth + 1))
+
+  defp render(%Alto.Content.Text{text: text}, _, _), do: text
+
+  defp render(%Alto.Content.Image{media_type: type, width: width, height: height}, _, _),
+    do: "Image · #{type} · #{width} × #{height}"
+
   defp render(%_{} = value, mode, depth), do: render(Map.from_struct(value), mode, depth + 1)
 
   defp render(value, mode, depth) when is_map(value) do

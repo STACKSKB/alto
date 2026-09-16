@@ -1289,33 +1289,32 @@ defmodule Alto.Runner.Execution do
     # backward compatibility); deterministic loops must prefer `value`.
     # Provider serialization stays at the provider boundary (transcript
     # messages carry `output` only).
-    case check_native_result(value, run.max_tool_result_bytes) do
-      :ok ->
-        run = merge_verdict(run, :completed)
-        content = encode_tool_result(value, run.max_tool_result_bytes)
+    with :ok <- check_native_result(value, run.max_tool_result_bytes),
+         {:ok, content, output} <- model_result_content(value, run.max_tool_result_bytes) do
+      run = merge_verdict(run, :completed)
 
-        case add_outcome_message(run, origin, call_id, name, op_id, :completed, content) do
-          {:ok, run} ->
-            # `output` is the bounded provider-facing encoding; `value` is the
-            # native term for deterministic loops. Provider serialization stays
-            # at the provider boundary instead of leaking into loop policy.
-            # `call_id` preserves tool-call correlation; `operation_id` is the
-            # globally unique runtime operation.
-            {:event,
-             Event.durable(:tool_completed, %{
-               call_id: call_id,
-               operation_id: op_id,
-               run_id: run.tool_context.session_id,
-               name: name,
-               output: content,
-               value: value,
-               outcome: Outcome.completed()
-             }), run}
+      case add_outcome_message(run, origin, call_id, name, op_id, :completed, content) do
+        {:ok, run} ->
+          # `output` is the bounded provider-facing encoding; `value` is the
+          # native term for deterministic loops. Provider serialization stays
+          # at the provider boundary instead of leaking into loop policy.
+          # `call_id` preserves tool-call correlation; `operation_id` is the
+          # globally unique runtime operation.
+          {:event,
+           Event.durable(:tool_completed, %{
+             call_id: call_id,
+             operation_id: op_id,
+             run_id: run.tool_context.session_id,
+             name: name,
+             output: output,
+             value: value,
+             outcome: Outcome.completed()
+           }), run}
 
-          {:error, reason, run} ->
-            {:error, reason, merge_verdict(run, :unknown)}
-        end
-
+        {:error, reason, run} ->
+          {:error, reason, merge_verdict(run, :unknown)}
+      end
+    else
       {:error, reason} ->
         tool_failure(call_id, name, reason, run, op_id, Outcome.unknown(reason), origin)
     end
@@ -1421,6 +1420,23 @@ defmodule Alto.Runner.Execution do
       {:ok, run} -> {:ok, consume_pending_provider_call(run, call_id, name)}
       error -> error
     end
+  end
+
+  defp add_outcome_message(run, :native, call_id, name, op_id, status, content)
+       when is_list(content) do
+    metadata =
+      JSON.encode!(%{
+        type: "alto_native_tool_result",
+        call_id: call_id,
+        name: name,
+        operation_id: op_id,
+        status: status
+      })
+
+    append_message(run, %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => metadata} | content]
+    })
   end
 
   defp add_outcome_message(run, :native, call_id, name, op_id, status, content) do
@@ -1547,6 +1563,20 @@ defmodule Alto.Runner.Execution do
     _error -> :ok
   catch
     _kind, _reason -> :ok
+  end
+
+  defp model_result_content(value, limit) do
+    case Alto.Content.normalize_tool_result(value, limit) do
+      :not_content ->
+        text = encode_tool_result(value, limit)
+        {:ok, text, text}
+
+      {:ok, blocks} ->
+        {:ok, blocks, Alto.Display.result(value, limit: min(limit, 8_000))}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp encode_tool_result(value, limit) do
