@@ -56,9 +56,7 @@ defmodule Alto.TUI.SelectionTest do
     [{paragraph, _} | _] =
       Selection.widgets(selected, [{%Paragraph{text: "new text"}, %Rect{width: 10, height: 1}}])
 
-    assert Enum.map_join(paragraph.text.lines, "\n", fn line ->
-             Enum.map_join(line.spans, & &1.content)
-           end) =~ "old text"
+    assert paragraph.text == "old text"
 
     assert {:handled, %{active?: false}} =
              Selection.event(selected, %Key{code: "esc"}, {10, 1}, widgets)
@@ -198,6 +196,7 @@ defmodule Alto.TUI.SelectionTest do
     down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
     {:handled, pressed} = Selection.event(Selection.new(), down, {240, 70}, widgets)
     assert_receive :built
+    Selection.widgets(pressed, fn -> flunk("mouse-down rebuilt the live view") end)
 
     for row <- 1..60 do
       {:handled, selected} =
@@ -205,12 +204,27 @@ defmodule Alto.TUI.SelectionTest do
 
       frozen = Selection.widgets(selected, fn -> flunk("drag rebuilt the live view") end)
       [{background, _} | _] = frozen
-      # One run per row, not one span per screen cell; cap native serialization.
-      assert Enum.sum(Enum.map(background.text.lines, &length(&1.spans))) <= 70
+      assert background.text == String.duplicate("content\n", 60)
       assert length(frozen) <= 62
     end
 
     refute_receive :built, 0
+  end
+
+  test "freezes mutable inputs without exporting every screen cell" do
+    input = ExRatatui.text_input_new()
+    ExRatatui.text_input_set_value(input, "original")
+
+    widgets = fn ->
+      [{%ExRatatui.Widgets.TextInput{state: input}, %Rect{width: 30, height: 1}}]
+    end
+
+    selected = drag(widgets, {30, 1}, {0, 0}, {7, 0})
+    ExRatatui.text_input_set_value(input, "changed")
+    assert Selection.text(selected) == "original"
+    cells = render_cells(Selection.widgets(selected, []), {30, 1})
+    assert Enum.map_join(cells, & &1.symbol) =~ "original"
+    refute Enum.map_join(cells, & &1.symbol) =~ "changed"
   end
 
   test "non-content controls neither capture a frame nor activate when dragged; Alt opts in" do

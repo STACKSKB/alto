@@ -6,11 +6,11 @@ defmodule Alto.TUI.Selection do
   """
 
   alias Alto.TUI.{Layout, SelectionRegions}
-  alias ExRatatui.{CellSession, Style, Text}
+  alias ExRatatui.{CellSession, Style}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.{Block, Paragraph}
+  alias ExRatatui.Widgets.{Block, Paragraph, TextInput, Textarea, Image, Popup}
 
   defstruct [
     :snapshot,
@@ -207,6 +207,8 @@ defmodule Alto.TUI.Selection do
   def widgets(%{active?: true} = selection, _live),
     do: selection.snapshot.widgets ++ selection.highlight ++ menu_widgets(selection.menu)
 
+  def widgets(%{snapshot: %{widgets: widgets}, press: %Mouse{}}, _live), do: widgets
+
   def widgets(_, live) when is_function(live, 0), do: live.()
   def widgets(_, live), do: live
 
@@ -250,7 +252,7 @@ defmodule Alto.TUI.Selection do
   end
 
   defp segments(row, low, high) do
-    Enum.flat_map(row.runs, fn run ->
+    Enum.flat_map(indexed_runs(row), fn run ->
       if run.right <= low or run.x > high do
         []
       else
@@ -266,7 +268,7 @@ defmodule Alto.TUI.Selection do
   defp point_at(run, col) do
     case preceding(run.points, col, 0, tuple_size(run.points) - 1, nil) do
       nil ->
-        {col, col + 1, col - run.x, col - run.x + 1}
+        {col, col + 1, col, col + 1}
 
       {_x, right, _first, last} = point ->
         if col < right,
@@ -316,126 +318,158 @@ defmodule Alto.TUI.Selection do
       {%Block{style: %Style{fg: :black, bg: :light_blue}},
        %Rect{x: x, y: y, width: width, height: 1}}
 
-  defp cached_row(cells, y) do
-    {groups, _} =
-      Enum.reduce(cells, {[], -1}, fn {cell, width} = entry, {groups, right} ->
-        if cell.col == right do
-          [group | rest] = groups
-          {[[entry | group] | rest], cell.col + width}
-        else
-          {[[entry] | groups], cell.col + width}
-        end
-      end)
-
-    runs =
-      groups
-      |> Enum.reverse()
-      |> Enum.map(fn group ->
-        group = Enum.reverse(group)
-
-        {points, _} =
-          Enum.reduce(group, {[], 0}, fn {cell, width}, {points, offset} ->
-            size = byte_size(cell.symbol)
-            last = offset + size
-
-            points =
-              if size == width,
-                do: points,
-                else: [{cell.col, cell.col + width, offset, last} | points]
-
-            {points, last}
-          end)
-
-        {first, _} = hd(group)
-        {last, width} = List.last(group)
-
-        %{
-          x: first.col,
-          right: last.col + width,
-          text: Enum.map_join(group, fn {cell, _} -> cell.symbol end),
-          points: points |> Enum.reverse() |> List.to_tuple()
-        }
-      end)
-
-    %{
-      runs: runs,
-      highlight: Enum.map(runs, &highlight_widget({&1.x, &1.right - &1.x, &1.text}, y))
-    }
-  end
-
   defp clamp_region({x, y}, rect),
     do:
       {max(rect.x, min(x, rect.x + rect.width - 1)),
        max(rect.y, min(y, rect.y + rect.height - 1))}
 
   defp capture(widgets, {width, height}, content, covered) do
-    session = CellSession.new(max(width, 1), max(height, 1))
+    # Keep immutable widget terms for paint, and export only the screen's text.
+    # Exporting 48,000 cell maps just to start a drag causes a visible pause.
+    widgets = Enum.map(widgets, fn {widget, rect} -> {freeze(widget), rect} end)
+    terminal = ExRatatui.init_test_terminal(max(width, 1), max(height, 1))
+    :ok = ExRatatui.draw(terminal, widgets)
+    lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
+    lines = List.to_tuple(lines)
 
-    try do
-      :ok = CellSession.draw(session, widgets)
-      snapshot = CellSession.take_cells(session)
-      widths = symbol_widths(snapshot.cells)
+    rows =
+      for y <- 0..(max(height, 1) - 1) do
+        raw = if y < tuple_size(lines), do: elem(lines, y), else: ""
+        ranges = if content == :all, do: [{0, width}], else: ranges(content, y, width)
+        ranges = Enum.reduce(ranges(covered, y, width), ranges, &subtract/2)
 
-      rows =
-        snapshot.cells
-        |> Enum.chunk_every(snapshot.width)
-        |> Enum.map(fn cells ->
-          {row, _} =
-            Enum.reduce(cells, {[], 0}, fn cell, {row, next_col} ->
-              if cell.col < next_col do
-                {row, next_col}
-              else
-                width = Map.get(widths, cell.symbol, 1)
-                {[{cell, width} | row], cell.col + width}
-              end
-            end)
+        %{
+          raw: raw,
+          width: width,
+          ranges: ranges,
+          highlight:
+            Enum.map(ranges, fn {x, right} -> highlight_widget({x, right - x, ""}, y) end)
+        }
+      end
 
-          Enum.reverse(row)
-        end)
+    %{rows: List.to_tuple(rows), width: width, widgets: widgets}
+  end
 
-      # Coalesce equal styles once, instead of serializing one span per cell on
-      # every mouse event. Keep immutable widgets ready for the native renderer.
-      lines =
-        Enum.map(rows, fn cells ->
-          cells
-          |> Enum.chunk_by(fn {cell, _} -> {cell.fg, cell.bg, cell.modifiers} end)
-          |> Enum.map(fn [{cell, _} | _] = run ->
-            Span.new(Enum.map_join(run, fn {c, _} -> c.symbol end),
-              style: %Style{fg: cell.fg, bg: cell.bg, modifiers: cell.modifiers}
-            )
-          end)
-          |> Line.new()
-        end)
+  # Only the two boundary rows need a glyph index during motion. Interior rows
+  # use cached rectangles; their text is indexed only if the user copies it.
+  defp indexed_runs(row) do
+    tokens = Enum.reject(tokens(row.raw), &(&1 == {:ascii, ""}))
+    symbols = for {:glyph, glyph} <- tokens, do: glyph
+    widths = symbol_widths(symbols)
+    {parts, points, col, _offset} = index_row(tokens, widths, [], [], 0, 0)
 
-      selectable =
-        Enum.map(rows, fn cells ->
-          Enum.filter(cells, fn {cell, _} ->
-            (content == :all or Enum.any?(content, &Layout.contains?(&1, cell.col, cell.row))) and
-              not Enum.any?(covered, &Layout.contains?(&1, cell.col, cell.row))
-          end)
-        end)
+    text =
+      IO.iodata_to_binary([Enum.reverse(parts), String.duplicate(" ", max(row.width - col, 0))])
 
-      %{
-        rows:
-          selectable
-          |> Enum.with_index()
-          |> Enum.map(fn {cells, y} -> cached_row(cells, y) end)
-          |> List.to_tuple(),
-        width: snapshot.width,
-        widgets: [
-          {%Paragraph{text: Text.new(lines)},
-           %Rect{width: snapshot.width, height: snapshot.height}}
-        ]
-      }
-    after
-      CellSession.close(session)
+    points = points |> Enum.reverse() |> List.to_tuple()
+
+    Enum.map(row.ranges, fn {left, right} ->
+      %{x: left, right: right, text: text, points: points}
+    end)
+  end
+
+  # Native buffers contain one filler cell after a double-width glyph. Remove
+  # that filler while indexing columns; combining marks remain in their glyph.
+  defp index_row([], _widths, parts, points, col, offset), do: {parts, points, col, offset}
+
+  defp index_row([{:ascii, text} | rest], widths, parts, points, col, offset) do
+    size = byte_size(text)
+    index_row(rest, widths, [text | parts], points, col + size, offset + size)
+  end
+
+  defp index_row([{:glyph, glyph} | rest], widths, parts, points, col, offset) do
+    width = Map.fetch!(widths, glyph)
+    size = byte_size(glyph)
+    points = [{col, col + width, offset, offset + size} | points]
+
+    rest =
+      case {width, rest} do
+        {w, [{:ascii, text} | tail]} when w > 1 ->
+          skip = min(w - 1, byte_size(text))
+          [{:ascii, binary_part(text, skip, byte_size(text) - skip)} | tail]
+
+        _ ->
+          rest
+      end
+
+    index_row(rest, widths, [glyph | parts], points, col + width, offset + size)
+  end
+
+  # Keep entire ASCII runs as binaries. Only Unicode needs grapheme segmentation;
+  # include the preceding ASCII character so e + combining accent stays intact.
+  defp tokens(""), do: []
+
+  defp tokens(text) do
+    case Regex.run(~r/[^\x00-\x7F]/, text, return: :index) do
+      nil ->
+        [{:ascii, text}]
+
+      [{offset, _}] ->
+        prefix = max(offset - 1, 0)
+        <<ascii::binary-size(prefix), rest::binary>> = text
+        {glyph, rest} = String.next_grapheme(rest)
+        token = if byte_size(glyph) == 1, do: {:ascii, glyph}, else: {:glyph, glyph}
+        [{:ascii, ascii}, token | tokens(rest)]
     end
   end
 
+  defp ranges(rects, y, width) do
+    rects
+    |> Enum.filter(&(y >= &1.y and y < &1.y + &1.height))
+    |> Enum.map(&{max(&1.x, 0), min(&1.x + &1.width, width)})
+    |> Enum.filter(fn {left, right} -> right > left end)
+    |> Enum.sort()
+    |> Enum.reduce([], fn {left, right}, acc ->
+      case acc do
+        [{a, b} | rest] when left <= b -> [{a, max(b, right)} | rest]
+        _ -> [{left, right} | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp subtract({left, right}, ranges) do
+    Enum.flat_map(ranges, fn {a, b} ->
+      if b <= left or a >= right do
+        [{a, b}]
+      else
+        [{a, min(b, left)}, {max(a, right), b}] |> Enum.filter(fn {x, z} -> z > x end)
+      end
+    end)
+  end
+
+  defp freeze(%TextInput{state: ref} = widget) when is_reference(ref),
+    do: %{widget | state: ExRatatui.Native.text_input_snapshot(ref)}
+
+  defp freeze(%Textarea{state: ref} = widget) when is_reference(ref),
+    do: %{widget | state: ExRatatui.Native.textarea_snapshot(ref)}
+
+  defp freeze(%Image{state: ref} = widget) when is_reference(ref),
+    do: %{widget | state: ExRatatui.Native.image_snapshot(ref)}
+
+  defp freeze(%Popup{content: content} = widget), do: %{widget | content: freeze(content)}
+  defp freeze(widget), do: widget
+
   # Batch Unicode width probes into one native draw/read instead of one native
   # roundtrip per distinct character. ASCII needs no probe.
-  defp symbol_widths(cells) do
-    symbols = cells |> Enum.map(& &1.symbol) |> Enum.uniq() |> Enum.reject(&(byte_size(&1) == 1))
+  defp symbol_widths(symbols) do
+    key = {__MODULE__, :glyph_widths}
+    cached = Process.get(key, %{})
+    missing = symbols |> Enum.uniq() |> Enum.reject(&Map.has_key?(cached, &1))
+
+    if missing == [] do
+      cached
+    else
+      widths =
+        Map.merge(if(map_size(cached) > 1024, do: %{}, else: cached), probe_widths(missing))
+
+      Process.put(key, widths)
+      Map.merge(cached, widths)
+    end
+  end
+
+  defp probe_widths(symbols) do
+    symbols = symbols |> Enum.uniq() |> Enum.reject(&(byte_size(&1) == 1))
 
     if symbols == [] do
       %{}
