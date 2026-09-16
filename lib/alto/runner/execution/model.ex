@@ -68,7 +68,7 @@ defmodule Alto.Runner.Execution.Model do
 
   def reserve_output(request, _budget), do: {:ok, request}
 
-  @doc "Stream a model request with bounded, transport-only retries."
+  @doc "Stream a model request with bounded transient-error retries before any output is delivered."
   @spec stream(module(), map(), function(), keyword(), Capabilities.t(), pos_integer()) ::
           {:ok, {:ok, map() | term()} | {:error, term()} | term()}
           | {:error, term()}
@@ -98,11 +98,20 @@ defmodule Alto.Runner.Execution.Model do
         {:cancelled, reason}
 
       :continue ->
+        # Shared with the provider call process; retain streaming without buffering
+        # bodies or replaying output already delivered by a failed attempt.
+        delivered = :atomics.new(1, [])
+
+        attempt_sink = fn event ->
+          :atomics.put(delivered, 1, 1)
+          sink.(event)
+        end
+
         outcome =
           Call.run(
             fn ->
               with :ok <- Budget.take_model(caps.budget),
-                   do: provider.stream(request, sink, provider_opts)
+                   do: provider.stream(request, attempt_sink, provider_opts)
             end,
             Budget.timeout(caps.budget, caps.provider_timeout),
             caps.cancel_ref
@@ -117,7 +126,8 @@ defmodule Alto.Runner.Execution.Model do
           caps,
           step,
           attempt,
-          max_attempts
+          max_attempts,
+          :atomics.get(delivered, 1) == 1
         )
     end
   end
@@ -131,9 +141,10 @@ defmodule Alto.Runner.Execution.Model do
          caps,
          step,
          attempt,
-         max_attempts
+         max_attempts,
+         delivered?
        ) do
-    if attempt < max_attempts and retryable_stream_error?(reason) do
+    if not delivered? and attempt < max_attempts and retryable_stream_error?(reason) do
       notify(
         caps.event_sink,
         Event.live(:model_retry, %{
@@ -174,7 +185,8 @@ defmodule Alto.Runner.Execution.Model do
          _caps,
          _step,
          _attempt,
-         _max
+         _max,
+         _delivered?
        ),
        do: outcome
 
@@ -182,11 +194,20 @@ defmodule Alto.Runner.Execution.Model do
   def retryable_stream_error?({:transport_error, _reason}), do: true
   def retryable_stream_error?({:http_error, 429, _detail}), do: true
   def retryable_stream_error?({:http_error, status, _detail}) when status >= 500, do: true
+  # Match the observed structured transient error, not arbitrary provider text
+  # or loosely coerced codes. HTTP 200 SSE errors do not carry an HTTP status.
+  def retryable_stream_error?(
+        {:provider_error,
+         %{"code" => 502, "metadata" => %{"error_type" => "provider_unavailable"}}}
+      ),
+      do: true
+
   def retryable_stream_error?(_reason), do: false
 
   @doc false
   def stream_error_kind({:transport_error, _reason}), do: :transport
   def stream_error_kind({:http_error, status, _detail}), do: {:http, status}
+  def stream_error_kind({:provider_error, %{"code" => 502}}), do: {:provider, 502}
 
   @doc false
   def sleep_backoff(attempt, cancel_ref, budget) do
