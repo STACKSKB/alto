@@ -13,7 +13,21 @@ It rejects unanswered assistant tool calls, orphan tool replies, stale
 the store reports `:conversation_storage_limit` and never silently removes an
 older revision or branch.
 
-Execution hosts using settled history should follow this order:
+`max_conversation_bytes` is also a runner/configuration option, covering both
+settled boundaries and terminal writes. A limit failure never silently drops
+history. Full snapshots trade storage for simple bounded reads; choose the cap
+for the expected conversation length.
+
+The built-in runners opt into these boundaries with `session_history: :settled`
+and an enabled session. They persist the initial context and each complete
+boundary before the next provider request, fence tool dispatch, and retain
+pending provider history before an approval checkpoint. Persistence or dispatch
+fence failures stop execution before another effect is dispatched. Terminal
+persistence remains visible in `result.persistence`. The library default,
+`:completed`, retains its end-of-run persistence behavior; the coding profile
+selects `:settled`. Retaining a transcript does not snapshot the workspace.
+
+Custom execution hosts using settled history should follow this order:
 
 1. Persist the initial user context and retain the returned revision.
 2. Before dispatching tools or native effects, call

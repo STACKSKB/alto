@@ -26,6 +26,7 @@ defmodule Alto.Runner.Checkpoint do
     :transcript_revision,
     :compacted?,
     :compaction_count,
+    :resolved_operations,
     :agent_identity
   ]
 
@@ -90,6 +91,7 @@ defmodule Alto.Runner.Checkpoint do
            decode(packet["state"]),
          true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(@fields),
          true <- valid_compaction_state?(saved),
+         true <- valid_history_state?(saved),
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          true <- saved.transcript_bytes <= run.max_transcript_bytes,
@@ -428,7 +430,7 @@ defmodule Alto.Runner.Checkpoint do
       is_integer(saved.model_requests) and saved.model_requests >= 0 and
       is_integer(saved.op_seq) and saved.op_seq >= 0 and
       valid_usage?(saved.usage) and is_list(saved.persistence_errors) and
-      valid_compaction_state?(saved) and
+      valid_compaction_state?(saved) and valid_history_state?(saved) and
       valid_pending_calls?(saved.pending_provider_calls) and
       (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
       saved.verdict in [:empty, :completed, :rejected_before_dispatch, :failed_known, :unknown]
@@ -439,6 +441,11 @@ defmodule Alto.Runner.Checkpoint do
   defp valid_compaction_state?(saved) do
     is_boolean(saved.compacted?) and is_integer(saved.compaction_count) and
       saved.compaction_count >= 0 and saved.compacted? == saved.compaction_count > 0
+  end
+
+  defp valid_history_state?(saved) do
+    is_list(saved.resolved_operations) and length(saved.resolved_operations) <= 256 and
+      Enum.all?(saved.resolved_operations, &(is_binary(&1) and byte_size(&1) in 1..512))
   end
 
   defp valid_usage?(%Alto.Usage{} = usage),
@@ -533,7 +540,8 @@ defmodule Alto.Runner.Checkpoint do
     data =
       {@continuation_format, run.spec.driver, run.spec.driver.module_info(:md5),
        run.spec.driver_options, run.spec.middleware, stable_subagents(run.spec.subagents), tools,
-       run.model_tools, run.tool_context.cwd}
+       run.model_tools, run.tool_context.cwd, Map.get(run, :session_history, :completed),
+       Map.get(run, :max_conversation_bytes, 128_000_000)}
 
     {:ok,
      :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))

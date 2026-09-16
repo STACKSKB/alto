@@ -583,7 +583,9 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:event, %Event{domain: :live, type: :tool_started}}
     assert :ok = Alto.cancel(handle, :user)
     assert {:error, {:cancelled, :user}, result} = Alto.await(handle, 1_000)
-    assert Enum.map(result.events, & &1.type) == [:model_completed, :run_cancelled]
+    assert Enum.map(result.events, & &1.type) == [:model_completed, :tool_failed, :run_cancelled]
+    assert Enum.find(result.events, &(&1.type == :tool_failed)).data.outcome == :unknown
+    assert List.last(result.messages)["role"] == "tool"
   end
 
   test "cancellation interrupts approval before the tool starts" do

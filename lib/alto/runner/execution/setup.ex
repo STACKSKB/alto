@@ -49,6 +49,9 @@ defmodule Alto.Runner.Execution.Setup do
     max_events = Keyword.get(opts, :max_events, @default_max_events)
 
     with :ok <- validate_spec(spec),
+         :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
+         :ok <-
+           validate_conversation_limit(Keyword.get(opts, :max_conversation_bytes, 128_000_000)),
          {:ok, budget} <- resolve_budget(opts),
          {:ok, provider} <- provider,
          {:ok, approval} <- approval,
@@ -127,6 +130,10 @@ defmodule Alto.Runner.Execution.Setup do
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       runner_options: Keyword.get(opts, :runner_options, []),
       input: Keyword.get(opts, :input),
+      session_history: Keyword.get(opts, :session_history, :completed),
+      max_conversation_bytes: Keyword.get(opts, :max_conversation_bytes, 128_000_000),
+      resolved_operations: [],
+      history_digest: nil,
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
       subagent_ticket: Keyword.get(opts, :subagent_ticket),
       child_profile: Keyword.get(opts, :child_profile),
@@ -177,6 +184,12 @@ defmodule Alto.Runner.Execution.Setup do
     with {:ok, _} <- normalize_agent_identity(agent_identity),
          do: {:ok, Map.merge(initial, settings)}
   end
+
+  defp validate_session_history(mode) when mode in [:completed, :settled], do: :ok
+  defp validate_session_history(mode), do: {:error, {:invalid_session_history, mode}}
+
+  defp validate_conversation_limit(limit) when is_integer(limit) and limit > 0, do: :ok
+  defp validate_conversation_limit(limit), do: {:error, {:invalid_max_conversation_bytes, limit}}
 
   # A provider is model capability state: generic rule runs are constructed
   # without one and fail closed only if a model effect is requested.

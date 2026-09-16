@@ -47,6 +47,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
       request_model_tools: nil,
       compacted?: false,
       compaction_count: 0,
+      resolved_operations: [],
       persistence_errors: [{:earlier_write, :unavailable}],
       session: nil,
       session_dir: dir,

@@ -1,6 +1,24 @@
 defmodule Alto.InputFaultTest do
   use ExUnit.Case, async: true
 
+  test "input ownership is released without misclassifying scheduler exits" do
+    {:ok, input} = Alto.Input.start_link()
+    opts = [input: input, loop: Alto.rule_loop(steps: [])]
+
+    assert catch_exit(Alto.Runner.Execution.run(%{}, opts, fn _, _ -> exit(:scheduler_down) end)) ==
+             :scheduler_down
+
+    assert :ok = Alto.Input.claim(input)
+  end
+
+  test "a dead input channel reports an input failure" do
+    {:ok, input} = Alto.Input.start_link()
+    GenServer.stop(input)
+
+    assert {:error, {:input_unavailable, _}, _} =
+             Alto.Runner.Execution.run(%{}, [input: input], fn _, _ -> flunk("dispatched") end)
+  end
+
   test "owner death releases the channel without dropping queued bytes" do
     {:ok, input} = Alto.Input.start_link(max_messages: 2, max_bytes: 3)
     assert {:ok, id} = Alto.Input.put(input, "abc", :steer)

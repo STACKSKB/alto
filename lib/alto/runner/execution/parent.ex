@@ -1,7 +1,7 @@
 defmodule Alto.Runner.Execution.Parent do
   @moduledoc "Durable parent batch boundaries shared by execution hosts."
   alias Alto.Runner.{Budget, Checkpoint}
-  alias Alto.Runner.Execution.{Call, Children}
+  alias Alto.Runner.Execution.{Call, Children, History}
   alias Alto.Subagents.{Continuation, Journal}
 
   @doc "Resolve a saved continuation's session before assembling a fresh host."
@@ -55,6 +55,7 @@ defmodule Alto.Runner.Execution.Parent do
          {:ok, specs, concurrency} <- Children.validate_batch(data, Children.project(run)),
          {:ok, specs, journal, state} <- Children.prepare_children(specs, Children.project(run)),
          run = Children.merge(run, state),
+         {:ok, run} <- History.persist(run, allow_pending: true),
          pending = %{
            kind: :children,
            journal: Journal.identity(journal),
@@ -103,6 +104,7 @@ defmodule Alto.Runner.Execution.Parent do
     else
       false -> {:error, :parent_continuation_not_supported, run}
       {:error, reason} -> {:error, reason, run}
+      {:error, reason, failed_run} -> {:error, reason, failed_run}
     end
   end
 
@@ -165,6 +167,7 @@ defmodule Alto.Runner.Execution.Parent do
                Children.merge_retained(joined.results, Children.project(run)),
              run = Children.merge(run, state),
              {:continue, frame, next_run} <- complete.(results, journal, run, rest, terminal),
+             {:ok, next_run} <- History.persist(next_run, allow_pending: true),
              {:ok, packet} <-
                call(
                  fn ->
@@ -183,6 +186,7 @@ defmodule Alto.Runner.Execution.Parent do
         else
           {:done, outcome} -> {:done, outcome}
           {:error, reason} -> {:error, reason, run}
+          {:error, reason, failed_run} -> {:error, reason, failed_run}
         end
 
       {:error, {:child_pending, _, _} = reason} ->

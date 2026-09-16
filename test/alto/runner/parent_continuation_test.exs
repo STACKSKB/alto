@@ -8,6 +8,16 @@ defmodule Alto.Runner.ParentContinuationTest do
   defmodule ParentLoop do
     @behaviour Alto.Loop
 
+    def init(%{agents: agents, before_children: true}, _spec),
+      do:
+        Transition.continue(%{phase: "before", agents: agents}, [
+          Effect.invoke_tool(%{
+            id: "before",
+            name: "integrate",
+            arguments: %{"value" => "before"}
+          })
+        ])
+
     def init(%{agents: agents}, _spec),
       do: Transition.continue(%{phase: "children"}, [Effect.spawn_agents(%{agents: agents})])
 
@@ -15,6 +25,10 @@ defmodule Alto.Runner.ParentContinuationTest do
       call = %{id: "integrate-1", name: "integrate", arguments: %{"value" => "joined"}}
       Transition.continue(Map.put(state, :results, results), [Effect.invoke_tool(call)])
     end
+
+    def handle_event(%Event{type: :tool_completed}, %{phase: "before"} = state, _spec),
+      do:
+        Transition.continue(%{phase: "children"}, [Effect.spawn_agents(%{agents: state.agents})])
 
     def handle_event(%Event{type: :tool_completed, data: data}, state, _spec),
       do: Transition.stop(state, %{results: state.results, tool: data})
@@ -183,6 +197,21 @@ defmodule Alto.Runner.ParentContinuationTest do
       assert {:ok, %{packet: %{"join" => receipt}}} = Journal.read(journal)
       assert receipt["continuation"] == identity
     end
+  end
+
+  test "settled history persists resolved native effects before parent capture", %{dir: dir} do
+    ledgers = ledgers(dir, "history")
+    agents = [%{id: "first", task: "one", loop: Alto.loop(ReturnLoop)}]
+
+    assert {:ok, result} =
+             Alto.run(
+               %{agents: agents, before_children: true},
+               opts(ledgers, dir, Alto.Runner.Serial, session_history: :settled)
+             )
+
+    assert result.persistence == :ok
+    assert_receive {:integrated, "before"}
+    assert_receive {:integrated, "joined"}
   end
 
   test "a completed child result is joined after parent kill without rerunning it", %{dir: dir} do

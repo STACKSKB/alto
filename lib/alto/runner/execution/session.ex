@@ -28,7 +28,8 @@ defmodule Alto.Runner.Execution.Session do
     :resume_snapshot,
     :checkpoint_resume,
     :transcript_revision,
-    :agent_depth
+    :agent_depth,
+    max_conversation_bytes: 128_000_000
   ]
 
   @type t :: %__MODULE__{
@@ -37,8 +38,9 @@ defmodule Alto.Runner.Execution.Session do
           session_dir: Path.t() | nil,
           resume_snapshot: boolean(),
           checkpoint_resume: boolean(),
-          transcript_revision: non_neg_integer(),
-          agent_depth: non_neg_integer()
+          transcript_revision: non_neg_integer() | :any,
+          agent_depth: non_neg_integer(),
+          max_conversation_bytes: pos_integer()
         }
 
   @type outcome ::
@@ -56,7 +58,8 @@ defmodule Alto.Runner.Execution.Session do
       resume_snapshot: run.resume_snapshot,
       checkpoint_resume: Map.get(run, :checkpoint_resume, false),
       transcript_revision: run.transcript_revision,
-      agent_depth: run.agent_depth
+      agent_depth: run.agent_depth,
+      max_conversation_bytes: Map.get(run, :max_conversation_bytes, 128_000_000)
     }
   end
 
@@ -93,12 +96,11 @@ defmodule Alto.Runner.Execution.Session do
   end
 
   def persist_session_outcome(%__MODULE__{} = state, {:ok, result}) do
+    {result, transcript_errors} = persist_transcript(state, result)
+
     errors =
       existing_persistence_errors(result) ++
-        persistence_errors([
-          persist_transcript(state, result),
-          persist_completed(state, "ok", nil, result)
-        ])
+        transcript_errors ++ persistence_errors([persist_completed(state, "ok", nil, result)])
 
     put_persistence({:ok, result}, persistence_status(errors))
   end
@@ -133,6 +135,8 @@ defmodule Alto.Runner.Execution.Session do
   end
 
   def persist_session_outcome(%__MODULE__{} = state, {:error, reason, result}) do
+    {result, transcript_errors} = persist_transcript(state, result)
+
     completion =
       case reason do
         {:cancelled, cause} -> persist_completed(state, "cancelled", cause, result)
@@ -141,31 +145,42 @@ defmodule Alto.Runner.Execution.Session do
 
     errors =
       existing_persistence_errors(result) ++
-        persistence_errors([persist_transcript(state, result), completion])
+        transcript_errors ++ persistence_errors([completion])
 
     put_persistence({:error, reason, result}, persistence_status(errors))
   end
 
-  defp persist_transcript(%__MODULE__{resume_snapshot: false}, _result), do: :ok
-  defp persist_transcript(%__MODULE__{checkpoint_resume: true}, %{loop_state: nil}), do: :ok
+  defp persist_transcript(%__MODULE__{resume_snapshot: false}, result), do: {result, []}
+  defp persist_transcript(_state, %{transcript_persisted: true} = result), do: {result, []}
+
+  defp persist_transcript(%__MODULE__{checkpoint_resume: true}, %{loop_state: nil} = result),
+    do: {result, []}
 
   defp persist_transcript(%__MODULE__{} = state, result) do
-    case DurableSession.write_transcript(
+    case DurableSession.Conversation.persist(
            state.session,
            result.messages,
            result.transcript_bytes,
-           Keyword.put(
-             session_dir_opt(state),
+           session_dir_opt(state)
+           |> Keyword.put(
              :expected_revision,
-             state.transcript_revision
+             result.transcript_revision || state.transcript_revision
            )
+           |> Keyword.put(:resolved_operations, result.resolved_operations)
+           |> Keyword.put(:allow_pending, true)
+           |> Keyword.put(:max_conversation_bytes, state.max_conversation_bytes)
          ) do
-      :ok ->
-        :ok
+      {:ok, snapshot} ->
+        {%{
+           result
+           | transcript_revision: snapshot.revision,
+             resolved_operations: [],
+             transcript_persisted: true
+         }, []}
 
       {:error, reason} ->
         Logger.warning("alto: session transcript not persisted: #{inspect(reason, limit: 5)}")
-        {:error, reason}
+        {result, [reason]}
     end
   end
 
