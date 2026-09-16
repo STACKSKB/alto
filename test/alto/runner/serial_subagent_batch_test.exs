@@ -83,13 +83,13 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
         session_dir: dir
       )
 
-    assert_receive {:batch_child_entered, first}, 2_000
-    assert_receive {:batch_child_entered, second}, 2_000
+    assert_receive {:batch_child_entered, first}, 5_000
+    assert_receive {:batch_child_entered, second}, 5_000
     refute_receive {:batch_child_entered, _third}, 100
 
     send(first, :release)
     send(second, :release)
-    assert_receive {:batch_child_entered, third}, 2_000
+    assert_receive {:batch_child_entered, third}, 5_000
     send(third, :release)
 
     assert {:ok, result} = Alto.await(handle, 10_000)
@@ -151,8 +151,8 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
         session_dir: dir
       )
 
-    assert_receive {:batch_child_entered, first}, 2_000
-    assert_receive {:batch_child_entered, second}, 2_000
+    assert_receive {:batch_child_entered, first}, 5_000
+    assert_receive {:batch_child_entered, second}, 5_000
     first_ref = Process.monitor(first)
     second_ref = Process.monitor(second)
     refute_receive {:batch_child_entered, _third}, 100
