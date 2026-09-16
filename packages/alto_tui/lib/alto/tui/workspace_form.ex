@@ -35,7 +35,10 @@ defmodule Alto.TUI.WorkspaceForm do
       when code in ["up", "down", "back_tab"] do
     delta = if code == "down", do: 1, else: -1
 
-    index = Integer.mod(form.suggestion_index + delta, length(form.suggestions))
+    index =
+      if form.choose?,
+        do: Integer.mod(form.suggestion_index + delta, length(form.suggestions)),
+        else: if(code == "down", do: 0, else: length(form.suggestions) - 1)
 
     {:edit, %{form | suggestion_index: index, choose?: true, error: nil}}
   end
@@ -111,12 +114,13 @@ defmodule Alto.TUI.WorkspaceForm do
       |> Enum.take(50)
 
     index =
-      if form.choose?, do: Enum.find_index(suggestions, &(&1 == selected(form))) || 0, else: 0
+      if form.choose?, do: Enum.find_index(suggestions, &(&1 == selected(form))), else: nil
 
     next = %{
       form
       | suggestions: suggestions,
-        suggestion_index: index,
+        suggestion_index: index || 0,
+        choose?: not is_nil(index),
         completion: completion,
         completion_pending?: result == :pending,
         tab_pending?: false
@@ -146,6 +150,13 @@ defmodule Alto.TUI.WorkspaceForm do
     button_row = max(inner.height - 3, 4)
     text = "Folder on #{form.host}\nRelative paths start from: #{form.base}"
 
+    enter_hint =
+      cond do
+        form.choose? -> "Enter opens selected folder"
+        path(form) == "" -> "Type a folder path"
+        true -> "Enter opens typed path"
+      end
+
     [
       {%Clear{}, rect},
       {%Paragraph{
@@ -160,15 +171,18 @@ defmodule Alto.TUI.WorkspaceForm do
          cursor_style: %Style{modifiers: [:reversed]}
        }, %{inner | y: inner.y + 2, height: min(inner.height, 1)}},
       {%List{
-         items: form.suggestions,
-         selected: if(form.suggestions == [], do: nil, else: form.suggestion_index),
-         highlight_symbol: "› ",
+         # Keep the marker gutter fixed when keyboard selection becomes active.
+         items:
+           Enum.with_index(form.suggestions, fn folder, index ->
+             if(form.choose? and index == form.suggestion_index, do: "› ", else: "  ") <> folder
+           end),
+         selected: if(form.choose?, do: form.suggestion_index, else: nil),
          highlight_style: %Style{fg: :black, bg: :light_blue},
          style: bg
        }, %{inner | y: inner.y + 4, height: max(button_row - 4, 0)}},
       {%Paragraph{
          text:
-           "[ Open folder ]  [ Cancel ]\n↑↓ choose · Tab complete · Enter open · Esc cancel\n#{form.error || ""}",
+           "[ Open folder ]  [ Cancel ]\n#{enter_hint} · Esc cancel\n#{form.error || "↑↓ choose · Tab complete"}",
          style: bg
        }, %{inner | y: inner.y + button_row, height: min(inner.height, 3)}}
     ]
@@ -197,7 +211,7 @@ defmodule Alto.TUI.WorkspaceForm do
 
     cond do
       row == button_row and column in 0..14 ->
-        {:submit, path(form)}
+        key(form, %Key{code: "enter"})
 
       row == button_row and column in 17..26 ->
         :cancel

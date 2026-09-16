@@ -3,6 +3,62 @@ defmodule Alto.TUI.WorkspaceFormTest do
   alias Alto.TUI.WorkspaceForm
   alias ExRatatui.Event.Key
 
+  test "suggestions have no default highlight and Enter opens exactly the typed path" do
+    root = temporary_folders(["Alpha", "Beta"])
+    form = WorkspaceForm.new(root)
+    assert suggestion_list(form).selected == nil
+    assert {:submit, ""} = WorkspaceForm.key(form, %Key{code: "enter"})
+    form = WorkspaceForm.paste(form, root <> "/")
+    assert suggestion_list(form).selected == nil
+    assert {:submit, path} = WorkspaceForm.key(form, %Key{code: "enter"})
+    assert path == root <> "/"
+
+    for {width, height} <- [{100, 30}, {50, 16}] do
+      terminal = ExRatatui.init_test_terminal(width, height)
+      ExRatatui.draw(terminal, WorkspaceForm.widgets(form, %{width: width, height: height}))
+      assert ExRatatui.get_buffer_content(terminal) =~ "Enter opens typed path"
+    end
+
+    {:edit, chosen} = WorkspaceForm.key(form, %Key{code: "down"})
+    assert suggestion_list(chosen).selected == 0
+    assert {:submit, selected} = WorkspaceForm.key(chosen, %Key{code: "enter"})
+    assert selected == root <> "/Alpha/"
+    assert WorkspaceForm.click(chosen, 13, 3) == {:submit, selected}
+    terminal = ExRatatui.init_test_terminal(50, 16)
+    ExRatatui.draw(terminal, WorkspaceForm.widgets(chosen, %{width: 50, height: 16}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "Enter opens selected folder"
+    assert suggestion_list(form).items == ["  " <> root <> "/Alpha/", "  " <> root <> "/Beta/"]
+    assert suggestion_list(chosen).items == ["› " <> root <> "/Alpha/", "  " <> root <> "/Beta/"]
+    {:edit, last} = WorkspaceForm.key(form, %Key{code: "up"})
+    assert suggestion_list(last).selected == 1
+    {:edit, edited} = WorkspaceForm.key(chosen, %Key{code: "A"})
+    assert suggestion_list(edited).selected == nil
+    {:edit, completed} = WorkspaceForm.key(edited, %Key{code: "tab"})
+    assert suggestion_list(completed).selected == nil
+    assert WorkspaceForm.path(completed) == root <> "/Alpha/"
+  end
+
+  test "remote refresh does not silently select a replacement for a vanished choice" do
+    form = WorkspaceForm.new("/remote", "remote", [], complete: nil)
+    form = WorkspaceForm.paste(form, "/remote/")
+    form = WorkspaceForm.suggest(form, {:ok, ["/remote/Alpha/", "/remote/Beta/"]})
+    assert suggestion_list(form).selected == nil
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "down"})
+    form = WorkspaceForm.suggest(form, {:ok, ["/remote/Beta/"]})
+    assert suggestion_list(form).selected == nil
+    assert {:submit, "/remote/"} = WorkspaceForm.key(form, %Key{code: "enter"})
+  end
+
+  defp suggestion_list(form) do
+    {list, _} =
+      Enum.find(WorkspaceForm.widgets(form, %{width: 100, height: 30}), fn
+        {%ExRatatui.Widgets.List{}, _} -> true
+        _ -> false
+      end)
+
+    list
+  end
+
   test "typed capitals and shifted symbols preserve their case and complete a matching folder" do
     root = temporary_folders(["Project_É!", "project_lowercase"])
     form = WorkspaceForm.new(root)
@@ -91,7 +147,9 @@ defmodule Alto.TUI.WorkspaceFormTest do
     on_exit(fn -> File.rm_rf!(root) end)
     form = WorkspaceForm.new(root) |> WorkspaceForm.paste("a")
     assert form.suggestions == [root <> "/alpha/", root <> "/another folder/"]
-    {:edit, chosen} = WorkspaceForm.key(form, %Key{code: "down"})
+    {:edit, first} = WorkspaceForm.key(form, %Key{code: "down"})
+    assert first.suggestion_index == 0
+    {:edit, chosen} = WorkspaceForm.key(first, %Key{code: "down"})
     assert chosen.suggestion_index == 1
     assert WorkspaceForm.path(chosen) == "a"
     widgets = WorkspaceForm.widgets(chosen, %{width: 100, height: 30})
@@ -121,7 +179,7 @@ defmodule Alto.TUI.WorkspaceFormTest do
     form = WorkspaceForm.paste(form, "pro")
     assert form.suggestions == []
     form = WorkspaceForm.suggest(form, {:ok, ["/remote/probe/", "/remote/project/"]})
-    {:edit, form} = WorkspaceForm.key(form, %Key{code: "down"})
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "up"})
     form = WorkspaceForm.suggest(form, {:ok, ["/remote/project/", "/remote/probe/"]})
     {:edit, completed} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(completed) == "/remote/project/"
