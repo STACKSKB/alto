@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add exact multi-edit batches with bounded descriptor reads and approval diffs;
+  keep original-snapshot matching and stale-write rejection.
+- Add explicit bounded parallel tool groups with ordered outcomes, shared budgets,
+  approval barriers, and owner-bound cancellation.
+- Stream native Anthropic responses and carry opt-in typed PNG/JPEG content
+  through tools, providers, and sessions; expose optional image processing.
+- Support repeated, manual, and context-pressure compaction, configurable
+  tokenizer estimates, and one-time tool input transforms.
+- Add bounded steering/follow-up channels and native TUI Ctrl+Enter steering.
+- Retain immutable conversation revisions and isolated branches; offer settled
+  execution history with dispatch fences, configurable storage bounds, and
+  explicit unknown outcomes after interrupted work.
+- Enable parallel reads, repeatable compaction, and settled history in the
+  coding profile while retaining conservative library and delegation defaults.
+
 - Display provider reasoning separately from answers, including OpenRouter / compatible
   streams, Codex summaries, and native Anthropic thinking. Preserve reasoning fields
   and signed content in saved histories and subsequent tool requests.

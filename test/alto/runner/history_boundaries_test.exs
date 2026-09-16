@@ -1,5 +1,7 @@
 defmodule Alto.Runner.HistoryBoundariesTest do
-  use ExUnit.Case, async: true
+  # The 257-boundary case deliberately exercises hundreds of durable writes.
+  # Keep it out of the timing-sensitive concurrent participant tests.
+  use ExUnit.Case, async: false
 
   defmodule Tick do
     @behaviour Alto.Tool

@@ -32,3 +32,10 @@ An accepted enqueue is not a promise of delivery: a run may finish or exhaust
 its budget before consuming it. Hosts should inspect pending entries on
 completion and decide whether to start another run. Checkpoints do not serialize
 the channel; the host explicitly supplies it again on resume.
+
+In the optional TUI, Enter queues a native Alto follow-up while a run is active,
+and Ctrl+Enter submits native steering input for the next model boundary. Input
+accepted near completion, cancellation, or failure remains pending until the
+next eligible run; the TUI keeps the composer draft and lets Enter retry
+delivery. Existing custom and Codex backends keep their established local
+follow-up queues and controls.
