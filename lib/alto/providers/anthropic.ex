@@ -4,14 +4,15 @@ defmodule Alto.Providers.Anthropic do
 
   Configure `{Alto.Providers.Anthropic, model: model_id, api_key: key}`. The
   Messages SSE response is consumed incrementally and bounded while received.
-  Signed thinking blocks are preserved for subsequent tool turns. Multimodal
-  content, server tools, and beta features are intentionally outside its
-  contract.
+  Signed thinking blocks are preserved for subsequent tool turns. Typed image
+  content is accepted only when the provider is explicitly configured with
+  `supports_images: true`.
 
   Protocol: https://platform.claude.com/docs/en/api/messages/create
   """
   @behaviour Alto.Provider
 
+  alias Alto.Content
   alias Alto.Providers.Anthropic.SSE
   alias Alto.Providers.Anthropic.Stream
 
@@ -29,7 +30,8 @@ defmodule Alto.Providers.Anthropic do
       model: opts[:model],
       context_window: opts[:context_window],
       streaming: Keyword.get(opts, :streaming, true),
-      tools: :client_tools
+      tools: :client_tools,
+      vision: Keyword.get(opts, :supports_images, false)
     }
 
   @impl true
@@ -52,6 +54,7 @@ defmodule Alto.Providers.Anthropic do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     max_event_bytes = Keyword.get(opts, :max_event_bytes, @default_max_event_bytes)
     max_response_bytes = Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
+    supports_images = Keyword.get(opts, :supports_images, false)
 
     cond do
       not is_binary(model) or model == "" ->
@@ -74,6 +77,9 @@ defmodule Alto.Providers.Anthropic do
         # max_event_bytes is the only new bound exposed by the SSE transport.
         {:error, :invalid_response_limit}
 
+      not is_boolean(supports_images) ->
+        {:error, {:invalid_supports_images, supports_images}}
+
       true ->
         {:ok,
          %{
@@ -83,6 +89,7 @@ defmodule Alto.Providers.Anthropic do
            timeout: timeout,
            max_event_bytes: max_event_bytes,
            max_response_bytes: max_response_bytes,
+           supports_images: supports_images,
            max_tokens: Keyword.get(opts, :max_tokens),
            thinking: Keyword.get(opts, :thinking),
            reasoning_effort: Keyword.get(opts, :reasoning_effort),
@@ -117,21 +124,21 @@ defmodule Alto.Providers.Anthropic do
 
     with [] <- unsupported,
          true <- is_integer(max_tokens) and max_tokens > 0,
-         :ok <- Alto.Context.Transcript.validate(request.messages) do
-      {system, messages} = Enum.split_with(request.messages, &(&1["role"] == "system"))
+         :ok <- Alto.Context.Transcript.validate(request.messages),
+         {:ok, system_content} <- system_content(request.messages),
+         {:ok, messages} <- anthropic_messages(request.messages, config.supports_images) do
+      has_system? = Enum.any?(request.messages, &(&1["role"] == "system"))
 
       body =
         Map.merge(options, %{
           "model" => config.model,
           "max_tokens" => max_tokens,
           "stream" => config.streaming,
-          "messages" => Enum.map(messages, &message/1)
+          "messages" => messages
         })
 
       body =
-        if system == [],
-          do: body,
-          else: Map.put(body, "system", Enum.map_join(system, "\n\n", & &1["content"]))
+        if has_system?, do: Map.put(body, "system", system_content), else: body
 
       tools =
         Enum.map(Map.get(request, :tools, []), fn %{"function" => tool} ->
@@ -150,43 +157,130 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp message(%{"role" => "tool"} = message),
-    do: %{
-      "role" => "user",
-      "content" => [
-        %{
-          "type" => "tool_result",
-          "tool_use_id" => message["tool_call_id"],
-          "content" => message["content"]
-        }
-      ]
-    }
+  defp system_content(messages) do
+    messages
+    |> Enum.filter(&(&1["role"] == "system"))
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"content" => content}, {:ok, contents} when is_binary(content) ->
+        {:cont, {:ok, [content | contents]}}
 
-  defp message(%{"role" => role} = message) when role in ["user", "assistant"] do
-    text =
-      case message["content"] do
-        nil -> []
-        "" -> []
-        text when is_binary(text) -> [%{"type" => "text", "text" => text}]
+      _message, _acc ->
+        {:halt, {:error, :anthropic_system_content_must_be_text}}
+    end)
+    |> case do
+      {:ok, contents} -> {:ok, contents |> Enum.reverse() |> Enum.join("\n\n")}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp anthropic_messages(messages, supports_images) do
+    messages
+    |> Enum.reject(&(&1["role"] == "system"))
+    |> Enum.reduce_while({:ok, []}, fn message, {:ok, normalized} ->
+      case message(message, supports_images) do
+        {:ok, message} -> {:cont, {:ok, [message | normalized]}}
+        {:error, _} = error -> {:halt, error}
       end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _} = error -> error
+    end
+  end
 
-    calls =
-      Enum.map(message["tool_calls"] || [], fn call ->
-        input = JSON.decode!(call["function"]["arguments"])
-        if not is_map(input), do: raise(ArgumentError, "tool input must be an object")
+  defp message(%{"role" => "tool"} = message, supports_images) do
+    with {:ok, content} <- anthropic_content(message["content"], supports_images) do
+      {:ok,
+       %{
+         "role" => "user",
+         "content" => [
+           %{
+             "type" => "tool_result",
+             "tool_use_id" => message["tool_call_id"],
+             "content" => content
+           }
+         ]
+       }}
+    end
+  end
 
-        %{
-          "type" => "tool_use",
-          "id" => call["id"],
-          "name" => call["function"]["name"],
-          "input" => input
+  defp message(%{"role" => role} = message, supports_images)
+       when role in ["user", "assistant"] do
+    with {:ok, content} <- anthropic_message_content(message, supports_images) do
+      calls =
+        Enum.map(message["tool_calls"] || [], fn call ->
+          input = JSON.decode!(call["function"]["arguments"])
+          if not is_map(input), do: raise(ArgumentError, "tool input must be an object")
+
+          %{
+            "type" => "tool_use",
+            "id" => call["id"],
+            "name" => call["function"]["name"],
+            "input" => input
+          }
+        end)
+
+      {:ok,
+       %{
+         "role" => role,
+         "content" => Map.get(message, "alto_anthropic_content", content ++ calls)
+       }}
+    end
+  end
+
+  defp message(message, _supports_images),
+    do: {:error, {:invalid_anthropic_message, message}}
+
+  defp anthropic_message_content(%{"alto_anthropic_content" => _content}, _supports_images),
+    do: {:ok, []}
+
+  defp anthropic_message_content(message, supports_images),
+    do: anthropic_content(message["content"], supports_images, empty: [])
+
+  defp anthropic_content(value, supports_images, opts \\ []) do
+    case Content.decode_transcript(value) do
+      :not_content when is_binary(value) ->
+        {:ok, if(value == "", do: Keyword.get(opts, :empty, ""), else: text_content(value, opts))}
+
+      :not_content when is_nil(value) ->
+        {:ok, Keyword.get(opts, :empty, "")}
+
+      {:ok, content} ->
+        anthropic_blocks(content.blocks, supports_images)
+
+      {:error, reason} ->
+        {:error, {:invalid_multimodal_content, reason}}
+
+      :not_content ->
+        {:error, :invalid_anthropic_message_content}
+    end
+  end
+
+  defp text_content(value, opts) do
+    if Keyword.has_key?(opts, :empty), do: [%{"type" => "text", "text" => value}], else: value
+  end
+
+  defp anthropic_blocks(blocks, supports_images) do
+    blocks
+    |> Enum.reduce_while({:ok, []}, fn
+      %Content.Text{text: text}, {:ok, normalized} ->
+        {:cont, {:ok, [%{"type" => "text", "text" => text} | normalized]}}
+
+      %Content.Image{}, _acc when not supports_images ->
+        {:halt, {:error, :model_does_not_support_images}}
+
+      %Content.Image{media_type: media_type, data: data}, {:ok, normalized} ->
+        block = %{
+          "type" => "image",
+          "source" => %{"type" => "base64", "media_type" => media_type, "data" => data}
         }
-      end)
 
-    %{
-      "role" => role,
-      "content" => Map.get(message, "alto_anthropic_content", text ++ calls)
-    }
+        {:cont, {:ok, [block | normalized]}}
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _} = error -> error
+    end
   end
 
   defp send_request(body, config, sink) do

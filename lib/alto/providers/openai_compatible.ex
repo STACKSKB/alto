@@ -9,6 +9,7 @@ defmodule Alto.Providers.OpenAICompatible do
 
   @behaviour Alto.Provider
 
+  alias Alto.Content
   alias Alto.Providers.OpenAICompatible.SSE
   alias Alto.Providers.OpenAICompatible.Stream
 
@@ -28,7 +29,8 @@ defmodule Alto.Providers.OpenAICompatible do
       base_url: Keyword.get(opts, :base_url, @default_base_url),
       streaming: true,
       context_window: Keyword.get(opts, :context_window),
-      tools: :function_calls
+      tools: :function_calls,
+      vision: Keyword.get(opts, :supports_images, false)
     }
   end
 
@@ -55,43 +57,190 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp request(config, request, sink) do
-    body =
-      request
-      |> Map.get(:options, %{})
-      |> Map.merge(%{
-        "model" => config.model,
-        "messages" =>
-          Enum.map(Map.fetch!(request, :messages), &Map.delete(&1, "alto_anthropic_content")),
-        "stream" => true
-      })
-      |> maybe_put_tools(Map.get(request, :tools, []))
-      |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
+    with {:ok, messages} <-
+           provider_messages(Map.fetch!(request, :messages), config.supports_images) do
+      body =
+        request
+        |> Map.get(:options, %{})
+        |> Map.merge(%{
+          "model" => config.model,
+          "messages" => messages,
+          "stream" => true
+        })
+        |> maybe_put_tools(Map.get(request, :tools, []))
+        |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
 
-    state = new_request_state(config.max_event_bytes, config.max_response_bytes)
+      state = new_request_state(config.max_event_bytes, config.max_response_bytes)
 
-    into = fn {:data, data}, {req, response} ->
-      current = Req.Response.get_private(response, @state_key, state)
-      next = consume_http_chunk(current, response.status, data, sink)
-      response = Req.Response.put_private(response, @state_key, next)
+      into = fn {:data, data}, {req, response} ->
+        current = Req.Response.get_private(response, @state_key, state)
+        next = consume_http_chunk(current, response.status, data, sink)
+        response = Req.Response.put_private(response, @state_key, next)
 
-      if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
+        if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
+      end
+
+      options =
+        [
+          url: config.endpoint,
+          body: JSON.encode!(body),
+          headers: config.headers,
+          into: into,
+          raw: true,
+          retry: false,
+          receive_timeout: config.timeout,
+          request_timeout: config.timeout
+        ] ++ config.req_options
+
+      case Req.post(options) do
+        {:ok, response} -> {:ok, response}
+        {:error, error} -> {:error, {:transport_error, error}}
+      end
     end
+  end
 
-    options =
-      [
-        url: config.endpoint,
-        body: JSON.encode!(body),
-        headers: config.headers,
-        into: into,
-        raw: true,
-        retry: false,
-        receive_timeout: config.timeout,
-        request_timeout: config.timeout
-      ] ++ config.req_options
+  defp provider_messages(messages, supports_images),
+    do: provider_messages(messages, supports_images, [])
 
-    case Req.post(options) do
-      {:ok, response} -> {:ok, response}
-      {:error, error} -> {:error, {:transport_error, error}}
+  defp provider_messages([], _supports_images, normalized),
+    do: {:ok, Enum.reverse(normalized)}
+
+  defp provider_messages([%{"role" => "tool"} | _] = messages, supports_images, normalized) do
+    {tool_group, rest} = Enum.split_while(messages, &(&1["role"] == "tool"))
+
+    with {:ok, tool_messages, attachments} <-
+           openai_tool_group(tool_group, supports_images) do
+      group =
+        case attachments do
+          [] -> tool_messages
+          attachments -> tool_messages ++ [openai_attachment_message(attachments)]
+        end
+
+      provider_messages(rest, supports_images, Enum.reverse(group, normalized))
+    end
+  end
+
+  defp provider_messages([message | rest], supports_images, normalized) do
+    with {:ok, message} <- provider_message(message, supports_images) do
+      provider_messages(rest, supports_images, [message | normalized])
+    end
+  end
+
+  defp openai_tool_group(messages, supports_images) do
+    messages
+    |> Enum.reduce_while({:ok, [], []}, fn message, {:ok, normalized, attachments} ->
+      case openai_tool_message(message, supports_images) do
+        {:ok, tool_message, images} ->
+          {:cont, {:ok, [tool_message | normalized], attachments ++ images}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, normalized, attachments} ->
+        {:ok, Enum.reverse(normalized), attachments}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp openai_tool_message(message, supports_images) do
+    message = Map.delete(message, "alto_anthropic_content")
+
+    case Content.decode_transcript(Map.get(message, "content")) do
+      :not_content ->
+        {:ok, message, []}
+
+      {:ok, content} ->
+        images = Enum.filter(content.blocks, &match?(%Content.Image{}, &1))
+
+        cond do
+          images != [] and not supports_images ->
+            {:error, :model_does_not_support_images}
+
+          true ->
+            text =
+              content.blocks
+              |> Enum.flat_map(fn
+                %Content.Text{text: text} -> [text]
+                %Content.Image{} -> []
+              end)
+              |> Enum.join("\n")
+              |> append_attachment_marker(message["tool_call_id"], images)
+
+            attachments = Enum.map(images, &{message["tool_call_id"], &1})
+            {:ok, Map.put(message, "content", text), attachments}
+        end
+
+      {:error, reason} ->
+        {:error, {:invalid_multimodal_content, reason}}
+    end
+  end
+
+  defp append_attachment_marker(text, _call_id, []), do: text
+
+  defp append_attachment_marker(text, call_id, _images) do
+    marker = "[Image attachment follows for tool call #{call_id}.]"
+    if text == "", do: marker, else: text <> "\n" <> marker
+  end
+
+  defp openai_attachment_message(attachments) do
+    content =
+      Enum.flat_map(attachments, fn {call_id, %Content.Image{media_type: media_type, data: data}} ->
+        [
+          %{"type" => "text", "text" => "Image result from tool call #{call_id}:"},
+          %{
+            "type" => "image_url",
+            "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
+          }
+        ]
+      end)
+
+    %{"role" => "user", "content" => content}
+  end
+
+  defp provider_message(message, supports_images) when is_map(message) do
+    message = Map.delete(message, "alto_anthropic_content")
+
+    case Content.decode_transcript(Map.get(message, "content")) do
+      :not_content ->
+        {:ok, message}
+
+      {:ok, content} ->
+        with {:ok, blocks} <- openai_blocks(content.blocks, supports_images) do
+          {:ok, Map.put(message, "content", blocks)}
+        end
+
+      {:error, reason} ->
+        {:error, {:invalid_multimodal_content, reason}}
+    end
+  end
+
+  defp provider_message(message, _supports_images),
+    do: {:error, {:invalid_provider_message, message}}
+
+  defp openai_blocks(blocks, supports_images) do
+    blocks
+    |> Enum.reduce_while({:ok, []}, fn
+      %Content.Text{text: text}, {:ok, normalized} ->
+        {:cont, {:ok, [%{"type" => "text", "text" => text} | normalized]}}
+
+      %Content.Image{}, _acc when not supports_images ->
+        {:halt, {:error, :model_does_not_support_images}}
+
+      %Content.Image{media_type: media_type, data: data}, {:ok, normalized} ->
+        block = %{
+          "type" => "image_url",
+          "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
+        }
+
+        {:cont, {:ok, [block | normalized]}}
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _} = error -> error
     end
   end
 
@@ -324,6 +473,7 @@ defmodule Alto.Providers.OpenAICompatible do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     max_event_bytes = Keyword.get(opts, :max_event_bytes, @default_max_event_bytes)
     max_response_bytes = Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
+    supports_images = Keyword.get(opts, :supports_images, false)
 
     cond do
       not is_binary(model) or model == "" ->
@@ -340,6 +490,9 @@ defmodule Alto.Providers.OpenAICompatible do
 
       not is_integer(max_response_bytes) or max_response_bytes <= 0 ->
         {:error, {:invalid_max_response_bytes, max_response_bytes}}
+
+      not is_boolean(supports_images) ->
+        {:error, {:invalid_supports_images, supports_images}}
 
       true ->
         headers =
@@ -361,6 +514,7 @@ defmodule Alto.Providers.OpenAICompatible do
            timeout: timeout,
            max_event_bytes: max_event_bytes,
            max_response_bytes: max_response_bytes,
+           supports_images: supports_images,
            req_options: Keyword.get(opts, :req_options, [])
          }}
     end

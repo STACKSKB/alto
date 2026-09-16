@@ -38,6 +38,71 @@ defmodule Alto.Providers.AnthropicTest do
     [api_key: "test-secret", model: "configured-model", req_options: [adapter: Adapter]]
   end
 
+  test "sends typed image tool results as native image sources when vision is enabled" do
+    opts =
+      configure(%{
+        "content" => [%{"type" => "text", "text" => "seen"}],
+        "stop_reason" => "end_turn"
+      })
+
+    image = Base.encode64(jpeg(12, 9))
+
+    messages = [
+      %{
+        "role" => "assistant",
+        "tool_calls" => [
+          %{"id" => "call-image", "function" => %{"name" => "read_image", "arguments" => "{}"}}
+        ]
+      },
+      %{
+        "role" => "tool",
+        "tool_call_id" => "call-image",
+        "content" => [
+          %{
+            "type" => "image",
+            "media_type" => "image/jpeg",
+            "data" => image,
+            "width" => 12,
+            "height" => 9
+          }
+        ]
+      }
+    ]
+
+    assert Anthropic.describe(opts).vision == false
+
+    assert {:error, :model_does_not_support_images} =
+             Anthropic.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
+
+    refute_received {:request, _}
+
+    vision_opts = Keyword.put(opts, :supports_images, true)
+    assert Anthropic.describe(vision_opts).vision == true
+
+    assert {:ok, _completion} =
+             Anthropic.stream(%{messages: messages, tools: []}, fn _ -> :ok end, vision_opts)
+
+    assert_receive {:request, request}
+    [_assistant, tool_result] = JSON.decode!(request.body)["messages"]
+
+    assert tool_result["content"] == [
+             %{
+               "type" => "tool_result",
+               "tool_use_id" => "call-image",
+               "content" => [
+                 %{
+                   "type" => "image",
+                   "source" => %{
+                     "type" => "base64",
+                     "media_type" => "image/jpeg",
+                     "data" => image
+                   }
+                 }
+               ]
+             }
+           ]
+  end
+
   test "native messages carry system policy, tool schemas and correlated tool results" do
     opts =
       configure(%{
@@ -332,5 +397,10 @@ defmodule Alto.Providers.AnthropicTest do
                fn _ -> :ok end,
                configure_stream(events)
              )
+  end
+
+  defp jpeg(width, height) do
+    components = <<3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0>>
+    <<0xFF, 0xD8, 0xFF, 0xC0, 17::16, 8, height::16, width::16, components::binary, 0xFF, 0xD9>>
   end
 end

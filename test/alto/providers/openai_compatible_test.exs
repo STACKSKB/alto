@@ -27,6 +27,80 @@ defmodule Alto.Providers.OpenAICompatibleTest do
 
   test "defaults to OpenRouter" do
     assert OpenAICompatible.describe([]).base_url == "https://openrouter.ai/api/v1"
+    assert OpenAICompatible.describe([]).vision == false
+    assert OpenAICompatible.describe(supports_images: true).vision == true
+  end
+
+  test "sends typed image tool results as vision content only when explicitly enabled" do
+    configure_adapter(self(), 200, "application/json", [
+      JSON.encode!(%{"choices" => [%{"message" => %{"content" => "seen"}}]})
+    ])
+
+    image = Base.encode64(png(10, 8))
+
+    messages = [
+      %{
+        "role" => "assistant",
+        "tool_calls" => [
+          %{"id" => "call-image", "function" => %{"name" => "read_image", "arguments" => "{}"}},
+          %{"id" => "call-text", "function" => %{"name" => "read_file", "arguments" => "{}"}}
+        ]
+      },
+      %{
+        "role" => "tool",
+        "tool_call_id" => "call-image",
+        "content" => [
+          %{"type" => "text", "text" => "workspace image"},
+          %{
+            "type" => "image",
+            "media_type" => "image/png",
+            "data" => image,
+            "width" => 10,
+            "height" => 8
+          }
+        ]
+      },
+      %{"role" => "tool", "tool_call_id" => "call-text", "content" => "ordinary text"}
+    ]
+
+    opts = [
+      model: "vision-model",
+      base_url: "https://unit.test/v1",
+      req_options: [adapter: Adapter]
+    ]
+
+    assert {:error, :model_does_not_support_images} =
+             OpenAICompatible.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
+
+    refute_received {:http_request, _}
+
+    assert {:ok, _completion} =
+             OpenAICompatible.stream(
+               %{messages: messages, tools: []},
+               fn _ -> :ok end,
+               Keyword.put(opts, :supports_images, true)
+             )
+
+    assert_receive {:http_request, request}
+    [_assistant, image_tool, text_tool, attachment] = JSON.decode!(request.body)["messages"]
+
+    assert image_tool["content"] ==
+             "workspace image\n[Image attachment follows for tool call call-image.]"
+
+    assert image_tool["tool_call_id"] == "call-image"
+    assert text_tool["content"] == "ordinary text"
+    assert text_tool["tool_call_id"] == "call-text"
+
+    assert attachment == %{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "Image result from tool call call-image:"},
+               %{
+                 "type" => "image_url",
+                 "image_url" => %{"url" => "data:image/png;base64,#{image}"}
+               }
+             ]
+           }
   end
 
   test "streams content and reconstructs fragmented function arguments" do
@@ -315,5 +389,11 @@ defmodule Alto.Providers.OpenAICompatibleTest do
       content_type: content_type,
       chunks: chunks
     })
+  end
+
+  defp png(width, height) do
+    signature = <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>
+    ihdr = <<width::32, height::32, 8, 2, 0, 0, 0>>
+    signature <> <<13::32, "IHDR", ihdr::binary, :erlang.crc32(["IHDR", ihdr])::32>>
   end
 end
