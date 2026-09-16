@@ -10,7 +10,7 @@ defmodule Alto.TUI.Selection do
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.Paragraph
+  alias ExRatatui.Widgets.{Block, Paragraph}
 
   defstruct [
     :snapshot,
@@ -133,7 +133,7 @@ defmodule Alto.TUI.Selection do
         _
       )
       when kind in ["drag", "up"] do
-    moved? = selection.dragged? or {x, y} != selection.anchor
+    moved? = selection.dragged? or kind == "drag" or {x, y} != selection.anchor
 
     cond do
       kind == "drag" -> {:handled, %{selection | dragged?: moved?}}
@@ -145,7 +145,7 @@ defmodule Alto.TUI.Selection do
   def event(%{press: %Mouse{}} = selection, %Mouse{kind: kind, x: x, y: y}, _, _, _)
       when kind in ["drag", "up"] do
     point = clamp_region({x, y}, selection.region)
-    moved? = selection.active? or {x, y} != selection.anchor
+    moved? = selection.active? or kind == "drag" or {x, y} != selection.anchor
 
     next =
       if point == selection.head and moved? == selection.active?,
@@ -227,49 +227,140 @@ defmodule Alto.TUI.Selection do
 
   def text(selection) do
     selected_rows(selection)
-    |> Enum.map_join("\n", fn {_y, cells} ->
-      Enum.map_join(cells, fn {cell, _} -> cell.symbol end) |> String.trim_trailing(" ")
+    |> Enum.map_join("\n", fn {_y, runs} ->
+      Enum.map_join(runs, fn {_x, _width, text} -> text end) |> String.trim_trailing(" ")
     end)
   end
 
-  defp selected_rows(%{anchor: {ax, ay}, head: {hx, hy}} = selection) do
-    {first, last} = Enum.min_max([{ay, ax}, {hy, hx}])
+  defp bounds(%{anchor: {ax, ay}, head: {hx, hy}}), do: Enum.min_max([{ay, ax}, {hy, hx}])
 
-    for y <- elem(first, 0)..elem(last, 0) do
-      cells = elem(selection.snapshot.rows, y)
+  defp selected_rows(selection) do
+    {{fy, fx}, {ly, lx}} = bounds(selection)
+
+    for y <- fy..ly do
+      row = elem(selection.snapshot.rows, y)
 
       {y,
-       Enum.filter(cells, fn {cell, width} ->
-         {y, cell.col + width - 1} >= first and {y, cell.col} <= last
-       end)}
+       segments(
+         row,
+         if(y == fy, do: fx, else: 0),
+         if(y == ly, do: lx, else: selection.snapshot.width)
+       )}
     end
+  end
+
+  defp segments(row, low, high) do
+    Enum.flat_map(row.runs, fn run ->
+      if run.right <= low or run.x > high do
+        []
+      else
+        {x, _, first, _} = point_at(run, max(low, run.x))
+        {_, right, _, last} = point_at(run, min(high, run.right - 1))
+        [{x, right - x, binary_part(run.text, first, last - first)}]
+      end
+    end)
+  end
+
+  # ASCII columns map directly to byte offsets. Store only Unicode exceptions,
+  # avoiding a tuple for every blank/ASCII cell in a large terminal snapshot.
+  defp point_at(run, col) do
+    case preceding(run.points, col, 0, tuple_size(run.points) - 1, nil) do
+      nil ->
+        {col, col + 1, col - run.x, col - run.x + 1}
+
+      {_x, right, _first, last} = point ->
+        if col < right,
+          do: point,
+          else: {col, col + 1, last + col - right, last + col - right + 1}
+    end
+  end
+
+  defp preceding(_points, _col, low, high, found) when low > high, do: found
+
+  defp preceding(points, col, low, high, found) do
+    middle = div(low + high, 2)
+    {x, _, _, _} = point = elem(points, middle)
+
+    if x <= col,
+      do: preceding(points, col, middle + 1, high, point),
+      else: preceding(points, col, low, middle - 1, found)
   end
 
   defp highlight(%{active?: false} = selection), do: selection
 
   defp highlight(selection) do
-    widgets =
-      Enum.flat_map(selected_rows(selection), fn {y, cells} ->
-        # Split at occluded or non-content cells, never painting over other boxes.
-        {runs, _} =
-          Enum.reduce(cells, {[], -1}, fn {cell, width}, {runs, right} ->
-            if cell.col == right do
-              [{x, size, symbols} | rest] = runs
-              {[{x, size + width, [cell.symbol | symbols]} | rest], cell.col + width}
-            else
-              {[{cell.col, width, [cell.symbol]} | runs], cell.col + width}
-            end
-          end)
+    {{fy, fx}, {ly, lx}} = bounds(selection)
 
-        Enum.map(runs, fn {x, width, symbols} ->
-          {%Paragraph{
-             text: symbols |> Enum.reverse() |> IO.iodata_to_binary(),
-             style: %Style{fg: :black, bg: :light_blue}
-           }, %Rect{x: x, y: y, width: width, height: 1}}
-        end)
+    widgets =
+      Enum.flat_map(fy..ly, fn y ->
+        row = elem(selection.snapshot.rows, y)
+
+        if y > fy and y < ly do
+          row.highlight
+        else
+          segments(
+            row,
+            if(y == fy, do: fx, else: 0),
+            if(y == ly, do: lx, else: selection.snapshot.width)
+          )
+          |> Enum.map(&highlight_widget(&1, y))
+        end
       end)
 
     %{selection | highlight: widgets}
+  end
+
+  # A borderless block changes cell styles without shaping/drawing the text again.
+  defp highlight_widget({x, width, _text}, y),
+    do:
+      {%Block{style: %Style{fg: :black, bg: :light_blue}},
+       %Rect{x: x, y: y, width: width, height: 1}}
+
+  defp cached_row(cells, y) do
+    {groups, _} =
+      Enum.reduce(cells, {[], -1}, fn {cell, width} = entry, {groups, right} ->
+        if cell.col == right do
+          [group | rest] = groups
+          {[[entry | group] | rest], cell.col + width}
+        else
+          {[[entry] | groups], cell.col + width}
+        end
+      end)
+
+    runs =
+      groups
+      |> Enum.reverse()
+      |> Enum.map(fn group ->
+        group = Enum.reverse(group)
+
+        {points, _} =
+          Enum.reduce(group, {[], 0}, fn {cell, width}, {points, offset} ->
+            size = byte_size(cell.symbol)
+            last = offset + size
+
+            points =
+              if size == width,
+                do: points,
+                else: [{cell.col, cell.col + width, offset, last} | points]
+
+            {points, last}
+          end)
+
+        {first, _} = hd(group)
+        {last, width} = List.last(group)
+
+        %{
+          x: first.col,
+          right: last.col + width,
+          text: Enum.map_join(group, fn {cell, _} -> cell.symbol end),
+          points: points |> Enum.reverse() |> List.to_tuple()
+        }
+      end)
+
+    %{
+      runs: runs,
+      highlight: Enum.map(runs, &highlight_widget({&1.x, &1.right - &1.x, &1.text}, y))
+    }
   end
 
   defp clamp_region({x, y}, rect),
@@ -325,7 +416,12 @@ defmodule Alto.TUI.Selection do
         end)
 
       %{
-        rows: List.to_tuple(selectable),
+        rows:
+          selectable
+          |> Enum.with_index()
+          |> Enum.map(fn {cells, y} -> cached_row(cells, y) end)
+          |> List.to_tuple(),
+        width: snapshot.width,
         widgets: [
           {%Paragraph{text: Text.new(lines)},
            %Rect{width: snapshot.width, height: snapshot.height}}

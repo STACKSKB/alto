@@ -43,7 +43,12 @@ defmodule Alto.TUI.App do
           _other -> terminal_size()
         end
 
-      state = state |> Map.put(:dimensions, dimensions) |> State.ensure_visible_focus()
+      state =
+        state
+        |> Map.put(:dimensions, dimensions)
+        |> Map.put(:drag_poll, Alto.TUI.DragInput.poller(opts))
+        |> State.ensure_visible_focus()
+
       if state.selected_backend == :codex, do: send(self(), :ensure_codex_backend)
       {:ok, state}
     else
@@ -58,6 +63,7 @@ defmodule Alto.TUI.App do
 
   @impl true
   def handle_event(event, state) do
+    event = Alto.TUI.DragInput.latest(event, state.drag_poll)
     {width, height} = state.dimensions
     widgets = fn -> View.widgets(state, %{width: width, height: height}) end
 
@@ -231,6 +237,8 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{} = key, state), do: {:noreply, navigate(state, key)}
 
   @impl true
+  def handle_info({:tui_deferred_input, event}, state), do: handle_event(event, state)
+
   def handle_info({:alto_tui_event, local_id, %Event{} = event, sender, ref}, state) do
     next = ingest_event(state, local_id, event)
     send(sender, {ref, :ok})
@@ -960,7 +968,7 @@ defmodule Alto.TUI.App do
 
   defp clear_approvals(state, predicate) do
     pending = Enum.reject(state.pending_approvals, predicate)
-    state = %{state | pending_approvals: pending}
+    state = reset_approval_view(state, pending)
 
     if pending == [] and state.details_drawer_auto_opened?,
       do: State.close_details_drawer(state),
@@ -1464,7 +1472,7 @@ defmodule Alto.TUI.App do
         send(waiter, {:alto_approval_decision, request.id, decision})
     end
 
-    next = %{state | pending_approvals: rest, notice: approval_notice(decision)}
+    next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
     cond do
       rest != [] and next.details_drawer_open? ->
@@ -1483,9 +1491,8 @@ defmodule Alto.TUI.App do
 
   defp show_pending_approval(state, pending, notice) do
     next = %{
-      state
-      | pending_approvals: state.pending_approvals ++ [pending],
-        details_visible?: true,
+      reset_approval_view(state, state.pending_approvals ++ [pending])
+      | details_visible?: true,
         notice: notice
     }
 
@@ -1502,6 +1509,17 @@ defmodule Alto.TUI.App do
       true ->
         State.open_details_drawer(next, auto: true)
     end
+  end
+
+  defp reset_approval_view(state, pending) do
+    changed? = List.first(state.pending_approvals) != List.first(pending)
+
+    %{
+      state
+      | pending_approvals: pending,
+        details_scroll: if(changed?, do: 0, else: state.details_scroll),
+        selection: if(changed?, do: Selection.new(), else: state.selection)
+    }
   end
 
   defp approval_decision(:approve), do: :approve

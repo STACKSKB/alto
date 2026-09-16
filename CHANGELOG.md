@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reset context scroll when the displayed approval changes and present commands,
+  folders, file changes and execution constraints without Elixir map syntax.
+- Reuse highlighted row caches and coalesce ordered mouse-motion bursts so large
+  selections and rapid direction changes do not queue stale frames.
+
 - Cache the TUI selection frame and highlight only changed content runs, avoiding
   full-view and per-cell span reconstruction on every drag. Batch Unicode width
   probes. Default to content selection, with Alt+drag for UI text, and replace

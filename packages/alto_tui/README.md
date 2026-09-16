@@ -66,3 +66,15 @@ Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
 your draft. Up/Down recalls saved folders in the dialog. The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
+
+Approval requests start at the top of the context pane, including when the next
+queued request becomes active. Commands show the prepared command line, folder,
+reason and execution limits. File changes show paths, replacement text and a
+preview; other tools use readable labels. Approval still authorizes the original
+prepared operation, not the display text.
+
+Large selections reuse cached full rows and slice only their two boundary rows.
+Highlighting changes cell colors without redrawing the selected text.
+Consecutive mouse-motion events are coalesced before drawing, including remote
+terminal sessions; releases, key presses, resize events and other messages keep
+their order.

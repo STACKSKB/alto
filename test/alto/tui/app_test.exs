@@ -753,7 +753,7 @@ defmodule Alto.TUI.AppTest do
     assert :ok = ExRatatui.draw(terminal, View.widgets(prompted, %{width: 80, height: 24}))
     approval_buffer = ExRatatui.get_buffer_content(terminal)
     assert approval_buffer =~ "approval required"
-    assert approval_buffer =~ "git_mutate"
+    assert approval_buffer =~ "Git mutate"
 
     assert {:noreply, decided} = App.handle_event(%Key{code: "f8", kind: "press"}, prompted)
     assert_receive {:alto_approval_decision, "approval-1", :approve}

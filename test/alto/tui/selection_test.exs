@@ -249,6 +249,47 @@ defmodule Alto.TUI.SelectionTest do
     assert drag(widgets, {20, 3}, {0, 0}, {19, 0}).active?
   end
 
+  test "a coalesced drag returning to its anchor never becomes a button click" do
+    widgets = fn -> [{%Paragraph{text: "Approve"}, %Rect{width: 20, height: 2}}] end
+    down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
+
+    for content <- [fn -> [] end, fn -> :all end] do
+      opts = [content: content]
+      {:handled, pressed} = Selection.event(Selection.new(), down, {20, 2}, widgets, opts)
+
+      {:handled, dragged} =
+        Selection.event(pressed, %{down | kind: "drag"}, {20, 2}, widgets, opts)
+
+      assert {:handled, _} =
+               Selection.event(dragged, %{down | kind: "up"}, {20, 2}, widgets, opts)
+    end
+  end
+
+  test "large selections shrink and reverse without stale highlight or broken Unicode boundaries" do
+    widgets = fn ->
+      [{%Paragraph{text: String.duplicate("A猫👩‍💻éZ\n", 18)}, %Rect{width: 40, height: 20}}]
+    end
+
+    down = %Mouse{kind: "down", button: "left", x: 1, y: 8}
+    {:handled, initial} = Selection.event(Selection.new(), down, {40, 20}, widgets)
+
+    Enum.reduce([{38, 18}, {3, 2}, {7, 8}, {2, 8}, {38, 18}, {0, 0}], initial, fn {x, y}, state ->
+      {:handled, selected} =
+        Selection.event(state, %{down | kind: "drag", x: x, y: y}, {40, 20}, widgets)
+
+      cells = render_cells(Selection.widgets(selected, []), {40, 20})
+      highlighted = Enum.filter(cells, &(&1.bg == :light_blue))
+      assert Enum.all?(highlighted, &(&1.row in min(y, 8)..max(y, 8)))
+      assert Enum.filter(cells, &(&1.symbol == "Z")) |> Enum.all?(&(&1.col == 6))
+
+      if y == 8 do
+        assert Selection.text(selected) == if(x == 2, do: "猫", else: "猫👩‍💻éZ")
+      end
+
+      selected
+    end)
+  end
+
   defp render_cells(widgets, {width, height}) do
     terminal = CellSession.new(width, height)
 

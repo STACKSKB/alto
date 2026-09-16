@@ -6,7 +6,7 @@ alias ExRatatui.Event.Mouse
 alias ExRatatui.Layout.Rect
 alias ExRatatui.Widgets.{Block, Paragraph}
 
-for {w, h} <- [{160, 50}, {240, 70}] do
+for {w, h} <- [{160, 50}, {240, 70}, {400, 120}] do
   lines =
     Enum.map_join(1..h, "\n", fn n ->
       "#{n} " <> String.duplicate("sample 猫 text ", div(w, 14))
@@ -35,23 +35,51 @@ for {w, h} <- [{160, 50}, {240, 70}] do
     for n <- 1..120 do
       event = %{down | kind: "drag", x: min(w - 2, 10 + rem(n, 100)), y: 2 + rem(n, h - 4)}
 
-      {us, _} =
-        :timer.tc(fn ->
-          {:handled, selected} = Selection.event(pressed, event, {w, h}, widgets)
-          :ok = CellSession.draw(terminal, Selection.widgets(selected, widgets))
-        end)
+      {event_us, {:handled, selected}} =
+        :timer.tc(fn -> Selection.event(pressed, event, {w, h}, widgets) end)
 
-      us
+      {draw_us, :ok} =
+        :timer.tc(fn -> CellSession.draw(terminal, Selection.widgets(selected, widgets)) end)
+
+      {event_us + draw_us, event_us}
     end
     |> Enum.sort()
 
   IO.inspect(%{
     viewport: {w, h},
     down_us: start,
-    drag_median_us: Enum.at(samples, 60),
-    drag_p95_us: Enum.at(samples, 114),
-    drag_max_us: List.last(samples)
+    drag_median_us: elem(Enum.at(samples, 60), 0),
+    drag_p95_us: elem(Enum.at(samples, 114), 0),
+    drag_max_us: elem(List.last(samples), 0),
+    highlight_median_us: samples |> Enum.map(&elem(&1, 1)) |> Enum.sort() |> Enum.at(60)
   })
+
+  burst =
+    for n <- 1..200,
+        do: %{down | kind: "drag", x: if(rem(n, 2) == 0, do: w - 2, else: 2), y: h - 2}
+
+  Process.put(:selection_benchmark_input, burst)
+
+  poll = fn ->
+    case Process.get(:selection_benchmark_input) do
+      [next | rest] ->
+        Process.put(:selection_benchmark_input, rest)
+        next
+
+      [] ->
+        nil
+    end
+  end
+
+  {burst_us, _} =
+    :timer.tc(fn ->
+      latest = Alto.TUI.DragInput.latest(%{down | kind: "drag"}, poll)
+      {:handled, selected} = Selection.event(pressed, latest, {w, h}, widgets)
+      :ok = CellSession.draw(terminal, Selection.widgets(selected, widgets))
+    end)
+
+  IO.inspect(%{viewport: {w, h}, queued_motion_events: 200, coalesced_frame_us: burst_us})
+  Process.delete(:selection_benchmark_input)
 
   CellSession.close(terminal)
 end

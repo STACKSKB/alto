@@ -117,6 +117,61 @@ defmodule Alto.TUI.ApprovalControlsTest do
     refute_receive {:alto_approval_decision, _, _}, 10
   end
 
+  test "new approvals and the next queued request start at the top in both context layouts",
+       context do
+    for dimensions <- [{140, 40}, {80, 24}] do
+      {width, height} = dimensions
+      initial = pending_state(context, dimensions)
+
+      initial = %{
+        initial
+        | pending_approvals: [],
+          details_scroll: 500,
+          selection: %{Alto.TUI.Selection.new() | active?: true}
+      }
+
+      request = %{
+        id: "ls-request",
+        tool: "run_command",
+        arguments: %{"program" => "ls", "args" => ["-la"]},
+        details: %{
+          command: %{
+            requested_program: "ls",
+            executable: "/usr/bin/ls",
+            args: ["-la"],
+            cwd: context.root,
+            timeout_ms: 30_000
+          }
+        }
+      }
+
+      {:noreply, shown} =
+        App.handle_info({:alto_approval_request, "run", request, self()}, initial)
+
+      assert shown.details_scroll == 0
+      refute shown.selection.active?
+      {buffer, _} = render(shown, width, height)
+      assert buffer =~ "Run command"
+      assert buffer =~ "ls -la"
+      refute buffer =~ "%{"
+      second = %{request | id: "pwd-request", arguments: %{"program" => "pwd"}, details: %{}}
+
+      {:noreply, queued} =
+        App.handle_info({:alto_approval_request, "run", second, self()}, %{
+          shown
+          | details_scroll: 2
+        })
+
+      assert queued.details_scroll == 2
+      {:noreply, next} = App.handle_event(%ExRatatui.Event.Key{code: "f8"}, queued)
+      assert_receive {:alto_approval_decision, "ls-request", :approve}
+      assert next.details_scroll == 0
+      {buffer, _} = render(next, width, height)
+      assert buffer =~ "pwd"
+      assert buffer =~ "Run command"
+    end
+  end
+
   defp pending_state(context, dimensions) do
     assert {:ok, state} =
              State.new(context.config,

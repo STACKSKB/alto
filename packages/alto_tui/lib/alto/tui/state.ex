@@ -28,6 +28,7 @@ defmodule Alto.TUI.State do
     :clipboard_text,
     :clipboard_write,
     :clipboard_read,
+    :drag_poll,
     selection: %Alto.TUI.Selection{},
     dimensions: {120, 36},
     projects: [],

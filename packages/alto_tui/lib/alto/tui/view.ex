@@ -994,12 +994,7 @@ defmodule Alto.TUI.View do
   defp details_target(_state, _rect, _x, _y), do: :details
 
   defp details_content(%{pending_approvals: [%{request: request} | _]}, _presentation) do
-    text =
-      "#{request.tool}\n\n" <>
-        "Arguments\n#{inspect(request.arguments, pretty: true, limit: 30)}\n\n" <>
-        "Prepared\n#{inspect(request.details, pretty: true, limit: 30)}"
-
-    {" approval required ", text}
+    {" approval required ", Alto.TUI.ApprovalView.text(request)}
   end
 
   defp details_content(state, _presentation) do
