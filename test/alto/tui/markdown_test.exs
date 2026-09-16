@@ -105,6 +105,22 @@ defmodule Alto.TUI.MarkdownTest do
     assert Transcript.render(entries, 60) == text
   end
 
+  test "large user and reasoning messages are not shortened by diagnostic limits" do
+    message = String.duplicate("literal **content**\n", 500) <> "LAST LINE"
+
+    for kind <- [:user, :reasoning] do
+      assert Transcript.render([%{kind: kind, text: message}], 60) |> plain() =~ "LAST LINE"
+    end
+
+    activity =
+      Transcript.render([%{kind: :activity, text: ~s({"output":"first\\nsecond"})}], 60)
+      |> plain()
+
+    assert activity =~ "first"
+    assert activity =~ "second"
+    refute activity =~ "\\n"
+  end
+
   test "rich viewport equals the full native render, and copy follows visible formatted text" do
     text =
       Markdown.render(

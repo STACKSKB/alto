@@ -52,10 +52,13 @@ defmodule Alto.TUI.Transcript do
           _ -> "· "
         end
 
+      value = entry[:text]
+
       text =
         case kind do
-          "tool" -> Alto.Display.result(entry[:text])
+          role when role in ["tool", "activity"] -> Alto.Display.result(entry[:text])
           "error" -> Alto.Display.error(entry[:text])
+          role when role in ["user", "reasoning"] and is_binary(value) -> entry.text
           _ -> Alto.Display.text(entry[:text])
         end
 
