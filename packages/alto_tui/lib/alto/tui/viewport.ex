@@ -6,6 +6,16 @@ defmodule Alto.TUI.Viewport do
 
   def widgets(widgets) do
     Enum.map(widgets, fn
+      {%Paragraph{text: %ExRatatui.Text{lines: lines} = text, wrap: false, scroll: {offset, 0}} =
+           widget, rect} ->
+        inner = SelectionRegions.content_rect(widget, rect)
+
+        {%{
+           widget
+           | text: %{text | lines: Enum.slice(lines, offset, max(inner.height, 0))},
+             scroll: {0, 0}
+         }, rect}
+
       {%Paragraph{text: text, wrap: true, scroll: {offset, 0}, alignment: :left} = widget, rect}
       when is_binary(text) and byte_size(text) > 4096 ->
         inner = SelectionRegions.content_rect(widget, rect)
@@ -17,6 +27,9 @@ defmodule Alto.TUI.Viewport do
         other
     end)
   end
+
+  def bottom(%ExRatatui.Text{lines: lines}, _width, height),
+    do: max(length(lines) - max(height, 1), 0)
 
   def bottom(text, width, height),
     do: max(tuple_size(rows(text, max(width, 1))) - max(height, 1), 0)

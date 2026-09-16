@@ -68,3 +68,23 @@ for n <- 1..3 do
 
   IO.inspect(%{warm_down_us: down, warm_scroll_us: scroll, streaming_drag_frame_us: stream})
 end
+
+# A large Markdown report exercises table layout while its final row streams.
+rows =
+  Enum.map_join(1..120, "\n", fn n ->
+    "| #{n} | `file#{n}.ex` | " <> String.duplicate("Review evidence ", 10) <> " |"
+  end)
+
+report = "## Long review\n\n| # | File | Evidence |\n| --- | --- | --- |\n" <> rows
+entries = [%{kind: :assistant, text: report}]
+{cold, _} = :timer.tc(fn -> Alto.TUI.Transcript.render(entries, 160) end)
+entries = [%{kind: :assistant, text: report <> " more streaming text"}]
+{stream, rich} = :timer.tc(fn -> Alto.TUI.Transcript.render(entries, 160) end)
+{warm, _} = :timer.tc(fn -> Alto.TUI.Transcript.render(entries, 160) end)
+
+IO.inspect(%{
+  report_cold_us: cold,
+  report_stream_us: stream,
+  report_cached_us: warm,
+  rows: length(rich.lines)
+})

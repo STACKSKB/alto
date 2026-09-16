@@ -220,16 +220,22 @@ defmodule Alto.TUI.Selection do
     |> Enum.reverse()
     |> Enum.find_value(fn
       {{%Paragraph{text: text, scroll: {offset, _}} = widget, rect}, index}
-      when is_binary(text) ->
+      when is_binary(text) or is_struct(text, ExRatatui.Text) ->
         inner = SelectionRegions.content_rect(widget, rect)
 
         if inner == selection.region do
           limit =
             Keyword.get(opts, :scroll_limit, fn _point ->
-              if widget.wrap,
-                do: Alto.TUI.Scroll.bottom(text, inner.width, inner.height, :selection),
-                else:
+              cond do
+                is_struct(text, ExRatatui.Text) ->
+                  max(length(text.lines) - inner.height, 0)
+
+                widget.wrap ->
+                  Alto.TUI.Scroll.bottom(text, inner.width, inner.height, :selection)
+
+                true ->
                   max(length(String.split(String.trim_trailing(text), "\n")) - inner.height, 0)
+              end
             end)
 
           %{
@@ -534,7 +540,7 @@ defmodule Alto.TUI.Selection do
       end
 
     rows = List.to_tuple(rows)
-    painted = Enum.map(widgets, &crop_history(&1, rows))
+    painted = widgets |> Enum.map(&crop_history(&1, rows)) |> Alto.TUI.Viewport.widgets()
     %{rows: rows, width: width, widgets: painted, source_widgets: widgets}
   end
 
@@ -694,6 +700,9 @@ defmodule Alto.TUI.Selection do
 
   # Batch Unicode width probes into one native draw/read instead of one native
   # roundtrip per distinct character. ASCII needs no probe.
+  @doc false
+  def glyph_widths(symbols), do: symbol_widths(symbols)
+
   defp symbol_widths(symbols) do
     key = {__MODULE__, :glyph_widths}
     cached = Process.get(key, %{})

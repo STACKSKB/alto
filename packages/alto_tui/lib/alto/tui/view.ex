@@ -17,6 +17,7 @@ defmodule Alto.TUI.View do
 
   @doc "Render one complete frame."
   def widgets(%State{} = state, %{width: width, height: height}) do
+    state = %{state | dimensions: {width, height}}
     layout = layout(state, width, height)
 
     []
@@ -294,7 +295,7 @@ defmodule Alto.TUI.View do
 
     %Paragraph{
       text: text,
-      wrap: true,
+      wrap: is_binary(text),
       scroll: {transcript_scroll(state), 0},
       style: style(fg: :white),
       block: block(title, state.focus == :transcript)
@@ -553,17 +554,9 @@ defmodule Alto.TUI.View do
           "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
 
       entries ->
-        key = {__MODULE__, :transcript_text}
-
-        case Process.get(key) do
-          {^entries, text} ->
-            text
-
-          _ ->
-            text = Enum.map_join(entries, "\n\n", &format_entry/1)
-            Process.put(key, {entries, text})
-            text
-        end
+        {width, height} = state.dimensions
+        rect = layout(state, width, height).transcript
+        Alto.TUI.Transcript.render(entries, max(rect.width - 2, 1))
     end
   end
 
@@ -1093,8 +1086,12 @@ defmodule Alto.TUI.View do
   defp format_entry(%{kind: :reasoning, text: text}), do: "thinking › " <> text
 
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
-  defp format_entry(%{kind: :assistant, text: text}), do: "alto › " <> text
-  defp format_entry(%{kind: :codex_assistant, text: text}), do: "codex › " <> text
+
+  defp format_entry(%{kind: :assistant, text: text}),
+    do: "alto › " <> Alto.TUI.Markdown.plain(text, 80)
+
+  defp format_entry(%{kind: :codex_assistant, text: text}),
+    do: "codex › " <> Alto.TUI.Markdown.plain(text, 80)
 
   defp format_entry(%{kind: :tool, text: text, detail: detail}) when detail not in [nil, ""],
     do: "tool · " <> Alto.Display.text(text) <> "\n" <> Alto.ToolDisplay.detail(detail)

@@ -116,6 +116,13 @@ ALTO_TUI_LOCAL=1 mix deps.get
 ALTO_TUI_LOCAL=1 mix alto.tui --config ../../alto.agentic.exs
 ```
 
+Assistant responses render as Markdown while streaming and when reopening a task:
+headings and emphasis are styled, fenced code retains indentation with syntax
+color, and tables use aligned columns when they fit or labeled records for long
+reports. Selection copies the visible formatted text; saved messages retain the
+original Markdown. Layout caches and viewport-only painting keep report formatting
+out of the pointer-motion path. The shared renderer is also used by Zekkyou.
+
 The TUI example hosts runs locally and uses the same approval, execution,
 cancellation, and session contracts as other hosts. Applications can build
 independently reconnectable clients using the transport contract below.

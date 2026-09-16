@@ -1,6 +1,9 @@
 defmodule Alto.TUI.Scroll do
   @moduledoc "Exact, cached scroll limits using the terminal's own word wrapping."
 
+  def bottom(%ExRatatui.Text{} = text, width, height, _slot),
+    do: Alto.TUI.Viewport.bottom(text, width, height)
+
   def bottom(text, width, height, slot) do
     width = max(width, 1)
     key = {__MODULE__, slot}
