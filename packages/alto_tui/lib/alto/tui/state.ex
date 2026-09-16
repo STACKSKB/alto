@@ -610,7 +610,7 @@ defmodule Alto.TUI.State do
 
   defp load_session_entries(session_id, opts) do
     case Session.transcript(session_id, Keyword.take(opts, [:session_dir])) do
-      {:ok, %{messages: messages}} -> Enum.flat_map(messages, &message_entries/1)
+      {:ok, %{messages: messages}} -> Alto.ToolDisplay.transcript(messages)
       _error -> []
     end
   end
@@ -639,22 +639,6 @@ defmodule Alto.TUI.State do
   end
 
   defp merge_record_usage(_record, usage), do: usage
-
-  defp message_entries(%{"role" => "user", "content" => text}) when is_binary(text),
-    do: [%{kind: :user, text: text}]
-
-  defp message_entries(%{"role" => "assistant"} = message) do
-    Alto.Reasoning.entries(message) ++
-      if(is_binary(message["content"]) and message["content"] != "",
-        do: [%{kind: :assistant, text: message["content"]}],
-        else: []
-      )
-  end
-
-  defp message_entries(%{"role" => "tool", "content" => text}) when is_binary(text),
-    do: [%{kind: :tool, text: Alto.Display.result(text)}]
-
-  defp message_entries(_message), do: []
 
   defp load_tasks(projects, opts) do
     Enum.reduce_while(projects, {:ok, %{}}, fn project, {:ok, acc} ->

@@ -1222,26 +1222,11 @@ defmodule Alto.TUI.App do
     State.update_usage(state, task_id, Map.get(data, :usage, %{}))
   end
 
-  defp do_ingest_event(state, task_id, %Event{type: :tool_started, data: data}) do
-    State.append_entry(state, task_id, %{kind: :tool, text: "#{data.name} …"})
-  end
-
-  defp do_ingest_event(state, task_id, %Event{type: :tool_completed, data: data}) do
-    State.append_entry(state, task_id, %{
-      kind: :tool,
-      text: "#{data.name} ✓",
-      detail: Map.get(data, :output)
-    })
-  end
-
-  defp do_ingest_event(state, task_id, %Event{type: :tool_failed, data: data}) do
-    detail = human_error(data.error)
-
-    State.append_entry(state, task_id, %{
-      kind: :error,
-      text: "#{data.name} failed",
-      detail: detail
-    })
+  defp do_ingest_event(state, task_id, %Event{type: type, data: data})
+       when type in [:tool_started, :tool_completed, :tool_failed] do
+    entry = Alto.ToolDisplay.entry(type, data)
+    key = {:tool, data[:operation_id] || data[:call_id]}
+    State.upsert_entry(state, task_id, key, entry)
   end
 
   defp do_ingest_event(state, task_id, %Event{type: :context_handoff_created, data: data}) do

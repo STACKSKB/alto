@@ -274,7 +274,8 @@ defmodule Alto.Runner.Execution do
                   call_id: job.id,
                   operation_id: job.op_id,
                   run_id: run.tool_context.session_id,
-                  name: job.name
+                  name: job.name,
+                  summary: job.summary
                 })
               )
             end)
@@ -475,7 +476,8 @@ defmodule Alto.Runner.Execution do
           tool,
           run,
           pending.request.operation_id,
-          pending.origin
+          pending.origin,
+          Alto.ToolDisplay.summary(pending.request.tool, pending.request.arguments)
         )
       else
         tool_failure(
@@ -1005,7 +1007,16 @@ defmodule Alto.Runner.Execution do
         {:ok, prepared, details} ->
           case authorize_tool(call_id, name, arguments, details, tool, run, op_id) do
             :ok ->
-              run_tool(call_id, name, prepared, tool, run, op_id, origin)
+              run_tool(
+                call_id,
+                name,
+                prepared,
+                tool,
+                run,
+                op_id,
+                origin,
+                Alto.ToolDisplay.summary(name, arguments)
+              )
 
             {:suspend, request} ->
               {:suspend, %{request: request, prepared: prepared, origin: origin}, run}
@@ -1123,6 +1134,7 @@ defmodule Alto.Runner.Execution do
                 op_id: op_id,
                 origin: origin,
                 tool: tool,
+                summary: Alto.ToolDisplay.summary(name, Map.get(call, :arguments_json, "{}")),
                 preparation: preparation
               }
 
@@ -1159,6 +1171,7 @@ defmodule Alto.Runner.Execution do
 
             {:ok, value} ->
               tool_outcome(job.id, job.name, value, run, job.op_id, job.origin)
+              |> tool_event_summary(job.summary)
 
             {:rejected, reason} ->
               tool_failure(
@@ -1253,7 +1266,7 @@ defmodule Alto.Runner.Execution do
         op_id
       )
 
-  defp run_tool(call_id, name, prepared, tool, run, op_id, origin) do
+  defp run_tool(call_id, name, prepared, tool, run, op_id, origin, summary) do
     case cancellation(run.cancel_ref) do
       {:cancelled, reason} ->
         {:cancelled, reason, run}
@@ -1266,7 +1279,8 @@ defmodule Alto.Runner.Execution do
               call_id: call_id,
               operation_id: op_id,
               run_id: run.tool_context.session_id,
-              name: name
+              name: name,
+              summary: summary
             })
           )
 
@@ -1284,6 +1298,7 @@ defmodule Alto.Runner.Execution do
           case Alto.Runner.Execution.Tool.invoke(tool, prepared, tool_capabilities(run)) do
             {:ok, outcome} ->
               tool_outcome(call_id, name, outcome, Map.delete(run, :in_flight), op_id, origin)
+              |> tool_event_summary(summary)
 
             {:error, reason} ->
               tool_failure(
@@ -1302,6 +1317,11 @@ defmodule Alto.Runner.Execution do
         end
     end
   end
+
+  defp tool_event_summary({:event, event, run}, summary),
+    do: {:event, %{event | data: Map.put(event.data, :summary, summary)}, run}
+
+  defp tool_event_summary(other, _summary), do: other
 
   defp tool_outcome(call_id, name, {:ok, value}, run, op_id, origin) do
     # Bounded native result contract: the native `value` is measured

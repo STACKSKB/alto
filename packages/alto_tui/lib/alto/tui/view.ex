@@ -1089,7 +1089,7 @@ defmodule Alto.TUI.View do
       |> Enum.map(fn entry ->
         case Map.get(entry, :detail) do
           detail when detail not in [nil, "", %{}, []] ->
-            format_entry(entry) <> "\n" <> Alto.Display.result(detail)
+            format_entry(Map.delete(entry, :detail)) <> "\n" <> Alto.Display.result(detail)
 
           _other ->
             format_entry(entry)
@@ -1107,6 +1107,10 @@ defmodule Alto.TUI.View do
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
   defp format_entry(%{kind: :assistant, text: text}), do: "alto › " <> text
   defp format_entry(%{kind: :codex_assistant, text: text}), do: "codex › " <> text
+
+  defp format_entry(%{kind: :tool, text: text, detail: detail}) when detail not in [nil, ""],
+    do: "tool · " <> Alto.Display.text(text) <> "\n" <> Alto.ToolDisplay.detail(detail)
+
   defp format_entry(%{kind: :tool, text: text}), do: "tool · " <> Alto.Display.result(text)
   defp format_entry(%{kind: :error, text: text}), do: "error ! " <> Alto.Display.error(text)
   defp format_entry(%{kind: :system, text: text}), do: "· " <> Alto.Display.text(text)

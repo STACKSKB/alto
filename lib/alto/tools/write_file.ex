@@ -47,7 +47,12 @@ defmodule Alto.Tools.WriteFile do
     with {:ok, resolved} <- revalidate_target(prepared, context),
          {:ok, mode} <- revalidate_original(prepared),
          :ok <- AtomicWrite.write(resolved, prepared.content, mode) do
-      {:ok, %{path: prepared.path, bytes_written: byte_size(prepared.content)}}
+      {:ok,
+       %{
+         path: prepared.path,
+         bytes_written: byte_size(prepared.content),
+         patch: Map.get(prepared, :patch)
+       }}
     end
   end
 
@@ -72,14 +77,22 @@ defmodule Alto.Tools.WriteFile do
         path: path,
         resolved: resolved,
         content: content,
-        original: original
+        original: if(is_map(original), do: Map.delete(original, :content), else: original),
+        patch:
+          Alto.Tools.UnifiedDiff.render(
+            path,
+            if(is_map(original), do: original.content, else: ""),
+            content,
+            16_384
+          )
       }
 
       details = %{
         path: path,
         bytes_before: original_bytes(original),
         bytes_after: byte_size(content),
-        preview: preview(content)
+        preview: preview(content),
+        patch: prepared.patch
       }
 
       {:ok, prepared, details}
@@ -101,7 +114,8 @@ defmodule Alto.Tools.WriteFile do
     case File.stat(path) do
       {:ok, %{type: :regular, mode: mode} = stat} ->
         with {:ok, content} <- File.read(path) do
-          {:ok, %{fingerprint: fingerprint(content), mode: mode, bytes: stat.size}}
+          {:ok,
+           %{fingerprint: fingerprint(content), mode: mode, bytes: stat.size, content: content}}
         end
 
       {:ok, _stat} ->

@@ -87,7 +87,8 @@ defmodule Alto.Tools.EditFile do
          path: prepared.path,
          replacements: prepared.replacements,
          bytes_before: byte_size(content),
-         bytes_after: byte_size(prepared.updated)
+         bytes_after: byte_size(prepared.updated),
+         patch: Map.get(prepared, :patch)
        }}
     end
   end
@@ -116,7 +117,8 @@ defmodule Alto.Tools.EditFile do
         updated: updated,
         replacements: replacements,
         fingerprint: fingerprint(content),
-        mode: stat.mode
+        mode: stat.mode,
+        patch: UnifiedDiff.render(path, content, updated, @patch_bytes)
       }
 
       details = %{
@@ -125,7 +127,7 @@ defmodule Alto.Tools.EditFile do
         bytes_before: byte_size(content),
         bytes_after: byte_size(updated),
         preview: bounded(content: updated, limit: @preview_bytes),
-        patch: UnifiedDiff.render(path, content, updated, @patch_bytes)
+        patch: prepared.patch
       }
 
       {:ok, prepared, details}
