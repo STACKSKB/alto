@@ -15,6 +15,7 @@ defmodule Alto.Runner.Execution.Setup do
   @default_max_transcript_bytes 8_000_000
   @default_max_events 1_000
   @default_provider_retries 0
+  @default_max_compactions 1
   @default_compaction_keep_messages 10
   @default_compaction_max_summary_bytes 8_000
   @default_compaction_max_handoff_bytes 24_000
@@ -156,6 +157,7 @@ defmodule Alto.Runner.Execution.Setup do
       session_dir: nil,
       compaction: false,
       compacted?: false,
+      compaction_count: 0,
       provider_retries: @default_provider_retries,
       agent_depth: 0,
       agent_identity: agent_identity,
@@ -405,6 +407,7 @@ defmodule Alto.Runner.Execution.Setup do
 
   @compaction_defaults [
     strategy: :summary,
+    max_compactions: @default_max_compactions,
     keep_recent_messages: @default_compaction_keep_messages,
     max_summary_bytes: @default_compaction_max_summary_bytes,
     max_handoff_bytes: @default_compaction_max_handoff_bytes,
@@ -418,6 +421,7 @@ defmodule Alto.Runner.Execution.Setup do
     if Keyword.keyword?(opts) do
       with {:ok, normalized} <- Keyword.validate(opts, @compaction_defaults),
            :ok <- validate_compaction_strategy(Keyword.fetch!(normalized, :strategy)),
+           :ok <- positive(:max_compactions, Keyword.fetch!(normalized, :max_compactions)),
            :ok <-
              positive(:keep_recent_messages, Keyword.fetch!(normalized, :keep_recent_messages)),
            :ok <- positive(:max_summary_bytes, Keyword.fetch!(normalized, :max_summary_bytes)),
@@ -437,8 +441,13 @@ defmodule Alto.Runner.Execution.Setup do
   defp validate_compaction_strategy(strategy) when strategy in [:summary, :handoff], do: :ok
 
   defp validate_compaction_strategy({module, opts}) when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :request, 3) and
-         function_exported?(module, :decode, 3) and Keyword.keyword?(opts),
+    deterministic? = function_exported?(module, :reduce, 3)
+
+    provider_backed? =
+      function_exported?(module, :request, 3) and function_exported?(module, :decode, 3)
+
+    if Code.ensure_loaded?(module) and (deterministic? or provider_backed?) and
+         Keyword.keyword?(opts),
        do: :ok,
        else: {:error, {:invalid_strategy, module}}
   end
@@ -460,6 +469,7 @@ defmodule Alto.Runner.Execution.Setup do
         session_dir: Keyword.get(opts, :session_dir),
         compaction: Keyword.fetch!(extensions, :compaction),
         compacted?: false,
+        compaction_count: 0,
         provider_retries: Keyword.fetch!(extensions, :provider_retries),
         agent_depth: Keyword.fetch!(extensions, :agent_depth),
         resume_snapshot: Keyword.fetch!(extensions, :resume_snapshot),

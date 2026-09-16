@@ -1,8 +1,7 @@
 defmodule Alto.Runner.SerialCompactionTest do
   @moduledoc """
-  Bounded recovery compaction: a single summarization pass when the transcript
-  ceiling hits, degrading to the pre-compaction error on any failure — never
-  a retry loop, never silent history loss.
+  Bounded recovery compaction with explicit repeat limits, shared budgets,
+  durable summaries, and conversation-safe boundaries.
   """
 
   use ExUnit.Case, async: true
@@ -186,6 +185,16 @@ defmodule Alto.Runner.SerialCompactionTest do
     def decode(%{message: content}, _limit, _opts), do: {:ok, "Domain state: " <> content}
   end
 
+  defmodule DeterministicReducer do
+    @behaviour Alto.Context.Compaction
+
+    @impl true
+    def reduce(input, _limit, opts) do
+      send(opts[:owner], {:deterministic_input, input})
+      {:ok, "Retained domain state."}
+    end
+  end
+
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-compact-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
@@ -272,7 +281,7 @@ defmodule Alto.Runner.SerialCompactionTest do
     refute Enum.any?(result.events, &(&1.type == :context_compacted))
   end
 
-  test "a second ceiling hit fails closed instead of looping", %{dir: dir} do
+  test "the compatibility default still permits one compaction", %{dir: dir} do
     assert {:error, {:transcript_limit, 400}, result} =
              Alto.run("go",
                provider: {SummaryTextProvider, []},
@@ -285,6 +294,126 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     compacted = Enum.filter(result.events, &(&1.type == :context_compacted))
     assert length(compacted) == 1
+    assert hd(compacted).data.compaction_count == 1
+  end
+
+  test "an explicit limit permits repeat reductions and stops at that limit", %{dir: dir} do
+    assert {:error, {:transcript_limit, 800}, result} =
+             Alto.run("go",
+               provider: {SummaryTextProvider, []},
+               tools: [EchoTool],
+               max_transcript_bytes: 800,
+               compaction: [
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: :new,
+               session_dir: dir
+             )
+
+    compacted = Enum.filter(result.events, &(&1.type == :context_compacted))
+    assert Enum.map(compacted, & &1.data.compaction_count) == [1, 2]
+    assert Enum.all?(compacted, &(&1.data.reason == :transcript_limit))
+    assert :ok = Alto.Context.Transcript.validate(result.messages)
+
+    assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
+    assert Enum.count(records, &(&1["type"] == "compaction")) == 2
+  end
+
+  test "a deterministic reducer works without a provider through the public reduction API", %{
+    dir: dir
+  } do
+    session = Session.generate_id()
+
+    assert {:ok, run} =
+             Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+               provider: nil,
+               max_transcript_bytes: 10_000,
+               compaction: [
+                 strategy: {DeterministicReducer, owner: self()},
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: session,
+               session_dir: dir
+             )
+
+    state = Alto.Runner.Execution.Transcript.project(run)
+
+    state =
+      Enum.reduce(1..4, state, fn index, state ->
+        message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+        assert {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+        state
+      end)
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.reduce(state, reason: :model_context_pressure)
+
+    assert state.compaction_count == 1
+    assert state.model_requests == 0
+    assert_received {:deterministic_input, first_input}
+    assert String.contains?(first_input, String.duplicate("1", 120))
+
+    state =
+      Enum.reduce(5..8, state, fn index, state ->
+        message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+        assert {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+        state
+      end)
+
+    assert {:ok, state} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert state.compaction_count == 2
+    assert state.model_requests == 0
+    assert :ok = Alto.Context.Transcript.validate(Enum.reverse(state.messages_rev))
+
+    assert {:error, {:compaction_limit, 2}, same} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert same.messages_rev == state.messages_rev
+    assert same.compaction_count == 2
+  end
+
+  test "an ineffective reduction does not consume a compaction slot", %{dir: dir} do
+    session = Session.generate_id()
+
+    assert {:ok, run} =
+             Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+               provider: nil,
+               max_transcript_bytes: 1_000,
+               compaction: [
+                 strategy: {DeterministicReducer, owner: self()},
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: session,
+               session_dir: dir
+             )
+
+    state = Alto.Runner.Execution.Transcript.project(run)
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.append(state, %{
+               "role" => "user",
+               "content" => String.duplicate("more", 80)
+             })
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.append(state, %{
+               "role" => "user",
+               "content" => String.duplicate("older", 60)
+             })
+
+    before = state.messages_rev
+
+    assert {:error, {:compaction_insufficient_headroom, _}, state} =
+             Alto.Runner.Execution.Transcript.reduce(state, required_headroom: 950)
+
+    assert state.messages_rev == before
+    assert state.compaction_count == 0
   end
 
   test "handoff strategy creates structured artifacts and a generated next step", %{dir: dir} do
@@ -361,6 +490,9 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "invalid compaction and retry options fail closed at construction" do
     assert {:error, {:invalid_compaction, _}, _} =
              Alto.run("go", base_opts(compaction: [keep_recent_messages: 0]))
+
+    assert {:error, {:invalid_compaction, _}, _} =
+             Alto.run("go", base_opts(compaction: [max_compactions: 0]))
 
     assert {:error, {:invalid_compaction, _}, _} = Alto.run("go", base_opts(compaction: "yes"))
 

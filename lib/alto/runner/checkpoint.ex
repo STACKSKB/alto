@@ -25,6 +25,7 @@ defmodule Alto.Runner.Checkpoint do
     :request_model_tools,
     :transcript_revision,
     :compacted?,
+    :compaction_count,
     :agent_identity
   ]
 
@@ -88,6 +89,7 @@ defmodule Alto.Runner.Checkpoint do
           %{run: saved, loop: loop, pending: pending, remaining: remaining, terminal: terminal}} <-
            decode(packet["state"]),
          true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(@fields),
+         true <- valid_compaction_state?(saved),
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          true <- saved.transcript_bytes <= run.max_transcript_bytes,
@@ -426,12 +428,18 @@ defmodule Alto.Runner.Checkpoint do
       is_integer(saved.model_requests) and saved.model_requests >= 0 and
       is_integer(saved.op_seq) and saved.op_seq >= 0 and
       valid_usage?(saved.usage) and is_list(saved.persistence_errors) and
-      is_boolean(saved.compacted?) and valid_pending_calls?(saved.pending_provider_calls) and
+      valid_compaction_state?(saved) and
+      valid_pending_calls?(saved.pending_provider_calls) and
       (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
       saved.verdict in [:empty, :completed, :rejected_before_dispatch, :failed_known, :unknown]
   end
 
   defp valid_parent_saved?(_, _), do: false
+
+  defp valid_compaction_state?(saved) do
+    is_boolean(saved.compacted?) and is_integer(saved.compaction_count) and
+      saved.compaction_count >= 0 and saved.compacted? == (saved.compaction_count > 0)
+  end
 
   defp valid_usage?(%Alto.Usage{} = usage),
     do: Enum.all?(Map.from_struct(usage), fn {_, value} -> is_integer(value) and value >= 0 end)

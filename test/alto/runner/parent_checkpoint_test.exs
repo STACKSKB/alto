@@ -46,6 +46,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
       pending_provider_calls: %{},
       request_model_tools: nil,
       compacted?: false,
+      compaction_count: 0,
       persistence_errors: [{:earlier_write, :unavailable}],
       session: nil,
       session_dir: dir,
@@ -67,6 +68,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
   test "round trip preserves parent state and tail without an approval request", context do
     %{run: run, pending: pending, opts: opts} = context
+    run = %{run | compacted?: true, compaction_count: 2}
     tail = [Effect.request_model(%{context_message: "integrate"})]
     assert :ok = Budget.take(run.budget)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
@@ -87,6 +89,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
     assert restored.loop_state == run.loop_state
     assert restored.messages_rev == run.messages_rev
     assert restored.persistence_errors == run.persistence_errors
+    assert restored.compaction_count == 2
     assert restored.usage == run.usage
     assert restored.op_seq == 1
     assert frame == %{pending: pending, remaining: tail, terminal: {:stop, "tail done"}}
