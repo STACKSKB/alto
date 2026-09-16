@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Use equal selection autoscroll speeds at both pane edges, independent of the
+  space available above or below the pane.
+
 - Autoscroll conversation/context panes while selecting at their edges or using
   the wheel; preserve off-screen selected text and stop on release or content bounds.
 

@@ -260,8 +260,8 @@ defmodule Alto.TUI.Selection do
 
   defp edge_delta(%{press: %Mouse{}, active?: true, scroll: %{pointer: {_x, y}}, region: rect}) do
     cond do
-      y <= rect.y -> -min(1 + div(rect.y - y, 2), 5)
-      y >= rect.y + rect.height - 1 -> min(1 + div(y - rect.y - rect.height + 1, 2), 5)
+      y <= rect.y -> -1
+      y >= rect.y + rect.height - 1 -> 1
       true -> 0
     end
   end

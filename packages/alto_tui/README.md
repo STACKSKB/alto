@@ -35,7 +35,7 @@ Left/Right to move the cursor, and Tab to move between fields. API keys stay mas
 Drag with the left mouse button to select conversation text, context data, your
 composer draft, or entered form values. Selection stays inside its starting box.
 Hold the drag at the top or bottom of a conversation/context pane to scroll;
-move farther beyond the edge to scroll faster. You can also use the wheel while
+scrolling runs at the same speed in either direction. You can also use the wheel while
 holding the drag. Moving back inside or releasing stops autoscroll. Copy includes
 the full selected range, including rows that have moved off-screen.
 Controls, titles, status bars, and placeholder hints are not selectable by

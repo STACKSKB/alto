@@ -72,13 +72,13 @@ defmodule Alto.TUI.SelectionScrollTest do
   test "reversing past the anchor selects earlier rows; bounds stop the timer" do
     selection = start(8) |> drag(30, 6) |> tick() |> tick()
     selection = drag(selection, 13, -10)
-    selection = tick(selection) |> tick()
+    selection = Enum.reduce(1..10, selection, fn _, s -> tick(s) end)
     assert selection.scroll.offset == 0
     assert Selection.text(selection) == Enum.map_join(0..9, "\n", &"line #{&1} 猫") <> "\nl"
     assert {:idle, stopped} = Selection.autoscroll(selection, selection.scroll.token)
     assert stopped.scroll.token == nil
     selection = drag(stopped, 30, 20)
-    selection = Enum.reduce(1..5, selection, fn _, s -> tick(s) end)
+    selection = Enum.reduce(1..24, selection, fn _, s -> tick(s) end)
     assert selection.scroll.offset == 24
     assert {:idle, stopped} = Selection.autoscroll(selection, selection.scroll.token)
     assert stopped.scroll.token == nil
@@ -110,6 +110,13 @@ defmodule Alto.TUI.SelectionScrollTest do
 
       assert {:idle, ^next} = Selection.autoscroll(next, token)
     end
+  end
+
+  test "top and bottom scroll at the same speed despite unequal space outside the pane" do
+    up = start(10) |> drag(13, 0) |> tick() |> release()
+    down = start(10) |> drag(30, 100) |> tick() |> release()
+    assert 10 - up.scroll.offset == down.scroll.offset - 10
+    assert down.scroll.offset == 11
   end
 
   test "wrapped rows retain exact rendered boundaries across autoscroll" do
