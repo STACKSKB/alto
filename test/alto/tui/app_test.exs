@@ -366,6 +366,41 @@ defmodule Alto.TUI.AppTest do
     assert copied.transcript_scroll == state.transcript_scroll
   end
 
+  test "activity stays visible and animated while waiting without output", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    state = %{
+      state
+      | dimensions: {150, 42},
+        runs: %{
+          "run" => %{
+            task_id: nil,
+            phase: "waiting for model",
+            started_at_ms: System.system_time(:millisecond) - 3000
+          }
+        }
+    }
+
+    frame = %{width: 150, height: 42}
+    assert [{first, rect}] = View.activity_widgets(state, frame)
+    assert first.text =~ "waiting for model"
+    assert first.text =~ "3s"
+
+    refute Enum.any?(
+             View.selection_content(state, 150, 42),
+             &Alto.TUI.Layout.contains?(&1, rect.x, rect.y)
+           )
+
+    assert {:noreply, next, render?: true} = App.handle_info(:tui_activity_tick, state)
+    assert [{second, ^rect}] = View.activity_widgets(next, frame)
+    refute first.text == second.text
+
+    assert {:noreply, idle, render?: false} =
+             App.handle_info(:tui_activity_tick, %{next | runs: %{}})
+
+    assert View.activity_widgets(idle, frame) == []
+  end
+
   test "ordinary selection excludes chrome and placeholders but includes content", context do
     {:ok, state} =
       State.new(context.config,

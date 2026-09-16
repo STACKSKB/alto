@@ -29,6 +29,8 @@ defmodule Alto.TUI.State do
     :clipboard_write,
     :clipboard_read,
     :drag_poll,
+    activity_tick: 0,
+    activity_started_ms: nil,
     selection: %Alto.TUI.Selection{},
     dimensions: {120, 36},
     projects: [],
@@ -160,6 +162,25 @@ defmodule Alto.TUI.State do
         Map.get(run, :phase, "working") <>
           " · Esc stop" <>
           if(queued?, do: " · 1 queued", else: "")
+    end
+  end
+
+  def activity(state) do
+    case Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end) do
+      {_id, run} ->
+        {run_label(state), Map.get(run, :started_at_ms)}
+
+      nil ->
+        cond do
+          state.selected_backend == :codex and state.codex.status in [:connecting, :refreshing] ->
+            {"waiting for Codex connection", state.activity_started_ms}
+
+          MapSet.size(state.model_loading) > 0 ->
+            {"loading model catalog", state.activity_started_ms}
+
+          true ->
+            nil
+        end
     end
   end
 

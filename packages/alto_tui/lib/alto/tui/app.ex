@@ -50,6 +50,7 @@ defmodule Alto.TUI.App do
         |> State.ensure_visible_focus()
 
       if state.selected_backend == :codex, do: send(self(), :ensure_codex_backend)
+      Process.send_after(self(), :tui_activity_tick, 250)
       {:ok, state}
     else
       nil -> {:error, :tui_config_required}
@@ -58,8 +59,10 @@ defmodule Alto.TUI.App do
   end
 
   @impl true
-  def render(state, frame),
-    do: Selection.widgets(state.selection, fn -> View.widgets(state, frame) end)
+  def render(state, frame) do
+    Selection.widgets(state.selection, fn -> View.widgets(state, frame) end) ++
+      View.activity_widgets(state, frame)
+  end
 
   @impl true
   def handle_event(event, state) do
@@ -262,6 +265,23 @@ defmodule Alto.TUI.App do
   @impl true
   def handle_info({:tui_deferred_input, event}, state), do: handle_event(event, state)
 
+  def handle_info(:tui_activity_tick, state) do
+    Process.send_after(self(), :tui_activity_tick, 250)
+    active? = State.activity(state) != nil
+
+    next = %{
+      state
+      | activity_tick: state.activity_tick + 1,
+        activity_started_ms:
+          if(active?,
+            do: state.activity_started_ms || System.system_time(:millisecond),
+            else: nil
+          )
+    }
+
+    {:noreply, next, render?: active?}
+  end
+
   def handle_info({:tui_selection_scroll, token}, state) do
     case Selection.autoscroll(state.selection, token) do
       {:scrolled, selection} -> {:noreply, apply_selection_scroll(state, selection)}
@@ -437,7 +457,14 @@ defmodule Alto.TUI.App do
         {:noreply, state, render?: false}
 
       {run, {:ok, %{thread_id: thread_id, turn_id: turn_id}}} ->
-        run = %{run | thread_id: thread_id, turn_id: turn_id, status: :running}
+        run = %{
+          run
+          | thread_id: thread_id,
+            turn_id: turn_id,
+            status: :running,
+            phase: "waiting for model"
+        }
+
         state = put_in(state.runs[local_id], run)
 
         state =
@@ -675,6 +702,7 @@ defmodule Alto.TUI.App do
       thread_id: task["backend_thread_id"],
       turn_id: nil,
       status: :starting,
+      phase: "waiting for Codex connection",
       approval_level: state.approval_level,
       started_at_ms: System.system_time(:millisecond)
     }
@@ -962,17 +990,7 @@ defmodule Alto.TUI.App do
   defp update_run_phase(state, local_id, %Event{} = event) do
     run = Map.fetch!(state.runs, local_id)
 
-    phase =
-      case event.type do
-        :model_started -> "waiting for model"
-        :model_delta -> "receiving response"
-        :model_completed -> "processing response"
-        :tool_started -> "running tool"
-        :tool_completed -> "processing tool result"
-        :approval_requested -> "waiting for approval"
-        :approval_resolved -> "processing approval"
-        _ -> Map.get(run, :phase, "working")
-      end
+    phase = Alto.TUI.Activity.phase(event.type, Map.get(run, :phase, "working"))
 
     run = if Map.get(run, :phase) == "cancelling", do: run, else: Map.put(run, :phase, phase)
 

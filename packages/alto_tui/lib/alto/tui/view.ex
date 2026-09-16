@@ -30,6 +30,21 @@ defmodule Alto.TUI.View do
     |> add_overlay(state.overlay, layout.root)
   end
 
+  def activity_widgets(state, %{width: width, height: height}) do
+    case State.activity(state) do
+      nil ->
+        []
+
+      {label, started} ->
+        Alto.TUI.Activity.widgets(
+          label,
+          started,
+          state.activity_tick,
+          layout(state, width, height).transcript
+        )
+    end
+  end
+
   @doc "Calculate the same geometry used for rendering and mouse routing."
   def layout(%State{} = state, width, height) do
     PaneLayout.calculate(width, height,

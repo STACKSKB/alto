@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Show animated connection/run activity and elapsed time on the conversation
+  border while waiting, thinking, retrying or executing tools.
+
 - Use equal selection autoscroll speeds at both pane edges, independent of the
   space available above or below the pane.
 
