@@ -44,7 +44,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert View.hit_target(state, 140, 40, approve_event.x, approve_event.y) ==
              {:approval, :approve}
 
-    assert {:noreply, decided} = App.handle_event(approve_event, state)
+    assert {:noreply, decided} = click(approve_event, state)
     assert_receive {:alto_approval_decision, "approval-1", :approve}
     assert decided.pending_approvals == []
 
@@ -52,7 +52,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     {buffer, _terminal} = render(state, 140, 40)
     {:ok, deny} = label_position(buffer, "[ Deny F9 ]")
 
-    assert {:noreply, decided} = App.handle_event(click_at(deny, "[ Deny F9 ]"), state)
+    assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), state)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
   end
@@ -66,7 +66,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     blank_x = approve.x + String.length("[ Approve F8 ]") + 1
 
     assert {:noreply, unchanged} =
-             App.handle_event(
+             click(
                %Mouse{kind: "down", button: "left", x: blank_x, y: approve.y},
                state
              )
@@ -75,7 +75,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     refute_receive {:alto_approval_decision, "approval-1", _decision}, 100
 
     assert {:noreply, unchanged} =
-             App.handle_event(
+             click(
                %Mouse{
                  kind: "down",
                  button: "left",
@@ -99,9 +99,21 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:ok, deny} = label_position(buffer, "[ Deny F9 ]")
     assert approve.y < deny.y
 
-    assert {:noreply, decided} = App.handle_event(click_at(deny, "[ Deny F9 ]"), scrolled)
+    assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), scrolled)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
+  end
+
+  test "dragging approval labels selects text without sending a decision", context do
+    state = pending_state(context, {140, 40})
+    {buffer, _terminal} = render(state, 140, 40)
+    {:ok, approve} = label_position(buffer, "[ Approve F8 ]")
+    down = %Mouse{kind: "down", button: "left", x: approve.x, y: approve.y}
+    {:noreply, pressed} = App.handle_event(down, state)
+    {:noreply, selected} = App.handle_event(%{down | kind: "up", x: approve.x + 13}, pressed)
+    assert selected.pending_approvals == state.pending_approvals
+    assert Alto.TUI.Selection.text(selected.selection) =~ "Approve F8"
+    refute_receive {:alto_approval_decision, _, _}, 10
   end
 
   defp pending_state(context, dimensions) do
@@ -140,6 +152,12 @@ defmodule Alto.TUI.ApprovalControlsTest do
           false
       end
     end)
+  end
+
+  defp click(mouse, state) do
+    {:noreply, pressed} = App.handle_event(mouse, state)
+    refute_receive {:alto_approval_decision, _, _}, 10
+    App.handle_event(%{mouse | kind: "up"}, pressed)
   end
 
   defp click_at(%{x: x, y: y}, label),

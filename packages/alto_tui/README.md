@@ -31,3 +31,21 @@ failure pauses the queued follow-up; press Enter with an empty composer to send 
 
 Provider and model forms show a cursor in the focused field. Type to edit, use
 Left/Right to move the cursor, and Tab to move between fields. API keys stay masked.
+
+Drag with the left mouse button to select visible text anywhere: conversations,
+workspaces, details, settings, the composer, borders, and popups. Click actions
+happen on release, so selecting a button's label does not activate it. Pane seams
+still resize; use Alt+drag to select across a seam. Scroll to older content before
+selecting it. Selection freezes the displayed screen while background work continues.
+
+Press Ctrl+C (or Alt+C) to copy the selection; Ctrl+C without a selection retains
+its cancel/quit behavior. Ctrl+Shift+A selects the entire visible screen when your
+terminal forwards that chord. Esc clears selection first. Copy uses the terminal's
+OSC 52 clipboard support, including over SSH and through tmux; your terminal must
+allow clipboard writes. Shift+drag and the terminal's own copy shortcut remain a
+fallback on terminals that reserve Shift for native selection.
+
+Paste with your terminal's usual shortcut (often Ctrl+Shift+V or Cmd+V). Bracketed
+paste inserts text without submitting it, including multiline text and form fields.
+Ctrl+V also reads the local clipboard using `wl-paste`, `xclip`, `xsel`, or `pbpaste`
+when available; otherwise it inserts the last selection copied in this TUI.

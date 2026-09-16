@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Select and copy rendered text anywhere in the TUI, including popups and status
+  bars, with Unicode-aware highlighting, OSC 52 clipboard output and paste support.
+- Share screen selection and clipboard helpers with downstream terminal clients.
+
 - Add durable parent-batch continuations and independently approved child
   continuations, with single-use grants and explicit retirement/cleanup hooks.
 - Validate child checkpoints before workspace activation; rejected recovery

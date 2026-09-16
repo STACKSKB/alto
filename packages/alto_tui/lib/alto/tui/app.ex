@@ -9,7 +9,7 @@ defmodule Alto.TUI.App do
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
   alias Alto.Session
-  alias Alto.TUI.{Backend, State, View}
+  alias Alto.TUI.{Backend, Selection, State, View}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -53,23 +53,76 @@ defmodule Alto.TUI.App do
   end
 
   @impl true
-  def render(state, frame), do: View.widgets(state, frame)
+  def render(state, frame),
+    do: Selection.widgets(state.selection, View.widgets(state, frame))
 
   @impl true
-  def handle_event(%Resize{width: width, height: height}, state),
+  def handle_event(event, state) do
+    {width, height} = state.dimensions
+    widgets = fn -> View.widgets(state, %{width: width, height: height}) end
+
+    # Pane seams retain their resize gesture; Alt+drag can select their text too.
+    seam? =
+      match?(%Mouse{kind: "down", button: "left", modifiers: []}, event) and
+        View.hit_target(state, width, height, event.x, event.y) in [:left_seam, :right_seam]
+
+    if seam? or state.dragging in [:left_seam, :right_seam] do
+      route_event(event, %{state | selection: Selection.new()})
+    else
+      case Selection.event(state.selection, event, state.dimensions, widgets) do
+        {:pass, selection} ->
+          route_event(event, %{state | selection: selection})
+
+        {:handled, selection} ->
+          {:noreply, %{state | selection: selection}}
+
+        {:click, mouse, selection} ->
+          state = %{state | selection: selection}
+
+          if View.hit_target(state, width, height, mouse.x, mouse.y) in [:left_seam, :right_seam],
+            do: {:noreply, state},
+            else: route_event(mouse, state)
+
+        {:copy, text, selection} ->
+          result = state.clipboard_write.(text)
+
+          notice =
+            if result == :ok,
+              do: "Copied selection",
+              else: "Clipboard unavailable; Ctrl+V pastes copy"
+
+          {:noreply, %{state | selection: selection, clipboard_text: text, notice: notice}}
+      end
+    end
+  end
+
+  defp route_event(%Key{kind: kind, code: "v", modifiers: ["ctrl"]}, state)
+       when kind != "release" do
+    content =
+      case state.clipboard_read.() do
+        {:ok, text} -> text
+        _ -> state.clipboard_text
+      end
+
+    if content == nil,
+      do: {:noreply, %{state | notice: "Paste with your terminal's paste shortcut"}},
+      else: route_event(%Paste{content: content}, state)
+  end
+
+  defp route_event(%Resize{width: width, height: height}, state),
     do:
       {:noreply,
        state
        |> Map.put(:dimensions, {width, height})
        |> State.reconcile_responsive_focus()}
 
-  def handle_event(%Paste{content: content}, %{overlay: nil, focus: :composer} = state) do
+  defp route_event(%Paste{content: content}, %{overlay: nil, focus: :composer} = state) do
     ExRatatui.textarea_insert_str(state.textarea, content)
     {:noreply, state}
   end
 
-  def handle_event(%Paste{content: content}, %{overlay: overlay} = state)
-      when not is_nil(overlay) do
+  defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
+       when not is_nil(overlay) do
     if overlay.kind in [:provider_form, :model_form] do
       {:noreply, insert_form_text(state, content)}
     else
@@ -77,31 +130,31 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_event(%Paste{}, %{details_drawer_open?: true} = state),
+  defp route_event(%Paste{}, %{details_drawer_open?: true} = state),
     do: {:noreply, state, render?: false}
 
-  def handle_event(%Paste{content: content}, %{type_to_compose?: true} = state) do
+  defp route_event(%Paste{content: content}, %{type_to_compose?: true} = state) do
     ExRatatui.textarea_insert_str(state.textarea, content)
     {:noreply, %{state | focus: :composer}}
   end
 
-  def handle_event(%Paste{}, state), do: {:noreply, state, render?: false}
+  defp route_event(%Paste{}, state), do: {:noreply, state, render?: false}
 
-  def handle_event(%Mouse{} = mouse, state), do: {:noreply, handle_mouse(state, mouse)}
+  defp route_event(%Mouse{} = mouse, state), do: {:noreply, handle_mouse(state, mouse)}
 
-  def handle_event(%Key{kind: "release"}, state), do: {:noreply, state, render?: false}
+  defp route_event(%Key{kind: "release"}, state), do: {:noreply, state, render?: false}
 
-  def handle_event(%Key{} = key, %{overlay: overlay} = state) when not is_nil(overlay),
+  defp route_event(%Key{} = key, %{overlay: overlay} = state) when not is_nil(overlay),
     do: {:noreply, overlay_key(state, key)}
 
-  def handle_event(%Key{code: "esc"}, %{details_drawer_open?: true} = state),
+  defp route_event(%Key{code: "esc"}, %{details_drawer_open?: true} = state),
     do: {:noreply, State.close_details_drawer(state)}
 
-  def handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state) do
+  defp route_event(%Key{code: "g", modifiers: ["ctrl"]}, state) do
     {:noreply, %{state | leader?: not state.leader?, notice: nil}}
   end
 
-  def handle_event(%Key{} = key, %{leader?: true} = state) do
+  defp route_event(%Key{} = key, %{leader?: true} = state) do
     case String.downcase(key.code || "") do
       "a" -> {:noreply, open_overlay(state, :approval)}
       "b" -> {:noreply, open_overlay(state, :backend)}
@@ -118,22 +171,22 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_event(%Key{code: "f2"}, state), do: {:noreply, open_overlay(state, :approval)}
-  def handle_event(%Key{code: "f3"}, state), do: {:noreply, open_overlay(state, :provider)}
-  def handle_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
-  def handle_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
-  def handle_event(%Key{code: "f6"}, state), do: {:noreply, toggle_composer_mode(state)}
-  def handle_event(%Key{code: "f8"}, state), do: {:noreply, decide_approval(state, :approve)}
+  defp route_event(%Key{code: "f2"}, state), do: {:noreply, open_overlay(state, :approval)}
+  defp route_event(%Key{code: "f3"}, state), do: {:noreply, open_overlay(state, :provider)}
+  defp route_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
+  defp route_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
+  defp route_event(%Key{code: "f6"}, state), do: {:noreply, toggle_composer_mode(state)}
+  defp route_event(%Key{code: "f8"}, state), do: {:noreply, decide_approval(state, :approve)}
 
-  def handle_event(%Key{code: "f9"}, state),
+  defp route_event(%Key{code: "f9"}, state),
     do: {:noreply, decide_approval(state, {:deny, :user_denied})}
 
-  def handle_event(%Key{code: "tab"}, state), do: {:noreply, State.focus_next(state)}
+  defp route_event(%Key{code: "tab"}, state), do: {:noreply, State.focus_next(state)}
 
-  def handle_event(%Key{code: "back_tab"}, state),
+  defp route_event(%Key{code: "back_tab"}, state),
     do: {:noreply, State.focus_next(state, :previous)}
 
-  def handle_event(%Key{code: "c", modifiers: ["ctrl"]}, state) do
+  defp route_event(%Key{code: "c", modifiers: ["ctrl"]}, state) do
     case active_run(state) do
       nil ->
         {:stop, state}
@@ -143,14 +196,14 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_event(%Key{code: "esc"}, state) do
+  defp route_event(%Key{code: "esc"}, state) do
     case active_run(state) do
       nil -> {:noreply, state}
       {_id, run} -> {:noreply, stop_active_run(state, run)}
     end
   end
 
-  def handle_event(%Key{code: "enter", modifiers: modifiers} = key, %{focus: :composer} = state) do
+  defp route_event(%Key{code: "enter", modifiers: modifiers} = key, %{focus: :composer} = state) do
     if "shift" in modifiers do
       forward_textarea(state, key)
     else
@@ -158,12 +211,12 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_event(%Key{} = key, %{focus: :composer} = state), do: forward_textarea(state, key)
+  defp route_event(%Key{} = key, %{focus: :composer} = state), do: forward_textarea(state, key)
 
-  def handle_event(
-        %Key{} = key,
-        %{type_to_compose?: true, details_drawer_open?: false} = state
-      ) do
+  defp route_event(
+         %Key{} = key,
+         %{type_to_compose?: true, details_drawer_open?: false} = state
+       ) do
     if printable_key?(key) do
       forward_textarea(%{state | focus: :composer}, key)
     else
@@ -171,7 +224,7 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_event(%Key{} = key, state), do: {:noreply, navigate(state, key)}
+  defp route_event(%Key{} = key, state), do: {:noreply, navigate(state, key)}
 
   @impl true
   def handle_info({:alto_tui_event, local_id, %Event{} = event, sender, ref}, state) do

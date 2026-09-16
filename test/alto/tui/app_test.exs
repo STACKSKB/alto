@@ -148,6 +148,98 @@ defmodule Alto.TUI.AppTest do
     }
   end
 
+  test "copies visible text in every pane and pastes through the composer", context do
+    owner = self()
+
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials,
+        clipboard_write: fn text ->
+          send(owner, {:clipboard, text})
+          :ok
+        end,
+        clipboard_read: fn -> {:error, :unavailable} end
+      )
+
+    state = %{state | dimensions: {150, 42}}
+    ExRatatui.textarea_insert_str(state.textarea, "draft text")
+    layout = View.layout(state, 150, 42)
+
+    for rect <- [
+          layout.rail,
+          layout.transcript,
+          layout.details,
+          layout.settings,
+          layout.composer,
+          layout.status
+        ] do
+      y = rect.y
+
+      {:noreply, pressed} =
+        App.handle_event(
+          %Mouse{kind: "down", button: "left", modifiers: ["alt"], x: rect.x, y: y},
+          state
+        )
+
+      {:noreply, selected} =
+        App.handle_event(
+          %Mouse{kind: "up", button: "left", x: rect.x + rect.width - 1, y: y},
+          pressed
+        )
+
+      assert selected.selection.active?
+      text = Alto.TUI.Selection.text(selected.selection)
+      assert text != ""
+      {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, selected)
+      assert_receive {:clipboard, ^text}
+      refute copied.selection.active?
+      assert copied.clipboard_text == text
+    end
+
+    {:noreply, pasted} =
+      App.handle_event(%Key{code: "v", modifiers: ["ctrl"]}, %{
+        state
+        | clipboard_text: "\n猫 pasted",
+          focus: :transcript
+      })
+
+    assert pasted.focus == :composer
+    assert ExRatatui.textarea_get_value(pasted.textarea) == "draft text\n猫 pasted"
+    assert {:stop, _} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, state)
+  end
+
+  test "popup selection copies only masked API keys and paste edits the current form", context do
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials,
+        clipboard_write: fn _ -> :ok end,
+        clipboard_read: fn -> {:ok, "from clipboard"} end
+      )
+
+    {:noreply, state} = App.handle_event(%Key{code: "f3"}, state)
+    # Add-provider action is exposed by the provider picker.
+    index = Enum.find_index(state.overlay.items, &(&1.value == {:configure_provider, nil}))
+    state = put_in(state.overlay.index, index)
+    {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
+    assert state.overlay.kind == :provider_form
+    input = Enum.find(state.overlay.fields, &(&1.key == :api_key)).input
+    ExRatatui.text_input_set_value(input, "never-copy-this-secret")
+    {:noreply, selected} = App.handle_event(%Key{code: "a", modifiers: ["ctrl", "shift"]}, state)
+    {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, selected)
+    assert copied.overlay.kind == :provider_form
+    assert copied.clipboard_text =~ "••••"
+    refute copied.clipboard_text =~ "never-copy-this-secret"
+    {:noreply, pasted} = App.handle_event(%Key{code: "v", modifiers: ["ctrl"]}, copied)
+
+    assert ExRatatui.text_input_get_value(
+             Enum.find(pasted.overlay.fields, &(&1.key == :id)).input
+           ) =~ "from clipboard"
+  end
+
   test "custom backends start providerless and retain configured approval", context do
     config =
       Alto.Config.new(
@@ -369,6 +461,8 @@ defmodule Alto.TUI.AppTest do
       y: settings_y
     })
 
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: entry_x, y: settings_y})
+
     clicked = user_state(app)
     assert clicked.composer_mode == :code
     assert ExRatatui.textarea_get_value(clicked.textarea) == "draft with a long line"
@@ -436,6 +530,12 @@ defmodule Alto.TUI.AppTest do
                state
              )
 
+    {:noreply, drawer} =
+      App.handle_event(
+        %Mouse{kind: "up", button: "left", x: context_x, y: layout.settings.y},
+        drawer
+      )
+
     assert drawer.details_drawer_open?
     assert drawer.details_return_focus == :composer
     assert drawer.focus == :details
@@ -452,6 +552,8 @@ defmodule Alto.TUI.AppTest do
 
     assert {:noreply, closed} =
              App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 10}, drawer)
+
+    {:noreply, closed} = App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 10}, closed)
 
     refute closed.details_drawer_open?
     assert closed.focus == :composer
@@ -625,6 +727,13 @@ defmodule Alto.TUI.AppTest do
       y: layout.settings.y
     })
 
+    Runtime.inject_event(app, %Mouse{
+      kind: "up",
+      button: "left",
+      x: approval_x,
+      y: layout.settings.y
+    })
+
     clicked = user_state(app)
     assert clicked.overlay.kind == :approval
     assert ExRatatui.textarea_get_value(clicked.textarea) == "untouched"
@@ -635,6 +744,18 @@ defmodule Alto.TUI.AppTest do
     Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: 31, y: 10})
 
     assert user_state(app).rail_width == 32
+
+    Runtime.inject_event(app, %Mouse{
+      kind: "down",
+      button: "left",
+      modifiers: ["alt"],
+      x: 31,
+      y: 10
+    })
+
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", modifiers: ["alt"], x: 31, y: 10})
+
+    assert user_state(app).dragging == nil
 
     Process.unlink(app)
     GenServer.stop(app)
@@ -737,8 +858,10 @@ defmodule Alto.TUI.AppTest do
 
     # The form uses the same geometry for rendering and mouse routing.
     Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: 25, y: 13})
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: 25, y: 13})
     assert user_state(app).overlay.field_index == 3
     Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: 25, y: 16})
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: 25, y: 16})
     saved = user_state(app)
 
     assert saved.overlay == nil

@@ -25,6 +25,10 @@ defmodule Alto.TUI.State do
     :overlay,
     :dragging,
     :notice,
+    :clipboard_text,
+    :clipboard_write,
+    :clipboard_read,
+    selection: %Alto.TUI.Selection{},
     dimensions: {120, 36},
     projects: [],
     tasks: %{},
@@ -92,6 +96,13 @@ defmodule Alto.TUI.State do
 
       state = %__MODULE__{
         textarea: ExRatatui.textarea_new(),
+        clipboard_write:
+          Keyword.get(
+            opts,
+            :clipboard_write,
+            if(opts[:test_mode], do: fn _ -> :ok end, else: &Alto.TUI.Clipboard.write/1)
+          ),
+        clipboard_read: Keyword.get(opts, :clipboard_read, &Alto.TUI.Clipboard.read/0),
         config: config,
         run_options: run_options,
         credentials_path: credentials_path,
