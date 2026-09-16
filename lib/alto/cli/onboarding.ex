@@ -146,7 +146,7 @@ defmodule Alto.CLI.Onboarding do
       |> Keyword.get(:provider_options, [])
       |> Keyword.put(:api_key, api_key)
 
-    with true <- function_exported?(provider, :list_models, 1),
+    with true <- Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),
          {:ok, models} <- provider.list_models(provider_options),
          {:ok, model} <- select_model(models, input, output),
          {:ok, credentials} <-

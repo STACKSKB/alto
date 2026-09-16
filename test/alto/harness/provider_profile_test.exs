@@ -36,4 +36,43 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert {:error, :duplicate_profile_id} =
              ProviderProfile.from_run_options(provider_profiles: [profile, profile])
   end
+
+  test "discovers models from a provider that has not been loaded yet" do
+    directory =
+      Path.join(System.tmp_dir!(), "alto-cold-provider-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    module = Alto.Test.ColdCatalogProvider
+
+    [{^module, beam}] =
+      Code.compile_string("""
+      defmodule Alto.Test.ColdCatalogProvider do
+        def list_models(_), do: {:ok, [%{id: "first-run"}]}
+      end
+      """)
+
+    File.write!(Path.join(directory, "#{module}.beam"), beam)
+    :code.purge(module)
+    :code.delete(module)
+    Code.prepend_path(directory)
+
+    on_exit(fn ->
+      Code.delete_path(directory)
+      :code.purge(module)
+      :code.delete(module)
+      File.rm_rf!(directory)
+    end)
+
+    refute function_exported?(module, :list_models, 1)
+
+    profile = %ProviderProfile{
+      id: "cold",
+      label: "Cold",
+      module: module,
+      models: :discover,
+      options: []
+    }
+
+    assert {:ok, [%{id: "first-run"}]} = ProviderProfile.models(profile)
+  end
 end
