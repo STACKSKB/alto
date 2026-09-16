@@ -6,7 +6,7 @@ defmodule Alto.Prompts.Coding do
   @tool_guidance "Use the provided tools when you need facts from the workspace. Tool results are bounded, so continue reads with offsets when necessary."
   @no_tools "No workspace tools are available. Do not claim to have inspected or changed the workspace."
   @read_only "This run is read-only. Explain any proposed changes instead of claiming to have written them."
-  @write_enabled "Workspace editing tools are enabled. Prefer exact edits for existing files and make only changes required by the user's task."
+  @write_enabled "Workspace editing tools are enabled. Prefer exact edits for existing files and make only changes required by the user's task. Use one edits array for disjoint replacements in the same file; each match refers to the original file."
   @command_enabled "The run_command tool uses the command executor configured by the harness. Shell syntax is interpreted only when a shell is explicitly selected. Use it for focused verification."
   @command_disabled "Command execution is disabled for this run."
   @finish "Keep working until the task is answered or completed, then return a concise final response."
@@ -56,7 +56,7 @@ defmodule Alto.Prompts.Coding do
         :other_tools
 
       MapSet.size(names) > 0 and
-          Enum.all?(names, &(&1 in [:list_files, :read_file, :search_files])) ->
+          Enum.all?(names, &(&1 in [:list_files, :read_file, :read_image, :search_files])) ->
         :read_only
 
       MapSet.size(names) > 0 ->

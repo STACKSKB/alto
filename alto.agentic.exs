@@ -16,12 +16,14 @@ command_executor =
    env: %{"MIX_HOME" => mix_home, "HEX_HOME" => mix_home}}
 
 openrouter_model = System.get_env("ALTO_MODEL")
+vision_enabled = System.get_env("ALTO_VISION") == "1"
 
 openrouter_options =
   [
     base_url: "https://openrouter.ai/api/v1",
     model: openrouter_model,
     timeout: 120_000,
+    supports_images: vision_enabled,
     model_query: [supported_parameters: "tools", sort: "most-popular"]
   ]
   |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
@@ -64,7 +66,11 @@ Alto.Config.new(
       credential_id: "openrouter"
     ]
   ],
-  loop: Alto.default_loop(),
+  loop:
+    Alto.default_loop(
+      tool_execution: {:parallel, 4},
+      context: Alto.Context.window(compact_at: 0.85, reserve_output: 4_096)
+    ),
   tools:
     [
       Alto.Tools.ListFiles,
@@ -74,7 +80,7 @@ Alto.Config.new(
       {Alto.Tools.GitInspect, executor: command_executor},
       {Alto.Tools.GitMutate, executor: command_executor},
       {Alto.Tools.RunCommand, executor: command_executor}
-    ] ++ fff_tools ++ ripwire_tools,
+    ] ++ if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++ fff_tools ++ ripwire_tools,
   approval: Alto.Approvals.Interactive,
   prompt: Alto.Prompts.Coding,
   tui: [
@@ -86,9 +92,12 @@ Alto.Config.new(
   ],
   project_instructions: :auto,
   sessions: true,
+  session_history: :settled,
   max_steps: 96,
+  max_tool_result_bytes: if(vision_enabled, do: 1_500_000, else: 64_000),
   compaction: [
     strategy: :handoff,
+    max_compactions: 8,
     keep_recent_messages: 12,
     max_handoff_bytes: 24_000
   ],

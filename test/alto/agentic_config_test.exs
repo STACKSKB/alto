@@ -7,8 +7,13 @@ defmodule Alto.AgenticConfigTest do
     opts = Alto.Config.run_options(config)
 
     assert Keyword.fetch!(opts, :sessions) == true
+    assert Keyword.fetch!(opts, :session_history) == :settled
     assert Keyword.fetch!(opts, :project_instructions) == :auto
     assert Keyword.fetch!(opts, :compaction)[:strategy] == :handoff
+    assert Keyword.fetch!(opts, :compaction)[:max_compactions] == 8
+    assert Keyword.fetch!(opts, :loop).driver_options[:tool_execution] == {:parallel, 4}
+    assert Keyword.fetch!(opts, :loop).context.compact_at == 0.85
+    assert Keyword.fetch!(opts, :loop).subagents.max_depth == 0
 
     assert [profile] = Keyword.fetch!(opts, :provider_profiles)
     assert profile[:id] == "openrouter"
