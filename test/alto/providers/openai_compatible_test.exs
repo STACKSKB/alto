@@ -104,6 +104,30 @@ defmodule Alto.Providers.OpenAICompatibleTest do
     assert body["tool_choice"] == "auto"
   end
 
+  test "selected effort reaches the correct provider request field" do
+    for {url, expected} <- [
+          {"https://openrouter.ai/api/v1",
+           %{"reasoning" => %{"effort" => "high", "exclude" => false}}},
+          {"https://unit.test/v1", %{"reasoning_effort" => "high"}}
+        ] do
+      configure_adapter(self(), 200, "application/json", [
+        JSON.encode!(%{"choices" => [%{"message" => %{"content" => "Done"}}]})
+      ])
+
+      assert {:ok, _} =
+               OpenAICompatible.stream(%{messages: [], tools: []}, fn _ -> :ok end,
+                 model: "test",
+                 base_url: url,
+                 reasoning_effort: "high",
+                 req_options: [adapter: Adapter]
+               )
+
+      assert_receive {:http_request, request}
+      body = JSON.decode!(request.body)
+      assert Map.take(body, Map.keys(expected)) == expected
+    end
+  end
+
   test "returns bounded provider errors" do
     body = JSON.encode!(%{"error" => %{"message" => "bad key"}})
     configure_adapter(self(), 401, "application/json", [body])
@@ -126,7 +150,8 @@ defmodule Alto.Providers.OpenAICompatibleTest do
             "id" => "anthropic/claude-sonnet",
             "name" => "Claude Sonnet",
             "context_length" => 200_000,
-            "supported_parameters" => ["tools", "reasoning"]
+            "supported_parameters" => ["tools", "reasoning"],
+            "reasoning" => %{"supported_efforts" => ["low", "high"], "mandatory" => true}
           },
           %{"id" => "openai/gpt", "name" => "GPT"},
           %{"name" => "missing id"}
@@ -148,7 +173,8 @@ defmodule Alto.Providers.OpenAICompatibleTest do
                id: "anthropic/claude-sonnet",
                name: "Claude Sonnet",
                context_length: 200_000,
-               supported_parameters: ["tools", "reasoning"]
+               supported_parameters: ["tools", "reasoning"],
+               reasoning: %{"supported_efforts" => ["low", "high"], "mandatory" => true}
              },
              %{
                id: "openai/gpt",

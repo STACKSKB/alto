@@ -7,13 +7,17 @@ defmodule Alto.Provider do
   @type completion :: %{
           required(:message) => String.t() | nil,
           required(:tool_calls) => [map()],
-          optional(:usage) => map() | nil
+          optional(:usage) => map() | nil,
+          optional(:reasoning) => String.t() | nil,
+          optional(:provider_fields) => map()
         }
   @type model :: %{
           required(:id) => String.t(),
           optional(:name) => String.t(),
           optional(:context_length) => pos_integer(),
-          optional(:supported_parameters) => [String.t()]
+          optional(:supported_parameters) => [String.t()],
+          optional(:reasoning) => map(),
+          optional(:efforts) => [String.t() | map()]
         }
 
   @callback describe(keyword()) :: map()

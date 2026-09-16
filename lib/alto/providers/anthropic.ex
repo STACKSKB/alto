@@ -4,7 +4,8 @@ defmodule Alto.Providers.Anthropic do
 
   Configure `{Alto.Providers.Anthropic, model: model_id, api_key: key}`. The
   response is bounded while received and emitted as one text event. This
-  adapter reports `streaming: false`; extended thinking, multimodal content,
+  adapter reports `streaming: false`; readable thinking is emitted when returned.
+  Signed thinking blocks are preserved for subsequent tool turns. Multimodal content,
   server tools, and beta features are intentionally outside its contract.
   It never silently drops unsupported response blocks.
 
@@ -12,7 +13,7 @@ defmodule Alto.Providers.Anthropic do
   """
   @behaviour Alto.Provider
   @state_key :alto_anthropic_body
-  @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata)
+  @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking)
 
   @impl true
   def describe(opts),
@@ -31,6 +32,9 @@ defmodule Alto.Providers.Anthropic do
          {:ok, response} <- send_request(body, opts),
          {:ok, payload} <- response_payload(response),
          {:ok, completion} <- completion(payload) do
+      if completion.reasoning != "",
+        do: sink.(Alto.Event.live(:model_reasoning_delta, %{text: completion.reasoning}))
+
       if completion.message, do: sink.(Alto.Event.live(:model_delta, %{text: completion.message}))
       {:ok, completion}
     end
@@ -59,6 +63,10 @@ defmodule Alto.Providers.Anthropic do
     options =
       Map.new(Map.get(request, :options, %{}), fn {key, value} -> {to_string(key), value} end)
 
+    options =
+      if opts[:thinking], do: Map.put_new(options, "thinking", opts[:thinking]), else: options
+
+    options = Alto.Reasoning.apply_options(options, :anthropic, opts[:reasoning_effort])
     unsupported = Map.keys(options) -- @options
     max_tokens = Map.get(options, "max_tokens", Keyword.get(opts, :max_tokens, 4_096))
 
@@ -130,7 +138,10 @@ defmodule Alto.Providers.Anthropic do
         }
       end)
 
-    %{"role" => role, "content" => text ++ calls}
+    %{
+      "role" => role,
+      "content" => Map.get(message, "alto_anthropic_content", text ++ calls)
+    }
   end
 
   defp send_request(body, opts) do
@@ -201,7 +212,17 @@ defmodule Alto.Providers.Anthropic do
 
   defp completion(%{"content" => blocks, "stop_reason" => reason} = payload)
        when is_list(blocks) do
-    with true <- reason in ["end_turn", "tool_use", "stop_sequence"],
+    {thinking, blocks} =
+      Enum.split_with(blocks, &(&1["type"] in ["thinking", "redacted_thinking"]))
+
+    readable =
+      thinking
+      |> Enum.map(& &1["thinking"])
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.join("\n")
+
+    with :ok <- validate_thinking(thinking),
+         true <- reason in ["end_turn", "tool_use", "stop_sequence"],
          {:ok, text, calls} <- Enum.reduce_while(blocks, {:ok, [], []}, &block/2) do
       message = text |> Enum.reverse() |> Enum.join()
 
@@ -209,7 +230,13 @@ defmodule Alto.Providers.Anthropic do
        %{
          message: if(message == "", do: nil, else: message),
          tool_calls: Enum.reverse(calls),
-         usage: payload["usage"]
+         usage: payload["usage"],
+         reasoning: readable,
+         provider_fields:
+           if(thinking == [],
+             do: %{},
+             else: %{"alto_anthropic_content" => payload["content"], "reasoning" => readable}
+           )
        }}
     else
       false -> {:error, {:incomplete_model_response, reason}}
@@ -218,6 +245,21 @@ defmodule Alto.Providers.Anthropic do
   end
 
   defp completion(_), do: {:error, :invalid_anthropic_response}
+
+  defp validate_thinking(blocks) do
+    if Enum.all?(blocks, fn
+         %{"type" => "thinking", "thinking" => text, "signature" => signature} ->
+           is_binary(text) and is_binary(signature)
+
+         %{"type" => "redacted_thinking", "data" => data} ->
+           is_binary(data)
+
+         _ ->
+           false
+       end),
+       do: :ok,
+       else: {:error, :unsupported_anthropic_content}
+  end
 
   defp block(%{"type" => "text", "text" => text}, {:ok, texts, calls}) when is_binary(text),
     do: {:cont, {:ok, [text | texts], calls}}

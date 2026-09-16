@@ -499,9 +499,9 @@ defmodule Alto.TUI.View do
     {width, _height} = composer_inner_size(state)
 
     if width < 90 do
-      " gear: B A P M E W T N D Q · Esc cancel "
+      " gear: B A P M R E W T N D Q · Esc cancel "
     else
-      " gear: B backend · A approval · P provider · M model · E entry · W workspace · T task · N new · D details · Q quit "
+      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · T task · N new · D details · Q quit "
     end
   end
 
@@ -539,7 +539,7 @@ defmodule Alto.TUI.View do
     case State.current_entries(state) do
       [] ->
         "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
-          "^G gear · B backend · A approval · P provider · M model · E entry mode · W workspace · T task · N new · D details · Q quit"
+          "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · T task · N new · D details · Q quit"
 
       entries ->
         entries
@@ -963,47 +963,57 @@ defmodule Alto.TUI.View do
         do: Alto.Codex.Backend.account_label(state.codex.account),
         else: (profile && profile.label) || "none"
 
-    cond do
-      ultra_compact_settings?(state) ->
-        [
-          %{target: {:setting, :backend}, text: " B:#{String.first(backend_label(state))} "},
-          %{target: {:setting, :approval}, text: " A:#{mini_approval_label(state)} "},
-          %{target: {:setting, :entry_mode}, text: " E:#{mini_entry_label(state)} "},
-          %{target: {:setting, :details}, text: " D:#{mini_context_label(state)} "},
-          %{target: {:setting, :provider}, text: " P:… "},
-          %{target: {:setting, :model}, text: " M:… "}
-        ]
+    segments =
+      cond do
+        ultra_compact_settings?(state) ->
+          [
+            %{target: {:setting, :backend}, text: " B:#{String.first(backend_label(state))} "},
+            %{target: {:setting, :approval}, text: " A:#{mini_approval_label(state)} "},
+            %{target: {:setting, :entry_mode}, text: " E:#{mini_entry_label(state)} "},
+            %{target: {:setting, :details}, text: " D:#{mini_context_label(state)} "},
+            %{target: {:setting, :provider}, text: " P:… "},
+            %{target: {:setting, :model}, text: " M:… "}
+          ]
 
-      compact_settings?(state) ->
-        label_width = compact_setting_label_width(state)
+        compact_settings?(state) ->
+          label_width = compact_setting_label_width(state)
 
-        [
-          %{target: {:setting, :backend}, text: " B:#{backend_label(state)} "},
-          %{target: {:setting, :approval}, text: " A:#{approval_label(state.approval_level)} "},
-          %{target: {:setting, :entry_mode}, text: " E:#{entry_mode_label(state)} "},
-          %{target: {:setting, :details}, text: " D:#{context_label(state)} "},
-          %{target: {:setting, :provider}, text: " P:#{short(provider, label_width)} "},
-          %{
-            target: {:setting, :model},
-            text: " M:#{short(state.selected_model || "choose…", label_width)} "
-          }
-        ]
+          [
+            %{target: {:setting, :backend}, text: " B:#{backend_label(state)} "},
+            %{target: {:setting, :approval}, text: " A:#{approval_label(state.approval_level)} "},
+            %{target: {:setting, :entry_mode}, text: " E:#{entry_mode_label(state)} "},
+            %{target: {:setting, :details}, text: " D:#{context_label(state)} "},
+            %{target: {:setting, :provider}, text: " P:#{short(provider, label_width)} "},
+            %{
+              target: {:setting, :model},
+              text: " M:#{short(state.selected_model || "choose…", label_width)} "
+            }
+          ]
 
-      true ->
-        [
-          %{target: {:setting, :backend}, text: " backend #{backend_label(state)} "},
-          %{
-            target: {:setting, :approval},
-            text: " approval #{approval_label(state.approval_level)} "
-          },
-          %{target: {:setting, :details}, text: " context #{context_label(state)} "},
-          %{target: {:setting, :provider}, text: " provider #{short(provider, 16)} "},
-          %{
-            target: {:setting, :model},
-            text: " model #{short(state.selected_model || "choose…", 20)} "
-          },
-          %{target: {:setting, :entry_mode}, text: " entry #{entry_mode_label(state)} "}
-        ]
+        true ->
+          [
+            %{target: {:setting, :backend}, text: " backend #{backend_label(state)} "},
+            %{
+              target: {:setting, :approval},
+              text: " approval #{approval_label(state.approval_level)} "
+            },
+            %{target: {:setting, :details}, text: " context #{context_label(state)} "},
+            %{target: {:setting, :provider}, text: " provider #{short(provider, 16)} "},
+            %{
+              target: {:setting, :model},
+              text: " model #{short(state.selected_model || "choose…", 20)} "
+            },
+            %{target: {:setting, :entry_mode}, text: " entry #{entry_mode_label(state)} "}
+          ]
+      end
+
+    if State.effort_choices(state) == [] do
+      segments
+    else
+      [
+        %{target: {:setting, :effort}, text: " R:#{State.selected_effort(state) || "auto"} "}
+        | segments
+      ]
     end
   end
 
@@ -1060,6 +1070,8 @@ defmodule Alto.TUI.View do
     root = if project, do: project["root"], else: ""
     {" context ", root <> "\n\n" <> recent}
   end
+
+  defp format_entry(%{kind: :reasoning, text: text}), do: "thinking › " <> text
 
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
   defp format_entry(%{kind: :assistant, text: text}), do: "alto › " <> text

@@ -60,10 +60,12 @@ defmodule Alto.Providers.OpenAICompatible do
       |> Map.get(:options, %{})
       |> Map.merge(%{
         "model" => config.model,
-        "messages" => Map.fetch!(request, :messages),
+        "messages" =>
+          Enum.map(Map.fetch!(request, :messages), &Map.delete(&1, "alto_anthropic_content")),
         "stream" => true
       })
       |> maybe_put_tools(Map.get(request, :tools, []))
+      |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
 
     state = new_request_state(config.max_event_bytes, config.max_response_bytes)
 
@@ -181,6 +183,16 @@ defmodule Alto.Providers.OpenAICompatible do
           name: string_value(model["name"], id),
           supported_parameters: string_list(model["supported_parameters"])
         }
+
+        normalized =
+          if is_map(model["reasoning"]),
+            do: Map.put(normalized, :reasoning, model["reasoning"]),
+            else: normalized
+
+        normalized =
+          if is_list(model["supported_reasoning_efforts"]),
+            do: Map.put(normalized, :efforts, model["supported_reasoning_efforts"]),
+            else: normalized
 
         normalized =
           case positive_value(model["context_length"]) do
@@ -342,6 +354,8 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok,
          %{
            model: model,
+           reasoning_effort: Keyword.get(opts, :reasoning_effort),
+           reasoning_format: Alto.Reasoning.format(opts),
            endpoint: endpoint,
            headers: headers,
            timeout: timeout,

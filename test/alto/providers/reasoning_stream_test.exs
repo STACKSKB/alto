@@ -1,0 +1,90 @@
+defmodule Alto.Providers.ReasoningStreamTest do
+  use ExUnit.Case, async: true
+  alias Alto.Providers.OpenAICompatible.Stream
+
+  test "streams readable reasoning once, preserves signatures, and never displays encrypted data" do
+    owner = self()
+    sink = &send(owner, {:event, &1})
+
+    chunks = [
+      %{
+        "reasoning" => "Checking ",
+        "reasoning_details" => [
+          %{"type" => "reasoning.text", "text" => "Checking ", "index" => 0, "signature" => "sig"}
+        ]
+      },
+      %{
+        "reasoning" => "files.",
+        "reasoning_details" => [
+          %{"type" => "reasoning.text", "text" => "files.", "index" => 0, "signature" => "nature"}
+        ]
+      },
+      %{
+        "reasoning_details" => [
+          %{"type" => "reasoning.encrypted", "data" => "opaque", "index" => 1}
+        ]
+      },
+      %{"content" => "Answer"}
+    ]
+
+    stream =
+      Enum.reduce(chunks, Stream.new(), fn delta, state ->
+        Stream.consume(state, JSON.encode!(%{"choices" => [%{"delta" => delta}]}), sink)
+      end)
+
+    assert {:ok, completion} = Stream.result(stream)
+    assert completion.message == "Answer"
+    assert completion.reasoning == "Checking files."
+
+    assert [%{"text" => "Checking files.", "signature" => "signature"}, %{"data" => "opaque"}] =
+             completion.provider_fields["reasoning_details"]
+
+    assert_received {:event, %{type: :model_reasoning_delta, data: %{text: "Checking "}}}
+    assert_received {:event, %{type: :model_reasoning_delta, data: %{text: "files."}}}
+    refute_received {:event, %{type: :model_reasoning_delta}}
+    assert Alto.Reasoning.text(completion.provider_fields) == "Checking files."
+  end
+
+  test "reasoning IDs do not reorder signed blocks during replay" do
+    delta = %{
+      "reasoning_details" => [
+        %{"id" => "z", "type" => "reasoning.text", "text" => "first"},
+        %{"id" => "a", "type" => "reasoning.encrypted", "data" => "second"}
+      ]
+    }
+
+    stream =
+      Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ ->
+        :ok
+      end)
+
+    assert {:ok, completion} = Stream.result(stream)
+    assert Enum.map(completion.provider_fields["reasoning_details"], & &1["id"]) == ["z", "a"]
+  end
+
+  test "JSON fallback and reasoning_content use the same readable event" do
+    owner = self()
+    message = %{"content" => "Answer", "reasoning_content" => "Provider explanation"}
+
+    assert {:ok, stream} =
+             Stream.from_response(%{"choices" => [%{"message" => message}]}, &send(owner, &1))
+
+    assert {:ok, result} = Stream.result(stream)
+    assert result.provider_fields["reasoning_content"] == "Provider explanation"
+    assert_received %{type: :model_reasoning_delta, data: %{text: "Provider explanation"}}
+
+    assert Alto.Reasoning.text(%{
+             "reasoning_details" => [%{"type" => "reasoning.encrypted", "data" => "secret"}]
+           }) == ""
+  end
+
+  test "reasoning is included in response bounds" do
+    chunk =
+      JSON.encode!(%{"choices" => [%{"delta" => %{"reasoning" => String.duplicate("x", 200)}}]})
+
+    stream =
+      Stream.consume(Stream.new(100), chunk, fn _ -> flunk("emitted over-limit content") end)
+
+    assert {:error, {:model_response_too_large, 100}} = Stream.result(stream)
+  end
+end

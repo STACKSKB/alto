@@ -128,7 +128,8 @@ defmodule Alto.FrontEnd.Registry do
   snapshot; crashed runs report `:no_resumable_transcript` rather than
   rerunning anything. Provider, tools, approval, and bounds come from the
   resolved configuration exactly like a fresh run. Trusted in-process callers may
-  supply `:cwd` to choose a workspace for this run; wire clients cannot override it.
+  supply `:cwd` to choose a workspace for this run; wire clients cannot override it. Hosts may also pass a validated `:reasoning_effort`
+  for the configured provider; wire start commands cannot supply provider overrides.
   """
   @spec start_run(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -435,6 +436,7 @@ defmodule Alto.FrontEnd.Registry do
       run_opts =
         config_opts
         |> Keyword.merge(Keyword.take(opts, [:continuation_key, :budget_account, :cwd]))
+        |> Alto.Reasoning.configure_run(Keyword.get(opts, :reasoning_effort))
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)

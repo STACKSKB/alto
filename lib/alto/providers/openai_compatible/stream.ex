@@ -6,6 +6,10 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   @default_max_bytes 2_000_000
 
   defstruct content: [],
+            reasoning: [],
+            reasoning_fields: %{},
+            reasoning_details: %{},
+            reasoning_order: [],
             calls: %{},
             usage: nil,
             error: nil,
@@ -61,6 +65,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   def from_response(%{"choices" => [%{"message" => message} | _]} = response, sink)
       when is_map(message) do
     content = Map.get(message, "content")
+    state = consume_reasoning(new(), message, sink)
 
     if is_binary(content) and content != "" do
       sink.(Event.live(:model_delta, %{text: content}))
@@ -73,11 +78,12 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
       |> Map.new(fn {call, index} -> {index, complete_call(call)} end)
 
     {:ok,
-     %__MODULE__{
-       content: if(is_binary(content), do: [content], else: []),
-       calls: calls,
-       usage: Map.get(response, "usage"),
-       done?: true
+     %{
+       state
+       | content: if(is_binary(content), do: [content], else: []),
+         calls: calls,
+         usage: Map.get(response, "usage"),
+         done?: true
      }}
   end
 
@@ -94,7 +100,9 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
        %{
          message: if(content == "", do: nil, else: content),
          tool_calls: tool_calls,
-         usage: state.usage
+         usage: state.usage,
+         reasoning: state.reasoning |> Enum.reverse() |> IO.iodata_to_binary(),
+         provider_fields: reasoning_fields(state)
        }}
     end
   end
@@ -111,6 +119,8 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   end
 
   defp consume_delta(state, delta, sink) do
+    state = consume_reasoning(state, delta, sink)
+
     state =
       case delta["content"] do
         text when is_binary(text) and text != "" ->
@@ -140,6 +150,64 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
       end)
 
     %{state | calls: calls}
+  end
+
+  defp consume_reasoning(state, delta, sink) do
+    text = Alto.Reasoning.text(delta)
+    if text != "", do: sink.(Event.live(:model_reasoning_delta, %{text: text}))
+
+    fields =
+      Enum.reduce(["reasoning", "reasoning_content"], state.reasoning_fields, fn key, acc ->
+        if is_binary(delta[key]),
+          do: Map.update(acc, key, [delta[key]], &[delta[key] | &1]),
+          else: acc
+      end)
+
+    {details, order} =
+      (delta["reasoning_details"] || [])
+      |> Enum.with_index()
+      |> Enum.reduce({state.reasoning_details, state.reasoning_order}, fn {detail, fallback},
+                                                                          {acc, order} ->
+        key = detail["index"] || detail["id"] || fallback
+
+        order = if Map.has_key?(acc, key), do: order, else: order ++ [key]
+
+        updated =
+          Map.update(acc, key, detail, fn previous ->
+            Map.merge(previous, detail, fn key, left, right ->
+              if key in ["text", "summary", "signature", "data"] and is_binary(left) and
+                   is_binary(right),
+                 do: left <> right,
+                 else: right || left
+            end)
+          end)
+
+        {updated, order}
+      end)
+
+    %{
+      state
+      | reasoning: if(text == "", do: state.reasoning, else: [text | state.reasoning]),
+        reasoning_fields: fields,
+        reasoning_details: details,
+        reasoning_order: order
+    }
+  end
+
+  defp reasoning_fields(state) do
+    fields =
+      Map.new(state.reasoning_fields, fn {key, parts} ->
+        {key, parts |> Enum.reverse() |> IO.iodata_to_binary()}
+      end)
+
+    if map_size(state.reasoning_details) == 0,
+      do: fields,
+      else:
+        Map.put(
+          fields,
+          "reasoning_details",
+          Enum.map(state.reasoning_order, &Map.fetch!(state.reasoning_details, &1))
+        )
   end
 
   defp complete_call(call) do

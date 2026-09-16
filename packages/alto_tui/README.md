@@ -32,6 +32,25 @@ failure pauses the queued follow-up; press Enter with an empty composer to send 
 Provider and model forms show a cursor in the focused field. Type to edit, use
 Left/Right to move the cursor, and Tab to move between fields. API keys stay masked.
 
+While a run is active, the conversation border shows an animated stage and elapsed
+time, including waiting for the model, thinking, receiving text, running tools,
+and retrying a connection. Codex connection and model-catalog waits are visible too.
+
+**Ctrl+G R** opens reasoning effort for models whose catalogs advertise choices.
+The clickable `R:` setting shows the current value; choices are remembered per
+backend/provider/model for this TUI session and apply to the next turn. Provider
+default restores the provider's configured behavior. Unknown capabilities do not
+get guessed effort values. For explicitly configured model catalogs, add an
+`efforts: ["low", "high"]` list using the provider's supported values.
+
+Readable provider reasoning appears as `thinking ›` before the answer and remains
+selectable and available in saved history. Codex may supply summaries; encrypted
+or redacted data is not displayed. The native Anthropic adapter emits thinking
+when its complete response arrives; it is not a streaming adapter. Its provider
+options accept `thinking: %{"type" => "adaptive"}` for models that support that mode.
+OpenAI-compatible proxies can set `reasoning_format: :openrouter` when they expect
+nested `reasoning.effort`; other endpoints use `reasoning_effort` by default.
+
 Drag with the left mouse button to select conversation text, context data, your
 composer draft, or entered form values. Selection stays inside its starting box.
 Hold the drag at the top or bottom of a conversation/context pane to scroll;

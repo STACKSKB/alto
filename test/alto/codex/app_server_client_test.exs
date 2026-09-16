@@ -40,6 +40,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
             "thread/resume" ->
               {%{"id" => id, "result" => %{"thread" => %{"id" => message["params"]["threadId"]}}}, state}
             "turn/start" ->
+              IO.puts(JSON.encode!(%{"method" => "test/turnParams", "params" => message["params"]}))
               response = %{"id" => id, "result" => %{"turn" => %{"id" => "turn-1", "status" => "inProgress"}}}
               IO.puts(JSON.encode!(response))
               IO.puts(JSON.encode!(%{"method" => "item/agentMessage/delta", "params" => %{"threadId" => "thr-1", "turnId" => "turn-1", "itemId" => "msg-1", "delta" => "hello"}}))
@@ -83,8 +84,12 @@ defmodule Alto.Codex.AppServer.ClientTest do
              Backend.start_turn(client, nil, "hello",
                cwd: root,
                model: "gpt-test",
+               effort: "high",
                approval: :ask
              )
+
+    assert_receive {:codex_notification, ^client, "test/turnParams",
+                    %{"effort" => "high", "summary" => "auto"}}
 
     assert_receive {:codex_notification, ^client, "item/agentMessage/delta",
                     %{"delta" => "hello"}}

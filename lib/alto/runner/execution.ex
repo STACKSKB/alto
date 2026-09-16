@@ -726,7 +726,13 @@ defmodule Alto.Runner.Execution do
         {:error, :empty_model_response, run}
 
       true ->
-        assistant = assistant_message(message, calls)
+        fields =
+          Map.take(
+            Map.get(completion, :provider_fields, %{}),
+            ["reasoning", "reasoning_content", "reasoning_details", "alto_anthropic_content"]
+          )
+
+        assistant = Map.merge(assistant_message(message, calls), fields)
 
         case append_message(run, assistant) do
           {:ok, run} ->
@@ -737,6 +743,7 @@ defmodule Alto.Runner.Execution do
             event =
               Event.durable(:model_completed, %{
                 message: message,
+                reasoning: Map.get(completion, :reasoning),
                 tool_calls: calls,
                 usage: Usage.to_map(request_usage)
               })

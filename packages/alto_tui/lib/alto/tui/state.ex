@@ -38,6 +38,7 @@ defmodule Alto.TUI.State do
     entries: %{},
     profiles: [],
     models: %{},
+    efforts: %{},
     model_loading: MapSet.new(),
     approval_level: :ask,
     composer_mode: :prose,
@@ -158,11 +159,35 @@ defmodule Alto.TUI.State do
       nil ->
         if queued?, do: "message queued · Enter send", else: "idle"
 
-      {_id, run} ->
-        Map.get(run, :phase, "working") <>
+      {id, run} ->
+        phase =
+          if Enum.any?(state.pending_approvals, &(Map.get(&1, :local_id) == id)),
+            do: "waiting for approval",
+            else: Map.get(run, :phase, "working")
+
+        phase <>
           " · Esc stop" <>
           if(queued?, do: " · 1 queued", else: "")
     end
+  end
+
+  def model_metadata(state) do
+    models =
+      if state.selected_backend == :codex,
+        do: state.codex.models,
+        else: Map.get(state.models, state.selected_provider_id, [])
+
+    Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
+  end
+
+  def effort_choices(state), do: Alto.Reasoning.efforts(model_metadata(state))
+
+  def effort_key(state),
+    do: {state.selected_backend, state.selected_provider_id, state.selected_model}
+
+  def selected_effort(state) do
+    value = Map.get(state.efforts, effort_key(state))
+    if value in effort_choices(state), do: value, else: nil
   end
 
   def activity(state) do
@@ -570,8 +595,13 @@ defmodule Alto.TUI.State do
   defp message_entries(%{"role" => "user", "content" => text}) when is_binary(text),
     do: [%{kind: :user, text: text}]
 
-  defp message_entries(%{"role" => "assistant", "content" => text}) when is_binary(text),
-    do: [%{kind: :assistant, text: text}]
+  defp message_entries(%{"role" => "assistant"} = message) do
+    Alto.Reasoning.entries(message) ++
+      if(is_binary(message["content"]) and message["content"] != "",
+        do: [%{kind: :assistant, text: message["content"]}],
+        else: []
+      )
+  end
 
   defp message_entries(%{"role" => "tool", "content" => text}) when is_binary(text),
     do: [%{kind: :tool, text: text}]

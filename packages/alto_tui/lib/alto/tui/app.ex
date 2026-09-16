@@ -196,6 +196,7 @@ defmodule Alto.TUI.App do
       "b" -> {:noreply, open_overlay(state, :backend)}
       "p" -> {:noreply, open_overlay(state, :provider)}
       "m" -> {:noreply, open_overlay(state, :model)}
+      "r" -> {:noreply, open_overlay(state, :effort)}
       "e" -> {:noreply, toggle_composer_mode(state)}
       "w" -> {:noreply, open_overlay(state, :project)}
       "t" -> {:noreply, open_overlay(state, :task)}
@@ -318,9 +319,9 @@ defmodule Alto.TUI.App do
         state = %{state | models: Map.put(state.models, profile_id, models)}
 
         state =
-          if (state.overlay && state.overlay.kind == :model) and
+          if (state.overlay && state.overlay.kind in [:model, :effort]) and
                state.selected_provider_id == profile_id do
-            open_overlay(%{state | overlay: nil}, :model)
+            open_overlay(%{state | overlay: nil}, state.overlay.kind)
           else
             state
           end
@@ -692,6 +693,8 @@ defmodule Alto.TUI.App do
     opts = [
       cwd: project["root"],
       model: state.selected_model,
+      effort:
+        State.selected_effort(state) || (State.model_metadata(state) || %{})[:default_effort],
       approval: state.approval_level
     ]
 
@@ -904,7 +907,14 @@ defmodule Alto.TUI.App do
         credentials_path: state.credentials_path
       )
 
-    {module, maybe_context_window(options, selected_model_metadata(state, profile))}
+    options = maybe_context_window(options, selected_model_metadata(state, profile))
+
+    options =
+      if effort = State.selected_effort(state),
+        do: Keyword.put(options, :reasoning_effort, effort),
+        else: options
+
+    {module, options}
   end
 
   defp selected_model_metadata(state, profile) do
@@ -1023,6 +1033,9 @@ defmodule Alto.TUI.App do
       else: state
   end
 
+  defp do_ingest_event(state, task_id, %Event{type: :model_reasoning_delta, data: %{text: text}}),
+    do: State.append_assistant_delta(state, task_id, text, :reasoning)
+
   defp do_ingest_event(state, task_id, %Event{type: :model_delta, data: %{text: text}}),
     do: State.append_assistant_delta(state, task_id, text)
 
@@ -1092,7 +1105,7 @@ defmodule Alto.TUI.App do
         end)
 
         overlay = %{
-          kind: :model,
+          kind: kind,
           title: "models · loading #{profile.label}…",
           index: 0,
           filter: "",
@@ -1119,6 +1132,33 @@ defmodule Alto.TUI.App do
 
       {:error, reason} ->
         %{state | notice: reason}
+    end
+  end
+
+  defp overlay_items(state, :effort) do
+    case State.effort_choices(state) do
+      [] ->
+        profile = State.selected_profile(state)
+
+        cond do
+          state.selected_backend == :codex and state.codex.status != :ready ->
+            {:codex_connect}
+
+          profile && state.selected_backend != :codex &&
+            not Map.has_key?(state.models, profile.id) &&
+              not MapSet.member?(state.model_loading, profile.id) ->
+            {:load, profile}
+
+          true ->
+            {:error, "This model does not advertise effort selection"}
+        end
+
+      choices ->
+        {:ok, "reasoning effort · next turn",
+         [
+           %{label: "Provider default", value: :default}
+           | Enum.map(choices, &%{label: &1, value: &1})
+         ], State.selected_effort(state) || :default}
     end
   end
 
@@ -1281,6 +1321,19 @@ defmodule Alto.TUI.App do
       %{value: {:codex_cancel_login, login_id}} -> cancel_codex_login(state, login_id)
       %{value: backend} when backend in [:alto, :codex] -> select_backend(state, backend)
       %{value: value} -> apply_selection(state, state.overlay.kind, value)
+    end
+  end
+
+  defp apply_selection(state, :effort, value) do
+    if value == :default or value in State.effort_choices(state) do
+      efforts =
+        if value == :default,
+          do: Map.delete(state.efforts, State.effort_key(state)),
+          else: Map.put(state.efforts, State.effort_key(state), value)
+
+      %{state | efforts: efforts, overlay: nil, notice: "effort: #{value} · applies next turn"}
+    else
+      %{state | overlay: nil, notice: "Effort is not supported by this model"}
     end
   end
 
@@ -2293,7 +2346,45 @@ defmodule Alto.TUI.App do
   end
 
   defp apply_codex_run_event(state, run, "item/agentMessage/delta", %{"delta" => delta}),
-    do: State.append_assistant_delta(state, run.task_id, delta, :codex_assistant)
+    do:
+      state
+      |> codex_phase(run, "receiving response")
+      |> State.append_assistant_delta(run.task_id, delta, :codex_assistant)
+
+  defp apply_codex_run_event(state, run, method, %{"delta" => delta} = params)
+       when method in ["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"] do
+    key = {:codex_reasoning, run.turn_id, params["itemId"]}
+    entries = Map.get(state.entries, run.task_id, [])
+    previous = Enum.find(entries, &(&1[:entry_key] == key)) || %{}
+    parts = Map.get(previous, :reasoning_parts, %{summary: %{}, raw: %{}})
+    type = if method == "item/reasoning/summaryTextDelta", do: :summary, else: :raw
+    index = params["summaryIndex"] || params["contentIndex"] || 0
+    parts = Map.update!(parts, type, &Map.update(&1, index, delta, fn text -> text <> delta end))
+    chosen = if map_size(parts.summary) > 0, do: parts.summary, else: parts.raw
+    text = chosen |> Enum.sort_by(&elem(&1, 0)) |> Enum.map_join("\n\n", &elem(&1, 1))
+
+    state
+    |> codex_phase(run, "thinking")
+    |> State.upsert_entry(run.task_id, key, %{
+      kind: :reasoning,
+      text: text,
+      reasoning_parts: parts
+    })
+  end
+
+  defp apply_codex_run_event(state, run, "item/completed", %{
+         "item" => %{"type" => "reasoning"} = item
+       }) do
+    text = CodexBackend.reasoning_text(item)
+
+    if text == "",
+      do: state,
+      else:
+        State.upsert_entry(state, run.task_id, {:codex_reasoning, run.turn_id, item["id"]}, %{
+          kind: :reasoning,
+          text: text
+        })
+  end
 
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
     state
@@ -2302,6 +2393,13 @@ defmodule Alto.TUI.App do
   end
 
   defp apply_codex_run_event(state, run, "item/started", %{"item" => item}) do
+    state =
+      cond do
+        item["type"] == "reasoning" -> codex_phase(state, run, "thinking")
+        codex_item_summary(item) != nil -> codex_phase(state, run, "running tool")
+        true -> state
+      end
+
     case codex_item_summary(item) do
       nil -> state
       text -> State.append_entry(state, run.task_id, %{kind: :tool, text: text <> " …"})
@@ -2342,6 +2440,19 @@ defmodule Alto.TUI.App do
   end
 
   defp apply_codex_run_event(state, _run, _method, _params), do: state
+
+  defp codex_phase(state, run, phase) do
+    runs =
+      Map.new(state.runs, fn {id, candidate} ->
+        {id,
+         if(candidate == run and Map.get(candidate, :phase) != "cancelling",
+           do: Map.put(candidate, :phase, phase),
+           else: candidate
+         )}
+      end)
+
+    %{state | runs: runs}
+  end
 
   defp codex_item_summary(%{"type" => "commandExecution", "command" => command}),
     do: "command · " <> short_inspect(command)

@@ -85,6 +85,53 @@ defmodule Alto.Providers.AnthropicTest do
     assert_received {:event, %Alto.Event{type: :model_delta, data: %{text: "Done"}}}
   end
 
+  test "thinking is readable and signed content is replayed unchanged with selected effort" do
+    blocks = [
+      %{"type" => "thinking", "thinking" => "Check the file", "signature" => "signed"},
+      %{"type" => "redacted_thinking", "data" => "opaque"},
+      %{
+        "type" => "tool_use",
+        "id" => "call",
+        "name" => "read_file",
+        "input" => %{"path" => "README"}
+      }
+    ]
+
+    opts =
+      configure(%{"content" => blocks, "stop_reason" => "tool_use"})
+      |> Keyword.put(:reasoning_effort, "high")
+
+    owner = self()
+
+    assert {:ok, completion} =
+             Anthropic.stream(%{messages: [], tools: []}, &send(owner, &1), opts)
+
+    assert_received %{type: :model_reasoning_delta, data: %{text: text}}
+    assert text =~ "Check the file"
+    refute text =~ "opaque"
+    assert completion.provider_fields["alto_anthropic_content"] == blocks
+    assert_received {:request, request}
+    assert JSON.decode!(request.body)["output_config"]["effort"] == "high"
+
+    messages = [
+      Map.merge(
+        %{
+          "role" => "assistant",
+          "content" => nil,
+          "tool_calls" => [
+            %{"id" => "call", "function" => %{"name" => "read_file", "arguments" => "{}"}}
+          ]
+        },
+        completion.provider_fields
+      ),
+      %{"role" => "tool", "tool_call_id" => "call", "content" => "file contents"}
+    ]
+
+    assert {:ok, _} = Anthropic.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
+    assert_received {:request, replay}
+    assert hd(JSON.decode!(replay.body)["messages"])["content"] == blocks
+  end
+
   test "unknown content and truncated responses cannot silently become successful completions" do
     request = %{messages: [%{"role" => "user", "content" => "go"}], tools: []}
 
@@ -122,9 +169,9 @@ defmodule Alto.Providers.AnthropicTest do
 
   test "unsupported options fail before dispatch" do
     opts = configure(%{"content" => [], "stop_reason" => "end_turn"})
-    request = %{messages: [], tools: [], options: %{"thinking" => %{"type" => "enabled"}}}
+    request = %{messages: [], tools: [], options: %{"unknown_option" => true}}
 
-    assert {:error, {:unsupported_anthropic_options, ["thinking"]}} =
+    assert {:error, {:unsupported_anthropic_options, ["unknown_option"]}} =
              Anthropic.stream(request, fn _ -> :ok end, opts)
 
     refute_received {:request, _}

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Display provider reasoning separately from answers, including OpenRouter / compatible
+  streams, Codex summaries, and native Anthropic thinking. Preserve reasoning fields
+  and signed content in saved histories and subsequent tool requests.
+
+- Add Ctrl+G R reasoning effort selection from model capabilities, remembered per
+  provider/model and sent through OpenAI-compatible, Anthropic and Codex adapters.
+
 - Show animated connection/run activity and elapsed time on the conversation
   border while waiting, thinking, retrying or executing tools.
 

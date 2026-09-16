@@ -162,7 +162,7 @@ defmodule Alto.Harness.ProviderProfile do
         [model]
 
       %{"id" => id} = model when is_binary(id) and id != "" ->
-        [%{id: id, name: Map.get(model, "name", id)}]
+        [Map.merge(model, %{id: id, name: Map.get(model, "name", id)})]
 
       _other ->
         []

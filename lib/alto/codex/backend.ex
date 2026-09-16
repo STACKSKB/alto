@@ -72,6 +72,8 @@ defmodule Alto.Codex.Backend do
              "input" => [%{"type" => "text", "text" => prompt}],
              "cwd" => cwd,
              "model" => model,
+             "effort" => Keyword.get(opts, :effort),
+             "summary" => "auto",
              "approvalPolicy" => approval_policy(approval),
              "sandboxPolicy" => sandbox_policy(approval)
            }),
@@ -208,10 +210,25 @@ defmodule Alto.Codex.Backend do
       }
     ]
 
+  defp history_item(%{"type" => "reasoning"} = item) do
+    case reasoning_text(item) do
+      "" -> []
+      text -> [%{kind: :reasoning, text: text}]
+    end
+  end
+
   defp history_item(%{"type" => "plan", "text" => text}) when is_binary(text),
     do: [%{kind: :system, text: "plan\n" <> text}]
 
   defp history_item(_item), do: []
+
+  def reasoning_text(item) do
+    summary = Enum.filter(item["summary"] || [], &is_binary/1) |> Enum.join("\n\n")
+
+    if summary != "",
+      do: summary,
+      else: Enum.filter(item["content"] || [], &is_binary/1) |> Enum.join("\n\n")
+  end
 
   defp client_options(opts), do: Keyword.take(opts, @client_keys)
 

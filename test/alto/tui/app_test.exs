@@ -401,6 +401,124 @@ defmodule Alto.TUI.AppTest do
     assert View.activity_widgets(idle, frame) == []
   end
 
+  test "effort picker offers only supported choices and remembers them per model", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    state = %{
+      state
+      | models: %{
+          state.selected_provider_id => [
+            %{id: state.selected_model, reasoning: %{"supported_efforts" => ["low", "high"]}}
+          ]
+        }
+    }
+
+    {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "r"}, state)
+    assert Enum.map(state.overlay.items, & &1.value) == [:default, "low", "high"]
+    {:noreply, state} = App.handle_event(%Key{code: "down"}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
+    assert State.selected_effort(state) == "low"
+    assert State.selected_effort(%{state | selected_model: "unsupported"}) == nil
+    assert Enum.any?(View.settings_segments(state), &(&1.target == {:setting, :effort}))
+    unsupported = %{state | selected_model: "unsupported", leader?: true}
+    {:noreply, unsupported} = App.handle_event(%Key{code: "r"}, unsupported)
+    assert unsupported.overlay == nil
+    assert unsupported.notice =~ "does not advertise"
+  end
+
+  test "provider reasoning is separate from the answer and changes the activity phase", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    state = %{
+      state
+      | selected_task_id: "task",
+        runs: %{"run" => %{task_id: "task", phase: "waiting for model"}}
+    }
+
+    {:noreply, state} =
+      App.handle_info(
+        {:alto_tui_event, "run", Alto.Event.live(:model_reasoning_delta, %{text: "Check files"})},
+        state
+      )
+
+    assert state.runs["run"].phase == "thinking"
+
+    {:noreply, state} =
+      App.handle_info(
+        {:alto_tui_event, "run", Alto.Event.live(:model_delta, %{text: "Answer"})},
+        state
+      )
+
+    assert state.runs["run"].phase == "receiving response"
+
+    assert [%{kind: :reasoning, text: "Check files"}, %{kind: :assistant, text: "Answer"}] =
+             State.current_entries(state)
+  end
+
+  test "Codex reasoning summaries replace raw deltas and the completed item is authoritative",
+       context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    run = %{
+      kind: :codex,
+      task_id: "task",
+      thread_id: "thread",
+      turn_id: "turn",
+      phase: "waiting for model"
+    }
+
+    state = %{
+      state
+      | selected_task_id: "task",
+        runs: %{"run" => run},
+        codex: %{state.codex | client: self()}
+    }
+
+    params = %{"threadId" => "thread", "turnId" => "turn", "itemId" => "reason", "delta" => "Raw"}
+
+    {:noreply, state} =
+      App.handle_info({:codex_notification, self(), "item/reasoning/textDelta", params}, state)
+
+    {:noreply, state} =
+      App.handle_info(
+        {:codex_notification, self(), "item/reasoning/summaryTextDelta",
+         %{params | "delta" => "Summary"}},
+        state
+      )
+
+    assert [%{kind: :reasoning, text: "Summary"}] = State.current_entries(state)
+    assert state.runs["run"].phase == "thinking"
+
+    params =
+      Map.put(params, "item", %{
+        "id" => "reason",
+        "type" => "reasoning",
+        "summary" => ["Final summary"],
+        "content" => ["Raw"]
+      })
+
+    {:noreply, state} =
+      App.handle_info({:codex_notification, self(), "item/completed", params}, state)
+
+    assert [%{kind: :reasoning, text: "Final summary"}] = State.current_entries(state)
+  end
+
+  test "effort selector loads a cold model catalog without visiting model selection first",
+       context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = %{state | models: %{}, leader?: true}
+    {:noreply, loading} = App.handle_event(%Key{code: "r"}, state)
+    assert loading.overlay.kind == :effort
+    assert MapSet.member?(loading.model_loading, state.selected_provider_id)
+    result = {:ok, [%{id: state.selected_model, efforts: ["low", "high"]}]}
+
+    {:noreply, loaded} =
+      App.handle_info({:alto_models_loaded, state.selected_provider_id, result}, loading)
+
+    assert Enum.map(loaded.overlay.items, & &1.value) == [:default, "low", "high"]
+  end
+
   test "ordinary selection excludes chrome and placeholders but includes content", context do
     {:ok, state} =
       State.new(context.config,
@@ -629,7 +747,7 @@ defmodule Alto.TUI.AppTest do
     layout = View.layout(state, 100, 30)
     widget = widget_at(View.widgets(state, %{width: 100, height: 30}), layout.composer)
 
-    assert widget.block.title =~ "B A P M E W T N D Q"
+    assert widget.block.title =~ "B A P M R E W T N D Q"
     assert widget.block.title =~ "Esc cancel"
     assert String.length(widget.block.title) <= layout.composer.width - 2
   end
