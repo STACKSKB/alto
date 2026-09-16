@@ -150,7 +150,7 @@ defmodule Alto.TUI.AppTest do
 
   test "Ctrl+G W opens a new folder workspace, preserves the draft and remembers the folder",
        context do
-    folder = Path.join(context.root, "second project")
+    folder = Path.join(context.root, "Second Project!")
     File.mkdir_p!(folder)
 
     {:ok, state} =
@@ -164,7 +164,18 @@ defmodule Alto.TUI.AppTest do
     original = state.selected_project_id
     form = folder_form(state)
     assert form.overlay.kind == :workspace_form
-    {:noreply, typed} = App.handle_event(%ExRatatui.Event.Paste{content: "second project"}, form)
+
+    typed =
+      Enum.reduce(String.graphemes("Second Project!"), form, fn code, state ->
+        modifiers = if code in ["S", "P", "!"], do: ["shift"], else: []
+
+        {:noreply, next} =
+          App.handle_event(%Key{code: code, kind: "press", modifiers: modifiers}, state)
+
+        next
+      end)
+
+    assert Alto.TUI.WorkspaceForm.path(typed.overlay) == "Second Project!"
     {:noreply, opened} = App.handle_event(%Key{code: "enter"}, typed)
     assert opened.overlay == nil
     assert opened.selected_project_id != original

@@ -55,7 +55,7 @@ defmodule Alto.TUI.WorkspaceForm do
   end
 
   def key(form, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] and
+    if Enum.all?(modifiers, &(&1 == "shift")) and
          (String.length(code || "") == 1 or
             code in ["backspace", "delete", "left", "right", "home", "end"]),
        do: ExRatatui.text_input_handle_key(form.input, code)

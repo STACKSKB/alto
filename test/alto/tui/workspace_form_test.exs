@@ -3,6 +3,58 @@ defmodule Alto.TUI.WorkspaceFormTest do
   alias Alto.TUI.WorkspaceForm
   alias ExRatatui.Event.Key
 
+  test "typed capitals and shifted symbols preserve their case and complete a matching folder" do
+    root = temporary_folders(["Project_É!", "project_lowercase"])
+    form = WorkspaceForm.new(root)
+
+    form =
+      Enum.reduce(
+        [
+          {"P", ["shift"]},
+          {"r", []},
+          {"o", []},
+          {"j", []},
+          {"e", []},
+          {"c", []},
+          {"t", []},
+          {"_", ["shift"]},
+          {"É", ["shift"]}
+        ],
+        form,
+        fn {code, modifiers}, form ->
+          {:edit, next} =
+            WorkspaceForm.key(form, %Key{code: code, kind: "press", modifiers: modifiers})
+
+          next
+        end
+      )
+
+    assert WorkspaceForm.path(form) == "Project_É"
+    assert form.suggestions == [root <> "/Project_É!/"]
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(form) == root <> "/Project_É!/"
+    assert {:submit, _} = WorkspaceForm.key(form, %Key{code: "enter"})
+  end
+
+  test "Shift inserts the terminal's actual characters while command modifiers remain shortcuts" do
+    form = WorkspaceForm.new("/remote", "remote", [], complete: nil)
+
+    for code <- ["A", "_", "~", "!", "É"] do
+      {:edit, _} = WorkspaceForm.key(form, %Key{code: code, modifiers: ["shift"]})
+    end
+
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "Z", modifiers: []})
+    assert WorkspaceForm.path(form) == "A_~!ÉZ"
+
+    for modifiers <- [["ctrl"], ["alt"], ["super"], ["ctrl", "shift"]] do
+      {:edit, _} = WorkspaceForm.key(form, %Key{code: "X", modifiers: modifiers})
+      assert WorkspaceForm.path(form) == "A_~!ÉZ"
+    end
+
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "u", modifiers: ["ctrl"]})
+    assert WorkspaceForm.path(form) == ""
+  end
+
   test "folder entry and actions remain visible on narrow terminals" do
     for {width, height} <- [{120, 36}, {50, 16}] do
       form = WorkspaceForm.new("/projects") |> WorkspaceForm.paste("/projects/猫 folder")
