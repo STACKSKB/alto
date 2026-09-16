@@ -40,9 +40,25 @@ defmodule Alto.ToolDisplay do
         %{kind: :error, text: title <> " failed", detail: Alto.Display.error(get(data, "error"))}
 
       _ ->
-        %{kind: :tool, text: title <> " ✓", detail: detail(output)}
+        %{kind: :tool, text: title <> " ✓", detail: result_detail(name, output)}
     end
   end
+
+  # Read results remain intact in the model/session; the terminal shows metadata.
+  defp result_detail(name, value) when name in ["read_file", :read_file] do
+    value = decode(value)
+    content = get(value, "content")
+    size = if is_binary(content), do: byte_size(content), else: nil
+
+    label =
+      if get(value, "encoding") == "base64",
+        do: "Binary file read",
+        else: if(size, do: "#{size} bytes read", else: "File read")
+
+    label <> if(get(value, "truncated"), do: " · more available", else: "")
+  end
+
+  defp result_detail(_, value), do: detail(value)
 
   def detail(value) do
     value = decode(value)
@@ -70,7 +86,12 @@ defmodule Alto.ToolDisplay do
             calls =
               Enum.reduce(message["tool_calls"] || [], calls, fn call, acc ->
                 function = call["function"] || %{}
-                Map.put(acc, call["id"], summary(function["name"], function["arguments"]))
+
+                Map.put(
+                  acc,
+                  call["id"],
+                  {function["name"], summary(function["name"], function["arguments"])}
+                )
               end)
 
             entries =
@@ -86,8 +107,20 @@ defmodule Alto.ToolDisplay do
             {[%{kind: :user, text: Alto.Display.text(message["content"])}], calls}
 
           "tool" ->
-            title = Map.get(calls, message["tool_call_id"], message["name"] || "tool")
-            {[%{kind: :tool, text: title <> " ✓", detail: detail(message["content"])}], calls}
+            {name, title} =
+              Map.get(
+                calls,
+                message["tool_call_id"],
+                {message["name"], message["name"] || "tool"}
+              )
+
+            {[
+               %{
+                 kind: :tool,
+                 text: title <> " ✓",
+                 detail: result_detail(name, message["content"])
+               }
+             ], calls}
 
           _ ->
             {[], calls}

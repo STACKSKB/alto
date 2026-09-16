@@ -276,7 +276,7 @@ defmodule Alto.TUI.Selection do
 
   defp arm_scroll(%{scroll: %{token: nil}} = selection) do
     token = make_ref()
-    timer = Process.send_after(self(), {:tui_selection_scroll, token}, 50)
+    timer = Process.send_after(self(), {:tui_selection_scroll, token}, 30)
     %{selection | scroll: %{selection.scroll | token: token, timer: timer}}
   end
 

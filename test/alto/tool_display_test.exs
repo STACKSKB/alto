@@ -67,7 +67,24 @@ defmodule Alto.ToolDisplayTest do
     assert [%{text: "read_file b ✓", detail: detail}, %{text: "read_file a ✓"}] =
              ToolDisplay.transcript(messages)
 
-    assert detail =~ "line one\nline two"
+    assert detail == "17 bytes read"
+  end
+
+  test "live file reads show metadata without copying file contents into the terminal" do
+    content = "PRIVATE_CANARY\n" <> String.duplicate("source line\n", 1000)
+    value = %{path: "large.ex", content: content, offset: 0, truncated: true}
+
+    entry =
+      ToolDisplay.entry(:tool_completed, %{
+        name: "read_file",
+        arguments: %{path: "large.ex"},
+        value: value
+      })
+
+    assert entry.text == "read_file large.ex ✓"
+    assert entry.detail == "#{byte_size(content)} bytes read · more available"
+    refute inspect(entry) =~ "PRIVATE_CANARY"
+    assert value.content == content
   end
 
   defmodule Provider do
