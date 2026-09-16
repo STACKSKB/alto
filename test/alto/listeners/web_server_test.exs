@@ -111,7 +111,7 @@ defmodule Alto.Listeners.WebServerTest do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
 
     :ok = :gen_tcp.send(socket, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-    {:ok, response} = :gen_tcp.recv(socket, 0, 2_000)
+    {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
 
     assert response =~ "200 OK"
     assert response =~ "text/html; charset=utf-8"

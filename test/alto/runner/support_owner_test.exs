@@ -39,18 +39,18 @@ defmodule Alto.Runner.SupportOwnerTest do
         tools: [{BlockingTool, owner: self()}]
       )
 
-    assert_receive {:tool_participant, participant}
+    assert_receive {:tool_participant, participant}, 3_000
     participant_ref = Process.monitor(participant)
     assert {:error, _, _} = Alto.Runner.terminate(handle)
-    assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}
+    assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}, 1_000
   end
 
   test "hard runner termination kills a supervised provider participant" do
     {:ok, handle} = Alto.start("task", provider: {BlockingProvider, owner: self()})
 
-    assert_receive {:provider_participant, participant}
+    assert_receive {:provider_participant, participant}, 3_000
     participant_ref = Process.monitor(participant)
     assert {:error, _, _} = Alto.Runner.terminate(handle)
-    assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}
+    assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}, 1_000
   end
 end

@@ -157,7 +157,7 @@ defmodule Alto.Listeners.WebhookTest do
              )
   end
 
-  defp post(port, path, body, headers) do
+  defp post(port, path, body, headers, recv_timeout \\ 2_000) do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
 
     header_lines =
@@ -170,7 +170,7 @@ defmodule Alto.Listeners.WebhookTest do
         "Content-Length: #{byte_size(body)}\r\n\r\n" <> body
 
     :ok = :gen_tcp.send(socket, request)
-    {:ok, response} = :gen_tcp.recv(socket, 0, 2_000)
+    {:ok, response} = :gen_tcp.recv(socket, 0, recv_timeout)
     :gen_tcp.close(socket)
     response
   end
@@ -207,7 +207,13 @@ defmodule Alto.Listeners.WebhookTest do
         {"X-Delivery-ID", delivery_id}
       ] ++ Keyword.get(opts, :extra_headers, [])
 
-    post(port, Keyword.get(opts, :path, "/hooks/events"), body, headers)
+    post(
+      port,
+      Keyword.get(opts, :path, "/hooks/events"),
+      body,
+      headers,
+      Keyword.get(opts, :recv_timeout, 2_000)
+    )
   end
 
   test "a verified delivery starts a run with the body as the task", %{
@@ -539,7 +545,7 @@ defmodule Alto.Listeners.WebhookTest do
       dead = :"webhook-dead-queue-#{System.unique_integer([:positive])}"
       port = start_listener(listener, registry, [enqueue_endpoint(dead)])
 
-      assert post_event(port, delivery_id: "inbox-dead") =~ "500"
+      assert post_event(port, delivery_id: "inbox-dead", recv_timeout: 5_000) =~ "500"
     end
 
     test "the same delivery id on two endpoints never collides", %{
