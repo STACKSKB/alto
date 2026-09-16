@@ -92,8 +92,10 @@ Open a different folder through **Ctrl+G, W → Open another folder**. Enter an
 existing folder path and press Enter (or click Open folder).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
-your draft. Up/Down highlights folder suggestions; Tab completes the selected path
-and lists its subfolders. Saved folders appear alongside directory matches.
+your draft. Tab extends the typed path to the longest common prefix of matching
+folders, then lists the matching folders or subfolders. For example, `/hom` becomes
+`/home/`, regardless of the current workspace. Up/Down followed by Tab accepts a
+specific suggestion. Saved folders appear only while the input is empty.
 The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 

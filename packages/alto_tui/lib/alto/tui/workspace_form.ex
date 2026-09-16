@@ -14,7 +14,10 @@ defmodule Alto.TUI.WorkspaceForm do
       suggestions: [],
       suggestion_index: 0,
       choose?: false,
-      complete: Keyword.get(opts, :complete, &Alto.Harness.Folders.complete(&1, base)),
+      completion: nil,
+      completion_pending?: false,
+      tab_pending?: false,
+      complete: Keyword.get(opts, :complete, &Alto.Harness.Folders.suggest(&1, base)),
       revision: make_ref(),
       host: host,
       error: nil
@@ -38,12 +41,12 @@ defmodule Alto.TUI.WorkspaceForm do
   end
 
   def key(form, %Key{code: "tab"}) do
-    if selected(form) do
-      ExRatatui.text_input_set_value(form.input, selected(form))
-      ExRatatui.text_input_handle_key(form.input, "end")
+    cond do
+      form.choose? -> {:edit, complete_path(form, selected(form))}
+      path(form) == "" -> {:edit, form}
+      form.completion_pending? -> {:edit, %{form | tab_pending?: true}}
+      true -> {:edit, complete_path(form, form.completion)}
     end
-
-    {:edit, refresh(form)}
   end
 
   def key(form, %Key{code: "u", modifiers: ["ctrl"]}) do
@@ -65,27 +68,42 @@ defmodule Alto.TUI.WorkspaceForm do
     refresh(form)
   end
 
+  defp complete_path(form, completion) do
+    if is_binary(completion) and completion != "" and completion != path(form) do
+      ExRatatui.text_input_set_value(form.input, completion)
+      ExRatatui.text_input_handle_key(form.input, "end")
+      refresh(form)
+    else
+      form
+    end
+  end
+
   defp selected(form), do: Enum.at(form.suggestions, form.suggestion_index)
 
   defp refresh(form) do
-    suggestions = if form.complete, do: form.complete.(path(form)), else: {:ok, []}
-    form = %{form | revision: make_ref(), choose?: false, suggestion_index: 0, error: nil}
-    suggest(form, suggestions)
+    result = if form.complete, do: form.complete.(path(form)), else: :pending
+
+    form = %{
+      form
+      | revision: make_ref(),
+        choose?: false,
+        tab_pending?: false,
+        suggestion_index: 0,
+        error: nil
+    }
+
+    suggest(form, result)
   end
 
   def suggest(form, result) do
-    query = path(form)
+    # Saved workspaces are shortcuts for an empty field, never path completions.
+    saved = if path(form) == "", do: form.folders, else: []
 
-    saved =
-      Enum.filter(
-        form.folders,
-        &(query == "" or String.starts_with?(&1, Path.expand(query, form.base)))
-      )
-
-    found =
+    {found, completion} =
       case result do
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{folders: folders, completion: completion}} -> {folders, completion}
+        {:ok, list} when is_list(list) -> {list, Alto.Harness.Folders.common_prefix(list)}
+        _ -> {[], nil}
       end
 
     suggestions =
@@ -95,7 +113,16 @@ defmodule Alto.TUI.WorkspaceForm do
     index =
       if form.choose?, do: Enum.find_index(suggestions, &(&1 == selected(form))) || 0, else: 0
 
-    %{form | suggestions: suggestions, suggestion_index: index}
+    next = %{
+      form
+      | suggestions: suggestions,
+        suggestion_index: index,
+        completion: completion,
+        completion_pending?: result == :pending,
+        tab_pending?: false
+    }
+
+    if form.tab_pending?, do: complete_path(next, completion), else: next
   end
 
   def rect(width, height) do

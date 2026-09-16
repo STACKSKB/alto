@@ -1,7 +1,12 @@
 defmodule Alto.Harness.Folders do
   @moduledoc "Bounded folder suggestions resolved on the host that owns the workspace."
 
-  def complete(path, base) when is_binary(path) and is_binary(base) do
+  def complete(path, base) do
+    with {:ok, result} <- suggest(path, base), do: {:ok, result.folders}
+  end
+
+  @doc "Bounded display suggestions and the common prefix of every matching directory."
+  def suggest(path, base) when is_binary(path) and is_binary(base) do
     if valid?(path) do
       expanded = Path.expand(if(path == "", do: ".", else: path), base)
 
@@ -22,17 +27,28 @@ defmodule Alto.Harness.Folders do
           |> Stream.map(&Path.join(directory, &1))
           |> Stream.filter(&File.dir?/1)
           |> Enum.sort()
-          |> Enum.take(50)
           |> Enum.map(&(&1 <> "/"))
 
-        {:ok, folders}
+        {:ok, %{folders: Enum.take(folders, 50), completion: common_prefix(folders)}}
       end
     else
       {:error, :invalid_workspace_path}
     end
   end
 
-  def complete(_, _), do: {:error, :invalid_workspace_path}
+  def suggest(_, _), do: {:error, :invalid_workspace_path}
+
+  @doc false
+  def common_prefix([]), do: nil
+
+  def common_prefix(paths) do
+    # Sorted endpoints determine the prefix, including matches beyond the display limit.
+    {first, last} = Enum.min_max(paths)
+
+    Enum.zip(String.codepoints(first), String.codepoints(last))
+    |> Enum.take_while(fn {left, right} -> left == right end)
+    |> Enum.map_join(fn {character, _} -> character end)
+  end
 
   defp valid?(path),
     do:

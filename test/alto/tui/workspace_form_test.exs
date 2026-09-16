@@ -74,4 +74,91 @@ defmodule Alto.TUI.WorkspaceFormTest do
     {:edit, completed} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(completed) == "/remote/project/"
   end
+
+  test "Tab completes the typed prefix, never a saved working directory" do
+    root = temporary_folders(["home/current/project", "home/another"])
+
+    form =
+      WorkspaceForm.new(root <> "/home/current/project", "host", [root <> "/home/current/project"])
+
+    {:edit, empty} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(empty) == ""
+
+    form = WorkspaceForm.paste(form, root <> "/hom")
+    assert form.suggestions == [root <> "/home/"]
+    {:edit, completed} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(completed) == root <> "/home/"
+    assert completed.suggestions == [root <> "/home/another/", root <> "/home/current/"]
+    {:edit, unchanged} = WorkspaceForm.key(completed, %Key{code: "tab"})
+    assert WorkspaceForm.path(unchanged) == root <> "/home/"
+  end
+
+  test "ambiguous Tab extends only the common prefix and leaves all choices available" do
+    root = temporary_folders(["project-one", "project-two", "猫屋", "猫咪"])
+    form = WorkspaceForm.new(root) |> WorkspaceForm.paste("pro")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(form) == root <> "/project-"
+    {:edit, same} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(same) == root <> "/project-"
+    assert same.suggestions == [root <> "/project-one/", root <> "/project-two/"]
+    {:edit, clicked} = WorkspaceForm.click(same, 4, 3)
+    assert WorkspaceForm.path(clicked) == root <> "/project-one/"
+
+    form = WorkspaceForm.new(root) |> WorkspaceForm.paste("猫")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(form) == root <> "/猫"
+    assert String.valid?(WorkspaceForm.path(form))
+    form = WorkspaceForm.new(root) |> WorkspaceForm.paste("new-folder")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(form) == "new-folder"
+  end
+
+  test "completion considers matches beyond the fifty displayed suggestions" do
+    root = temporary_folders(Enum.map(1..55, &("aaa-" <> Integer.to_string(&1))) ++ ["az-last"])
+
+    assert {:ok, %{folders: folders, completion: prefix}} =
+             Alto.Harness.Folders.suggest("a", root)
+
+    assert length(folders) == 50
+    assert prefix == root <> "/a"
+    form = WorkspaceForm.new(root) |> WorkspaceForm.paste("a")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert WorkspaceForm.path(form) == root <> "/a"
+  end
+
+  test "Tab waits for remote completion and then lists the completed folder's children" do
+    form = WorkspaceForm.new("/home/current", "remote", ["/home/current"], complete: nil)
+    form = WorkspaceForm.paste(form, "/hom")
+    revision = form.revision
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    assert form.revision == revision
+    assert WorkspaceForm.path(form) == "/hom"
+    form = WorkspaceForm.suggest(form, {:ok, %{folders: ["/home/"], completion: "/home/"}})
+    assert WorkspaceForm.path(form) == "/home/"
+    assert form.revision != revision
+    assert form.completion_pending?
+    refute form.tab_pending?
+
+    form =
+      WorkspaceForm.suggest(
+        form,
+        {:ok, %{folders: ["/home/current/", "/home/other/"], completion: "/home/"}}
+      )
+
+    assert form.suggestions == ["/home/current/", "/home/other/"]
+
+    form = WorkspaceForm.paste(form, "oth")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
+    form = WorkspaceForm.paste(form, "er/new")
+    form = WorkspaceForm.suggest(form, {:ok, []})
+    assert WorkspaceForm.path(form) == "/home/other/new"
+    refute form.tab_pending?
+  end
+
+  defp temporary_folders(folders) do
+    root = Path.join(System.tmp_dir!(), "alto-prefix-#{System.unique_integer([:positive])}")
+    Enum.each(folders, &File.mkdir_p!(Path.join(root, &1)))
+    on_exit(fn -> File.rm_rf!(root) end)
+    root
+  end
 end
