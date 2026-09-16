@@ -148,6 +148,71 @@ defmodule Alto.TUI.AppTest do
     }
   end
 
+  test "F7 opens a new folder workspace, preserves the draft and remembers the folder", context do
+    folder = Path.join(context.root, "second project")
+    File.mkdir_p!(folder)
+
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials
+      )
+
+    ExRatatui.textarea_insert_str(state.textarea, "draft survives")
+    original = state.selected_project_id
+    {:noreply, form} = App.handle_event(%Key{code: "f7"}, state)
+    assert form.overlay.kind == :workspace_form
+    {:noreply, typed} = App.handle_event(%ExRatatui.Event.Paste{content: "second project"}, form)
+    {:noreply, opened} = App.handle_event(%Key{code: "enter"}, typed)
+    assert opened.overlay == nil
+    assert opened.selected_project_id != original
+    assert State.selected_project(opened)["root"] == folder
+    assert opened.selected_task_id == nil
+    assert opened.focus == :composer
+    assert ExRatatui.textarea_get_value(opened.textarea) == "draft survives"
+    {:ok, again} = State.open_workspace(opened, folder)
+    assert again.selected_project_id == opened.selected_project_id
+    assert length(again.projects) == 2
+
+    {:ok, restarted} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials
+      )
+
+    assert Enum.any?(restarted.projects, &(&1["root"] == folder))
+  end
+
+  test "workspace form reports invalid folders and sidebar clicks open the same form", context do
+    {:ok, state} =
+      State.new(context.config,
+        project: context.root,
+        path: context.catalog,
+        credentials_path: context.credentials
+      )
+
+    state = %{state | dimensions: {150, 42}}
+    rail = View.layout(state, 150, 42).rail
+    mouse = %Mouse{kind: "down", button: "left", x: rail.x + 2, y: rail.y + 1}
+    {:noreply, pressed} = App.handle_event(mouse, state)
+    {:noreply, form} = App.handle_event(%{mouse | kind: "up"}, pressed)
+    assert form.overlay.kind == :workspace_form
+    {:noreply, invalid} = App.handle_event(%Key{code: "enter"}, form)
+    assert invalid.overlay.error =~ "Enter a folder"
+
+    {:noreply, typed} =
+      App.handle_event(%ExRatatui.Event.Paste{content: "/missing/alto-workspace"}, invalid)
+
+    {:noreply, invalid} = App.handle_event(%Key{code: "enter"}, typed)
+    assert invalid.overlay.error =~ "does not exist"
+    assert invalid.selected_project_id == state.selected_project_id
+    {:noreply, cancelled} = App.handle_event(%Key{code: "esc"}, invalid)
+    assert cancelled.overlay == nil
+    assert cancelled.selected_project_id == state.selected_project_id
+  end
+
   test "copies visible text in every pane and pastes through the composer", context do
     owner = self()
 

@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.State
+  alias Alto.TUI.{State, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -20,7 +20,7 @@ defmodule Alto.TUI.View do
     layout = layout(state, width, height)
 
     []
-    |> maybe_add(rail_widget(state), layout.rail)
+    |> add_rail(state, layout.rail)
     |> add(transcript_widget(state), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
@@ -69,8 +69,15 @@ defmodule Alto.TUI.View do
       layout.right_seam && abs(x - layout.right_seam) <= 0 ->
         :right_seam
 
+      PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->
+        :new_workspace
+
       PaneLayout.contains?(layout.rail, x, y) ->
-        {:rail_row, y - layout.rail.y - 1}
+        inner_height = max(layout.rail.height - 3, 0)
+        selected = selected_rail_index(state, State.rail_rows(state)) || 0
+        offset = max(selected - inner_height + 1, 0)
+        row = y - layout.rail.y - 2
+        if row >= 0 and row < inner_height, do: {:rail_row, row + offset}, else: :none
 
       PaneLayout.contains?(layout.settings, x, y) ->
         settings_target(state, layout.settings, x)
@@ -112,6 +119,25 @@ defmodule Alto.TUI.View do
     end
   end
 
+  defp add_rail(widgets, _state, nil), do: widgets
+
+  defp add_rail(widgets, state, rect) do
+    inner = %Rect{
+      x: rect.x + 1,
+      y: rect.y + 2,
+      width: max(rect.width - 2, 0),
+      height: max(rect.height - 3, 0)
+    }
+
+    widgets ++
+      [
+        {block(" workspaces ", state.focus == :rail), rect},
+        {%Paragraph{text: "＋ New workspace · F7", style: style(fg: @accent, bg: @panel)},
+         %{inner | y: rect.y + 1, height: 1}},
+        {rail_widget(state), inner}
+      ]
+  end
+
   defp rail_widget(state) do
     rows = State.rail_rows(state)
 
@@ -121,7 +147,7 @@ defmodule Alto.TUI.View do
       highlight_symbol: "› ",
       highlight_style: style(fg: @accent, bg: @panel_alt, modifiers: [:bold]),
       style: style(fg: :gray, bg: @panel),
-      block: block(" workspaces ", state.focus == :rail)
+      block: nil
     }
   end
 
@@ -404,7 +430,7 @@ defmodule Alto.TUI.View do
   defp transcript_text(state) do
     case State.current_entries(state) do
       [] ->
-        "Welcome to Alto. Start typing below.\n\n" <>
+        "Welcome to Alto. Start typing below.\nF7 New workspace · choose another folder\n\n" <>
           "^G gear · B backend · A approval · P provider · M model · E entry mode · W workspace · T task · N new · D details · Q quit"
 
       entries ->
@@ -546,6 +572,9 @@ defmodule Alto.TUI.View do
   end
 
   defp add_overlay(widgets, nil, _root), do: widgets
+
+  defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
+    do: widgets ++ WorkspaceForm.widgets(form, root)
 
   defp add_overlay(widgets, %{kind: :provider_form} = overlay, root) do
     popup = %Popup{
@@ -922,7 +951,9 @@ defmodule Alto.TUI.View do
         recent
       end
 
-    {" context ", text}
+    project = State.selected_project(state)
+    root = if project, do: project["root"], else: "No folder selected"
+    {" context ", "Workspace folder\n" <> root <> "\nF7 New workspace\n\n" <> text}
   end
 
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
@@ -959,6 +990,9 @@ defmodule Alto.TUI.View do
   end
 
   defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
+
+  defp overlay_rect(%{kind: :workspace_form}, width, height),
+    do: WorkspaceForm.rect(width, height)
 
   defp overlay_rect(%{kind: :provider_form}, width, height),
     do: popup_rect(width, height, 72, 66)
@@ -1107,6 +1141,4 @@ defmodule Alto.TUI.View do
 
   defp style(opts), do: struct(Style, opts)
   defp add(widgets, widget, rect), do: widgets ++ [{widget, rect}]
-  defp maybe_add(widgets, _widget, nil), do: widgets
-  defp maybe_add(widgets, widget, rect), do: add(widgets, widget, rect)
 end

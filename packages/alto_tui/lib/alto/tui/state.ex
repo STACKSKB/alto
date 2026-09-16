@@ -203,7 +203,7 @@ defmodule Alto.TUI.State do
     case Enum.at(rail_rows(state), index) do
       %{kind: :project, id: id} -> select_project(state, id)
       %{kind: :task, id: id} -> select_task(state, id)
-      nil -> state
+      _ -> state
     end
   end
 
@@ -248,6 +248,32 @@ defmodule Alto.TUI.State do
         transcript_scroll: 0,
         transcript_follow?: true
     }
+  end
+
+  @doc "Open a folder as a workspace and prepare a new task without losing the draft."
+  def open_workspace(state, path) do
+    base =
+      case selected_project(state) do
+        nil -> File.cwd!()
+        project -> project["root"]
+      end
+
+    if is_binary(path) and byte_size(path) <= 4096 and String.trim(path) != "" and
+         not String.contains?(path, ["\n", "\r", <<0>>]) do
+      root = Path.expand(path, base)
+
+      with {:ok, project} <- Catalog.register_project(root, state.catalog_opts),
+           {:ok, projects} <- Catalog.projects(state.catalog_opts),
+           {:ok, tasks} <- load_tasks(projects, state.catalog_opts) do
+        {:ok,
+         %{state | projects: projects, tasks: tasks, selected_project_id: project["id"]}
+         |> close_details_drawer()
+         |> new_task()
+         |> Map.put(:notice, "Workspace: " <> root)}
+      end
+    else
+      {:error, :invalid_workspace_path}
+    end
   end
 
   @doc "Entries displayed for the selected task or scratch composer."

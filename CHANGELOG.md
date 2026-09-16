@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a visible New workspace action and F7 folder dialog, remembered workspace
+  folders, and a full working-folder display. Trusted registry callers can select
+  a per-run working folder without changing the registry default.
+
 - Select and copy rendered text anywhere in the TUI, including popups and status
   bars, with Unicode-aware highlighting, OSC 52 clipboard output and paste support.
 - Share screen selection and clipboard helpers with downstream terminal clients.

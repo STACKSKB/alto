@@ -9,7 +9,7 @@ defmodule Alto.TUI.App do
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
   alias Alto.Session
-  alias Alto.TUI.{Backend, Selection, State, View}
+  alias Alto.TUI.{Backend, Selection, State, View, WorkspaceForm}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -121,6 +121,9 @@ defmodule Alto.TUI.App do
     {:noreply, state}
   end
 
+  defp route_event(%Paste{content: content}, %{overlay: %{kind: :workspace_form} = form} = state),
+    do: {:noreply, %{state | overlay: WorkspaceForm.paste(form, content)}}
+
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
     if overlay.kind in [:provider_form, :model_form] do
@@ -176,6 +179,7 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
   defp route_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
   defp route_event(%Key{code: "f6"}, state), do: {:noreply, toggle_composer_mode(state)}
+  defp route_event(%Key{code: "f7"}, state), do: {:noreply, open_workspace_form(state)}
   defp route_event(%Key{code: "f8"}, state), do: {:noreply, decide_approval(state, :approve)}
 
   defp route_event(%Key{code: "f9"}, state),
@@ -1129,7 +1133,8 @@ defmodule Alto.TUI.App do
 
   defp overlay_items(state, :project) do
     items =
-      Enum.map(state.projects, &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]})
+      [%{label: "＋ New workspace… (F7)", value: :new_workspace}] ++
+        Enum.map(state.projects, &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]})
 
     {:ok, "workspaces · type to filter", items, state.selected_project_id}
   end
@@ -1144,6 +1149,9 @@ defmodule Alto.TUI.App do
       do: {:error, "no tasks in this workspace"},
       else: {:ok, "tasks · type to filter", items, state.selected_task_id}
   end
+
+  defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
+    do: workspace_form_result(state, WorkspaceForm.key(form, key))
 
   defp overlay_key(%{overlay: %{kind: :provider_form}} = state, key),
     do: provider_form_key(state, key)
@@ -1205,6 +1213,7 @@ defmodule Alto.TUI.App do
     case Enum.at(items, index) do
       nil -> state
       %{value: nil} -> state
+      %{value: :new_workspace} -> open_workspace_form(state)
       %{value: {:configure_provider, profile_id}} -> open_provider_form(state, profile_id)
       %{value: {:retry_models, profile_id}} -> retry_models(state, profile_id)
       %{value: {:enter_model, profile_id}} -> open_model_form(state, profile_id)
@@ -1269,6 +1278,9 @@ defmodule Alto.TUI.App do
       :right_seam ->
         %{state | dragging: :right_seam}
 
+      :new_workspace ->
+        open_workspace_form(state)
+
       {:rail_row, row} ->
         state
         |> State.select_rail_row(row)
@@ -1303,7 +1315,12 @@ defmodule Alto.TUI.App do
         decide_approval(state, approval_decision(decision))
 
       {:overlay_row, row} ->
-        handle_overlay_click(state, row)
+        if state.overlay.kind == :workspace_form do
+          rect = WorkspaceForm.rect(width, height)
+          workspace_form_result(state, WorkspaceForm.click(state.overlay, row, x - rect.x - 1))
+        else
+          handle_overlay_click(state, row)
+        end
 
       :overlay_outside ->
         %{state | overlay: nil}
@@ -1623,6 +1640,36 @@ defmodule Alto.TUI.App do
         },
         notice: nil
     }
+  end
+
+  defp open_workspace_form(state) do
+    project = State.selected_project(state)
+    base = if project, do: project["root"], else: File.cwd!()
+
+    %{
+      state
+      | overlay: WorkspaceForm.new(base, "this computer", Enum.map(state.projects, & &1["root"])),
+        leader?: false
+    }
+  end
+
+  defp workspace_form_result(state, :cancel), do: %{state | overlay: nil}
+  defp workspace_form_result(state, {:edit, form}), do: %{state | overlay: form}
+
+  defp workspace_form_result(state, {:submit, path}) do
+    case State.open_workspace(state, path) do
+      {:ok, next} ->
+        %{next | overlay: nil}
+
+      {:error, {:project_not_directory, _}} ->
+        put_in(state.overlay.error, "Folder does not exist or is not a directory.")
+
+      {:error, :invalid_workspace_path} ->
+        put_in(state.overlay.error, "Enter a folder path on one line.")
+
+      {:error, reason} ->
+        put_in(state.overlay.error, "Could not open workspace: #{inspect(reason)}")
+    end
   end
 
   defp open_model_form(state, profile_id) do
