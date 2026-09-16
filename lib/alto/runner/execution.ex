@@ -759,7 +759,13 @@ defmodule Alto.Runner.Execution do
       {provider, provider_opts} = run.provider
       step = run.model_requests + 1
 
-      notify(run.event_sink, Event.live(:model_started, %{step: step}))
+      notify(
+        run.event_sink,
+        Event.live(:model_started, %{
+          step: step,
+          prefix: Alto.Providers.PrefixContinuity.report(request)
+        })
+      )
 
       outcome =
         stream_with_retries(provider, request, live_sink, provider_opts, run, step)
