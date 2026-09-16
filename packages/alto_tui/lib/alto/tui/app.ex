@@ -245,7 +245,11 @@ defmodule Alto.TUI.App do
     if "shift" in modifiers do
       forward_textarea(state, key)
     else
-      {:noreply, submit(state)}
+      if "ctrl" in modifiers do
+        {:noreply, submit(state, :steer)}
+      else
+        {:noreply, submit(state)}
+      end
     end
   end
 
@@ -521,6 +525,10 @@ defmodule Alto.TUI.App do
     {:noreply, send_queued(state, task_id)}
   end
 
+  def handle_info({:alto_tui_send_input, task_id}, state) do
+    {:noreply, send_native_input(state, task_id)}
+  end
+
   # Completion is a runner notification, independent of its implementation.
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
     case find_run(state, ref: ref) do
@@ -547,12 +555,16 @@ defmodule Alto.TUI.App do
     :ok
   end
 
-  defp submit(state) do
+  defp submit(state, mode \\ :follow_up) do
     prompt = state.textarea |> ExRatatui.textarea_get_value() |> String.trim()
 
     cond do
       state.selected_project_id == nil ->
         %{state | notice: "Open a workspace first · ^G W"}
+
+      prompt == "" and not task_running?(state, state.selected_task_id) and
+          State.input_pending?(state, state.selected_task_id) ->
+        send_native_input(state, state.selected_task_id)
 
       prompt == "" and not task_running?(state, state.selected_task_id) and
           Map.has_key?(state.queued_messages, state.selected_task_id) ->
@@ -562,7 +574,7 @@ defmodule Alto.TUI.App do
         %{state | notice: "write a message first"}
 
       task_running?(state, state.selected_task_id) ->
-        queue_message(state, prompt)
+        queue_message(state, prompt, mode)
 
       map_size(state.runs) >= 32 ->
         %{state | notice: "too many active runs; finish or cancel one first"}
@@ -572,7 +584,13 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp queue_message(state, prompt) do
+  defp queue_message(state, prompt, mode) do
+    if State.task_backend(State.selected_task(state)) == :alto,
+      do: queue_native_input(state, state.selected_task_id, prompt, mode),
+      else: queue_message_legacy(state, prompt)
+  end
+
+  defp queue_message_legacy(state, prompt) do
     cond do
       Map.has_key?(state.queued_messages, state.selected_task_id) ->
         %{state | notice: "one message already queued · draft kept · Esc stops current run"}
@@ -592,6 +610,142 @@ defmodule Alto.TUI.App do
         })
         |> Map.put(:notice, "message queued for the next turn · Esc stops current run")
     end
+  end
+
+  defp queue_native_input(state, task_id, prompt, mode) do
+    with {:ok, state} <- ensure_native_input(state, task_id),
+         input <- Map.fetch!(state.inputs, task_id),
+         :ok <- one_follow_up_available(input, mode),
+         {:ok, input_id} <- Alto.Input.put(input, prompt, mode) do
+      ExRatatui.textarea_set_value(state.textarea, "")
+
+      state
+      |> Map.update!(
+        :queued_messages,
+        &Map.put_new(&1, task_id, %{
+          prompt: prompt,
+          selection: Map.take(state, @submission_selection),
+          mode: mode,
+          input_id: input_id
+        })
+      )
+      |> State.append_entry(task_id, %{kind: :system, text: input_label(mode) <> prompt})
+      |> Map.put(:notice, input_notice(mode))
+    else
+      {:error, :follow_up_pending} ->
+        %{state | notice: "one message already queued · draft kept · Esc stops current run"}
+
+      {:error, reason} ->
+        %{state | notice: "input not accepted: #{human_error(reason)} · draft kept"}
+    end
+  end
+
+  defp one_follow_up_available(_input, :steer), do: :ok
+
+  defp one_follow_up_available(input, :follow_up) do
+    if Enum.any?(Alto.Input.list(input), &(&1.mode == :follow_up)),
+      do: {:error, :follow_up_pending},
+      else: :ok
+  end
+
+  defp input_label(:steer), do: "Steering message: "
+  defp input_label(:follow_up), do: "Queued message: "
+  defp input_notice(:steer), do: "steering message accepted · Enter queues a follow-up"
+  defp input_notice(:follow_up), do: "message queued for the next turn · Esc stops current run"
+
+  defp ensure_native_input(state, task_id) do
+    case Map.get(state.inputs, task_id) do
+      input when is_pid(input) ->
+        {:ok, state}
+
+      nil ->
+        case Alto.Input.start_link() do
+          {:ok, input} -> {:ok, put_in(state.inputs[task_id], input)}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp ensure_input_for_task(state, task) do
+    if State.task_backend(task) == :alto,
+      do: ensure_native_input(state, task["id"]),
+      else: {:ok, state}
+  end
+
+  defp send_native_input(state, task_id) do
+    case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
+      {false, input} when is_pid(input) and map_size(state.runs) < 32 ->
+        case take_native_input(input) do
+          :empty ->
+            state
+
+          :busy ->
+            # Completion is delivered before the supervised runner releases
+            # the channel. Retry after that handoff so accepted input survives
+            # the completion race instead of crashing or being dropped.
+            retry_native_input(state, task_id)
+
+          {:ok, entry} ->
+            draft = ExRatatui.textarea_get_value(state.textarea)
+            next = submit_backend(state, entry.text)
+            ExRatatui.textarea_set_value(state.textarea, draft)
+
+            if task_running?(next, task_id) do
+              %{next | queued_messages: Map.delete(next.queued_messages, task_id)}
+            else
+              case Alto.Input.put(input, entry.text, entry.mode) do
+                {:ok, _} ->
+                  %{next | notice: "input retained · Enter sends"}
+
+                {:error, reason} ->
+                  %{next | notice: "input unavailable: #{human_error(reason)} · draft kept"}
+              end
+            end
+
+          {:error, reason} ->
+            %{state | notice: "input unavailable: #{human_error(reason)} · draft kept"}
+        end
+
+      {false, _input} ->
+        %{state | notice: "no native input is available for this task"}
+
+      _ ->
+        state
+    end
+  end
+
+  defp take_native_input(input) do
+    case Alto.Input.claim(input) do
+      :ok ->
+        try do
+          case Alto.Input.peek(input, [:steer, :follow_up]) do
+            nil ->
+              :empty
+
+            {:error, reason} ->
+              {:error, reason}
+
+            entry ->
+              case Alto.Input.ack(input, entry.id) do
+                :ok -> {:ok, entry}
+                {:error, reason} -> {:error, reason}
+              end
+          end
+        after
+          Alto.Input.release(input)
+        end
+
+      {:error, :input_in_use} ->
+        :busy
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp retry_native_input(state, task_id) do
+    Process.send_after(self(), {:alto_tui_send_input, task_id}, 10)
+    %{state | notice: "input pending · Enter sends"}
   end
 
   defp send_queued(state, task_id) do
@@ -619,14 +773,22 @@ defmodule Alto.TUI.App do
   end
 
   defp finish_queued(state, task_id, true) do
-    if Map.has_key?(state.queued_messages, task_id),
-      do: send(self(), {:alto_tui_send_queued, task_id})
+    cond do
+      State.input_pending?(state, task_id) ->
+        send(self(), {:alto_tui_send_input, task_id})
+        %{state | notice: state.notice <> " · input retained (Enter sends)"}
 
-    state
+      Map.has_key?(state.queued_messages, task_id) ->
+        send(self(), {:alto_tui_send_queued, task_id})
+        state
+
+      true ->
+        state
+    end
   end
 
   defp finish_queued(state, task_id, false) do
-    if Map.has_key?(state.queued_messages, task_id),
+    if Map.has_key?(state.queued_messages, task_id) or State.input_pending?(state, task_id),
       do: %{state | notice: state.notice <> " · queued message paused (Enter sends)"},
       else: state
   end
@@ -658,6 +820,7 @@ defmodule Alto.TUI.App do
 
       true ->
         with {:ok, state, task} <- ensure_task(state, prompt),
+             {:ok, state} <- ensure_input_for_task(state, task),
              {:ok, run_options} <- run_options(state, profile),
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
           attach_started_run(state, task, prompt, handle, completion_ref, local_id)
@@ -878,6 +1041,11 @@ defmodule Alto.TUI.App do
           profile -> Keyword.put(opts, :provider, runtime_provider(state, profile))
         end
 
+      opts =
+        if State.task_backend(State.selected_task(state)) == :alto,
+          do: Keyword.put(opts, :input, Map.get(state.inputs, state.selected_task_id)),
+          else: opts
+
       {:ok, opts}
     else
       {:error, :project_required}
@@ -1041,6 +1209,14 @@ defmodule Alto.TUI.App do
 
   defp do_ingest_event(state, task_id, %Event{type: :model_delta, data: %{text: text}}),
     do: State.append_assistant_delta(state, task_id, text)
+
+  defp do_ingest_event(state, task_id, %Event{type: :input_received, data: %{id: id}}) do
+    queued = Map.get(state.queued_messages, task_id)
+
+    if is_map(queued) and queued[:input_id] == id,
+      do: %{state | queued_messages: Map.delete(state.queued_messages, task_id)},
+      else: state
+  end
 
   defp do_ingest_event(state, task_id, %Event{type: :model_completed, data: data}) do
     State.update_usage(state, task_id, Map.get(data, :usage, %{}))

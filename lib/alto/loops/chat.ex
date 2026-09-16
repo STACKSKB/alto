@@ -19,6 +19,12 @@ defmodule Alto.Loops.Chat do
   end
 
   @impl true
+  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, _spec) do
+    next = %{state | task: text, phase: :awaiting_model}
+    Transition.continue(next, [Effect.request_model(%{task: text, context: state.context})])
+  end
+
+  @impl true
   def handle_event(
         %Event{type: :model_completed, data: data},
         %__MODULE__{phase: :awaiting_model} = state,

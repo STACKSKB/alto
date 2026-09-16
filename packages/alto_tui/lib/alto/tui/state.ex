@@ -62,6 +62,7 @@ defmodule Alto.TUI.State do
     pending_approvals: [],
     runs: %{},
     queued_messages: %{},
+    inputs: %{},
     usage: %{},
     catalog_opts: []
   ]
@@ -153,7 +154,9 @@ defmodule Alto.TUI.State do
 
   @doc "Visible execution stage and recovery controls for the selected task."
   def run_label(state) do
-    queued? = Map.has_key?(state.queued_messages, state.selected_task_id)
+    queued? =
+      Map.has_key?(state.queued_messages, state.selected_task_id) or
+        input_pending?(state, state.selected_task_id)
 
     case Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end) do
       nil ->
@@ -169,6 +172,16 @@ defmodule Alto.TUI.State do
           " · Esc stop" <>
           if(queued?, do: " · 1 queued", else: "")
     end
+  end
+
+  @doc "Whether a native task has accepted input waiting for delivery."
+  def input_pending?(%__MODULE__{} = state, task_id) do
+    case Map.get(state.inputs, task_id) do
+      nil -> false
+      input -> Alto.Input.list(input) != []
+    end
+  catch
+    :exit, _ -> false
   end
 
   def model_metadata(state) do

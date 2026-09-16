@@ -132,6 +132,26 @@ defmodule Alto.TUI.RunLifecycleTest do
     eventually(fn -> state(app).runs == %{} end)
   end
 
+  test "ctrl-enter sends steering input through the native channel", %{root: root} do
+    app = start_app(root)
+    submit(app, "first")
+    assert_receive {:model_waiting, first, _}, 5_000
+
+    ExRatatui.textarea_set_value(state(app).textarea, "change direction")
+    key(app, "enter", ["ctrl"])
+
+    task_id = state(app).selected_task_id
+    input = state(app).inputs[task_id]
+    assert [%{mode: :steer, text: "change direction"}] = Alto.Input.list(input)
+    send(first, {:finish, "first done"})
+
+    assert_receive {:model_waiting, second, messages}, 5_000
+    assert List.last(messages) == %{"role" => "user", "content" => "change direction"}
+    eventually(fn -> state(app).queued_messages == %{} end)
+    send(second, {:finish, "second done"})
+    eventually(fn -> state(app).runs == %{} end)
+  end
+
   test "an unexpected runner exit releases the task without forgetting its saved session", %{
     root: root
   } do
