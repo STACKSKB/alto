@@ -158,6 +158,82 @@ defmodule Alto.Runner.Execution do
   defp do_execute([], run, :continue),
     do: {:done, {:error, :loop_stalled, result(run, nil, :error)}}
 
+  defp do_execute([%Effect{kind: :run_tools, data: data} | rest], run, terminal) do
+    case data do
+      %{calls: calls, max_concurrency: limit}
+      when is_list(calls) and calls != [] and limit in 1..32 ->
+        # Partition only explicitly batched calls. Approval and exclusive tools
+        # remain ordinary effects, so suspended approvals retain exact continuations.
+        groups =
+          calls
+          |> Enum.chunk_by(&parallel_call?(&1, run))
+          |> Enum.flat_map(fn group ->
+            if parallel_call?(hd(group), run) do
+              Enum.map(Enum.chunk_every(group, limit), fn calls ->
+                %Effect{kind: :parallel_tools, data: %{calls: calls}}
+              end)
+            else
+              Enum.map(group, &Effect.run_tool/1)
+            end
+          end)
+
+        execute(groups ++ rest, run, terminal)
+
+      _ ->
+        {:done, {:error, :invalid_tool_batch, result(run, nil, :error)}}
+    end
+  end
+
+  defp do_execute([%Effect{kind: :parallel_tools, data: %{calls: calls}} | rest], run, terminal)
+       when is_list(calls) and length(calls) in 1..32 do
+    if Enum.all?(calls, &parallel_call?(&1, run)) do
+      case prepare_batch(calls, run) do
+        {:ok, jobs, run} ->
+          caps = tool_capabilities(run)
+          ready = Enum.filter(jobs, &match?({:ok, _}, &1.preparation))
+
+          Enum.each(ready, fn job ->
+            notify(
+              run.event_sink,
+              Event.live(:tool_started, %{
+                call_id: job.id,
+                operation_id: job.op_id,
+                run_id: run.tool_context.session_id,
+                name: job.name
+              })
+            )
+          end)
+
+          response =
+            Alto.Runner.ToolBatch.run(Enum.map(ready, &{&1.tool, elem(&1.preparation, 1)}), caps)
+
+          {outcomes, stopped} =
+            case response do
+              {:ok, outcomes} -> {outcomes, nil}
+              {:cancelled, reason, outcomes} -> {outcomes, {:cancelled, reason}}
+              {:error, reason, outcomes} -> {outcomes, reason}
+            end
+
+          indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
+
+          outcomes =
+            Enum.map(jobs, fn job ->
+              case job.preparation do
+                {:ok, _} -> Map.fetch!(indexed, job.op_id)
+                {:error, reason} -> {:rejected, reason}
+              end
+            end)
+
+          finish_batch(jobs, outcomes, run, rest, terminal, stopped)
+
+        {:error, reason, run} ->
+          {:done, {:error, reason, result(run, nil, :error)}}
+      end
+    else
+      {:done, {:error, :invalid_parallel_tools, result(run, nil, :error)}}
+    end
+  end
+
   defp do_execute(
          [%Effect{kind: :spawn_agents, data: data} | rest],
          %{continuation_store: store} = run,
@@ -880,6 +956,143 @@ defmodule Alto.Runner.Execution do
   end
 
   defp check_model_exposure(name, :provider, _run), do: {:error, {:invalid_tool_name, name}}
+
+  defp parallel_call?(%{name: name}, run) do
+    case Map.get(run.tools, name) do
+      %{execution_mode: :parallel, approval: :never} -> true
+      _ -> false
+    end
+  end
+
+  defp parallel_call?(_, _), do: false
+
+  defp prepare_batch(calls, run) do
+    Enum.reduce_while(calls, {:ok, [], run}, fn call, {:ok, jobs, run} ->
+      case reserve_effect(run) do
+        :ok ->
+          {op_id, run} = next_operation(run)
+          name = Map.get(call, :name)
+          id = Map.get(call, :id)
+
+          origin =
+            if check_provider_correlation(run, id, name) == :ok, do: :provider, else: :native
+
+          tool = Map.fetch!(run.tools, name)
+
+          preparation =
+            with :ok <- check_model_exposure(name, origin, run),
+                 {:ok, args} <- decode_arguments(Map.get(call, :arguments_json, "{}")),
+                 {:ok, prepared, _details} <- prepare_tool(tool, args, run),
+                 do: {:ok, prepared}
+
+          case preparation do
+            {:cancelled, reason} ->
+              {:halt, {:error, {:cancelled, reason}, run}}
+
+            _ ->
+              job = %{
+                id: id,
+                name: name,
+                op_id: op_id,
+                origin: origin,
+                tool: tool,
+                preparation: preparation
+              }
+
+              {:cont, {:ok, jobs ++ [job], run}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason, run}}
+
+        {:cancelled, reason, next} ->
+          {:halt, {:error, {:cancelled, reason}, next}}
+      end
+    end)
+  end
+
+  defp finish_batch(jobs, outcomes, run, rest, terminal, stopped) do
+    # All worker outcomes are folded before any middleware-generated effect
+    # executes. Each invocation is correlated and accounted exactly once.
+    {run, events, failure} =
+      Enum.zip(jobs, outcomes)
+      |> Enum.reduce({run, [], nil}, fn {job, outcome}, {run, events, failure} ->
+        interpreted =
+          case outcome do
+            {:ok, {:batch_oversize, reason}} ->
+              tool_failure(
+                job.id,
+                job.name,
+                reason,
+                run,
+                job.op_id,
+                Outcome.unknown(reason),
+                job.origin
+              )
+
+            {:ok, value} ->
+              tool_outcome(job.id, job.name, value, run, job.op_id, job.origin)
+
+            {:rejected, reason} ->
+              tool_failure(
+                job.id,
+                job.name,
+                reason,
+                run,
+                job.op_id,
+                Outcome.pre_dispatch(reason),
+                job.origin
+              )
+
+            {:error, reason} ->
+              tool_failure(
+                job.id,
+                job.name,
+                reason,
+                run,
+                job.op_id,
+                Outcome.unknown(reason),
+                job.origin
+              )
+          end
+
+        case interpreted do
+          {:event, event, next} -> {record_event(next, event), events ++ [event], failure}
+          {:error, reason, next} -> {next, events, failure || reason}
+        end
+      end)
+
+    case stopped || failure do
+      nil -> dispatch_batch(events, run, [], rest, terminal)
+      {:cancelled, reason} -> {:done, cancelled(reason, run)}
+      reason -> {:done, {:error, reason, result(run, nil, :error)}}
+    end
+  end
+
+  defp dispatch_batch([], run, effects, rest, terminal),
+    do: execute(effects ++ rest, run, terminal)
+
+  defp dispatch_batch([event | events], run, effects, rest, terminal) do
+    case call_policy(
+           fn -> Runtime.dispatch(run.spec, event, run.loop_state, runtime_context(run)) end,
+           run
+         ) do
+      {:ok, transition} ->
+        next = %{run | loop_state: transition.state}
+
+        case transition.status do
+          :continue -> dispatch_batch(events, next, effects ++ transition.effects, rest, terminal)
+          :stop -> execute(effects ++ transition.effects, next, {:stop, transition.result})
+          :error -> execute(effects ++ transition.effects, next, {:error, transition.error})
+        end
+
+      {:cancelled, reason} ->
+        {:done, cancelled(reason, run)}
+
+      {:error, reason} ->
+        {:done, {:error, reason, result(run, nil, :error)}}
+    end
+  end
 
   defp tool_capabilities(run) do
     values =

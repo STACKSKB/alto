@@ -469,7 +469,7 @@ defmodule Alto.Runner.Checkpoint do
     is_list(remaining) and
       Enum.all?(remaining, fn
         %Alto.Effect{kind: kind, data: data} ->
-          kind in [:emit, :request_model, :run_tool, :invoke_tool, :spawn_agent, :spawn_agents] and
+          kind in [:emit, :request_model, :run_tool, :run_tools, :parallel_tools, :invoke_tool, :spawn_agent, :spawn_agents] and
             is_map(data)
 
         _ ->

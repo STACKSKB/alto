@@ -21,6 +21,9 @@ defmodule Alto.Capabilities do
 
     %{
       driver: module_name(loop.driver),
+      runner: module_name(Keyword.get(opts, :runner, Alto.Runner.default())),
+      tool_execution: tool_execution(loop),
+      subagents: subagents(loop.subagents),
       middleware: Enum.map(loop.middleware, &module_name/1),
       provider: module_name(Keyword.get(opts, :provider)),
       approval: module_name(Keyword.get(opts, :approval, Alto.Approvals.DenyAll)),
@@ -30,6 +33,28 @@ defmodule Alto.Capabilities do
       limits: Map.new(@defaults, fn {key, default} -> {key, Keyword.get(opts, key, default)} end)
     }
   end
+
+  defp tool_execution(%{driver: Alto.Loops.Default, driver_options: options}) do
+    case Keyword.get(options, :tool_execution, :serial) do
+      :serial -> %{mode: :serial, max_concurrency: 1}
+      {:parallel, limit} -> %{mode: :explicit_batches, max_concurrency: limit}
+    end
+  end
+
+  defp tool_execution(_), do: %{mode: :loop_defined}
+
+  defp subagents(%Alto.Subagents.Bounded{} = policy) do
+    %{
+      enabled: policy.max_depth > 0,
+      max_depth: policy.max_depth,
+      max_children: policy.max_children,
+      max_concurrency: policy.max_concurrency,
+      delegation: :loop_defined
+    }
+  end
+
+  defp subagents(nil), do: nil
+  defp subagents(_), do: :custom
 
   defp tool(spec) do
     {module, opts} =

@@ -172,16 +172,17 @@ defmodule Alto.Runner.Execution.Tool do
   defp invoke_prepare(%{module: module, opts: opts, preparation: :arity3}, arguments, context),
     do: module.prepare(arguments, context, opts)
 
-  defp invoke_tool(%{module: module, preparation: :arity2}, prepared, context),
+  @doc "Invoke directly inside an already supervised, bounded worker."
+  def invoke_tool(%{module: module, preparation: :arity2}, prepared, context),
     do: module.run_prepared(prepared, context)
 
-  defp invoke_tool(%{module: module, opts: opts, preparation: :arity3}, prepared, context),
+  def invoke_tool(%{module: module, opts: opts, preparation: :arity3}, prepared, context),
     do: module.run_prepared(prepared, context, opts)
 
-  defp invoke_tool(%{module: module, opts: []}, arguments, context),
+  def invoke_tool(%{module: module, opts: []}, arguments, context),
     do: module.run(arguments, context)
 
-  defp invoke_tool(%{module: module, opts: opts}, arguments, context),
+  def invoke_tool(%{module: module, opts: opts}, arguments, context),
     do: module.run(arguments, context, opts)
 
   defp bound_details(prepared, details, limit) do

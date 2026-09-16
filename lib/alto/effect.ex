@@ -12,7 +12,14 @@ defmodule Alto.Effect do
   @enforce_keys [:kind, :data]
   defstruct [:kind, :data]
 
-  @type kind :: :emit | :request_model | :run_tool | :invoke_tool | :spawn_agent | :spawn_agents
+  @type kind ::
+          :emit
+          | :request_model
+          | :run_tool
+          | :run_tools
+          | :invoke_tool
+          | :spawn_agent
+          | :spawn_agents
   @type t :: %__MODULE__{kind: kind(), data: map()}
 
   @spec emit(Event.t()) :: t()
@@ -33,6 +40,16 @@ defmodule Alto.Effect do
   """
   @spec run_tool(map()) :: t()
   def run_tool(call), do: new(:run_tool, call)
+
+  @doc """
+  Explicit batch of model-shaped calls. Parallel, approval-free tools may run
+  together; other calls are barriers. Completion hooks run after each bounded
+  parallel group settles, in source order. Ordinary `run_tool` effects retain
+  their interleaved hook semantics. Concurrency must be between 1 and 32.
+  """
+  def run_tools(calls, max_concurrency \\ 4)
+      when is_list(calls) and max_concurrency in 1..32,
+      do: new(:run_tools, %{calls: calls, max_concurrency: max_concurrency})
 
   @doc """
   Native tool invocation for loops and hooks that hold an Elixir map:

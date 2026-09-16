@@ -46,7 +46,7 @@ defmodule Alto.Loops.Default do
   def handle_event(
         %Event{type: :model_completed, data: data},
         %__MODULE__{phase: :awaiting_model} = state,
-        _spec
+        spec
       ) do
     output = Map.get(data, :message, Map.get(data, :output))
 
@@ -58,7 +58,14 @@ defmodule Alto.Loops.Default do
         # A provider may repeat a call id; every emitted invocation must
         # report before the step can settle.
         pending = Enum.frequencies_by(tool_calls, &Map.fetch!(&1, :id))
-        effects = Enum.map(tool_calls, &Effect.run_tool/1)
+
+        effects =
+          case Keyword.get(spec.driver_options, :tool_execution, :serial) do
+            :serial -> Enum.map(tool_calls, &Effect.run_tool/1)
+            {:parallel, limit} when limit in 1..32 -> [Effect.run_tools(tool_calls, limit)]
+            other -> raise ArgumentError, "invalid tool_execution: #{inspect(other)}"
+          end
+
         Transition.continue(%{state | phase: {:awaiting_tools, pending}}, effects)
     end
   end
