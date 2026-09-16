@@ -225,6 +225,8 @@ defmodule Alto.TUI.SelectionTest do
     cells = render_cells(Selection.widgets(selected, []), {30, 1})
     assert Enum.map_join(cells, & &1.symbol) =~ "original"
     refute Enum.map_join(cells, & &1.symbol) =~ "changed"
+    selected = drag(widgets, {30, 1}, {0, 0}, {6, 0})
+    assert Selection.text(selected) == "changed"
   end
 
   test "non-content controls neither capture a frame nor activate when dragged; Alt opts in" do

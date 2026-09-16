@@ -327,7 +327,7 @@ defmodule Alto.TUI.Selection do
     # Keep immutable widget terms for paint, and export only the screen's text.
     # Exporting 48,000 cell maps just to start a drag causes a visible pause.
     widgets = Enum.map(widgets, fn {widget, rect} -> {freeze(widget), rect} end)
-    terminal = ExRatatui.init_test_terminal(max(width, 1), max(height, 1))
+    terminal = capture_terminal(max(width, 1), max(height, 1))
     :ok = ExRatatui.draw(terminal, widgets)
     lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
     lines = List.to_tuple(lines)
@@ -348,6 +348,22 @@ defmodule Alto.TUI.Selection do
       end
 
     %{rows: List.to_tuple(rows), width: width, widgets: widgets}
+  end
+
+  # Reuse native buffers between gestures instead of allocating an entire second
+  # terminal on each click. Every capture still redraws the current widgets.
+  defp capture_terminal(width, height) do
+    key = {__MODULE__, :capture_terminal}
+
+    case Process.get(key) do
+      {^width, ^height, terminal} ->
+        terminal
+
+      _ ->
+        terminal = ExRatatui.init_test_terminal(width, height)
+        Process.put(key, {width, height, terminal})
+        terminal
+    end
   end
 
   # Only the two boundary rows need a glyph index during motion. Interior rows

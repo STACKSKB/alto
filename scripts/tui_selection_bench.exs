@@ -23,13 +23,16 @@ for {w, h} <- [{160, 50}, {240, 70}, {400, 120}] do
   end
 
   down = %Mouse{kind: "down", button: "left", x: 1, y: 1}
-  # Warm the renderer before timing.
-  Selection.event(Selection.new(), down, {w, h}, widgets)
+  # Report first capture separately from reuse of the same native buffers.
+  {cold_start, _} = :timer.tc(fn -> Selection.event(Selection.new(), down, {w, h}, widgets) end)
 
   {start, {:handled, pressed}} =
     :timer.tc(fn -> Selection.event(Selection.new(), down, {w, h}, widgets) end)
 
   terminal = CellSession.new(w, h)
+
+  {down_draw, :ok} =
+    :timer.tc(fn -> CellSession.draw(terminal, Selection.widgets(pressed, widgets)) end)
 
   samples =
     for n <- 1..120 do
@@ -47,7 +50,9 @@ for {w, h} <- [{160, 50}, {240, 70}, {400, 120}] do
 
   IO.inspect(%{
     viewport: {w, h},
+    cold_capture_us: cold_start,
     down_us: start,
+    down_frame_us: start + down_draw,
     drag_median_us: elem(Enum.at(samples, 60), 0),
     drag_p95_us: elem(Enum.at(samples, 114), 0),
     drag_max_us: elem(List.last(samples), 0),
