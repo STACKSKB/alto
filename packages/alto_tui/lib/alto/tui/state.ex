@@ -244,6 +244,8 @@ defmodule Alto.TUI.State do
     %{
       state
       | selected_task_id: nil,
+        overlay: nil,
+        leader?: false,
         notice: "new task — your draft is preserved",
         focus: :composer,
         transcript_scroll: 0,

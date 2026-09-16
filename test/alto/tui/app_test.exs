@@ -148,7 +148,8 @@ defmodule Alto.TUI.AppTest do
     }
   end
 
-  test "F7 opens a new folder workspace, preserves the draft and remembers the folder", context do
+  test "Ctrl+G W opens a new folder workspace, preserves the draft and remembers the folder",
+       context do
     folder = Path.join(context.root, "second project")
     File.mkdir_p!(folder)
 
@@ -161,7 +162,7 @@ defmodule Alto.TUI.AppTest do
 
     ExRatatui.textarea_insert_str(state.textarea, "draft survives")
     original = state.selected_project_id
-    {:noreply, form} = App.handle_event(%Key{code: "f7"}, state)
+    form = folder_form(state)
     assert form.overlay.kind == :workspace_form
     {:noreply, typed} = App.handle_event(%ExRatatui.Event.Paste{content: "second project"}, form)
     {:noreply, opened} = App.handle_event(%Key{code: "enter"}, typed)
@@ -185,7 +186,8 @@ defmodule Alto.TUI.AppTest do
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
-  test "workspace form reports invalid folders and sidebar clicks open the same form", context do
+  test "new-task sidebar action keeps the folder; workspace command reports invalid folders",
+       context do
     {:ok, state} =
       State.new(context.config,
         project: context.root,
@@ -197,7 +199,11 @@ defmodule Alto.TUI.AppTest do
     rail = View.layout(state, 150, 42).rail
     mouse = %Mouse{kind: "down", button: "left", x: rail.x + 2, y: rail.y + 1}
     {:noreply, pressed} = App.handle_event(mouse, state)
-    {:noreply, form} = App.handle_event(%{mouse | kind: "up"}, pressed)
+    {:noreply, new_task} = App.handle_event(%{mouse | kind: "up"}, pressed)
+    assert new_task.overlay == nil
+    assert new_task.selected_task_id == nil
+    assert new_task.selected_project_id == state.selected_project_id
+    form = folder_form(new_task)
     assert form.overlay.kind == :workspace_form
     {:noreply, invalid} = App.handle_event(%Key{code: "enter"}, form)
     assert invalid.overlay.error =~ "Enter a folder"
@@ -305,7 +311,7 @@ defmodule Alto.TUI.AppTest do
         end
 
         baseline = row.()
-        assert Enum.map_join(baseline, &elem(&1, 1)) =~ "+ New workspace"
+        assert Enum.map_join(baseline, &elem(&1, 1)) =~ "+ New task"
         down = %Mouse{kind: "down", button: "left", x: layout.transcript.x + 1, y: 1}
 
         events = [
@@ -1133,4 +1139,17 @@ defmodule Alto.TUI.AppTest do
   end
 
   defp eventually(_fun, 0), do: flunk("condition did not become true")
+
+  defp folder_form(state) do
+    {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
+    # Filtering uses the same command picker as all other gear commands.
+    {:noreply, state} = App.handle_event(%Key{code: "o"}, state)
+    index = Enum.find_index(state.overlay.items, &(&1.value == :new_workspace))
+
+    {:noreply, form} =
+      App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
+
+    form
+  end
 end

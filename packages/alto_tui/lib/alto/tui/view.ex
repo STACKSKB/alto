@@ -151,7 +151,7 @@ defmodule Alto.TUI.View do
         :right_seam
 
       PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->
-        :new_workspace
+        :new_task
 
       PaneLayout.contains?(layout.rail, x, y) ->
         inner_height = max(layout.rail.height - 3, 0)
@@ -213,7 +213,7 @@ defmodule Alto.TUI.View do
     widgets ++
       [
         {block(" workspaces ", state.focus == :rail), rect},
-        {%Paragraph{text: "+ New workspace · F7", style: style(fg: @accent, bg: @panel)},
+        {%Paragraph{text: "+ New task · ^G N", style: style(fg: @accent, bg: @panel)},
          %{inner | y: rect.y + 1, height: 1}},
         {rail_widget(state), inner}
       ]
@@ -511,7 +511,7 @@ defmodule Alto.TUI.View do
   defp transcript_text(state) do
     case State.current_entries(state) do
       [] ->
-        "Welcome to Alto. Start typing below.\nF7 New workspace · choose another folder\n\n" <>
+        "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
           "^G gear · B backend · A approval · P provider · M model · E entry mode · W workspace · T task · N new · D details · Q quit"
 
       entries ->

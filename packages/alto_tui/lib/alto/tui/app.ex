@@ -185,7 +185,6 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
   defp route_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
   defp route_event(%Key{code: "f6"}, state), do: {:noreply, toggle_composer_mode(state)}
-  defp route_event(%Key{code: "f7"}, state), do: {:noreply, open_workspace_form(state)}
   defp route_event(%Key{code: "f8"}, state), do: {:noreply, decide_approval(state, :approve)}
 
   defp route_event(%Key{code: "f9"}, state),
@@ -1141,7 +1140,7 @@ defmodule Alto.TUI.App do
 
   defp overlay_items(state, :project) do
     items =
-      [%{label: "+ New workspace… (F7)", value: :new_workspace}] ++
+      [%{label: "Open another folder…", value: :new_workspace}] ++
         Enum.map(state.projects, &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]})
 
     {:ok, "workspaces · type to filter", items, state.selected_project_id}
@@ -1153,9 +1152,8 @@ defmodule Alto.TUI.App do
       |> Map.get(state.selected_project_id, [])
       |> Enum.map(&%{label: &1["status"] <> " · " <> &1["title"], value: &1["id"]})
 
-    if items == [],
-      do: {:error, "no tasks in this workspace"},
-      else: {:ok, "tasks · type to filter", items, state.selected_task_id}
+    {:ok, "tasks · type to filter", [%{label: "+ New task", value: :new_task} | items],
+     state.selected_task_id}
   end
 
   defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
@@ -1222,6 +1220,7 @@ defmodule Alto.TUI.App do
       nil -> state
       %{value: nil} -> state
       %{value: :new_workspace} -> open_workspace_form(state)
+      %{value: :new_task} -> State.new_task(state)
       %{value: {:configure_provider, profile_id}} -> open_provider_form(state, profile_id)
       %{value: {:retry_models, profile_id}} -> retry_models(state, profile_id)
       %{value: {:enter_model, profile_id}} -> open_model_form(state, profile_id)
@@ -1286,8 +1285,8 @@ defmodule Alto.TUI.App do
       :right_seam ->
         %{state | dragging: :right_seam}
 
-      :new_workspace ->
-        open_workspace_form(state)
+      :new_task ->
+        State.new_task(state)
 
       {:rail_row, row} ->
         state
