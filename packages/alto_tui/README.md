@@ -85,10 +85,10 @@ paste inserts text without submitting it, including multiline text and form fiel
 Ctrl+V also reads the local clipboard using `wl-paste`, `xclip`, `xsel`, or `pbpaste`
 when available; otherwise it inserts the last selection copied in this TUI.
 
-Start a task in the current folder with **Ctrl+G, N** or **+ New task** above the
-task list. **Ctrl+G, T** also includes a New task action.
+Start a task with **Ctrl+G, N** in the current folder, or click a workspace name
+in the sidebar to compose a new task in that folder. **Ctrl+G, T** also includes a New task action.
 
-Open a different folder through **Ctrl+G, W → Open another folder**. Enter an
+Click **+ New workspace** or use **Ctrl+G, W → Open another folder** to open a different folder. Enter an
 existing folder path and press Enter (or click Open folder).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving

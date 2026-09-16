@@ -166,7 +166,7 @@ defmodule Alto.TUI.View do
         :right_seam
 
       PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->
-        :new_task
+        :new_workspace
 
       PaneLayout.contains?(layout.rail, x, y) ->
         inner_height = max(layout.rail.height - 3, 0)
@@ -228,7 +228,7 @@ defmodule Alto.TUI.View do
     widgets ++
       [
         {block(" workspaces ", state.focus == :rail), rect},
-        {%Paragraph{text: "+ New task · ^G N", style: style(fg: @accent, bg: @panel)},
+        {%Paragraph{text: "+ New workspace · ^G W", style: style(fg: @accent, bg: @panel)},
          %{inner | y: rect.y + 1, height: 1}},
         {rail_widget(state), inner}
       ]

@@ -260,14 +260,13 @@ defmodule Alto.TUI.State do
         state
 
       _project ->
-        task = state.tasks |> Map.get(id, []) |> List.first()
-
-        state
-        |> Map.put(:selected_project_id, id)
-        |> Map.put(:selected_task_id, task && task["id"])
-        |> Map.put(:transcript_follow?, true)
-        |> sync_backend(task)
-        |> hydrate_selected()
+        %{
+          state
+          | selected_project_id: id,
+            selected_task_id: nil,
+            transcript_scroll: 0,
+            transcript_follow?: true
+        }
     end
   end
 

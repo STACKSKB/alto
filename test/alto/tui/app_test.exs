@@ -186,7 +186,60 @@ defmodule Alto.TUI.AppTest do
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
-  test "new-task sidebar action keeps the folder; workspace command reports invalid folders",
+  test "sidebar arrows cross workspace headers both ways and workspace clicks compose", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    projects =
+      Enum.map(1..3, fn n ->
+        %{"id" => "p#{n}", "name" => "Project #{n}", "root" => context.root}
+      end)
+
+    tasks =
+      Map.new(1..3, fn n ->
+        {"p#{n}", [%{"id" => "t#{n}", "title" => "Task #{n}", "status" => "completed"}]}
+      end)
+
+    state = %{
+      state
+      | projects: projects,
+        tasks: tasks,
+        selected_project_id: "p2",
+        selected_task_id: "t2",
+        focus: :rail,
+        dimensions: {150, 42}
+    }
+
+    ExRatatui.textarea_insert_str(state.textarea, "keep draft")
+    {:noreply, header} = App.handle_event(%Key{code: "up"}, state)
+    assert header.selected_project_id == "p2"
+    assert header.selected_task_id == nil
+    assert header.focus == :rail
+    {:noreply, previous} = App.handle_event(%Key{code: "up"}, header)
+    assert previous.selected_project_id == "p1"
+    assert previous.selected_task_id == nil
+    {:noreply, first} = App.handle_event(%Key{code: "up"}, previous)
+    assert first.selected_project_id == "p1"
+    {:noreply, task} = App.handle_event(%Key{code: "down"}, first)
+    assert task.selected_task_id == "t1"
+    {:noreply, next} = App.handle_event(%Key{code: "down"}, task)
+    assert next.selected_project_id == "p2"
+    assert next.selected_task_id == nil
+
+    rail = View.layout(state, 150, 42).rail
+    # Click the current workspace, then a different one; neither resumes an old task.
+    for {row, id} <- [{1, "p2"}, {3, "p3"}] do
+      mouse = %Mouse{kind: "down", button: "left", x: rail.x + 3, y: rail.y + 2 + row}
+      {:noreply, pressed} = App.handle_event(mouse, state)
+      {:noreply, clicked} = App.handle_event(%{mouse | kind: "up"}, pressed)
+      assert clicked.selected_project_id == id
+      assert clicked.selected_task_id == nil
+      assert clicked.overlay == nil
+      assert clicked.focus == :composer
+      assert ExRatatui.textarea_get_value(clicked.textarea) == "keep draft"
+    end
+  end
+
+  test "new-workspace sidebar opens the folder picker and reports invalid folders",
        context do
     {:ok, state} =
       State.new(context.config,
@@ -199,11 +252,8 @@ defmodule Alto.TUI.AppTest do
     rail = View.layout(state, 150, 42).rail
     mouse = %Mouse{kind: "down", button: "left", x: rail.x + 2, y: rail.y + 1}
     {:noreply, pressed} = App.handle_event(mouse, state)
-    {:noreply, new_task} = App.handle_event(%{mouse | kind: "up"}, pressed)
-    assert new_task.overlay == nil
-    assert new_task.selected_task_id == nil
-    assert new_task.selected_project_id == state.selected_project_id
-    form = folder_form(new_task)
+    {:noreply, form} = App.handle_event(%{mouse | kind: "up"}, pressed)
+    assert form.selected_project_id == state.selected_project_id
     assert form.overlay.kind == :workspace_form
     {:noreply, invalid} = App.handle_event(%Key{code: "enter"}, form)
     assert invalid.overlay.error =~ "Enter a folder"
@@ -311,7 +361,7 @@ defmodule Alto.TUI.AppTest do
         end
 
         baseline = row.()
-        assert Enum.map_join(baseline, &elem(&1, 1)) =~ "+ New task"
+        assert Enum.map_join(baseline, &elem(&1, 1)) =~ "+ New workspace"
         down = %Mouse{kind: "down", button: "left", x: layout.transcript.x + 1, y: 1}
 
         events = [

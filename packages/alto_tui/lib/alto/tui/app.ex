@@ -1387,14 +1387,16 @@ defmodule Alto.TUI.App do
       :right_seam ->
         %{state | dragging: :right_seam}
 
-      :new_task ->
-        State.new_task(state)
+      :new_workspace ->
+        open_workspace_form(state)
 
       {:rail_row, row} ->
-        state
-        |> State.select_rail_row(row)
-        |> prepare_selected_backend()
-        |> Map.put(:focus, :rail)
+        selected = state |> State.select_rail_row(row) |> prepare_selected_backend()
+
+        case Enum.at(State.rail_rows(state), row) do
+          %{kind: :project} -> State.new_task(selected)
+          _ -> %{selected | focus: :rail}
+        end
 
       {:setting, :entry_mode} ->
         toggle_composer_mode(state)
