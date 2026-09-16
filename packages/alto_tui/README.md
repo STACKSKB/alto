@@ -66,7 +66,9 @@ task list. **Ctrl+G, T** also includes a New task action.
 Open a different folder through **Ctrl+G, W → Open another folder**. Enter an existing folder path and press Enter (or click Open workspace).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
-your draft. Up/Down recalls saved folders in the dialog. The details pane shows the full working folder. Existing runs continue
+your draft. Up/Down highlights folder suggestions; Tab completes the selected path
+and lists its subfolders. Saved folders appear alongside directory matches.
+The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 
 Approval requests start at the top of the context pane, including when the next

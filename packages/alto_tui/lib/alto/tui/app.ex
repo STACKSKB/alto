@@ -1324,7 +1324,11 @@ defmodule Alto.TUI.App do
       {:overlay_row, row} ->
         if state.overlay.kind == :workspace_form do
           rect = WorkspaceForm.rect(width, height)
-          workspace_form_result(state, WorkspaceForm.click(state.overlay, row, x - rect.x - 1))
+
+          workspace_form_result(
+            state,
+            WorkspaceForm.click(state.overlay, row, x - rect.x - 1, rect.height)
+          )
         else
           handle_overlay_click(state, row)
         end
