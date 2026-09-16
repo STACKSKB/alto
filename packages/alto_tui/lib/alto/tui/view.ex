@@ -543,27 +543,7 @@ defmodule Alto.TUI.View do
     inner_width = max(transcript.width - 2, 1)
     inner_height = max(transcript.height - 2, 1)
 
-    text = transcript_text(state)
-    cache_key = {__MODULE__, :transcript_rows}
-
-    row_count =
-      case Process.get(cache_key) do
-        {^text, ^inner_width, count} ->
-          count
-
-        _ ->
-          count =
-            text
-            |> String.split("\n", trim: false)
-            |> Enum.reduce(0, fn line, count ->
-              count + length(wrap_prose_line(String.graphemes(line), inner_width))
-            end)
-
-          Process.put(cache_key, {text, inner_width, count})
-          count
-      end
-
-    max(row_count - inner_height, 0)
+    Alto.TUI.Viewport.bottom(transcript_text(state), inner_width, inner_height)
   end
 
   defp transcript_text(state) do
@@ -573,9 +553,17 @@ defmodule Alto.TUI.View do
           "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
 
       entries ->
-        entries
-        |> Enum.map(&format_entry/1)
-        |> Enum.join("\n\n")
+        key = {__MODULE__, :transcript_text}
+
+        case Process.get(key) do
+          {^entries, text} ->
+            text
+
+          _ ->
+            text = Enum.map_join(entries, "\n\n", &format_entry/1)
+            Process.put(key, {entries, text})
+            text
+        end
     end
   end
 

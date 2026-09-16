@@ -60,7 +60,9 @@ defmodule Alto.TUI.App do
 
   @impl true
   def render(state, frame) do
-    Selection.widgets(state.selection, fn -> View.widgets(state, frame) end) ++
+    Selection.widgets(state.selection, fn ->
+      View.widgets(state, frame) |> Alto.TUI.Viewport.widgets()
+    end) ++
       View.activity_widgets(state, frame)
   end
 

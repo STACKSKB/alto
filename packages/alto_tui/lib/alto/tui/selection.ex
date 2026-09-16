@@ -235,7 +235,7 @@ defmodule Alto.TUI.Selection do
           %{
             index: index,
             offset: offset,
-            limit: fn -> limit.(selection.anchor) end,
+            limit: (fn value -> fn -> value end end).(limit.(selection.anchor)),
             dimensions: dimensions,
             covered: covered,
             history: nil,
@@ -514,7 +514,7 @@ defmodule Alto.TUI.Selection do
     # TestBackend retains cells skipped by wide-glyph diffs. Blank the frame
     # before reuse so moving a double-width glyph cannot leave stale copy text.
     :ok = ExRatatui.draw(terminal, [])
-    :ok = ExRatatui.draw(terminal, widgets)
+    :ok = ExRatatui.draw(terminal, Alto.TUI.Viewport.widgets(widgets))
     lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
     lines = List.to_tuple(lines)
 
@@ -584,6 +584,12 @@ defmodule Alto.TUI.Selection do
         Process.put(key, {width, height, terminal})
         terminal
     end
+  end
+
+  @doc false
+  def buffer_row_text(raw, width) do
+    [%{text: text}] = indexed_runs(%{raw: raw, width: width, ranges: [{0, width}]})
+    text
   end
 
   # Only the two boundary rows need a glyph index during motion. Interior rows
