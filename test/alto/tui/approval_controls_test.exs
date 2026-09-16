@@ -172,6 +172,35 @@ defmodule Alto.TUI.ApprovalControlsTest do
     end
   end
 
+  test "context wheel and keyboard scrolling stop at content in both layouts", context do
+    for {width, height} = dimensions <- [{140, 40}, {80, 24}] do
+      state = pending_state(context, dimensions)
+      [pending] = state.pending_approvals
+
+      request = %{
+        pending.request
+        | details: %{preview: String.duplicate("line 猫\n", 100) <> "THE END"}
+      }
+
+      state = %{state | pending_approvals: [%{pending | request: request}], focus: :details}
+      cap = View.details_bottom_scroll(state)
+      assert cap > 0
+      state = %{state | details_scroll: cap}
+      {:noreply, state} = App.handle_event(%ExRatatui.Event.Key{code: "down"}, state)
+      assert state.details_scroll == cap
+
+      rect =
+        View.context_overlay_rect(state, width, height) ||
+          View.layout(state, width, height).details
+
+      wheel = %Mouse{kind: "scroll_down", x: rect.x + 2, y: rect.y + 2}
+      {:noreply, state} = App.handle_event(wheel, state)
+      assert state.details_scroll == cap
+      {buffer, _} = render(%{state | details_scroll: 65_000}, width, height)
+      assert buffer =~ "THE END"
+    end
+  end
+
   defp pending_state(context, dimensions) do
     assert {:ok, state} =
              State.new(context.config,

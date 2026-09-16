@@ -1357,18 +1357,25 @@ defmodule Alto.TUI.App do
 
     case View.hit_target(state, width, height, x, y) do
       :transcript -> scroll_transcript(state, delta)
-      :details -> %{state | details_scroll: max(state.details_scroll + delta, 0)}
+      :details -> scroll_details(state, delta)
       _other -> state
     end
   end
 
   defp handle_mouse(state, _mouse), do: state
 
+  defp scroll_details(state, delta),
+    do: %{
+      state
+      | details_scroll:
+          min(max(state.details_scroll + delta, 0), View.details_bottom_scroll(state))
+    }
+
   defp navigate(state, %Key{code: code}) when code in ["down", "j"] do
     case state.focus do
       :rail -> move_rail(state, 1)
       :transcript -> scroll_transcript(state, 1)
-      :details -> %{state | details_scroll: state.details_scroll + 1}
+      :details -> scroll_details(state, 1)
       _other -> state
     end
   end
@@ -1377,7 +1384,7 @@ defmodule Alto.TUI.App do
     case state.focus do
       :rail -> move_rail(state, -1)
       :transcript -> scroll_transcript(state, -1)
-      :details -> %{state | details_scroll: max(state.details_scroll - 1, 0)}
+      :details -> scroll_details(state, -1)
       _other -> state
     end
   end

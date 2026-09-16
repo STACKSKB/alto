@@ -527,6 +527,21 @@ defmodule Alto.TUI.View do
   defp transcript_scroll(state),
     do: min(state.transcript_scroll, transcript_bottom_scroll(state))
 
+  @doc "Largest useful context offset, including the approval button rows."
+  def details_bottom_scroll(state) do
+    {width, height} = state.dimensions
+    drawer = context_overlay_rect(state, width, height)
+    rect = drawer || layout(state, width, height).details
+
+    if rect do
+      {_, text} = details_content(state, if(drawer, do: :drawer, else: :pane))
+      controls = if state.pending_approvals == [], do: 0, else: length(approval_controls(rect))
+      Alto.TUI.Scroll.bottom(text, rect.width - 2, rect.height - 2 - controls, :details)
+    else
+      0
+    end
+  end
+
   defp details_widget(state, presentation) do
     {title, text} = details_content(state, presentation)
 
@@ -538,7 +553,7 @@ defmodule Alto.TUI.View do
     %Paragraph{
       text: text,
       wrap: true,
-      scroll: {state.details_scroll, 0},
+      scroll: {min(state.details_scroll, details_bottom_scroll(state)), 0},
       style: style(fg: :gray, bg: @panel),
       block: block(title, state.focus == :details)
     }
