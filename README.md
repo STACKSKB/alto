@@ -116,6 +116,11 @@ ALTO_TUI_LOCAL=1 mix deps.get
 ALTO_TUI_LOCAL=1 mix alto.tui --config ../../alto.agentic.exs
 ```
 
+In the workspace dialog (`Ctrl+G`, then `W`), type a new folder path and
+click **Create folder** or press `Ctrl+N` to create it and open the workspace.
+Missing parent folders are created too. `Enter` continues to open an existing
+folder; creating a workspace preserves the current draft.
+
 Assistant responses render as Markdown while streaming and when reopening a task:
 headings and emphasis are styled, fenced code retains indentation with syntax
 color, and tables use aligned columns when they fit or labeled records for long

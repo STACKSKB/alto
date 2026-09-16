@@ -197,6 +197,34 @@ defmodule Alto.TUI.AppTest do
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
+  test "create folder opens the typed nested path without losing the draft", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    ExRatatui.textarea_insert_str(state.textarea, "keep this draft")
+    form = folder_form(state)
+
+    {:noreply, form} =
+      App.handle_event(%ExRatatui.Event.Paste{content: "New Parent/Project É!"}, form)
+
+    {:noreply, missing} = App.handle_event(%Key{code: "enter"}, form)
+    folder = Path.join(context.root, "New Parent/Project É!")
+    refute File.exists?(folder)
+    assert missing.overlay.error =~ "Ctrl+N"
+    {:noreply, opened} = App.handle_event(%Key{code: "n", modifiers: ["ctrl"]}, missing)
+    assert File.dir?(folder)
+    assert opened.overlay == nil
+    assert State.selected_project(opened)["root"] == folder
+    assert opened.selected_task_id == nil
+    assert ExRatatui.textarea_get_value(opened.textarea) == "keep this draft"
+
+    form = folder_form(opened)
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: folder}, form)
+    {:noreply, failed} = App.handle_event(%Key{code: "n", modifiers: ["ctrl"]}, form)
+    assert failed.overlay.error =~ "already exists"
+    assert failed.overlay.error =~ "Open folder"
+    assert Alto.TUI.WorkspaceForm.path(failed.overlay) == folder
+    assert failed.selected_project_id == opened.selected_project_id
+  end
+
   test "close controls hide workspaces, preserve tasks and draft, and handle the last workspace",
        context do
     {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)

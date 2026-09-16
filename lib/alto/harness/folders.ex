@@ -1,5 +1,27 @@
 defmodule Alto.Harness.Folders do
-  @moduledoc "Bounded folder suggestions resolved on the host that owns the workspace."
+  @moduledoc "Folder creation and bounded suggestions on the host that owns the workspace."
+
+  @doc "Create a typed folder path (including missing parents) on the workspace host."
+  def create(path, base) when is_binary(path) and is_binary(base) do
+    if valid?(path) and String.trim(path) != "" do
+      root = Path.expand(path, base)
+
+      case File.lstat(root) do
+        {:ok, _} ->
+          {:error, if(File.dir?(root), do: :folder_already_exists, else: :eexist)}
+
+        {:error, :enoent} ->
+          with :ok <- File.mkdir_p(root), do: {:ok, root}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:error, :invalid_workspace_path}
+    end
+  end
+
+  def create(_, _), do: {:error, :invalid_workspace_path}
 
   def complete(path, base) do
     with {:ok, result} <- suggest(path, base), do: {:ok, result.folders}

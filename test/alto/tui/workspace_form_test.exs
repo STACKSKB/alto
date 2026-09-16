@@ -3,6 +3,21 @@ defmodule Alto.TUI.WorkspaceFormTest do
   alias Alto.TUI.WorkspaceForm
   alias ExRatatui.Event.Key
 
+  test "create action uses typed path, even with a suggestion highlighted" do
+    root = temporary_folders(["Alpha"])
+    form = WorkspaceForm.new(root) |> WorkspaceForm.paste(root <> "/")
+    {:edit, form} = WorkspaceForm.key(form, %Key{code: "down"})
+    assert {:create, path} = WorkspaceForm.key(form, %Key{code: "n", modifiers: ["ctrl"]})
+    assert path == root <> "/"
+    assert WorkspaceForm.click(form, 13, 30) == {:create, path}
+
+    terminal = ExRatatui.init_test_terminal(50, 18)
+    ExRatatui.draw(terminal, WorkspaceForm.widgets(form, %{width: 50, height: 18}))
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "[ Create folder ]"
+    assert screen =~ "^N create & open"
+  end
+
   test "suggestions have no default highlight and Enter opens exactly the typed path" do
     root = temporary_folders(["Alpha", "Beta"])
     form = WorkspaceForm.new(root)

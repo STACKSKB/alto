@@ -28,6 +28,9 @@ defmodule Alto.TUI.WorkspaceForm do
   def path(form), do: ExRatatui.text_input_get_value(form.input)
   def key(_form, %Key{code: "esc"}), do: :cancel
 
+  # Creation always uses the typed path, never a highlighted existing suggestion.
+  def key(form, %Key{code: "n", modifiers: ["ctrl"]}), do: {:create, path(form)}
+
   def key(form, %Key{code: "enter"}),
     do: {:submit, if(form.choose?, do: selected(form) || path(form), else: path(form))}
 
@@ -182,7 +185,7 @@ defmodule Alto.TUI.WorkspaceForm do
        }, %{inner | y: inner.y + 4, height: max(button_row - 4, 0)}},
       {%Paragraph{
          text:
-           "[ Open folder ]  [ Cancel ]\n#{enter_hint} · Esc cancel\n#{form.error || "↑↓ choose · Tab complete"}",
+           "[ Open folder ] [ Cancel ] [ Create folder ]\n#{enter_hint} · Esc cancel\n#{form.error || "↑↓ choose · Tab complete · ^N create & open"}",
          style: bg
        }, %{inner | y: inner.y + button_row, height: min(inner.height, 3)}}
     ]
@@ -213,8 +216,11 @@ defmodule Alto.TUI.WorkspaceForm do
       row == button_row and column in 0..14 ->
         key(form, %Key{code: "enter"})
 
-      row == button_row and column in 17..26 ->
+      row == button_row and column in 16..25 ->
         :cancel
+
+      row == button_row and column in 27..43 ->
+        {:create, path(form)}
 
       row >= 4 and row < button_row and row - 4 + offset < length(form.suggestions) ->
         key(%{form | suggestion_index: row - 4 + offset, choose?: true}, %Key{code: "tab"})

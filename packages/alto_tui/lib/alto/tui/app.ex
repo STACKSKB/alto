@@ -1964,13 +1964,20 @@ defmodule Alto.TUI.App do
   defp workspace_form_result(state, :cancel), do: %{state | overlay: nil}
   defp workspace_form_result(state, {:edit, form}), do: %{state | overlay: form}
 
+  defp workspace_form_result(state, {:create, path}) do
+    case Alto.Harness.Folders.create(path, state.overlay.base) do
+      {:ok, root} -> workspace_form_result(state, {:submit, root})
+      {:error, reason} -> put_in(state.overlay.error, Alto.Display.error(reason))
+    end
+  end
+
   defp workspace_form_result(state, {:submit, path}) do
     case State.open_workspace(state, path) do
       {:ok, next} ->
         %{next | overlay: nil}
 
       {:error, {:project_not_directory, _}} ->
-        put_in(state.overlay.error, "Folder does not exist or is not a directory.")
+        put_in(state.overlay.error, "Folder does not exist. Ctrl+N creates it.")
 
       {:error, :invalid_workspace_path} ->
         put_in(state.overlay.error, "Enter a folder path on one line.")
