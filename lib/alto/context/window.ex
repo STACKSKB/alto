@@ -1,11 +1,12 @@
 defmodule Alto.Context.Window do
   @moduledoc "A context cap resolved against the selected model's advertised window."
 
-  defstruct [:max_tokens, reserve_output: 0, estimator: nil]
+  defstruct [:max_tokens, reserve_output: 0, estimator: nil, compact_at: nil]
 
   @type t :: %__MODULE__{
           max_tokens: pos_integer() | nil,
           reserve_output: non_neg_integer(),
+          compact_at: float() | nil,
           estimator: (map() -> non_neg_integer()) | nil
         }
 
@@ -17,7 +18,9 @@ defmodule Alto.Context.Window do
 
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
-    opts = Keyword.validate!(opts, max_tokens: nil, reserve_output: 0, estimator: nil)
+    opts =
+      Keyword.validate!(opts, max_tokens: nil, reserve_output: 0, estimator: nil, compact_at: nil)
+
     max_tokens = Keyword.fetch!(opts, :max_tokens)
     reserve_output = Keyword.fetch!(opts, :reserve_output)
 
@@ -30,11 +33,20 @@ defmodule Alto.Context.Window do
     end
 
     estimator = Keyword.fetch!(opts, :estimator)
+    compact_at = Keyword.fetch!(opts, :compact_at)
+
+    if compact_at != nil and (not is_number(compact_at) or compact_at <= 0 or compact_at > 1),
+      do: raise(ArgumentError, "compact_at must be a fraction greater than zero and at most one")
 
     if estimator != nil and not is_function(estimator, 1),
       do: raise(ArgumentError, "estimator must be a unary function or nil")
 
-    %__MODULE__{max_tokens: max_tokens, reserve_output: reserve_output, estimator: estimator}
+    %__MODULE__{
+      max_tokens: max_tokens,
+      reserve_output: reserve_output,
+      estimator: estimator,
+      compact_at: compact_at
+    }
   end
 
   @spec resolve(t(), pos_integer()) :: budget()
@@ -71,7 +83,9 @@ defmodule Alto.Context.Window do
           {:error, :invalid_context_estimate}
 
         estimate <= budget.input_tokens ->
-          {:ok, budget}
+          if policy.compact_at && estimate > budget.input_tokens * policy.compact_at,
+            do: {:ok, Map.put(budget, :pressure, true)},
+            else: {:ok, budget}
 
         true ->
           {:error, {:context_limit, %{input_upper_bound: estimate, budget: budget.input_tokens}}}

@@ -438,7 +438,7 @@ defmodule Alto.Runner.Checkpoint do
 
   defp valid_compaction_state?(saved) do
     is_boolean(saved.compacted?) and is_integer(saved.compaction_count) and
-      saved.compaction_count >= 0 and saved.compacted? == (saved.compaction_count > 0)
+      saved.compaction_count >= 0 and saved.compacted? == saved.compaction_count > 0
   end
 
   defp valid_usage?(%Alto.Usage{} = usage),
@@ -477,7 +477,17 @@ defmodule Alto.Runner.Checkpoint do
     is_list(remaining) and
       Enum.all?(remaining, fn
         %Alto.Effect{kind: kind, data: data} ->
-          kind in [:emit, :request_model, :run_tool, :run_tools, :parallel_tools, :invoke_tool, :spawn_agent, :spawn_agents] and
+          kind in [
+            :emit,
+            :request_model,
+            :compact_context,
+            :run_tool,
+            :run_tools,
+            :parallel_tools,
+            :invoke_tool,
+            :spawn_agent,
+            :spawn_agents
+          ] and
             is_map(data)
 
         _ ->

@@ -32,10 +32,22 @@ defmodule Alto.Runner.Execution.Model do
       )
 
     case checked do
-      {:ok, {:ok, budget}} -> reserve_output(request, budget)
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:cancelled, reason} -> {:error, {:cancelled, reason}}
-      {:error, reason} -> {:error, {:context_policy_failed, reason}}
+      {:ok, {:ok, budget}} ->
+        request =
+          if is_map(budget) and Map.get(budget, :pressure, false),
+            do: Map.put(request, :context_pressure, true),
+            else: request
+
+        reserve_output(request, budget)
+
+      {:ok, {:error, reason}} ->
+        {:error, reason}
+
+      {:cancelled, reason} ->
+        {:error, {:cancelled, reason}}
+
+      {:error, reason} ->
+        {:error, {:context_policy_failed, reason}}
     end
   end
 

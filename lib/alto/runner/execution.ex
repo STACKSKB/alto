@@ -561,6 +561,13 @@ defmodule Alto.Runner.Execution do
     {:event, event, run}
   end
 
+  defp interpret(%Effect{kind: :compact_context, data: options}, run) do
+    compact_context(run,
+      reason: :manual,
+      required_headroom: Map.get(options, :required_headroom, 0)
+    )
+  end
+
   # Model requests are a model-specific effect: a generic provider-less run
   # fails closed if its loop policy requests one.
   defp interpret(%Effect{kind: :request_model}, %{provider: nil} = run),
@@ -569,8 +576,7 @@ defmodule Alto.Runner.Execution do
   defp interpret(%Effect{kind: :request_model, data: request}, run) do
     with {:ok, run} <- request_context(request, run),
          :ok <- Transcript.validate(Enum.reverse(run.messages_rev)),
-         {:ok, request} <- model_request(request, run),
-         {:ok, request} <- check_context(request, run) do
+         {:ok, request, run} <- prepare_model_context(request, run) do
       exposed = MapSet.new(Enum.map(request.tools, & &1["function"]["name"]))
       request_model(request, %{run | request_model_tools: exposed})
     else
@@ -688,6 +694,41 @@ defmodule Alto.Runner.Execution do
 
       _ ->
         {:error, :invalid_context_message}
+    end
+  end
+
+  defp prepare_model_context(effect_request, run) do
+    with {:ok, request} <- model_request(effect_request, run) do
+      case check_context(request, run) do
+        {:ok, %{context_pressure: true} = request} ->
+          case compact_context(run, reason: :model_context_pressure) do
+            {:ok, next} -> prepare_model_context(effect_request, next)
+            {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
+            {:error, _, next} -> {:ok, Map.delete(request, :context_pressure), next}
+          end
+
+        {:ok, request} ->
+          {:ok, request, run}
+
+        {:error, {:context_limit, _} = original} ->
+          case compact_context(run, reason: :model_context_pressure) do
+            {:ok, next} -> prepare_model_context(effect_request, next)
+            {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
+            {:error, _reason, next} -> {:error, original, next}
+          end
+
+        {:error, reason} ->
+          {:error, reason, run}
+      end
+    end
+  end
+
+  defp compact_context(run, opts) do
+    alias Alto.Runner.Execution.Transcript, as: History
+
+    case History.reduce(History.project(run), opts) do
+      {:ok, state} -> {:ok, History.merge(run, state)}
+      {:error, reason, state} -> {:error, reason, History.merge(run, state)}
     end
   end
 

@@ -15,6 +15,7 @@ defmodule Alto.Effect do
   @type kind ::
           :emit
           | :request_model
+          | :compact_context
           | :run_tool
           | :run_tools
           | :invoke_tool
@@ -32,6 +33,9 @@ defmodule Alto.Effect do
   """
   @spec request_model(map()) :: t()
   def request_model(request), do: new(:request_model, request)
+
+  @doc "Request one bounded context reduction using the configured reducer."
+  def compact_context(options \\ %{}), do: new(:compact_context, options)
 
   @doc """
   Model-shaped tool invocation: `call` carries the provider's tool-call
