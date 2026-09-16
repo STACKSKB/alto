@@ -112,6 +112,11 @@ defmodule Alto.Harness.Catalog do
             project ->
               updated = Map.put(project, "last_opened_at_ms", now)
 
+              updated =
+                if Keyword.get(opts, :reopen, true),
+                  do: Map.delete(updated, "closed"),
+                  else: updated
+
               catalog =
                 Map.update!(catalog, "projects", fn projects ->
                   Enum.map(projects, &if(&1["id"] == project["id"], do: updated, else: &1))
@@ -121,6 +126,24 @@ defmodule Alto.Harness.Catalog do
           end
         end)
     end
+  end
+
+  @doc "Close a workspace in navigation without deleting its tasks, sessions, or files."
+  def close_project(project_id, opts \\ []) when is_binary(project_id) do
+    transact(opts, fn catalog ->
+      case Enum.find(catalog["projects"], &(&1["id"] == project_id)) do
+        nil ->
+          {:error, {:unknown_project, project_id}}
+
+        project ->
+          closed = Map.put(project, "closed", true)
+
+          projects =
+            Enum.map(catalog["projects"], &if(&1["id"] == project_id, do: closed, else: &1))
+
+          {:ok, Map.put(catalog, "projects", projects), closed}
+      end
+    end)
   end
 
   @doc "Create a task under an existing project."

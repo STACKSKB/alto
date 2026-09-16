@@ -197,6 +197,70 @@ defmodule Alto.TUI.AppTest do
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
+  test "close controls hide workspaces, preserve tasks and draft, and handle the last workspace",
+       context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    original = state.selected_project_id
+    folder = Path.join(context.root, "Other")
+    File.mkdir!(folder)
+    {:ok, state} = State.open_workspace(state, folder)
+    other = state.selected_project_id
+    {:ok, task} = Alto.Harness.Catalog.create_task(other, "Saved task", state.catalog_opts)
+    state = %{State.put_task(state, task) | dimensions: {150, 42}}
+    ExRatatui.textarea_insert_str(state.textarea, "keep draft")
+    rows = State.rail_rows(state)
+    index = Enum.find_index(rows, &(&1.id == other))
+    rail = View.layout(state, 150, 42).rail
+
+    mouse = %Mouse{
+      kind: "down",
+      button: "left",
+      x: rail.x + rail.width - 2,
+      y: rail.y + 2 + index
+    }
+
+    assert View.hit_target(state, 150, 42, mouse.x, mouse.y) == {:close_workspace, other}
+    {:noreply, pressed} = App.handle_event(mouse, state)
+    {:noreply, closed} = App.handle_event(%{mouse | kind: "up"}, pressed)
+    assert closed.selected_project_id == original
+    assert closed.selected_task_id == nil
+    refute Enum.any?(State.rail_rows(closed), &(&1.id in [other, task["id"]]))
+    assert {:ok, [^task]} = Alto.Harness.Catalog.tasks(other, state.catalog_opts)
+    assert File.dir?(folder)
+    assert ExRatatui.textarea_get_value(closed.textarea) == "keep draft"
+    {:ok, restarted} = State.new(context.config, project: context.root, path: context.catalog)
+    refute Enum.any?(State.rail_rows(restarted), &(&1.id == other))
+
+    {:noreply, gear} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, closed)
+    {:noreply, empty} = App.handle_event(%Key{code: "x"}, gear)
+    assert empty.selected_project_id == nil
+    assert State.rail_rows(empty) == []
+    {:noreply, empty} = App.handle_event(%Key{code: "enter"}, empty)
+    assert empty.notice =~ "Open a workspace first"
+    assert ExRatatui.textarea_get_value(empty.textarea) == "keep draft"
+    terminal = ExRatatui.init_test_terminal(150, 42)
+    assert :ok = ExRatatui.draw(terminal, View.widgets(empty, %{width: 150, height: 42}))
+    {:ok, reopened} = State.open_workspace(empty, folder)
+    assert reopened.selected_project_id == other
+    assert Enum.any?(State.rail_rows(reopened), &(&1.id == task["id"]))
+    assert Enum.any?(State.rail_rows(reopened), &(&1.id == other))
+  end
+
+  test "workspace menu offers Close workspace without cancelling running work", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = %{state | runs: %{"background" => %{task_id: "running", status: :running}}}
+    {:noreply, gear} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, menu} = App.handle_event(%Key{code: "w"}, gear)
+    index = Enum.find_index(menu.overlay.items, &(&1.value == :close_workspace))
+
+    {:noreply, closed} =
+      App.handle_event(%Key{code: "enter"}, %{menu | overlay: %{menu.overlay | index: index}})
+
+    assert closed.runs == state.runs
+    assert closed.selected_project_id == nil
+    assert closed.overlay == nil
+  end
+
   test "sidebar arrows cross workspace headers both ways and workspace clicks compose", context do
     {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
 
@@ -808,7 +872,7 @@ defmodule Alto.TUI.AppTest do
     layout = View.layout(state, 100, 30)
     widget = widget_at(View.widgets(state, %{width: 100, height: 30}), layout.composer)
 
-    assert widget.block.title =~ "B A P M R E W T N D Q"
+    assert widget.block.title =~ "B A P M R E W X T N D Q"
     assert widget.block.title =~ "Esc cancel"
     assert String.length(widget.block.title) <= layout.composer.width - 2
   end

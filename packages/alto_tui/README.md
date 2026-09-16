@@ -99,6 +99,11 @@ specific suggestion. Saved folders appear only while the input is empty.
 The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 
+Close a workspace with the **×** on its sidebar row, **Ctrl+G, X**, or
+**Ctrl+G, W → Close workspace**. Closing hides it without cancelling running work
+or deleting files, tasks, or transcripts. Reopen its folder to restore its tasks.
+You can close the last workspace and open another when ready.
+
 Approval requests start at the top of the context pane, including when the next
 queued request becomes active. Commands show the prepared command line, folder,
 reason and execution limits. File changes show paths, replacement text and a

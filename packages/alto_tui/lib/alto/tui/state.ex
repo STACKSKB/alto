@@ -224,9 +224,41 @@ defmodule Alto.TUI.State do
   def selected_profile(%__MODULE__{} = state),
     do: Enum.find(state.profiles, &(&1.id == state.selected_provider_id))
 
+  def open_projects(state), do: Enum.reject(state.projects, &(&1["closed"] == true))
+
+  def close_workspace(state, nil),
+    do: %{state | leader?: false, overlay: nil, notice: "No workspace to close"}
+
+  def close_workspace(state, id) do
+    case Catalog.close_project(id, state.catalog_opts) do
+      {:ok, closed} ->
+        next = %{
+          state
+          | projects: Enum.map(state.projects, &if(&1["id"] == id, do: closed, else: &1)),
+            overlay: nil,
+            leader?: false
+        }
+
+        next =
+          if state.selected_project_id == id do
+            project = List.first(open_projects(next))
+
+            %{next | selected_project_id: project && project["id"], details_scroll: 0}
+            |> new_task()
+          else
+            next
+          end
+
+        %{next | notice: "Workspace closed · reopen its folder to return"}
+
+      {:error, reason} ->
+        %{state | leader?: false, notice: "Could not close workspace: #{inspect(reason)}"}
+    end
+  end
+
   @doc "Navigation rows in their exact on-screen order."
   def rail_rows(%__MODULE__{} = state) do
-    Enum.flat_map(state.projects, fn project ->
+    Enum.flat_map(open_projects(state), fn project ->
       project_row = %{kind: :project, id: project["id"], label: "▾ " <> project["name"]}
 
       if project["id"] == state.selected_project_id do

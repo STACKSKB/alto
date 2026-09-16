@@ -37,6 +37,27 @@ defmodule Alto.Harness.CatalogTest do
     assert MapSet.new(projects, & &1["id"]) == MapSet.new([first["id"], second["id"]])
   end
 
+  test "closing only changes navigation and reopening restores the same project and tasks", %{
+    root: root,
+    opts: opts
+  } do
+    File.write!(Path.join(root, "keep.txt"), "keep")
+    {:ok, project} = Catalog.register_project(root, opts)
+    {:ok, task} = Catalog.create_task(project["id"], "Still running", opts)
+    assert {:ok, closed} = Catalog.close_project(project["id"], opts)
+    assert closed["closed"]
+    assert {:ok, [^closed]} = Catalog.projects(opts)
+    assert {:ok, [^task]} = Catalog.tasks(project["id"], opts)
+    assert File.read!(Path.join(root, "keep.txt")) == "keep"
+    assert {:ok, touched} = Catalog.register_project(root, Keyword.put(opts, :reopen, false))
+    assert touched["closed"]
+    assert {:ok, reopened} = Catalog.register_project(root, opts)
+    assert reopened["id"] == project["id"]
+    refute reopened["closed"]
+    assert {:ok, [^task]} = Catalog.tasks(reopened["id"], opts)
+    assert {:error, {:unknown_project, "missing"}} = Catalog.close_project("missing", opts)
+  end
+
   test "fails closed for unknown projects, tasks, and fields", %{opts: opts} do
     assert {:error, {:unknown_project, "missing"}} = Catalog.create_task("missing", "x", opts)
     assert {:error, {:unknown_task, "missing"}} = Catalog.update_task("missing", %{}, opts)

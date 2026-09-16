@@ -173,7 +173,18 @@ defmodule Alto.TUI.View do
         selected = selected_rail_index(state, State.rail_rows(state)) || 0
         offset = max(selected - inner_height + 1, 0)
         row = y - layout.rail.y - 2
-        if row >= 0 and row < inner_height, do: {:rail_row, row + offset}, else: :none
+
+        if row >= 0 and row < inner_height do
+          case Enum.at(State.rail_rows(state), row + offset) do
+            %{kind: :project, id: id} when x == layout.rail.x + layout.rail.width - 2 ->
+              {:close_workspace, id}
+
+            _ ->
+              {:rail_row, row + offset}
+          end
+        else
+          :none
+        end
 
       PaneLayout.contains?(layout.settings, x, y) ->
         settings_target(state, layout.settings, x)
@@ -230,8 +241,28 @@ defmodule Alto.TUI.View do
         {block(" workspaces ", state.focus == :rail), rect},
         {%Paragraph{text: "+ New workspace · ^G W", style: style(fg: @accent, bg: @panel)},
          %{inner | y: rect.y + 1, height: 1}},
-        {rail_widget(state), inner}
-      ]
+        {rail_widget(state), %{inner | width: max(inner.width - 2, 0)}}
+      ] ++ close_workspace_buttons(state, rect, inner)
+  end
+
+  defp close_workspace_buttons(state, rect, inner) do
+    rows = State.rail_rows(state)
+    offset = max((selected_rail_index(state, rows) || 0) - inner.height + 1, 0)
+
+    rows
+    |> Enum.drop(offset)
+    |> Enum.take(inner.height)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn
+      {%{kind: :project}, row} ->
+        [
+          {%Paragraph{text: "×", style: style(fg: @muted, bg: @panel)},
+           %Rect{x: rect.x + rect.width - 2, y: inner.y + row, width: 1, height: 1}}
+        ]
+
+      _ ->
+        []
+    end)
   end
 
   defp rail_widget(state) do
@@ -499,9 +530,9 @@ defmodule Alto.TUI.View do
     {width, _height} = composer_inner_size(state)
 
     if width < 90 do
-      " gear: B A P M R E W T N D Q · Esc cancel "
+      " gear: B A P M R E W X T N D Q · Esc cancel "
     else
-      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · T task · N new · D details · Q quit "
+      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · X close workspace · T task · N new · D details · Q quit "
     end
   end
 
@@ -539,7 +570,7 @@ defmodule Alto.TUI.View do
     case State.current_entries(state) do
       [] ->
         "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
-          "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · T task · N new · D details · Q quit"
+          "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
 
       entries ->
         entries

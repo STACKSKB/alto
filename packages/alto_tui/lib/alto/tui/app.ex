@@ -199,6 +199,7 @@ defmodule Alto.TUI.App do
       "r" -> {:noreply, open_overlay(state, :effort)}
       "e" -> {:noreply, toggle_composer_mode(state)}
       "w" -> {:noreply, open_overlay(state, :project)}
+      "x" -> {:noreply, State.close_workspace(state, state.selected_project_id)}
       "t" -> {:noreply, open_overlay(state, :task)}
       "n" -> {:noreply, state |> State.new_task() |> Map.put(:leader?, false)}
       "d" -> {:noreply, toggle_details(state)}
@@ -551,6 +552,9 @@ defmodule Alto.TUI.App do
     prompt = state.textarea |> ExRatatui.textarea_get_value() |> String.trim()
 
     cond do
+      state.selected_project_id == nil ->
+        %{state | notice: "Open a workspace first · ^G W"}
+
       prompt == "" and not task_running?(state, state.selected_task_id) and
           Map.has_key?(state.queued_messages, state.selected_task_id) ->
         send_queued(state, state.selected_task_id)
@@ -1230,7 +1234,14 @@ defmodule Alto.TUI.App do
   defp overlay_items(state, :project) do
     items =
       [%{label: "Open another folder…", value: :new_workspace}] ++
-        Enum.map(state.projects, &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]})
+        if(state.selected_project_id,
+          do: [%{label: "Close workspace · ^G X", value: :close_workspace}],
+          else: []
+        ) ++
+        Enum.map(
+          State.open_projects(state),
+          &%{label: &1["name"] <> " · " <> &1["root"], value: &1["id"]}
+        )
 
     {:ok, "workspaces · type to filter", items, state.selected_project_id}
   end
@@ -1309,6 +1320,7 @@ defmodule Alto.TUI.App do
       nil -> state
       %{value: nil} -> state
       %{value: :new_workspace} -> open_workspace_form(state)
+      %{value: :close_workspace} -> State.close_workspace(state, state.selected_project_id)
       %{value: :new_task} -> State.new_task(state)
       %{value: {:configure_provider, profile_id}} -> open_provider_form(state, profile_id)
       %{value: {:retry_models, profile_id}} -> retry_models(state, profile_id)
@@ -1389,6 +1401,9 @@ defmodule Alto.TUI.App do
 
       :new_workspace ->
         open_workspace_form(state)
+
+      {:close_workspace, id} ->
+        State.close_workspace(state, id)
 
       {:rail_row, row} ->
         selected = state |> State.select_rail_row(row) |> prepare_selected_backend()
