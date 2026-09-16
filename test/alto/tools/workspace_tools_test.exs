@@ -233,6 +233,179 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "changed by another writer\n"
   end
 
+  test "applies disjoint edits against one original snapshot", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "a b a\n")
+
+    assert {:ok, %{replacements: 3, bytes_before: 6, bytes_after: 6}} =
+             EditFile.run(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [
+                   %{"old_text" => "a", "new_text" => "b", "replace_all" => true},
+                   %{"old_text" => "b", "new_text" => "c"}
+                 ]
+               },
+               context
+             )
+
+    # The second edit matches the original b, not the b produced by the first edit.
+    assert File.read!(path) == "b c b\n"
+  end
+
+  test "rejects mixed and overlapping multi-edit requests without writing", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "abcdef\n")
+
+    assert {:error, :mixed_edit_arguments} =
+             EditFile.run(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "ab", "new_text" => "x"}],
+                 "old_text" => "cd",
+                 "new_text" => "y"
+               },
+               context
+             )
+
+    assert {:error, :overlapping_edits} =
+             EditFile.run(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [
+                   %{"old_text" => "abc", "new_text" => "x"},
+                   %{"old_text" => "bcd", "new_text" => "y"}
+                 ]
+               },
+               context
+             )
+
+    assert {:error, :text_not_found} =
+             EditFile.run(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "abc def", "new_text" => "x"}]
+               },
+               context
+             )
+
+    assert File.read!(path) == "abcdef\n"
+  end
+
+  test "preserves BOM, CRLF line endings, and unrelated bytes", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    original = <<0xEF, 0xBB, 0xBF>> <> "one\r\ntwo\r\nthree\r\n"
+    File.write!(path, original)
+
+    assert {:ok, %{replacements: 1}} =
+             EditFile.run(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "two", "new_text" => "second"}]
+               },
+               context
+             )
+
+    assert File.read!(path) == <<0xEF, 0xBB, 0xBF>> <> "one\r\nsecond\r\nthree\r\n"
+  end
+
+  test "approval details contain a bounded unified patch from the frozen content", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "before")
+    replacement = :binary.copy("é", 20_000)
+
+    assert {:ok, _prepared, details} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => replacement}]
+               },
+               context
+             )
+
+    assert details.preview.truncated
+    assert byte_size(details.preview.content) <= 4_096
+    assert String.valid?(details.preview.content)
+    assert details.patch.truncated
+    assert byte_size(details.patch.content) <= 16_384
+    assert String.valid?(details.patch.content)
+    assert details.patch.content =~ "--- a/sample.txt\n+++ b/sample.txt\n"
+    assert details.patch.content =~ "-before\n\\ No newline at end of file\n"
+  end
+
+  test "edit input, prepared output, and both snapshot reads are bounded", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "marker" <> :binary.copy("x", 800_000))
+
+    oversized_edits =
+      Enum.map(1..6, fn index ->
+        %{
+          "old_text" => "marker#{index}" <> :binary.copy("o", 200_000),
+          "new_text" => "n"
+        }
+      end)
+
+    assert {:error, {:edit_input_too_large, 1_256_000}} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "edits" =>
+                   oversized_edits ++
+                     [%{"old_text" => :binary.copy("z", 56_000), "new_text" => "n"}]
+               },
+               context
+             )
+
+    assert {:error, {:replacement_too_large, 256_000}} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "old_text" => "marker",
+                 "new_text" => :binary.copy("n", 256_001)
+               },
+               context
+             )
+
+    assert {:error, {:file_too_large, 1_000_000}} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [
+                   %{"old_text" => "marker", "new_text" => :binary.copy("n", 256_000 - 6)}
+                 ]
+               },
+               context
+             )
+
+    File.write!(path, "before\n")
+
+    assert {:ok, prepared, _details} =
+             EditFile.prepare(
+               %{"path" => "sample.txt", "old_text" => "before", "new_text" => "after"},
+               context
+             )
+
+    File.write!(path, :binary.copy("z", 1_000_001))
+
+    assert {:error, {:file_too_large, 1_000_000}} =
+             EditFile.run_prepared(prepared, context)
+  end
+
   test "prepared writes refuse a target created after approval", %{root: root, context: context} do
     assert {:ok, prepared, details} =
              WriteFile.prepare(%{"path" => "new.txt", "content" => "approved\n"}, context)
