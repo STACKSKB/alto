@@ -137,6 +137,25 @@ configuration profile. Each example keeps authentication, persistence, retries, 
 external side effects in the host application while Alto enforces its own
 execution and resource boundaries.
 
+The feature guides cover [explicit tool batches](docs/tool-batches.md),
+[context reduction](docs/context-reduction.md), [interactive input](docs/interactive-input.md),
+[conversation revisions](docs/conversations.md), [multimodal tool content](docs/multimodal-content.md),
+[extension boundaries](docs/extensions.md), and the [offline benchmark and provider comparison](docs/benchmarks.md).
+
+The checked-in [`alto.agentic.exs`](./alto.agentic.exs) profile is an explicit
+coding configuration, not a library default. It uses up to four concurrent
+approval-free read calls, permits eight context reductions, and starts context
+reduction at 85% of the available input window. Settled session history keeps
+complete conversation boundaries for recovery. Set `ALTO_VISION=1` only when
+the selected model supports vision; this enables the bounded image reader and
+passes images to the provider adapter. Library defaults remain conservative,
+with serial tools, no automatic image capability, and one context reduction.
+Team composition is explicit: trusted loops request children, each child
+inherits an exact subset of the parent's tools and authority, and
+`Alto.Subagents.bounded/1` sets depth, child-count, and concurrency ceilings.
+Use a shared budget account when the team also needs bounded effect and model
+request counts; delegation never widens capabilities or the root budget.
+
 Alto is distributed under the [MIT License](./LICENSE).
 
 Durable hosts can use [approval continuations](docs/checkpoints.md) to persist
