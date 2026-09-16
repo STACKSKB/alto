@@ -15,6 +15,18 @@ defmodule Alto.Runner.ToolBatch do
       Enum.map(jobs, fn {tool, prepared} ->
         task =
           Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
+            # The worker establishes its own ownership guard before entering
+            # participant code.  Doing this from the coordinator after
+            # `async_nolink/2` leaves a hard-death window in which the
+            # supervised, unlinked worker has already started but no process
+            # is responsible for terminating it.
+            worker = self()
+            guardian = spawn_link(fn -> guard(owner, worker) end)
+
+            receive do
+              {:alto_batch_guard_ready, ^guardian} -> :ok
+            end
+
             value = Tool.invoke_tool(tool, prepared, caps.context)
 
             case Tool.check_native_result(value, caps.max_tool_result_bytes) do
@@ -22,8 +34,6 @@ defmodule Alto.Runner.ToolBatch do
               {:error, reason} -> {:batch_oversize, reason}
             end
           end)
-
-        spawn(fn -> guard(owner, task.pid) end)
 
         {task,
          System.monotonic_time(:millisecond) + Budget.timeout(caps.budget, caps.tool_timeout)}
@@ -39,9 +49,11 @@ defmodule Alto.Runner.ToolBatch do
   defp collect(tasks, caps, results) do
     case {Call.cancellation(caps.cancel_ref), Budget.check(caps.budget)} do
       {{:cancelled, reason}, _} ->
+        results = harvest(tasks, results)
         {:cancelled, reason, ordered(tasks, results, {:error, :cancelled})}
 
       {_, {:error, reason}} ->
+        results = harvest(tasks, results)
         {:error, reason, ordered(tasks, results, {:error, reason})}
 
       {:continue, :ok} ->
@@ -85,13 +97,36 @@ defmodule Alto.Runner.ToolBatch do
   defp ordered(tasks, results, fallback),
     do: Enum.map(tasks, fn {task, _} -> Map.get(results, task.ref, fallback) end)
 
+  # Cancellation is received selectively, so completed task messages can be
+  # sitting earlier in the coordinator mailbox.  Preserve those decided
+  # outcomes before assigning an unknown fallback to work still in flight.
+  defp harvest(tasks, results) do
+    Enum.reduce(tasks, results, fn {task, _deadline}, acc ->
+      if Map.has_key?(acc, task.ref) do
+        acc
+      else
+        case Task.yield(task, 0) do
+          {:ok, value} -> Map.put(acc, task.ref, {:ok, value})
+          {:exit, reason} -> Map.put(acc, task.ref, {:error, reason})
+          nil -> acc
+        end
+      end
+    end)
+  end
+
   defp guard(owner, worker) do
     owner_ref = Process.monitor(owner)
     worker_ref = Process.monitor(worker)
 
-    receive do
-      {:DOWN, ^owner_ref, :process, _, _} -> Process.exit(worker, :kill)
-      {:DOWN, ^worker_ref, :process, _, _} -> :ok
+    if Process.alive?(owner) do
+      send(worker, {:alto_batch_guard_ready, self()})
+
+      receive do
+        {:DOWN, ^owner_ref, :process, _, _} -> Process.exit(worker, :kill)
+        {:DOWN, ^worker_ref, :process, _, _} -> :ok
+      end
+    else
+      Process.exit(worker, :kill)
     end
   end
 end
