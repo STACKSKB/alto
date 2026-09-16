@@ -126,6 +126,7 @@ defmodule Alto.Runner.Execution.Setup do
       loop_state: nil,
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       runner_options: Keyword.get(opts, :runner_options, []),
+      input: Keyword.get(opts, :input),
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
       subagent_ticket: Keyword.get(opts, :subagent_ticket),
       child_profile: Keyword.get(opts, :child_profile),

@@ -48,6 +48,32 @@ defmodule Alto.Runner.Execution do
 
   @spec run(term(), keyword(), (Frame.t(), context() -> run_result())) :: run_result()
   def run(task, opts, scheduler) do
+    case Keyword.get(opts, :input) do
+      nil ->
+        run_scoped(task, opts, scheduler)
+
+      input ->
+        case Alto.Input.claim(input) do
+          :ok ->
+            try do
+              run_scoped(task, opts, scheduler)
+            after
+              try do
+                Alto.Input.release(input)
+              catch
+                :exit, _ -> :ok
+              end
+            end
+
+          {:error, reason} ->
+            {:error, reason, Result.empty()}
+        end
+    end
+  catch
+    :exit, reason -> {:error, {:input_unavailable, reason}, Result.empty()}
+  end
+
+  defp run_scoped(task, opts, scheduler) do
     opts = Keyword.put(opts, :execution_scheduler, scheduler)
 
     outcome =
@@ -146,9 +172,52 @@ defmodule Alto.Runner.Execution do
     case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
       {{:cancelled, reason}, _} -> {:done, cancelled(reason, run)}
       {_, {:error, reason}} -> {:done, {:error, reason, result(run, nil, :error)}}
-      {:continue, :ok} -> do_execute(effects, run, terminal)
+      {:continue, :ok} -> admit_input(effects, run, terminal)
     end
   end
+
+  defp admit_input(effects, %{input: input} = run, terminal) when not is_nil(input) do
+    modes =
+      cond do
+        effects == [] and match?({:stop, _}, terminal) -> [:steer, :follow_up]
+        match?([%Effect{kind: :request_model} | _], effects) -> [:steer]
+        true -> []
+      end
+
+    if modes != [] and map_size(Map.get(run, :pending_provider_calls, %{})) == 0 do
+      case Alto.Input.peek(input, modes, max(Budget.remaining(run.budget), 1)) do
+        nil ->
+          do_execute(effects, run, terminal)
+
+        {:error, reason} ->
+          {:done, {:error, reason, result(run, nil, :error)}}
+
+        entry ->
+          case append_message(run, %{"role" => "user", "content" => entry.text}) do
+            {:ok, next} ->
+              :ok = Alto.Input.ack(input, entry.id, max(Budget.remaining(run.budget), 1))
+              event = Event.durable(:input_received, entry)
+
+              rest =
+                case effects do
+                  [%Effect{kind: :request_model} | rest] -> rest
+                  [] -> []
+                end
+
+              finish_effect({:event, event, next}, rest, next, :continue)
+
+            {:error, reason, next} ->
+              {:done, {:error, reason, result(next, nil, :error)}}
+          end
+      end
+    else
+      do_execute(effects, run, terminal)
+    end
+  catch
+    :exit, reason -> {:done, {:error, {:input_unavailable, reason}, result(run, nil, :error)}}
+  end
+
+  defp admit_input(effects, run, terminal), do: do_execute(effects, run, terminal)
 
   defp do_execute([], run, {:stop, output}), do: {:done, {:ok, result(run, output, :success)}}
 

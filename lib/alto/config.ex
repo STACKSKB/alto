@@ -10,6 +10,7 @@ defmodule Alto.Config do
   @allowed_options [
     :runner,
     :runner_options,
+    :input,
     :loop,
     :provider,
     :provider_options,
