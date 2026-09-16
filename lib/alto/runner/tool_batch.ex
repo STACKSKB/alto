@@ -6,7 +6,7 @@ defmodule Alto.Runner.ToolBatch do
   Results are bounded before they leave workers and returned in source order.
   Worker guardians terminate work if the coordinator dies, including hard kills.
   """
-  alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
+  alias Alto.Runner.{Budget, Execution.Call, Execution.Support, Execution.Tool}
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
     owner = self()
@@ -15,17 +15,10 @@ defmodule Alto.Runner.ToolBatch do
       Enum.map(jobs, fn {tool, prepared} ->
         task =
           Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
-            # The worker establishes its own ownership guard before entering
-            # participant code.  Doing this from the coordinator after
-            # `async_nolink/2` leaves a hard-death window in which the
-            # supervised, unlinked worker has already started but no process
-            # is responsible for terminating it.
-            worker = self()
-            guardian = spawn_link(fn -> guard(owner, worker) end)
-
-            receive do
-              {:alto_batch_guard_ready, ^guardian} -> :ok
-            end
+            # Establish ownership before entering participant code. Doing
+            # this from the coordinator after `async_nolink/2` would leave a
+            # hard-death window with an unowned worker.
+            Support.guard_owner(owner)
 
             value = Tool.invoke_tool(tool, prepared, caps.context)
 
@@ -112,21 +105,5 @@ defmodule Alto.Runner.ToolBatch do
         end
       end
     end)
-  end
-
-  defp guard(owner, worker) do
-    owner_ref = Process.monitor(owner)
-    worker_ref = Process.monitor(worker)
-
-    if Process.alive?(owner) do
-      send(worker, {:alto_batch_guard_ready, self()})
-
-      receive do
-        {:DOWN, ^owner_ref, :process, _, _} -> Process.exit(worker, :kill)
-        {:DOWN, ^worker_ref, :process, _, _} -> :ok
-      end
-    else
-      Process.exit(worker, :kill)
-    end
   end
 end

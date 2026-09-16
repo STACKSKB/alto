@@ -5,8 +5,25 @@ defmodule Alto.Runner.Execution.Support do
   def supervised_call(_fun, timeout, _cancel_ref) when timeout <= 0, do: {:error, :timeout}
 
   def supervised_call(fun, timeout, cancel_ref) when is_function(fun, 0) do
-    task = Task.Supervisor.async_nolink(Alto.TaskSupervisor, fun)
+    owner = self()
+
+    task =
+      Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
+        guard_owner(owner)
+        fun.()
+      end)
+
     await(task, System.monotonic_time(:millisecond) + max(timeout, 0), cancel_ref)
+  end
+
+  @doc false
+  def guard_owner(owner) when is_pid(owner) do
+    worker = self()
+    guardian = spawn_link(fn -> owner_guard(owner, worker) end)
+
+    receive do
+      {:alto_owner_guard_ready, ^guardian} -> :ok
+    end
   end
 
   defp await(task, deadline, cancel_ref) do
@@ -59,4 +76,20 @@ defmodule Alto.Runner.Execution.Support do
   end
 
   def notify(_, _), do: :ok
+
+  defp owner_guard(owner, worker) do
+    owner_ref = Process.monitor(owner)
+    worker_ref = Process.monitor(worker)
+
+    if Process.alive?(owner) do
+      send(worker, {:alto_owner_guard_ready, self()})
+
+      receive do
+        {:DOWN, ^owner_ref, :process, _, _} -> Process.exit(worker, :kill)
+        {:DOWN, ^worker_ref, :process, _, _} -> :ok
+      end
+    else
+      Process.exit(worker, :kill)
+    end
+  end
 end
