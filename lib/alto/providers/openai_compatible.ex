@@ -69,6 +69,7 @@ defmodule Alto.Providers.OpenAICompatible do
         })
         |> maybe_put_tools(Map.get(request, :tools, []))
         |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
+        |> Alto.Providers.PromptCache.compatible(request, config)
 
       state = new_request_state(config.max_event_bytes, config.max_response_bytes)
 
@@ -509,6 +510,7 @@ defmodule Alto.Providers.OpenAICompatible do
            model: model,
            reasoning_effort: Keyword.get(opts, :reasoning_effort),
            reasoning_format: Alto.Reasoning.format(opts),
+           prompt_cache: Keyword.get(opts, :prompt_cache, true),
            endpoint: endpoint,
            headers: headers,
            timeout: timeout,

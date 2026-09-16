@@ -69,7 +69,8 @@ Alto.Config.new(
   loop:
     Alto.default_loop(
       tool_execution: {:parallel, 4},
-      context: Alto.Context.window(compact_at: 0.85, reserve_output: 4_096)
+      context:
+        Alto.Context.window(compact_at: 0.85, reserve_output: 4_096, usage_estimation: true)
     ),
   tools:
     [

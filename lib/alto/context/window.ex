@@ -1,12 +1,19 @@
 defmodule Alto.Context.Window do
   @moduledoc "A context cap resolved against the selected model's advertised window."
 
-  defstruct [:max_tokens, reserve_output: 0, estimator: nil, compact_at: nil]
+  defstruct [
+    :max_tokens,
+    reserve_output: 0,
+    estimator: nil,
+    compact_at: nil,
+    usage_estimation: false
+  ]
 
   @type t :: %__MODULE__{
           max_tokens: pos_integer() | nil,
           reserve_output: non_neg_integer(),
           compact_at: float() | nil,
+          usage_estimation: boolean(),
           estimator: (map() -> non_neg_integer()) | nil
         }
 
@@ -19,7 +26,13 @@ defmodule Alto.Context.Window do
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
     opts =
-      Keyword.validate!(opts, max_tokens: nil, reserve_output: 0, estimator: nil, compact_at: nil)
+      Keyword.validate!(opts,
+        max_tokens: nil,
+        reserve_output: 0,
+        estimator: nil,
+        compact_at: nil,
+        usage_estimation: false
+      )
 
     max_tokens = Keyword.fetch!(opts, :max_tokens)
     reserve_output = Keyword.fetch!(opts, :reserve_output)
@@ -31,6 +44,9 @@ defmodule Alto.Context.Window do
     if not is_integer(reserve_output) or reserve_output < 0 do
       raise ArgumentError, "reserve_output must be a non-negative integer"
     end
+
+    if not is_boolean(Keyword.fetch!(opts, :usage_estimation)),
+      do: raise(ArgumentError, "usage_estimation must be a boolean")
 
     estimator = Keyword.fetch!(opts, :estimator)
     compact_at = Keyword.fetch!(opts, :compact_at)
@@ -45,7 +61,8 @@ defmodule Alto.Context.Window do
       max_tokens: max_tokens,
       reserve_output: reserve_output,
       estimator: estimator,
-      compact_at: compact_at
+      compact_at: compact_at,
+      usage_estimation: Keyword.fetch!(opts, :usage_estimation)
     }
   end
 
@@ -60,6 +77,22 @@ defmodule Alto.Context.Window do
       reserve_output: min(policy.reserve_output, context_window)
     }
   end
+
+  # An unchanged observed prefix already has an authoritative provider count.
+  # Charge every new suffix byte as a token, retaining a conservative margin.
+  # A compaction or tool change invalidates the observation automatically.
+  defp observed_estimate(%{usage_estimation: true}, %{context_observation: observation} = request)
+       when is_map(observation) do
+    previous = observation.messages
+    {prefix, suffix} = Enum.split(request.messages, length(previous))
+
+    if observation.input_tokens > 0 and prefix == previous and request.tools == observation.tools do
+      observation.input_tokens +
+        Enum.reduce(suffix, 0, &(byte_size(JSON.encode!(&1)) + 16 + &2))
+    end
+  end
+
+  defp observed_estimate(_, _), do: nil
 
   @doc "Check input using a conservative byte-based token upper bound. Provider usage remains authoritative accounting."
   def check(%__MODULE__{} = policy, request, provider_info) do
@@ -76,7 +109,9 @@ defmodule Alto.Context.Window do
       estimate =
         if policy.estimator,
           do: policy.estimator.(input),
-          else: byte_size(JSON.encode!(input)) + 16 * length(request.messages) + 16
+          else:
+            observed_estimate(policy, request) ||
+              byte_size(JSON.encode!(input)) + 16 * length(request.messages) + 16
 
       cond do
         not is_integer(estimate) or estimate < 0 ->

@@ -767,10 +767,25 @@ defmodule Alto.Runner.Execution do
       run = %{run | model_requests: run.model_requests + 1}
 
       case outcome do
-        {:ok, {:ok, completion}} -> complete_model(run, completion)
-        {:ok, {:error, reason}} -> {:error, {:model_request_failed, reason}, run}
-        {:error, reason} -> {:error, {:model_process_failed, reason}, run}
-        {:cancelled, reason} -> {:cancelled, reason, run}
+        {:ok, {:ok, completion}} ->
+          usage = Usage.normalize(if(is_map(completion), do: Map.get(completion, :usage)))
+
+          observation = %{
+            messages: request.messages,
+            tools: request.tools,
+            input_tokens: usage.input_tokens
+          }
+
+          complete_model(Map.put(run, :context_observation, observation), completion)
+
+        {:ok, {:error, reason}} ->
+          {:error, {:model_request_failed, reason}, run}
+
+        {:error, reason} ->
+          {:error, {:model_process_failed, reason}, run}
+
+        {:cancelled, reason} ->
+          {:cancelled, reason, run}
       end
     end
   end
@@ -805,6 +820,8 @@ defmodule Alto.Runner.Execution do
         {:ok,
          %{
            messages: Enum.reverse(run.messages_rev),
+           session_id: run.session || run.tool_context.session_id,
+           context_observation: Map.get(run, :context_observation),
            tools: tools,
            options: stringify_top_keys(options),
            loop: request

@@ -21,6 +21,7 @@ defmodule Alto.Usage do
             total_tokens: 0,
             cached_input_tokens: 0,
             last_input_tokens: 0,
+            last_cached_input_tokens: 0,
             requests: 0
 
   @type t :: %__MODULE__{
@@ -29,6 +30,7 @@ defmodule Alto.Usage do
           total_tokens: non_neg_integer(),
           cached_input_tokens: non_neg_integer(),
           last_input_tokens: non_neg_integer(),
+          last_cached_input_tokens: non_neg_integer(),
           requests: non_neg_integer()
         }
 
@@ -79,6 +81,7 @@ defmodule Alto.Usage do
       total_tokens: total,
       cached_input_tokens: min(cached, input),
       last_input_tokens: input,
+      last_cached_input_tokens: min(cached, input),
       requests: 1
     }
   end
@@ -95,6 +98,11 @@ defmodule Alto.Usage do
       cached_input_tokens: left.cached_input_tokens + right.cached_input_tokens,
       last_input_tokens:
         if(right.requests > 0, do: right.last_input_tokens, else: left.last_input_tokens),
+      last_cached_input_tokens:
+        if(right.requests > 0,
+          do: right.last_cached_input_tokens,
+          else: left.last_cached_input_tokens
+        ),
       requests: left.requests + right.requests
     }
   end
@@ -117,6 +125,15 @@ defmodule Alto.Usage do
     |> cache_hit_rate()
   end
 
+  @doc "Cache-hit percentage of the most recent model request."
+  def last_cache_hit_rate(%__MODULE__{last_input_tokens: 0}), do: 0.0
+
+  def last_cache_hit_rate(%__MODULE__{} = usage),
+    do: min(usage.last_cached_input_tokens / usage.last_input_tokens * 100.0, 100.0)
+
+  def last_cache_hit_rate(usage) when is_map(usage),
+    do: usage |> from_map() |> last_cache_hit_rate()
+
   @doc "Rehydrate normalized accounting received through an event or session."
   @spec from_map(map()) :: t()
   def from_map(map) when is_map(map) do
@@ -127,6 +144,7 @@ defmodule Alto.Usage do
       cached_input_tokens: integer(map, ~w(cached_input_tokens)),
       last_input_tokens:
         integer(map, ~w(last_input_tokens)) |> default_last_input(integer(map, ~w(input_tokens))),
+      last_cached_input_tokens: integer(map, ~w(last_cached_input_tokens)),
       requests: integer(map, ~w(requests))
     }
   end
@@ -143,6 +161,7 @@ defmodule Alto.Usage do
       total_tokens: integer(total, ~w(totalTokens)) |> default_total(input + output),
       cached_input_tokens: min(integer(total, ~w(cachedInputTokens)), input),
       last_input_tokens: integer(last, ~w(inputTokens)),
+      last_cached_input_tokens: integer(last, ~w(cachedInputTokens)),
       requests: 1
     }
   end

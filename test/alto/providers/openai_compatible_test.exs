@@ -25,6 +25,47 @@ defmodule Alto.Providers.OpenAICompatibleTest do
     end
   end
 
+  test "OpenRouter keeps a stable session and enables Claude caching without altering messages" do
+    configure_adapter(self(), 200, "application/json", [
+      JSON.encode!(%{"choices" => [%{"message" => %{"content" => "ok"}}]})
+    ])
+
+    messages = [
+      %{"role" => "system", "content" => "fixed"},
+      %{"role" => "user", "content" => "review"}
+    ]
+
+    request = %{messages: messages, tools: [], session_id: "session-1"}
+    opts = [model: "anthropic/claude-sonnet-4", req_options: [adapter: Adapter]]
+
+    for extra <- [[], [%{"role" => "assistant", "content" => "working"}]] do
+      assert {:ok, _} =
+               OpenAICompatible.stream(
+                 %{request | messages: messages ++ extra},
+                 fn _ -> :ok end,
+                 opts
+               )
+
+      assert_receive {:http_request, wire}
+      body = JSON.decode!(wire.body)
+      assert body["session_id"] == "session-1"
+      assert body["cache_control"] == %{"type" => "ephemeral"}
+      assert Enum.take(body["messages"], 2) == messages
+    end
+
+    assert {:ok, _} =
+             OpenAICompatible.stream(
+               request,
+               fn _ -> :ok end,
+               Keyword.put(opts, :base_url, "https://unit.test/v1")
+             )
+
+    assert_receive {:http_request, wire}
+    body = JSON.decode!(wire.body)
+    refute Map.has_key?(body, "cache_control")
+    refute Map.has_key?(body, "session_id")
+  end
+
   test "defaults to OpenRouter" do
     assert OpenAICompatible.describe([]).base_url == "https://openrouter.ai/api/v1"
     assert OpenAICompatible.describe([]).vision == false

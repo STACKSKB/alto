@@ -681,7 +681,7 @@ defmodule Alto.TUI.View do
 
     right =
       "tok #{compact(usage.total_tokens)}  ↑#{compact(usage.input_tokens)}  ↓#{compact(usage.output_tokens)}" <>
-        "  ctx #{context_consumption(state, usage)}  cache #{Float.round(Usage.cache_hit_rate(usage), 1)}%" <>
+        "  ctx #{context_consumption(state, usage)}  cache #{Float.round(Usage.last_cache_hit_rate(usage), 1)}% last / #{Float.round(Usage.cache_hit_rate(usage), 1)}% total" <>
         quota_suffix(state) <> " "
 
     message = if state.notice, do: " │ " <> short(state.notice, 32), else: ""

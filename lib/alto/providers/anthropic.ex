@@ -21,7 +21,7 @@ defmodule Alto.Providers.Anthropic do
   @default_max_event_bytes 1_000_000
   @default_max_response_bytes 2_000_000
   @state_key :alto_anthropic_stream
-  @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking)
+  @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking cache_control)
 
   @impl true
   def describe(opts),
@@ -84,6 +84,7 @@ defmodule Alto.Providers.Anthropic do
         {:ok,
          %{
            model: model,
+           prompt_cache: Keyword.get(opts, :prompt_cache, true),
            api_key: api_key,
            endpoint: endpoint,
            timeout: timeout,
@@ -149,7 +150,11 @@ defmodule Alto.Providers.Anthropic do
           }
         end)
 
-      {:ok, if(tools == [], do: body, else: Map.put(body, "tools", tools))}
+      {:ok,
+       Alto.Providers.PromptCache.anthropic(
+         if(tools == [], do: body, else: Map.put(body, "tools", tools)),
+         config.prompt_cache
+       )}
     else
       [_ | _] -> {:error, {:unsupported_anthropic_options, unsupported}}
       false -> {:error, :invalid_max_tokens}

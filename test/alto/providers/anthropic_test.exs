@@ -38,6 +38,32 @@ defmodule Alto.Providers.AnthropicTest do
     [api_key: "test-secret", model: "configured-model", req_options: [adapter: Adapter]]
   end
 
+  test "enables automatic prefix caching and preserves an explicit override" do
+    opts =
+      configure(%{
+        "content" => [%{"type" => "text", "text" => "ok"}],
+        "stop_reason" => "end_turn"
+      })
+
+    request = %{messages: [%{"role" => "user", "content" => "hello"}], tools: []}
+    assert {:ok, _} = Anthropic.stream(request, fn _ -> :ok end, opts)
+    assert_receive {:request, wire}
+    assert JSON.decode!(wire.body)["cache_control"] == %{"type" => "ephemeral"}
+
+    assert {:ok, _} =
+             Anthropic.stream(request, fn _ -> :ok end, Keyword.put(opts, :prompt_cache, false))
+
+    assert_receive {:request, wire}
+    refute Map.has_key?(JSON.decode!(wire.body), "cache_control")
+
+    request =
+      Map.put(request, :options, %{"cache_control" => %{"type" => "ephemeral", "ttl" => "1h"}})
+
+    assert {:ok, _} = Anthropic.stream(request, fn _ -> :ok end, opts)
+    assert_receive {:request, wire}
+    assert JSON.decode!(wire.body)["cache_control"]["ttl"] == "1h"
+  end
+
   test "sends typed image tool results as native image sources when vision is enabled" do
     opts =
       configure(%{

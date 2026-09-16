@@ -35,3 +35,37 @@ messages remain intact.
 Use `Alto.Context.Estimator` with a configured tokenizer and provider/model
 framing costs when available. The default byte estimator remains conservative;
 admission estimates and authoritative provider usage are separate measurements.
+
+### Prefix reuse and cache accounting
+
+Ordinary tool turns append assistant/tool messages to the stored conversation.
+The initial system prompt and tool definitions remain fixed, and resuming a
+session reuses its saved messages verbatim. Compaction intentionally replaces
+older history; changing models, tools, or reasoning settings can also invalidate
+provider cache reuse.
+
+The shipped `alto.agentic.exs` enables `usage_estimation: true` in its context
+window policy. After a successful response, an exactly unchanged message/tool
+prefix is budgeted using the provider's reported input tokens, with every new
+suffix byte charged as one token plus message framing. A changed prefix falls
+back to the existing byte estimate. Explicit tokenizers take precedence. This
+avoids repeatedly treating the entire observed code transcript as one token per
+byte and compacting too early. Initial/resumed requests without an observation
+still use the conservative byte fallback.
+
+OpenRouter requests carry a stable session ID for provider affinity. Native
+Anthropic and Claude through OpenRouter enable automatic five-minute prefix
+caching by default; set provider option `prompt_cache: false` to opt out, or
+`prompt_cache: %{"type" => "ephemeral", "ttl" => "1h"}` to request a longer TTL.
+Explicit request cache controls take precedence. Other compatible endpoints do
+not receive these provider-specific fields. Cache retention, routing, minimum
+prompt lengths, and actual hits remain provider-controlled.
+
+The Alto status bar reports both the last request's cache read percentage and
+the cumulative percentage, so cold starts and earlier misses do not obscure
+current reuse. Internal compaction streams produce context-progress events,
+not assistant messages; decoded handoff artifacts remain the durable record.
+
+Provider references:
+- https://openrouter.ai/docs/guides/best-practices/prompt-caching
+- https://platform.claude.com/docs/en/build-with-claude/prompt-caching

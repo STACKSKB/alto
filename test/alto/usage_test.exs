@@ -3,6 +3,21 @@ defmodule Alto.UsageTest do
 
   alias Alto.Usage
 
+  test "latest cache rate is separate from cumulative cold-start costs" do
+    cold = Alto.Usage.normalize(%{"prompt_tokens" => 1000})
+
+    warm =
+      Alto.Usage.normalize(%{
+        "prompt_tokens" => 2000,
+        "prompt_tokens_details" => %{"cached_tokens" => 1900}
+      })
+
+    usage = Alto.Usage.merge(cold, warm)
+    assert Alto.Usage.last_cache_hit_rate(usage) == 95.0
+    assert Alto.Usage.cache_hit_rate(usage) < 64
+    assert Alto.Usage.last_cache_hit_rate(Alto.Usage.to_map(usage)) == 95.0
+  end
+
   test "normalizes common token and cache fields" do
     openai =
       Usage.normalize(%{
