@@ -24,16 +24,46 @@ defmodule Alto.TUI.Activity do
 
   def phase(event, fallback \\ "working") do
     case to_string(event || "") do
-      "model_started" -> "waiting for model"
-      "model_reasoning_delta" -> "thinking"
-      "model_delta" -> "receiving response"
-      "model_retry" -> "retrying provider connection"
-      "model_completed" -> "processing response"
-      "tool_started" -> "running tool"
-      "tool_completed" -> "processing tool result"
-      "approval_requested" -> "waiting for approval"
-      "approval_resolved" -> "processing approval"
-      _ -> fallback
+      event
+      when event in [
+             "context_handoff_started",
+             "context_compacting",
+             "context_compaction_progress"
+           ] ->
+        "compacting context"
+
+      "context_handoff_created" ->
+        "context ready"
+
+      "model_started" ->
+        "waiting for model"
+
+      "model_reasoning_delta" ->
+        "thinking"
+
+      "model_delta" ->
+        "receiving response"
+
+      "model_retry" ->
+        "retrying provider connection"
+
+      "model_completed" ->
+        "processing response"
+
+      "tool_started" ->
+        "running tool"
+
+      "tool_completed" ->
+        "processing tool result"
+
+      "approval_requested" ->
+        "waiting for approval"
+
+      "approval_resolved" ->
+        "processing approval"
+
+      _ ->
+        fallback
     end
   end
 end

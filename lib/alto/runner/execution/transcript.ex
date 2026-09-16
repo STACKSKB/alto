@@ -246,7 +246,7 @@ defmodule Alto.Runner.Execution.Transcript do
          reason
        ) do
     {provider, provider_opts} = run.provider
-    sink = fn event -> notify(run.event_sink, event) end
+    sink = compaction_sink(run.event_sink)
 
     outcome =
       supervised_call(
@@ -429,7 +429,7 @@ defmodule Alto.Runner.Execution.Transcript do
     input = render_for_summary(middle)
     input_bytes = byte_size(input)
     {provider, provider_opts} = run.provider
-    sink = fn event -> notify(run.event_sink, event) end
+    sink = compaction_sink(run.event_sink)
 
     notify(
       run.event_sink,
@@ -589,7 +589,7 @@ defmodule Alto.Runner.Execution.Transcript do
         "Reply with plain text under #{max_summary} bytes, no tool calls."
 
     {provider, provider_opts} = run.provider
-    sink = fn event -> notify(run.event_sink, event) end
+    sink = compaction_sink(run.event_sink)
 
     notify(run.event_sink, Event.live(:context_compacting, %{dropped_messages: length(middle)}))
 
@@ -811,5 +811,13 @@ defmodule Alto.Runner.Execution.Transcript do
 
   defp session_dir_opt(run), do: [session_dir: run.session_dir]
   defp supervised_call(fun, timeout, ref), do: Alto.Runner.Execution.Call.run(fun, timeout, ref)
+  # Internal reducer output is not an assistant answer. Keep progress observable
+  # without leaking JSON artifacts (or reducer reasoning) into the conversation.
+  defp compaction_sink(sink) do
+    fn event ->
+      notify(sink, Event.live(:context_compaction_progress, %{event: event.type}))
+    end
+  end
+
   defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 end

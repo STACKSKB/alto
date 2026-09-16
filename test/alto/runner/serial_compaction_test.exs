@@ -126,12 +126,15 @@ defmodule Alto.Runner.SerialCompactionTest do
     def describe(_opts), do: %{}
 
     @impl true
-    def stream(request, _sink, _opts) do
+    def stream(request, sink, _opts) do
       cond do
         Enum.any?(request.messages, fn
           %{"role" => "user", "content" => "Prepare a context handoff" <> _} -> true
           _other -> false
         end) ->
+          sink.(Event.live(:model_delta, %{text: ~s({"design":"internal\\njson"})}))
+          sink.(Event.live(:model_reasoning_delta, %{text: "internal reducer reasoning"}))
+
           {:ok,
            %{
              message:
@@ -417,9 +420,12 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "handoff strategy creates structured artifacts and a generated next step", %{dir: dir} do
+    owner = self()
+
     assert {:ok, result} =
              Alto.run(String.duplicate("t", 300),
                provider: {HandoffProvider, []},
+               event_sink: fn event -> send(owner, {:handoff_event, event}) end,
                tools: [EchoTool],
                max_transcript_bytes: 600,
                compaction: [
@@ -438,6 +444,9 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert %Event{data: data} =
              Enum.find(result.events, &(&1.type == :context_handoff_created))
 
+    assert_received {:handoff_event, %Event{type: :context_compaction_progress}}
+    refute_received {:handoff_event, %Event{type: :model_delta}}
+    refute_received {:handoff_event, %Event{type: :model_reasoning_delta}}
     assert data.next_step == "Return the final answer."
     assert File.read!(data.files.design) == "Keep the runtime bounded.\n"
     assert File.read!(data.files.pointers) == "lib/alto/runner/serial.ex\n"
