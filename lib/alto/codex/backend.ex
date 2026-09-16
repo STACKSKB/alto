@@ -193,20 +193,20 @@ defmodule Alto.Codex.Backend do
     do: [
       %{
         kind: :tool,
-        text: "command · " <> inspect(item["command"]),
+        text: "command · " <> Alto.Display.text(item["command"]),
         detail: item["aggregatedOutput"]
       }
     ]
 
   defp history_item(%{"type" => "fileChange"} = item),
-    do: [%{kind: :tool, text: "file changes", detail: inspect(item["changes"], pretty: true)}]
+    do: [%{kind: :tool, text: "file changes", detail: Alto.Display.result(item["changes"])}]
 
   defp history_item(%{"type" => "mcpToolCall"} = item),
     do: [
       %{
         kind: :tool,
         text: "MCP · #{item["server"]}/#{item["tool"]}",
-        detail: inspect(item["result"], pretty: true)
+        detail: Alto.Display.result(item["result"])
       }
     ]
 

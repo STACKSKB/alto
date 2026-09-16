@@ -449,7 +449,7 @@ defmodule Alto.TUI.App do
         {:noreply, State.put_entries(state, task_id, entries)}
 
       {:error, reason} ->
-        {:noreply, %{state | notice: "could not load Codex history · #{short_inspect(reason)}"}}
+        {:noreply, %{state | notice: "could not load Codex history · #{human_error(reason)}"}}
     end
   end
 
@@ -512,8 +512,7 @@ defmodule Alto.TUI.App do
   end
 
   def handle_info({:codex_browser_opened, {:error, reason}}, state),
-    do:
-      {:noreply, %{state | notice: "open the displayed URL manually · #{short_inspect(reason)}"}}
+    do: {:noreply, %{state | notice: "open the displayed URL manually · #{human_error(reason)}"}}
 
   def handle_info({:codex_browser_opened, _result}, state),
     do: {:noreply, state, render?: false}
@@ -663,7 +662,7 @@ defmodule Alto.TUI.App do
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
           attach_started_run(state, task, prompt, handle, completion_ref, local_id)
         else
-          {:error, reason} -> %{state | notice: "cannot start: #{short_inspect(reason)}"}
+          {:error, reason} -> %{state | notice: "cannot start: #{human_error(reason)}"}
         end
     end
   end
@@ -683,7 +682,7 @@ defmodule Alto.TUI.App do
         with {:ok, state, task} <- ensure_task(state, prompt) do
           start_codex_task(state, task, prompt)
         else
-          {:error, reason} -> %{state | notice: "cannot start: #{short_inspect(reason)}"}
+          {:error, reason} -> %{state | notice: "cannot start: #{human_error(reason)}"}
         end
     end
   end
@@ -954,11 +953,11 @@ defmodule Alto.TUI.App do
           {"completed", completed.session_id, nil, "run completed", completed.persistence}
 
         {:error, reason, completed} ->
-          {"failed", completed.session_id, %{kind: :error, text: short_inspect(reason)},
+          {"failed", completed.session_id, %{kind: :error, text: human_error(reason)},
            "run failed", completed.persistence}
 
         other ->
-          {"failed", nil, %{kind: :error, text: short_inspect(other)}, "run failed", nil}
+          {"failed", nil, %{kind: :error, text: human_error(other)}, "run failed", nil}
       end
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
@@ -984,7 +983,7 @@ defmodule Alto.TUI.App do
   end
 
   defp persistence_feedback(entry, notice, {:degraded, errors}) do
-    warning = %{kind: :error, text: "persistence degraded", detail: short_inspect(errors)}
+    warning = %{kind: :error, text: "persistence degraded", detail: human_error(errors)}
     {entry || warning, notice <> " · persistence degraded"}
   end
 
@@ -1060,7 +1059,7 @@ defmodule Alto.TUI.App do
   end
 
   defp do_ingest_event(state, task_id, %Event{type: :tool_failed, data: data}) do
-    detail = short_inspect(data.error)
+    detail = human_error(data.error)
 
     State.append_entry(state, task_id, %{
       kind: :error,
@@ -1721,10 +1720,9 @@ defmodule Alto.TUI.App do
 
     message =
       reason
-      |> short_inspect()
+      |> human_error()
       |> redact_secrets()
-      |> String.replace(~r/\s+/, " ")
-      |> String.slice(0, 240)
+      |> String.slice(0, 1_000)
 
     %{
       state
@@ -1815,7 +1813,7 @@ defmodule Alto.TUI.App do
         put_in(state.overlay.error, "Enter a folder path on one line.")
 
       {:error, reason} ->
-        put_in(state.overlay.error, "Could not open workspace: #{inspect(reason)}")
+        put_in(state.overlay.error, "Could not open workspace: #{Alto.Display.error(reason)}")
     end
   end
 
@@ -2247,7 +2245,7 @@ defmodule Alto.TUI.App do
   end
 
   defp codex_error_overlay(state, reason) do
-    message = reason |> short_inspect() |> redact_secrets() |> String.slice(0, 500)
+    message = reason |> human_error() |> redact_secrets() |> String.slice(0, 500)
 
     items = [
       %{label: "Retry Codex connection", value: :codex_reconnect},
@@ -2432,7 +2430,7 @@ defmodule Alto.TUI.App do
         State.append_entry(state, run.task_id, %{
           kind: :tool,
           text: text <> " ✓",
-          detail: short_inspect(item)
+          detail: Alto.Display.result(item)
         })
     end
   end
@@ -2452,7 +2450,7 @@ defmodule Alto.TUI.App do
   end
 
   defp apply_codex_run_event(state, run, "error", params) do
-    text = Map.get(params, "message") || short_inspect(params)
+    text = Map.get(params, "message") || human_error(params)
     State.append_entry(state, run.task_id, %{kind: :error, text: text})
   end
 
@@ -2472,7 +2470,7 @@ defmodule Alto.TUI.App do
   end
 
   defp codex_item_summary(%{"type" => "commandExecution", "command" => command}),
-    do: "command · " <> short_inspect(command)
+    do: "command · " <> Alto.Display.text(command)
 
   defp codex_item_summary(%{"type" => "fileChange"}), do: "file changes"
   defp codex_item_summary(%{"type" => "mcpToolCall", "tool" => tool}), do: "MCP · #{tool}"
@@ -2531,7 +2529,7 @@ defmodule Alto.TUI.App do
     state
     |> State.append_entry(run.task_id, %{
       kind: :error,
-      text: "Codex could not start: #{short_inspect(reason)}"
+      text: "Codex could not start: #{human_error(reason)}"
     })
     |> drop_run(local_id)
     |> Map.put(:notice, "Codex run failed to start")
@@ -2673,7 +2671,7 @@ defmodule Alto.TUI.App do
   defp human_provider_error(:provider_base_url_must_be_http),
     do: "use an http:// or https:// URL"
 
-  defp human_provider_error(reason), do: "could not save provider: #{short_inspect(reason)}"
+  defp human_provider_error(reason), do: "could not save provider: #{human_error(reason)}"
 
   defp redact_secrets(text) do
     text
@@ -2701,5 +2699,5 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp short_inspect(term), do: inspect(term, limit: 8, printable_limit: 240)
+  defp human_error(term), do: Alto.Display.error(term, limit: 1_000)
 end

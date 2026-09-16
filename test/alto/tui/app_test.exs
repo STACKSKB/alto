@@ -1236,6 +1236,51 @@ defmodule Alto.TUI.AppTest do
     GenServer.stop(app)
   end
 
+  test "provider failures and structured tool details render readable fields", context do
+    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+
+    reason =
+      {:http_error, 400,
+       %{
+         "error" => %{
+           "message" => "Model does not support tools",
+           "code" => "unsupported_parameter"
+         }
+       }}
+
+    {:noreply, failed} = App.handle_info({:alto_models_loaded, "test", {:error, reason}}, state)
+    assert failed.overlay.message =~ "Provider returned HTTP 400"
+    assert failed.overlay.message =~ "Model does not support tools"
+    refute failed.overlay.message =~ "%{"
+    refute failed.overlay.message =~ "=>"
+    terminal = ExRatatui.init_test_terminal(150, 42)
+    ExRatatui.draw(terminal, View.widgets(failed, %{width: 150, height: 42}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "Model does not support tools"
+
+    task = %{
+      "id" => "display",
+      "project_id" => state.selected_project_id,
+      "title" => "Display",
+      "status" => "failed"
+    }
+
+    state =
+      state
+      |> State.put_task(task)
+      |> State.put_entries("display", [
+        %{kind: :error, text: %{message: "Request failed", reason: :eacces}},
+        %{kind: :tool, text: "Command finished", detail: %{exit_code: 1, stderr: "Missing file"}}
+      ])
+
+    ExRatatui.draw(terminal, View.widgets(state, %{width: 150, height: 42}))
+    buffer = ExRatatui.get_buffer_content(terminal)
+    assert buffer =~ "Permission denied"
+    assert buffer =~ "Exit code: 1"
+    assert buffer =~ "Stderr: Missing file"
+    refute buffer =~ "%{"
+    refute buffer =~ "=>"
+  end
+
   test "a failed model discovery remains open with recovery actions", context do
     config =
       Alto.Config.new(
@@ -1265,7 +1310,7 @@ defmodule Alto.TUI.AppTest do
 
     failed = user_state(app)
     assert failed.overlay.kind == :model_error
-    assert failed.overlay.message =~ "api_key_missing"
+    assert failed.overlay.message =~ "API key is missing"
     assert failed.overlay.message =~ "[REDACTED]"
     refute failed.overlay.message =~ "should-not-render"
     assert Enum.any?(failed.overlay.items, &(&1.value == {:retry_models, "broken"}))

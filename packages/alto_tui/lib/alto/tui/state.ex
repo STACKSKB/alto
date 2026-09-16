@@ -252,7 +252,11 @@ defmodule Alto.TUI.State do
         %{next | notice: "Workspace closed · reopen its folder to return"}
 
       {:error, reason} ->
-        %{state | leader?: false, notice: "Could not close workspace: #{inspect(reason)}"}
+        %{
+          state
+          | leader?: false,
+            notice: "Could not close workspace: #{Alto.Display.error(reason)}"
+        }
     end
   end
 
@@ -635,7 +639,7 @@ defmodule Alto.TUI.State do
   end
 
   defp message_entries(%{"role" => "tool", "content" => text}) when is_binary(text),
-    do: [%{kind: :tool, text: text}]
+    do: [%{kind: :tool, text: Alto.Display.result(text)}]
 
   defp message_entries(_message), do: []
 

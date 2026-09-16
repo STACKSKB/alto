@@ -17,7 +17,7 @@ defmodule Mix.Tasks.Alto.Tui do
     case OptionParser.parse(argv, strict: @switches, aliases: @aliases) do
       {opts, [], []} -> run_options(opts)
       {_opts, args, []} -> Mix.raise("unexpected arguments: #{Enum.join(args, " ")}")
-      {_opts, _args, invalid} -> Mix.raise("invalid options: #{inspect(invalid)}")
+      {_opts, _args, invalid} -> Mix.raise("invalid options: #{Alto.Display.text(invalid)}")
     end
   end
 
@@ -35,7 +35,7 @@ defmodule Mix.Tasks.Alto.Tui do
 
       case Alto.TUI.run(config, tui_opts) do
         :ok -> :ok
-        {:error, reason} -> Mix.raise("Alto TUI failed: #{inspect(reason)}")
+        {:error, reason} -> Mix.raise("Alto TUI failed: #{Alto.Display.error(reason)}")
       end
     end
   end

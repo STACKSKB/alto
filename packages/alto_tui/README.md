@@ -107,6 +107,11 @@ Close a workspace with the **×** on its sidebar row, **Ctrl+G, X**, or
 or deleting files, tasks, or transcripts. Reopen its folder to restore its tasks.
 You can close the last workspace and open another when ready.
 
+Errors and returned tool data use readable messages and labeled fields. Provider
+failures retain the HTTP status and supplied explanation; file and command results
+show paths, exit codes, and output. Saved history uses the same presentation.
+User and assistant messages retain their original code and prose.
+
 Approval requests start at the top of the context pane, including when the next
 queued request becomes active. Commands show the prepared command line, folder,
 reason and execution limits. File changes show paths, replacement text and a

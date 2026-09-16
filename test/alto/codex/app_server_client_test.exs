@@ -46,8 +46,15 @@ defmodule Alto.Codex.AppServer.ClientTest do
               IO.puts(JSON.encode!(%{"method" => "item/agentMessage/delta", "params" => %{"threadId" => "thr-1", "turnId" => "turn-1", "itemId" => "msg-1", "delta" => "hello"}}))
               {nil, state}
             "thread/read" ->
+              if message["params"]["threadId"] == "thr-tools" do
+                items = [%{"type" => "commandExecution", "command" => "ls -la", "aggregatedOutput" => "file.txt"},
+                  %{"type" => "fileChange", "changes" => [%{"path" => "file.txt", "kind" => "added"}]},
+                  %{"type" => "mcpToolCall", "server" => "test", "tool" => "lookup", "result" => %{"error" => %{"message" => "Not available", "code" => 503}}}]
+                {%{"id" => id, "result" => %{"thread" => %{"turns" => [%{"items" => items}]}}}, state}
+              else
               turns = [%{"id" => "turn-old", "status" => "completed", "items" => [%{"id" => "user", "type" => "userMessage", "content" => [%{"type" => "text", "text" => "old prompt"}]}, %{"id" => "agent", "type" => "agentMessage", "text" => "old answer"}]}]
               {%{"id" => id, "result" => %{"thread" => %{"id" => "thr-1", "turns" => turns}}}, state}
+              end
             _ ->
               if id, do: {%{"id" => id, "result" => %{}}, state}, else: {nil, state}
           end
@@ -97,6 +104,22 @@ defmodule Alto.Codex.AppServer.ClientTest do
     assert {:ok,
             [%{kind: :user, text: "old prompt"}, %{kind: :codex_assistant, text: "old answer"}]} =
              Backend.history(client, "thr-1")
+  end
+
+  test "restored Codex tool history uses readable result fields", %{root: root, server: server} do
+    {:ok, client} =
+      Client.ensure_started(command: server, args: [], cwd: root, request_timeout: 5_000)
+
+    assert {:ok, [command, file, mcp]} = Backend.history(client, "thr-tools")
+    assert command.text == "command · ls -la"
+    assert file.detail =~ "Path: file.txt"
+    assert mcp.detail =~ "Message: Not available"
+
+    for entry <- [command, file, mcp] do
+      refute entry.text =~ "%{"
+      refute entry.detail =~ "%{"
+      refute entry.detail =~ "=>"
+    end
   end
 
   test "approval levels map to Codex policy and sandbox independently", _context do

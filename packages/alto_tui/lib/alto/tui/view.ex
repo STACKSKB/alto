@@ -1088,8 +1088,8 @@ defmodule Alto.TUI.View do
       |> Enum.take(-12)
       |> Enum.map(fn entry ->
         case Map.get(entry, :detail) do
-          detail when is_binary(detail) and detail != "" ->
-            format_entry(entry) <> "\n" <> detail
+          detail when detail not in [nil, "", %{}, []] ->
+            format_entry(entry) <> "\n" <> Alto.Display.result(detail)
 
           _other ->
             format_entry(entry)
@@ -1107,10 +1107,10 @@ defmodule Alto.TUI.View do
   defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
   defp format_entry(%{kind: :assistant, text: text}), do: "alto › " <> text
   defp format_entry(%{kind: :codex_assistant, text: text}), do: "codex › " <> text
-  defp format_entry(%{kind: :tool, text: text}), do: "tool · " <> text
-  defp format_entry(%{kind: :error, text: text}), do: "error ! " <> text
-  defp format_entry(%{kind: :system, text: text}), do: "· " <> text
-  defp format_entry(%{text: text}), do: text
+  defp format_entry(%{kind: :tool, text: text}), do: "tool · " <> Alto.Display.result(text)
+  defp format_entry(%{kind: :error, text: text}), do: "error ! " <> Alto.Display.error(text)
+  defp format_entry(%{kind: :system, text: text}), do: "· " <> Alto.Display.text(text)
+  defp format_entry(%{text: text}), do: Alto.Display.text(text)
 
   defp segment_span(segment),
     do: Span.new(segment.text, style: style(fg: :white, bg: @panel_alt, modifiers: [:bold]))
