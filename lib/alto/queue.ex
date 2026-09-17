@@ -434,63 +434,27 @@ defmodule Alto.Queue do
   def init(%__MODULE__{} = state), do: {:ok, state}
 
   defp load(state) do
-    with :ok <- Alto.Storage.ensure_private_dir(state.dir, owned: true),
-         :ok <- Alto.Storage.ensure_private_file(state.path),
-         :ok <- DurableLog.ensure(state.path),
-         {:ok, state} <- replay(state) do
-      {:ok, state}
-    end
+    with :ok <- DurableLog.open(state.path), do: replay(state)
   end
 
   defp replay(state) do
-    case bounded_read(state.path, state.max_log_bytes) do
-      {:ok, contents} ->
-        replay_contents(state, contents)
-
-      {:error, {:too_large, size, max}} ->
-        {:error, {:queue_log_too_large, size, max}}
-
-      {:error, :enoent} ->
-        {:ok, state}
-
-      {:error, reason} ->
-        {:error, {:queue_read_failed, reason}}
+    case DurableLog.replay(state.path, state.max_log_bytes, &replay_lines(state, &1)) do
+      :missing -> {:ok, state}
+      {:read_error, {:too_large, size, max}} -> {:error, {:queue_log_too_large, size, max}}
+      {:read_error, reason} -> {:error, {:queue_read_failed, reason}}
+      result -> result
     end
   end
 
-  defp bounded_read(path, max), do: Alto.BoundedFile.read(path, max)
+  defp replay_lines(state, []), do: {:ok, %{state | next_id: 1}}
 
-  # A crash mid-append leaves a torn final line: bytes with no trailing
-  # newline that do not decode. Discard exactly that tail and truncate the
-  # file with the last good byte prefix; the committed prefix replays normally.
-  # A corrupt line anywhere else still fails the start loudly.
-  defp replay_contents(state, "") do
-    {:ok, %{state | next_id: 1}}
-  end
-
-  defp replay_contents(state, contents) do
-    {lines, torn?} = split_log(contents)
-
+  defp replay_lines(state, lines) do
     with :ok <- verify_retained_prefix(lines),
-         {:ok, state} <- fold_lines(state, lines) do
+         {:ok, state} <- Alto.JSONLines.fold(state, lines, &apply_logged/3) do
       state = trim_completed(state)
-      state = %{state | next_id: max(state.next_id, replay_next_id(state.records))}
-
-      if torn? do
-        case DurableLog.replace(state.path, join_lines(lines)) do
-          :ok -> {:ok, state}
-          {:error, reason} -> {:error, {:queue_read_failed, reason}}
-        end
-      else
-        {:ok, state}
-      end
+      {:ok, %{state | next_id: max(state.next_id, replay_next_id(state.records))}}
     end
   end
-
-  defp split_log(contents), do: Alto.JSONLines.split(contents)
-  defp join_lines(lines), do: Alto.JSONLines.join(lines)
-
-  defp fold_lines(state, lines), do: Alto.JSONLines.fold(state, lines, &apply_logged/3)
 
   # Replayed puts carry their logged ids; new live puts continue past the
   # highest id the log has ever used.
@@ -1526,7 +1490,7 @@ defmodule Alto.Queue do
       "sha256" => retained_digest(record_lines)
     }
 
-    lines = [JSON.encode!(header), "\n", join_lines(record_lines)]
+    lines = [JSON.encode!(header), "\n", Alto.JSONLines.join(record_lines)]
     bytes = IO.iodata_length(lines)
 
     with true <-
@@ -1613,7 +1577,7 @@ defmodule Alto.Queue do
   end
 
   defp retained_digest(lines),
-    do: :crypto.hash(:sha256, join_lines(lines)) |> Base.encode16(case: :lower)
+    do: :crypto.hash(:sha256, Alto.JSONLines.join(lines)) |> Base.encode16(case: :lower)
 
   defp restore_retained_state(
          state,

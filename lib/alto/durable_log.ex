@@ -3,6 +3,34 @@ defmodule Alto.DurableLog do
 
   import Bitwise
 
+  @doc "Open a private durable log before replay, under the caller's storage lock."
+  def open(path) do
+    with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
+         :ok <- Alto.Storage.ensure_private_file(path),
+         do: ensure(path)
+  end
+
+  @doc "Replay validated lines and repair a torn tail only after the domain decoder succeeds."
+  def replay(path, max_bytes, decode) do
+    case Alto.BoundedFile.read(path, max_bytes) do
+      {:ok, contents} ->
+        {lines, torn?} = Alto.JSONLines.split(contents)
+
+        with {:ok, value} <- decode.(lines) do
+          case if(torn?, do: replace(path, Alto.JSONLines.join(lines)), else: :ok) do
+            :ok -> {:ok, value}
+            {:error, reason} -> {:read_error, reason}
+          end
+        end
+
+      {:error, :enoent} ->
+        :missing
+
+      {:error, reason} ->
+        {:read_error, reason}
+    end
+  end
+
   @doc false
   def ensure(path) do
     if File.exists?(path), do: :ok, else: append(path, "")

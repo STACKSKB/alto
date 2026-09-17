@@ -1124,49 +1124,23 @@ defmodule Alto.OperationLog do
   ## contract as Alto.Queue; broader device guarantees are deployment-specific)
 
   defp load(state) do
-    with :ok <- Alto.Storage.ensure_private_dir(state.dir, owned: true),
-         :ok <- Alto.Storage.ensure_private_file(state.path),
-         :ok <- DurableLog.ensure(state.path),
-         {:ok, state} <- replay(state) do
-      {:ok, state}
-    end
+    with :ok <- DurableLog.open(state.path), do: replay(state)
   end
 
   defp replay(state) do
-    case bounded_read(state.path, state.max_log_bytes) do
-      {:ok, ""} ->
-        {:ok, state}
-
-      {:ok, contents} ->
-        replay_contents(state, contents)
-
-      {:error, {:too_large, size, max}} ->
-        {:error, {:ledger_log_too_large, size, max}}
-
-      {:error, :enoent} ->
-        {:ok, state}
-
-      {:error, reason} ->
-        {:error, {:ledger_read_failed, reason}}
+    case DurableLog.replay(state.path, state.max_log_bytes, &replay_lines(state, &1)) do
+      :missing -> {:ok, state}
+      {:read_error, {:too_large, size, max}} -> {:error, {:ledger_log_too_large, size, max}}
+      {:read_error, reason} -> {:error, {:ledger_read_failed, reason}}
+      result -> result
     end
   end
 
-  defp bounded_read(path, max), do: Alto.BoundedFile.read(path, max)
+  defp replay_lines(state, []), do: {:ok, state}
 
-  defp replay_contents(state, contents) do
-    {lines, torn?} = split_log(contents)
-
-    with {:ok, state} <- fold_lines(state, lines),
-         {:ok, state} <- trim_to_bound(state) do
-      if torn? do
-        case DurableLog.replace(state.path, join_lines(lines)) do
-          :ok -> {:ok, state}
-          {:error, reason} -> {:error, {:ledger_read_failed, reason}}
-        end
-      else
-        {:ok, state}
-      end
-    end
+  defp replay_lines(state, lines) do
+    with {:ok, state} <- Alto.JSONLines.fold(state, lines, &apply_logged/3),
+         do: trim_to_bound(state)
   end
 
   # Restart resurrects evicted decided entries from the audit log; trim back
@@ -1188,11 +1162,6 @@ defmodule Alto.OperationLog do
       end
     end
   end
-
-  defp split_log(contents), do: Alto.JSONLines.split(contents)
-  defp join_lines(lines), do: Alto.JSONLines.join(lines)
-
-  defp fold_lines(state, lines), do: Alto.JSONLines.fold(state, lines, &apply_logged/3)
 
   defp apply_logged(state, line, number) do
     with :ok <- validate_record_bytes(line, state) do
