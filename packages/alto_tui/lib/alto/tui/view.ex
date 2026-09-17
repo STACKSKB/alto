@@ -971,9 +971,10 @@ defmodule Alto.TUI.View do
     profile = State.selected_profile(state)
 
     provider =
-      if state.selected_backend == :codex,
-        do: Alto.Codex.Backend.account_label(state.codex.account),
-        else: (profile && profile.label) || "none"
+      case Alto.TUI.Backend.ui(state, :provider_label) do
+        :pass -> (profile && profile.label) || "none"
+        label -> label
+      end
 
     segments =
       cond do
@@ -1158,10 +1159,9 @@ defmodule Alto.TUI.View do
   defp compact(n), do: Integer.to_string(n)
 
   defp context_consumption(state, usage) do
-    if state.selected_backend == :codex do
-      context_percent(usage, state.codex.context_window)
-    else
-      native_context_consumption(state, usage)
+    case Alto.TUI.Backend.ui(state, :context_window) do
+      :pass -> native_context_consumption(state, usage)
+      context -> context_percent(usage, context)
     end
   end
 
@@ -1184,14 +1184,12 @@ defmodule Alto.TUI.View do
 
   defp context_percent(_usage, _context), do: "—"
 
-  defp quota_suffix(%{selected_backend: :codex} = state) do
-    case Alto.Codex.Backend.primary_rate_limit(state.codex.rate_limits) do
-      %{"usedPercent" => used} when is_number(used) -> "  quota #{Float.round(used * 1.0, 1)}%"
-      _other -> "  quota —"
+  defp quota_suffix(state) do
+    case Alto.TUI.Backend.ui(state, :quota_label) do
+      :pass -> ""
+      label -> label
     end
   end
-
-  defp quota_suffix(_state), do: ""
 
   defp compact_settings?(state) do
     {width, height} = state.dimensions

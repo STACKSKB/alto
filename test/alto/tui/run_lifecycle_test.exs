@@ -244,7 +244,7 @@ defmodule Alto.TUI.RunLifecycleTest do
           tools: []
         ]
 
-    config = Alto.Config.new(options ++ [session_dir: Path.join(root, "sessions")])
+    config = Alto.Test.TUI.config(options ++ [session_dir: Path.join(root, "sessions")])
 
     {:ok, app} =
       App.start_link(

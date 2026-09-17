@@ -1,19 +1,25 @@
 defmodule Alto.TUI.Backend do
   @moduledoc """
-  Additional local execution backends for the terminal.
+  Host-composed terminal backends. `tui_backends` is the complete ordered list;
+  identifiers, including `:alto` and `:codex`, are not reserved.
 
-  Configure `tui_backends: [custom: {MyBackend, options}]`. The adapter accepts
-  the same trusted run options (including event sink and approval policy),
-  returns an opaque Alto runner handle, and supports cancellation.
-  The runner must return an `Alto.Runner.Result` outcome. It owns resume
-  semantics using the supplied catalog task. A configured adapter is trusted
-  code and must enforce the supplied approval policy and runtime limits.
-  The built-in Codex integration retains its account-specific UI.
+  Runner adapters implement `start/4` and `cancel/3`. Interactive adapters
+  implement `ui/3` and `cancel/3`, owning their connection and protocol lifecycle.
+  Optional UI contributions receive `:prepare`, `:selected`, `:model`,
+  `{:submit, prompt}`, `{:overlay, kind}`, `{:select, value}` and
+  `{:message, message}`. Return `:pass` to use ordinary terminal behavior.
+  Message contributions use the application's `handle_info` return contract;
+  overlay contributions return picker items or `{:state, state}`.
+
+  These are trusted host components. Runner adapters must honor the supplied
+  approval policy and runtime limits. Interactive adapters own their protocol's
+  equivalent controls and put their cancellation adapter on each active run.
   """
-
   @callback start(map(), String.t(), keyword(), keyword()) ::
               {:ok, Alto.Runner.Handle.t()} | {:error, term()}
-  @callback cancel(Alto.Runner.Handle.t(), term(), keyword()) :: term()
+  @callback cancel(term(), term(), keyword()) :: term()
+  @callback ui(term(), map(), keyword()) :: term()
+  @optional_callbacks start: 4, ui: 3
 
   def configured(options), do: Keyword.get(options, :tui_backends, [])
 
@@ -25,20 +31,49 @@ defmodule Alto.TUI.Backend do
   end
 
   def items(options) do
-    [%{label: "Alto native", value: :alto}, %{label: "Codex · ChatGPT", value: :codex}] ++
-      Enum.map(configured(options), fn {id, _spec} -> %{label: Atom.to_string(id), value: id} end)
+    Enum.map(configured(options), fn {id, {_module, opts}} ->
+      %{label: Keyword.get(opts, :label, Atom.to_string(id)), value: id}
+    end)
+  end
+
+  def ui(state, event) do
+    case lookup(state.run_options, state.selected_backend) do
+      {:ok, module, opts} -> contribution(module, event, state, opts)
+      _ -> :pass
+    end
+  end
+
+  def initialize(state) do
+    Enum.reduce(configured(state.run_options), state, fn {_id, {module, opts}}, acc ->
+      case contribution(module, :init, acc, opts) do
+        :pass -> acc
+        next -> next
+      end
+    end)
+  end
+
+  def message(state, message) do
+    Enum.reduce_while(configured(state.run_options), :pass, fn {_id, {module, opts}}, :pass ->
+      case contribution(module, {:message, message}, state, opts) do
+        :pass -> {:cont, :pass}
+        result -> {:halt, result}
+      end
+    end)
+  end
+
+  defp contribution(module, event, state, opts) do
+    if function_exported?(module, :ui, 3), do: module.ui(event, state, opts), else: :pass
   end
 
   def valid?(backends) when is_list(backends) do
     Keyword.keyword?(backends) and
       length(Keyword.keys(backends)) == length(Enum.uniq(Keyword.keys(backends))) and
       Enum.all?(backends, fn
-        {id, {module, opts}}
-        when id not in [:alto, :codex] and is_atom(module) and is_list(opts) ->
+        {id, {module, opts}} when is_atom(module) and is_list(opts) ->
           Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, Atom.to_string(id)) and
-            Keyword.keyword?(opts) and
-            Code.ensure_loaded?(module) and function_exported?(module, :start, 4) and
-            function_exported?(module, :cancel, 3)
+            Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
+            function_exported?(module, :cancel, 3) and
+            (function_exported?(module, :start, 4) or function_exported?(module, :ui, 3))
 
         _ ->
           false

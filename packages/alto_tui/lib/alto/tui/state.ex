@@ -95,9 +95,12 @@ defmodule Alto.TUI.State do
          {:ok, tasks} <- load_tasks(projects, catalog_opts) do
       selected_task = tasks |> Map.get(selected_project["id"], []) |> List.first()
       profile = List.first(profiles)
-      codex_options = Keyword.get(run_options, :codex_backend, [])
       tui_options = Keyword.get(run_options, :tui, [])
-      selected_backend = task_backend(selected_task)
+
+      selected_backend =
+        if selected_task,
+          do: task_backend(selected_task),
+          else: List.first(Keyword.keys(Alto.TUI.Backend.configured(run_options)))
 
       state = %__MODULE__{
         textarea: ExRatatui.textarea_new(),
@@ -125,29 +128,12 @@ defmodule Alto.TUI.State do
         narrow_context_fullscreen_below:
           Keyword.get(tui_options, :narrow_context_fullscreen_below, 72),
         approval_auto_open?: Keyword.get(tui_options, :approval_auto_open, true),
-        selected_model:
-          if(selected_backend == :codex,
-            do: Keyword.get(codex_options, :model),
-            else: profile && profile.default_model
-          ),
+        selected_model: profile && profile.default_model,
         selected_backend: selected_backend,
-        codex: %{
-          options: codex_options,
-          client: nil,
-          status: :idle,
-          account: nil,
-          models: [],
-          rate_limits: nil,
-          context_window: nil,
-          login: nil,
-          loaded_threads: MapSet.new(),
-          history_loading: MapSet.new(),
-          pending_events: [],
-          pending_requests: []
-        },
         usage: %{}
       }
 
+      state = Alto.TUI.Backend.initialize(state)
       {:ok, hydrate_selected(state)}
     end
   end
@@ -186,9 +172,10 @@ defmodule Alto.TUI.State do
 
   def model_metadata(state) do
     models =
-      if state.selected_backend == :codex,
-        do: state.codex.models,
-        else: Map.get(state.models, state.selected_provider_id, [])
+      case Alto.TUI.Backend.ui(state, :models) do
+        :pass -> Map.get(state.models, state.selected_provider_id, [])
+        models -> models
+      end
 
     Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
   end
@@ -210,8 +197,8 @@ defmodule Alto.TUI.State do
 
       nil ->
         cond do
-          state.selected_backend == :codex and state.codex.status in [:connecting, :refreshing] ->
-            {"waiting for Codex connection", state.activity_started_ms}
+          Alto.TUI.Backend.ui(state, :activity) not in [:pass, nil] ->
+            {Alto.TUI.Backend.ui(state, :activity), state.activity_started_ms}
 
           MapSet.size(state.model_loading) > 0 ->
             {"loading model catalog", state.activity_started_ms}
@@ -596,9 +583,12 @@ defmodule Alto.TUI.State do
       usage =
         case selected_task(state) do
           %{"session_id" => session_id} = task when is_binary(session_id) ->
-            if task_backend(task) == :alto,
-              do: load_session_usage(session_id, state.catalog_opts),
-              else: Usage.new()
+            if Alto.TUI.Backend.ui(
+                 %{state | selected_backend: task_backend(task)},
+                 :durable_input?
+               ) == true,
+               do: load_session_usage(session_id, state.catalog_opts),
+               else: Usage.new()
 
           _other ->
             Usage.new()
@@ -690,32 +680,19 @@ defmodule Alto.TUI.State do
   defp sync_backend(state, task) do
     backend = task_backend(task)
 
+    state = %{state | selected_backend: backend}
+
     model =
-      case backend do
-        :codex ->
-          current = state.selected_model
-
-          if Enum.any?(state.codex.models, &((&1[:id] || &1["id"]) == current)),
-            do: current,
-            else: codex_default_model(state)
-
-        _local ->
+      case Alto.TUI.Backend.ui(state, :sync_model) do
+        :pass ->
           profile = selected_profile(state)
           profile && profile.default_model
+
+        model ->
+          model
       end
 
-    %{state | selected_backend: backend, selected_model: model}
-  end
-
-  defp codex_default_model(state) do
-    configured = Keyword.get(state.codex.options, :model)
-
-    configured ||
-      case Enum.find(state.codex.models, &Map.get(&1, :default?, false)) ||
-             List.first(state.codex.models) do
-        nil -> nil
-        model -> model[:id] || model["id"]
-      end
+    %{state | selected_model: model}
   end
 
   defp status_marker("completed"), do: "✓"

@@ -19,7 +19,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     File.mkdir_p!(root)
 
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         provider_profiles: [
           [id: "test", label: "Test", provider: {Provider, model: "test/model"}]
         ],

@@ -122,7 +122,7 @@ defmodule Alto.TUI.AppTest do
     File.chmod!(codex_server, 0o755)
 
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         provider_profiles: [
           [
             id: "test",
@@ -745,7 +745,7 @@ defmodule Alto.TUI.AppTest do
 
   test "custom backends start providerless and retain configured approval", context do
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         provider: nil,
         approval: Alto.Approvals.DenyAll,
         tui_backends: [custom: {CustomBackend, owner: self()}],
@@ -1108,7 +1108,7 @@ defmodule Alto.TUI.AppTest do
     config =
       context.config.run_options
       |> Keyword.put(:tui, approval_auto_open: false)
-      |> Alto.Config.new()
+      |> Alto.Test.TUI.config()
 
     assert {:ok, quiet} = State.new(config, project: context.root, path: context.catalog)
     quiet = %{quiet | dimensions: {80, 24}, focus: :composer}
@@ -1147,7 +1147,7 @@ defmodule Alto.TUI.AppTest do
     config =
       context.config.run_options
       |> Keyword.put(:tui, type_to_compose: false)
-      |> Alto.Config.new()
+      |> Alto.Test.TUI.config()
 
     assert {:ok, navigating} =
              State.new(config, project: context.root, path: context.catalog)
@@ -1311,7 +1311,7 @@ defmodule Alto.TUI.AppTest do
 
   test "a failed model discovery remains open with recovery actions", context do
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         provider_profiles: [
           [id: "broken", label: "Broken", provider: FailingProvider, models: :discover]
         ],
@@ -1350,7 +1350,7 @@ defmodule Alto.TUI.AppTest do
 
   test "provider setup masks and privately persists API keys", context do
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         provider_profiles: [
           [
             id: "openrouter",
@@ -1428,7 +1428,7 @@ defmodule Alto.TUI.AppTest do
     test_owner = self()
 
     config =
-      Alto.Config.new(
+      Alto.Test.TUI.config(
         codex_backend: [
           command: context.codex_server,
           args: [],

@@ -105,6 +105,10 @@ Alto.Config.new(
           Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
       {Alto.Tools.RunCommand, executor: command_executor}
     ] ++ if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++ fff_tools ++ ripwire_tools,
+  tui_backends: [
+    alto: {Alto.TUI.Backends.Native, label: "Alto native"},
+    codex: {Alto.TUI.Backends.Codex, label: "Codex · ChatGPT"}
+  ],
   tool_presenter: {Alto.ToolDisplay, []},
   approval: Alto.Approvals.Interactive,
   prompt: Alto.Prompts.Coding,
