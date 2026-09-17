@@ -45,6 +45,8 @@ defmodule Alto.Config do
     :session_dir,
     :compaction,
     :provider_retries,
+    :retry_policy,
+    :event_sink,
     :tui,
     :tui_backends
   ]

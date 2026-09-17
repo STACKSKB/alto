@@ -30,6 +30,8 @@ defmodule Alto.Runner.Execution.Children do
     :agent_depth,
     :model_tools,
     :provider_timeout,
+    :provider_retries,
+    :retry_policy,
     :tool_timeout,
     :approval_timeout,
     :max_approval_details_bytes,
@@ -65,6 +67,8 @@ defmodule Alto.Runner.Execution.Children do
       :agent_depth,
       :model_tools,
       :provider_timeout,
+      :provider_retries,
+      :retry_policy,
       :tool_timeout,
       :approval_timeout,
       :max_approval_details_bytes,
@@ -500,6 +504,8 @@ defmodule Alto.Runner.Execution.Children do
       sub_opts =
         [
           provider: provider,
+          provider_retries: run.provider_retries,
+          retry_policy: run.retry_policy,
           checkpoint_version: run.checkpoint_version,
           parent_expires_at_ms: run.parent_expires_at_ms,
           child_profile: checkpoint_profile(spec, run),

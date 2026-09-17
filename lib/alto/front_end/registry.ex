@@ -442,7 +442,7 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put(:session_id, run_id)
         |> Keyword.put(:owner, owner)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
-        |> Keyword.put(:event_sink, fn event ->
+        |> Alto.Events.attach(fn event ->
           GenServer.call(me, {:ingest_run_event, run_id, event})
         end)
         |> with_session(session_opts, state)

@@ -921,7 +921,7 @@ defmodule Alto.TUI.App do
 
     run_options =
       run_options
-      |> Keyword.put(:event_sink, &deliver_event(owner, local_id, &1))
+      |> Alto.Events.attach(&deliver_event(owner, local_id, &1))
       |> Keyword.update(
         :tool_context_metadata,
         %{approval_sink: owner},

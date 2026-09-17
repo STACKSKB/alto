@@ -9,7 +9,7 @@ defmodule Alto.AgenticConfigTest do
     assert Keyword.fetch!(opts, :sessions) == true
     assert Keyword.fetch!(opts, :session_history) == :settled
     assert Keyword.fetch!(opts, :project_instructions) == :auto
-    assert Keyword.fetch!(opts, :compaction)[:strategy] == :handoff
+    assert Keyword.fetch!(opts, :compaction)[:strategy] == {Alto.Context.Reducers.Handoff, []}
     assert Keyword.fetch!(opts, :compaction)[:max_compactions] == 8
     assert Keyword.fetch!(opts, :loop).driver_options[:tool_execution] == {:parallel, 4}
     assert Keyword.fetch!(opts, :loop).context.compact_at == 0.85

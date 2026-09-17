@@ -49,6 +49,7 @@ defmodule Alto.Runner.Execution.Setup do
 
     with :ok <- validate_spec(spec),
          :ok <- Alto.Context.Policy.validate(spec.context),
+         :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
          :ok <- Alto.Subagents.Policy.validate(spec.subagents),
          :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
          :ok <-
@@ -170,6 +171,7 @@ defmodule Alto.Runner.Execution.Setup do
       compacted?: false,
       compaction_count: 0,
       provider_retries: @default_provider_retries,
+      retry_policy: Keyword.get(opts, :retry_policy),
       agent_depth: 0,
       agent_identity: agent_identity,
       max_agent_depth: 0,

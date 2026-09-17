@@ -545,7 +545,7 @@ defmodule Alto.CLI do
         |> configure_project_instructions(options)
         |> configure_session(options)
         |> Keyword.put(:cwd, File.cwd!())
-        |> Keyword.put(:event_sink, &send(renderer, {:event, &1}))
+        |> Alto.Events.attach(&send(renderer, {:event, &1}))
 
       {:ok, run_options, renderer}
     end

@@ -120,12 +120,13 @@ Alto.Config.new(
   max_steps: 96,
   max_tool_result_bytes: if(vision_enabled, do: 1_500_000, else: 64_000),
   compaction: [
-    strategy: :handoff,
+    strategy: {Alto.Context.Reducers.Handoff, []},
     max_compactions: 8,
     keep_recent_messages: 12,
     keep_initial_messages: 1,
     max_input_bytes: 1_000_000,
     max_handoff_bytes: 24_000
   ],
+  retry_policy: {Alto.Retry.Transient, base_delay: 500, max_delay: 5_000},
   provider_retries: 3
 )

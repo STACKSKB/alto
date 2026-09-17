@@ -9,7 +9,14 @@ defmodule Alto.Runner.Execution.Model do
   defmodule Capabilities do
     @moduledoc "The bounded capabilities required for one provider request."
     @enforce_keys [:budget, :cancel_ref, :provider_timeout, :provider_retries, :event_sink]
-    defstruct [:budget, :cancel_ref, :provider_timeout, :provider_retries, :event_sink]
+    defstruct [
+      :budget,
+      :cancel_ref,
+      :provider_timeout,
+      :provider_retries,
+      :event_sink,
+      retry_policy: nil
+    ]
 
     @type t :: %__MODULE__{
             budget: Budget.t(),
@@ -163,35 +170,45 @@ defmodule Alto.Runner.Execution.Model do
          max_attempts,
          delivered?
        ) do
-    if not delivered? and attempt < max_attempts and retryable_stream_error?(reason) do
-      notify(
-        caps.event_sink,
-        Event.live(:model_retry, %{
-          step: step,
-          attempt: attempt,
-          max_attempts: max_attempts,
-          kind: stream_error_kind(reason)
-        })
-      )
+    decision =
+      if not delivered? and attempt < max_attempts,
+        do: retry_decision(caps, reason, attempt),
+        else: :stop
 
-      case sleep_backoff(attempt, caps.cancel_ref, caps.budget) do
-        :ok ->
-          attempt_stream(
-            provider,
-            request,
-            sink,
-            provider_opts,
-            caps,
-            step,
-            attempt + 1,
-            max_attempts
-          )
+    case decision do
+      {:retry, delay, kind} ->
+        notify(
+          caps.event_sink,
+          Event.live(:model_retry, %{
+            step: step,
+            attempt: attempt,
+            max_attempts: max_attempts,
+            kind: kind
+          })
+        )
 
-        {:cancelled, reason} ->
-          {:cancelled, reason}
-      end
-    else
-      outcome
+        case sleep_backoff(delay, caps.cancel_ref, caps.budget) do
+          :ok ->
+            attempt_stream(
+              provider,
+              request,
+              sink,
+              provider_opts,
+              caps,
+              step,
+              attempt + 1,
+              max_attempts
+            )
+
+          {:cancelled, reason} ->
+            {:cancelled, reason}
+        end
+
+      {:cancelled, reason} ->
+        {:cancelled, reason}
+
+      :stop ->
+        outcome
     end
   end
 
@@ -209,35 +226,20 @@ defmodule Alto.Runner.Execution.Model do
        ),
        do: outcome
 
-  @doc false
-  def retryable_stream_error?({:transport_error, _reason}), do: true
-  def retryable_stream_error?({:http_error, 429, _detail}), do: true
-  def retryable_stream_error?({:http_error, status, _detail}) when status >= 500, do: true
-  # Match the observed structured transient error, not arbitrary provider text
-  # or loosely coerced codes. HTTP 200 SSE errors do not carry an HTTP status.
-  def retryable_stream_error?(
-        {:provider_error,
-         %{"code" => 502, "metadata" => %{"error_type" => "provider_unavailable"}}}
-      ),
-      do: true
+  defp retry_decision(caps, reason, attempt) do
+    case Call.run(
+           fn -> Alto.Retry.decide(caps.retry_policy, reason, attempt) end,
+           Budget.timeout(caps.budget, caps.provider_timeout),
+           caps.cancel_ref
+         ) do
+      {:ok, decision} -> decision
+      {:cancelled, _} = cancelled -> cancelled
+      _ -> :stop
+    end
+  end
 
-  def retryable_stream_error?(
-        {:provider_error, %{"code" => 504, "metadata" => %{"error_type" => "timeout"}}}
-      ),
-      do: true
-
-  def retryable_stream_error?(_reason), do: false
-
-  @doc false
-  def stream_error_kind({:transport_error, _reason}), do: :transport
-  def stream_error_kind({:http_error, status, _detail}), do: {:http, status}
-  def stream_error_kind({:provider_error, %{"code" => 502}}), do: {:provider, 502}
-  def stream_error_kind({:provider_error, %{"code" => 504}}), do: {:provider, 504}
-
-  @doc false
-  def sleep_backoff(attempt, cancel_ref, budget) do
-    backoff = min(500 * Integer.pow(2, attempt - 1), 5_000)
-    sleep_until(System.monotonic_time(:millisecond) + Budget.timeout(budget, backoff), cancel_ref)
+  defp sleep_backoff(delay, cancel_ref, budget) do
+    sleep_until(System.monotonic_time(:millisecond) + Budget.timeout(budget, delay), cancel_ref)
   end
 
   defp sleep_until(deadline, cancel_ref) do

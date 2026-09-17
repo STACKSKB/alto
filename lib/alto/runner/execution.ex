@@ -835,7 +835,14 @@ defmodule Alto.Runner.Execution do
   defp model_capabilities(run) do
     struct!(
       Alto.Runner.Execution.Model.Capabilities,
-      Map.take(run, [:budget, :cancel_ref, :provider_timeout, :provider_retries, :event_sink])
+      Map.take(run, [
+        :budget,
+        :cancel_ref,
+        :provider_timeout,
+        :provider_retries,
+        :event_sink,
+        :retry_policy
+      ])
     )
   end
 
