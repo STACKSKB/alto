@@ -417,38 +417,18 @@ defmodule Alto.Codex.AppServer.Client do
       {:error, {:codex_app_server_port_open_failed, Exception.message(error)}}
   end
 
-  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil)
-  defp send_request(_state, _method, _params, _reply, _monitor, 0), do: {:error, :request_expired}
+  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil) do
+    owner = if monitor_owner, do: elem(elem(reply, 1), 0), else: nil
 
-  defp send_request(state, method, params, reply, monitor_owner, timeout) do
-    limit = Keyword.fetch!(state.opts, :max_pending_requests)
-
-    if map_size(state.pending) >= limit do
-      {:error, {:codex_app_server_pending_request_limit, limit}}
-    else
-      id = state.next_id
-      payload = %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
-
-      case send_payload(state, payload) do
-        :ok ->
-          timer = start_timer(id, timeout || Keyword.fetch!(state.opts, :request_timeout))
-
-          {owner, monitor} = owner_monitor(reply, monitor_owner)
-
-          pending =
-            Map.put(state.pending, id, %{
-              reply: reply,
-              timer: timer,
-              owner: owner,
-              monitor: monitor
-            })
-
-          {:ok, %{state | next_id: id + 1, pending: pending}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    JSONRPC.request(
+      state,
+      method,
+      params,
+      reply,
+      owner,
+      timeout,
+      :codex_app_server_pending_request_limit
+    )
   end
 
   defp send_notification(state, method, params \\ %{}) do
@@ -458,17 +438,7 @@ defmodule Alto.Codex.AppServer.Client do
   defp send_payload(state, payload),
     do: JSONRPC.send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
-  defp consume_lines(state) do
-    case :binary.split(state.buffer, "\n") do
-      [rest] ->
-        {:ok, %{state | buffer: rest}}
-
-      [line, rest] ->
-        with {:ok, next} <- handle_line(String.trim_trailing(line, "\r"), %{state | buffer: rest}) do
-          consume_lines(next)
-        end
-    end
-  end
+  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
 
   defp handle_line("", state), do: {:ok, state}
 
@@ -493,17 +463,8 @@ defmodule Alto.Codex.AppServer.Client do
     {:ok, state}
   end
 
-  defp handle_message(%{"id" => id} = message, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
-        {:ok, state}
-
-      {%{reply: reply, timer: timer, owner: owner, monitor: monitor}, pending} ->
-        Process.cancel_timer(timer)
-        demonitor(owner, monitor)
-        settle_response(reply, message, %{state | pending: pending})
-    end
-  end
+  defp handle_message(%{"id" => id} = message, state),
+    do: JSONRPC.settle(state, id, message, &settle_response/3)
 
   defp handle_message(%{"method" => method} = notification, state) do
     broadcast(
@@ -571,21 +532,8 @@ defmodule Alto.Codex.AppServer.Client do
     end
   end
 
-  defp owner_monitor(_reply, false), do: {nil, nil}
-
-  defp owner_monitor({_kind, from, _method}, true),
-    do: {elem(from, 0), Process.monitor(elem(from, 0))}
-
-  defp demonitor(nil, _monitor), do: :ok
-
-  defp demonitor(_owner, monitor) when is_reference(monitor),
-    do: Process.demonitor(monitor, [:flush])
-
-  defp start_timer(_id, :infinity), do: nil
-  defp start_timer(id, timeout), do: Process.send_after(self(), {:request_timeout, id}, timeout)
-
-  defp cancel_timer(nil), do: :ok
-  defp cancel_timer(timer), do: Process.cancel_timer(timer)
+  defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
+  defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)
 
   defp cancel_request(state, id) do
     _ =
@@ -604,29 +552,9 @@ defmodule Alto.Codex.AppServer.Client do
     :exit, reason -> {:error, {:codex_app_server_startup_failed, reason}}
   end
 
-  defp fail_waiters(state, reason) do
-    Enum.each(state.ready_waiters, fn {from, monitor} ->
-      demonitor(elem(from, 0), monitor)
-      GenServer.reply(from, {:error, reason})
-    end)
+  defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
 
-    %{state | ready_waiters: [], phase: {:failed, reason}}
-  end
-
-  defp fail_all(state, reason) do
-    state
-    |> fail_waiters(reason)
-    |> then(fn next ->
-      Enum.each(next.pending, fn {_id,
-                                  %{reply: reply, timer: timer, owner: owner, monitor: monitor}} ->
-        cancel_timer(timer)
-        demonitor(owner, monitor)
-        reply_error(reply, reason)
-      end)
-
-      %{next | pending: %{}}
-    end)
-  end
+  defp fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
 
   defp reply_error(:initialize, _reason), do: :ok
   defp reply_error({:request, from, _method}, reason), do: GenServer.reply(from, {:error, reason})

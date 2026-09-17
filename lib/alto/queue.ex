@@ -487,43 +487,10 @@ defmodule Alto.Queue do
     end
   end
 
-  defp split_log(contents) do
-    if contents == "" do
-      {[], false}
-    else
-      split_log_nonempty(contents)
-    end
-  end
+  defp split_log(contents), do: Alto.JSONLines.split(contents)
+  defp join_lines(lines), do: Alto.JSONLines.join(lines)
 
-  defp split_log_nonempty(contents) do
-    if :binary.last(contents) == ?\n do
-      {String.split(contents, "\n", trim: true), false}
-    else
-      parts = String.split(contents, "\n")
-      {complete, [tail]} = Enum.split(parts, -1)
-      complete = Enum.reject(complete, &(&1 == ""))
-
-      case JSON.decode(tail) do
-        {:ok, _} -> {complete ++ [tail], true}
-        {:error, _} -> {complete, true}
-      end
-    end
-  end
-
-  defp join_lines([]), do: ""
-
-  defp join_lines(lines), do: Enum.join(lines, "\n") <> "\n"
-
-  defp fold_lines(state, lines) do
-    lines
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, state}, fn {line, number}, {:ok, state} ->
-      case apply_logged(state, line, number) do
-        {:ok, state} -> {:cont, {:ok, state}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
+  defp fold_lines(state, lines), do: Alto.JSONLines.fold(state, lines, &apply_logged/3)
 
   # Replayed puts carry their logged ids; new live puts continue past the
   # highest id the log has ever used.

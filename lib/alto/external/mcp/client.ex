@@ -383,39 +383,9 @@ defmodule Alto.External.MCP.Client do
     error in ArgumentError -> {:error, {:mcp_port_open_failed, Exception.message(error)}}
   end
 
-  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil)
-  defp send_request(_state, _method, _params, _reply, _monitor, 0), do: {:error, :request_expired}
-
-  defp send_request(state, method, params, reply, monitor_owner, timeout) do
-    if map_size(state.pending) >= Keyword.fetch!(state.opts, :max_pending_requests) do
-      {:error, {:mcp_pending_request_limit, Keyword.fetch!(state.opts, :max_pending_requests)}}
-    else
-      id = state.next_id
-
-      payload =
-        %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
-
-      case JSONRPC.send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes)) do
-        :ok ->
-          timer =
-            start_timer(id, timeout || Keyword.fetch!(state.opts, :request_timeout))
-
-          {owner, monitor} = owner_monitor(reply, monitor_owner)
-
-          pending =
-            Map.put(state.pending, id, %{
-              reply: reply,
-              timer: timer,
-              owner: owner,
-              monitor: monitor
-            })
-
-          {:ok, %{state | next_id: id + 1, pending: pending}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil) do
+    owner = if monitor_owner, do: elem(elem(reply, 1), 0), else: nil
+    JSONRPC.request(state, method, params, reply, owner, timeout, :mcp_pending_request_limit)
   end
 
   defp send_notification(state, method) do
@@ -435,18 +405,7 @@ defmodule Alto.External.MCP.Client do
     ArgumentError -> {:error, {:mcp_transport_lost, :closed}}
   end
 
-  defp consume_lines(state) do
-    case :binary.split(state.buffer, "\n") do
-      [rest] ->
-        {:ok, %{state | buffer: rest}}
-
-      [line, rest] ->
-        with {:ok, state} <-
-               handle_line(String.trim_trailing(line, "\r"), %{state | buffer: rest}) do
-          consume_lines(state)
-        end
-    end
-  end
+  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
 
   defp handle_line("", state), do: {:ok, state}
 
@@ -464,17 +423,8 @@ defmodule Alto.External.MCP.Client do
     maybe_refuse_server_request(message, state)
   end
 
-  defp handle_message(%{"id" => id} = message, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
-        {:ok, state}
-
-      {%{reply: reply, timer: timer, owner: owner, monitor: monitor}, pending} ->
-        cancel_timer(timer)
-        demonitor(owner, monitor)
-        settle_response(reply, message, %{state | pending: pending})
-    end
-  end
+  defp handle_message(%{"id" => id} = message, state),
+    do: JSONRPC.settle(state, id, message, &settle_response/3)
 
   defp handle_message(_notification, state), do: {:ok, state}
 
@@ -544,29 +494,13 @@ defmodule Alto.External.MCP.Client do
 
   defp maybe_refuse_server_request(_message, state), do: {:ok, state}
 
-  defp fail_waiters(state, reason) do
-    Enum.each(state.ready_waiters, fn {from, monitor} ->
-      demonitor(elem(from, 0), monitor)
-      GenServer.reply(from, {:error, reason})
-    end)
+  defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
 
-    %{state | ready_waiters: [], phase: {:failed, reason}}
-  end
-
-  defp fail_all(state, reason) do
-    state
-    |> fail_waiters(reason)
-    |> then(fn state ->
-      Enum.each(state.pending, fn {_id,
-                                   %{reply: reply, timer: timer, owner: owner, monitor: monitor}} ->
-        cancel_timer(timer)
-        demonitor(owner, monitor)
+  defp fail_all(state, reason),
+    do:
+      JSONRPC.fail_all(state, reason, fn reply, reason ->
         reply_error(reply, reason, classify_failure(reply))
       end)
-
-      %{state | pending: %{}}
-    end)
-  end
 
   defp add_ready_waiter(from, state) do
     if length(state.ready_waiters) >= Keyword.fetch!(state.opts, :max_ready_waiters) do
@@ -579,19 +513,8 @@ defmodule Alto.External.MCP.Client do
     end
   end
 
-  defp owner_monitor(_reply, false), do: {nil, nil}
-  defp owner_monitor({_kind, from}, true), do: {elem(from, 0), Process.monitor(elem(from, 0))}
-
-  defp demonitor(nil, _monitor), do: :ok
-
-  defp demonitor(_owner, monitor) when is_reference(monitor),
-    do: Process.demonitor(monitor, [:flush])
-
-  defp start_timer(_id, :infinity), do: nil
-  defp start_timer(id, timeout), do: Process.send_after(self(), {:request_timeout, id}, timeout)
-
-  defp cancel_timer(nil), do: :ok
-  defp cancel_timer(timer), do: Process.cancel_timer(timer)
+  defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
+  defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)
 
   defp cancel_request(state, id, reason) do
     payload =

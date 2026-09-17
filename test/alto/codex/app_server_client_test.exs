@@ -106,6 +106,15 @@ defmodule Alto.Codex.AppServer.ClientTest do
              Backend.history(client, "thr-1")
   end
 
+  test "infinite request timeout settles without cancelling a nil timer", %{
+    root: root,
+    server: server
+  } do
+    assert {:ok, client} = Client.ensure_started(command: server, args: [], cwd: root)
+    assert {:ok, %{"data" => [_]}} = Client.request(client, "model/list", %{}, :infinity)
+    assert Process.alive?(client)
+  end
+
   test "restored Codex tool history uses readable result fields", %{root: root, server: server} do
     {:ok, client} =
       Client.ensure_started(command: server, args: [], cwd: root, request_timeout: 5_000)
