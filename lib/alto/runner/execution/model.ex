@@ -202,12 +202,18 @@ defmodule Alto.Runner.Execution.Model do
       ),
       do: true
 
+  def retryable_stream_error?(
+        {:provider_error, %{"code" => 504, "metadata" => %{"error_type" => "timeout"}}}
+      ),
+      do: true
+
   def retryable_stream_error?(_reason), do: false
 
   @doc false
   def stream_error_kind({:transport_error, _reason}), do: :transport
   def stream_error_kind({:http_error, status, _detail}), do: {:http, status}
   def stream_error_kind({:provider_error, %{"code" => 502}}), do: {:provider, 502}
+  def stream_error_kind({:provider_error, %{"code" => 504}}), do: {:provider, 504}
 
   @doc false
   def sleep_backoff(attempt, cancel_ref, budget) do

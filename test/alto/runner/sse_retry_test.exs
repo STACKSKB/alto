@@ -9,7 +9,7 @@ defmodule Alto.Runner.SSERetryTest do
   defmodule Provider do
     def stream(request, sink, opts) do
       attempt = :atomics.add_get(opts[:counter], 1, 1)
-      chunks = if attempt == 1, do: opts[:chunks], else: [opts[:success]]
+      chunks = if attempt == 1 or opts[:repeat_error], do: opts[:chunks], else: [opts[:success]]
       Process.put(:sse_retry_chunks, chunks)
       send(opts[:parent], {:attempt, request})
 
@@ -52,6 +52,10 @@ defmodule Alto.Runner.SSERetryTest do
           %{"code" => 502},
           %{"code" => 502, "metadata" => nil},
           %{"code" => 502, "metadata" => %{"error_type" => "invalid_request"}},
+          %{"code" => "504", "metadata" => %{"error_type" => "timeout"}},
+          %{"code" => 504},
+          %{"code" => 504, "metadata" => %{"error_type" => "invalid_request"}},
+          %{"code" => 502, "metadata" => %{"error_type" => "timeout"}},
           %{"code" => 400, "metadata" => %{"error_type" => "provider_unavailable"}},
           %{"code" => 401},
           %{"code" => 402}
@@ -69,12 +73,14 @@ defmodule Alto.Runner.SSERetryTest do
   end
 
   test "never retries after delivering text or reasoning, in one chunk or separate chunks" do
-    for field <- ["content", "reasoning"], combined <- [true, false] do
+    for field <- ["content", "reasoning"],
+        combined <- [true, false],
+        failure <- [unavailable(), idle_timeout()] do
       delta = sse(%{"choices" => [%{"delta" => %{field => "partial"}}]})
-      error = sse(%{"error" => unavailable()})
+      error = sse(%{"error" => failure})
       chunks = if combined, do: [delta <> error], else: [delta, error]
       {outcome, count, _} = run_stream(chunks)
-      assert outcome == {:ok, {:error, {:provider_error, unavailable()}}}
+      assert outcome == {:ok, {:error, {:provider_error, failure}}}
       assert count == 1
       assert_receive {:event, %Event{data: %{text: "partial"}}}
       refute_receive {:event, %Event{type: :model_retry}}
@@ -89,12 +95,32 @@ defmodule Alto.Runner.SSERetryTest do
     refute_receive {:event, %Event{type: :model_retry}}
   end
 
+  test "retries an empty streamed idle timeout with the identical request" do
+    {outcome, count, request} = run_stream([sse(%{"error" => idle_timeout()})])
+    assert {:ok, {:ok, %{message: "done"}}} = outcome
+    assert count == 2
+    assert_receive {:attempt, ^request}
+    assert_receive {:attempt, ^request}
+    assert_receive {:event, %Event{type: :model_retry, data: %{kind: {:provider, 504}}}}
+  end
+
+  test "streamed timeout retries are opt-in and stop at the configured limit" do
+    for retries <- [0, 2] do
+      {outcome, count, _} = run_stream([sse(%{"error" => idle_timeout()})], retries, true)
+      assert outcome == {:ok, {:error, {:provider_error, idle_timeout()}}}
+      assert count == retries + 1
+    end
+  end
+
   defp unavailable,
     do: %{"code" => 502, "metadata" => %{"error_type" => "provider_unavailable"}}
 
+  defp idle_timeout,
+    do: %{"code" => 504, "metadata" => %{"error_type" => "timeout"}}
+
   defp sse(value), do: "data: " <> JSON.encode!(value) <> "\n\n"
 
-  defp run_stream(chunks, retries \\ 1) do
+  defp run_stream(chunks, retries \\ 1, repeat_error \\ false) do
     parent = self()
     counter = :atomics.new(1, [])
     {:ok, budget} = Budget.new(max_model_requests: 4, run_timeout: 10_000)
@@ -121,7 +147,13 @@ defmodule Alto.Runner.SSERetryTest do
         Provider,
         request,
         sink,
-        [counter: counter, chunks: chunks, success: success, parent: parent],
+        [
+          counter: counter,
+          chunks: chunks,
+          success: success,
+          parent: parent,
+          repeat_error: repeat_error
+        ],
         caps,
         1
       )
