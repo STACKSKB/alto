@@ -3,7 +3,7 @@ defmodule Alto.Providers.OpenAICompatibleTest do
 
   alias Alto.Event
   alias Alto.Providers.OpenAICompatible
-  alias Alto.Providers.OpenAICompatible.SSE
+  alias Alto.Providers.SSE
 
   defmodule Adapter do
     def run(request) do

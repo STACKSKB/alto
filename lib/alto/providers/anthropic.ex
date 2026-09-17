@@ -13,7 +13,7 @@ defmodule Alto.Providers.Anthropic do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.Anthropic.SSE
+  alias Alto.Providers.SSE
   alias Alto.Providers.Anthropic.Stream
 
   @default_base_url "https://api.anthropic.com/v1"

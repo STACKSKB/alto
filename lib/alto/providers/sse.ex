@@ -1,9 +1,15 @@
-defmodule Alto.Providers.Anthropic.SSE do
-  @moduledoc false
+defmodule Alto.Providers.SSE do
+  @moduledoc """
+  Bounded provider response framing around ServerSentEvents.Parser.
+
+  The envelope owns raw JSON fallback, wire byte limits and EOF flushing.
+  The library owns SSE field interpretation and data assembly. Lines are
+  normalized only after byte accounting, preserving split CRLF and UTF-8.
+  """
 
   @enforce_keys [:max_event_bytes]
   defstruct buffer: "",
-            data_lines_rev: [],
+            parser: nil,
             frame_bytes: 0,
             raw_rev: [],
             raw_bytes: 0,
@@ -12,7 +18,7 @@ defmodule Alto.Providers.Anthropic.SSE do
 
   @type t :: %__MODULE__{
           buffer: binary(),
-          data_lines_rev: [binary()],
+          parser: ServerSentEvents.Parser.t(),
           frame_bytes: non_neg_integer(),
           raw_rev: [binary()] | nil,
           raw_bytes: non_neg_integer(),
@@ -22,7 +28,7 @@ defmodule Alto.Providers.Anthropic.SSE do
 
   @spec new(pos_integer()) :: t()
   def new(max_event_bytes) when is_integer(max_event_bytes) and max_event_bytes > 0,
-    do: %__MODULE__{max_event_bytes: max_event_bytes}
+    do: %__MODULE__{max_event_bytes: max_event_bytes, parser: ServerSentEvents.Parser.new()}
 
   @spec feed(t(), binary()) :: {:ok, t(), [binary()]} | {:error, term()}
   def feed(%__MODULE__{} = state, chunk) when is_binary(chunk) do
@@ -96,44 +102,22 @@ defmodule Alto.Providers.Anthropic.SSE do
       else: {:error, {:sse_event_too_large, state.max_event_bytes}}
   end
 
-  defp consume_line(state, "", payloads), do: dispatch_frame(state, payloads)
-
   defp consume_line(state, line, payloads) do
-    case data_value(line) do
-      {:ok, value} ->
-        state = mark_sse(state)
-        {%{state | data_lines_rev: [value | state.data_lines_rev]}, payloads}
-
-      :not_data ->
-        state = if sse_control_line?(line), do: mark_sse(state), else: state
-        {state, payloads}
-    end
+    state = if sse_line?(line), do: %{state | sse?: true, raw_rev: nil, raw_bytes: 0}, else: state
+    {events, parser} = ServerSentEvents.Parser.parse(state.parser, line <> "\n")
+    state = %{state | parser: parser, frame_bytes: if(line == "", do: 0, else: state.frame_bytes)}
+    {state, Enum.reverse(Enum.map(events, & &1.data), payloads)}
   end
 
-  defp data_value("data"), do: {:ok, ""}
-  defp data_value("data:" <> value), do: {:ok, remove_optional_space(value)}
-  defp data_value(_line), do: :not_data
+  defp sse_line?(":" <> _), do: true
 
-  defp remove_optional_space(" " <> value), do: value
-  defp remove_optional_space(value), do: value
-
-  defp sse_control_line?(":" <> _comment), do: true
-
-  defp sse_control_line?(line) do
-    Enum.any?(["event", "id", "retry"], fn field ->
-      line == field or :binary.match(line, field <> ":") == {0, byte_size(field) + 1}
+  defp sse_line?(line) do
+    Enum.any?(["data", "event", "id", "retry"], fn field ->
+      line == field or String.starts_with?(line, field <> ":")
     end)
   end
 
-  defp mark_sse(state), do: %{state | sse?: true, raw_rev: nil, raw_bytes: 0}
-
-  defp dispatch_frame(%{data_lines_rev: []} = state, payloads),
-    do: {%{state | frame_bytes: 0}, payloads}
-
-  defp dispatch_frame(state, payloads) do
-    payload = state.data_lines_rev |> Enum.reverse() |> Enum.join("\n")
-    {%{state | data_lines_rev: [], frame_bytes: 0}, [payload | payloads]}
-  end
+  defp dispatch_frame(state, payloads), do: consume_line(state, "", payloads)
 
   defp consume_final_line(%{buffer: ""} = state, payloads), do: {:ok, state, payloads}
 

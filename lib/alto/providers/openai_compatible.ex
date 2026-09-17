@@ -10,7 +10,7 @@ defmodule Alto.Providers.OpenAICompatible do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.OpenAICompatible.SSE
+  alias Alto.Providers.SSE
   alias Alto.Providers.OpenAICompatible.Stream
 
   @default_base_url "https://openrouter.ai/api/v1"
