@@ -1,6 +1,20 @@
 defmodule Alto.Storage do
   @moduledoc false
 
+  @doc "Resolve the storage root; callers may override their own directory explicitly."
+  def state_home do
+    case System.get_env("ALTO_STATE_HOME") do
+      path when is_binary(path) and path != "" ->
+        path
+
+      _other ->
+        case System.get_env("XDG_STATE_HOME") do
+          path when is_binary(path) and path != "" -> path
+          _other -> Path.join(System.user_home!(), ".local/state")
+        end
+    end
+  end
+
   @default_lock_timeout 5_000
   @ready "__alto_lock_ready__\n"
 

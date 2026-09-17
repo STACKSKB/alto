@@ -235,7 +235,7 @@ defmodule Alto.Queue do
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []) do
     case Keyword.get(opts, :dir) do
-      nil -> Path.join([state_home(), "alto", "queues"])
+      nil -> Path.join([Alto.Storage.state_home(), "alto", "queues"])
       path when is_binary(path) -> path
     end
   end
@@ -1606,19 +1606,6 @@ defmodule Alto.Queue do
     case validate_id(id) do
       :ok -> :ok
       {:error, reason} -> raise ArgumentError, "invalid queue id: #{inspect(reason)}"
-    end
-  end
-
-  defp state_home do
-    case System.get_env("ALTO_STATE_HOME") do
-      path when is_binary(path) and path != "" ->
-        path
-
-      _other ->
-        case System.get_env("XDG_STATE_HOME") do
-          path when is_binary(path) and path != "" -> path
-          _other -> Path.join(System.user_home!(), ".local/state")
-        end
     end
   end
 end

@@ -186,7 +186,7 @@ defmodule Alto.OperationLog do
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []) do
     case Keyword.get(opts, :dir) do
-      nil -> Path.join([state_home(), "alto", "operation_logs"])
+      nil -> Path.join([Alto.Storage.state_home(), "alto", "operation_logs"])
       path when is_binary(path) -> path
     end
   end
@@ -1492,17 +1492,4 @@ defmodule Alto.OperationLog do
   end
 
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
-
-  defp state_home do
-    case System.get_env("ALTO_STATE_HOME") do
-      path when is_binary(path) and path != "" ->
-        path
-
-      _other ->
-        case System.get_env("XDG_STATE_HOME") do
-          path when is_binary(path) and path != "" -> path
-          _other -> Path.join(System.user_home!(), ".local/state")
-        end
-    end
-  end
 end

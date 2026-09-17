@@ -56,7 +56,7 @@ defmodule Alto.Session do
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []) do
     case Keyword.get(opts, :session_dir) do
-      nil -> Path.join([state_home(), "alto", "sessions"])
+      nil -> Path.join([Alto.Storage.state_home(), "alto", "sessions"])
       path when is_binary(path) -> path
     end
   end
@@ -581,19 +581,6 @@ defmodule Alto.Session do
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
   defp transcript_path(dir, id), do: Path.join(dir, id <> ".transcript.json")
   defp lock_path(path), do: path <> ".lock"
-
-  defp state_home do
-    case System.get_env("ALTO_STATE_HOME") do
-      path when is_binary(path) and path != "" ->
-        path
-
-      _other ->
-        case System.get_env("XDG_STATE_HOME") do
-          path when is_binary(path) and path != "" -> path
-          _other -> Path.join(System.user_home!(), ".local/state")
-        end
-    end
-  end
 
   defp encode_line(record) do
     {:ok, JSON.encode!(record) <> "\n"}
