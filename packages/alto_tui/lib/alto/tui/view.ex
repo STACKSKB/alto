@@ -8,7 +8,7 @@ defmodule Alto.TUI.View do
   alias ExRatatui.Style
   alias ExRatatui.Text
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup, Textarea}
+  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup}
 
   @accent {:rgb, 105, 180, 255}
   @muted {:rgb, 116, 126, 140}
@@ -316,195 +316,19 @@ defmodule Alto.TUI.View do
         do: gear_title(state),
         else: composer_title(state)
 
-    if state.composer_mode == :code do
-      native_composer(state, title)
-    else
-      wrapped_composer(state, title)
-    end
-  end
-
-  defp native_composer(state, title) do
-    %Textarea{
-      state: state.textarea,
-      placeholder: "Paste or type code…",
-      placeholder_style: style(fg: @muted),
-      style: style(fg: :white, bg: @panel),
-      cursor_style: style(fg: :black, bg: @accent),
-      cursor_line_style: style(bg: @panel),
-      block: block(title, state.focus == :composer)
-    }
-  end
-
-  # ExRatatui 0.13's stateful textarea does not expose soft wrapping. Prose mode
-  # therefore renders a wrapped, cursor-aware projection while retaining that
-  # textarea as the sole editing state. Code mode above uses the native widget.
-  defp wrapped_composer(state, title) do
-    value = ExRatatui.textarea_get_value(state.textarea)
-    {cursor_line, cursor_column} = ExRatatui.textarea_cursor(state.textarea)
-    {text, cursor_row} = wrapped_composer_text(state, value, cursor_line, cursor_column)
-    {_width, height} = composer_inner_size(state)
-    scroll_y = if cursor_row, do: max(cursor_row - height + 1, 0), else: 0
-
-    %Paragraph{
-      text: text,
-      wrap: false,
-      scroll: {scroll_y, 0},
-      style: style(fg: :white, bg: @panel),
-      block: block(title, state.focus == :composer)
-    }
-  end
-
-  defp wrapped_composer_text(state, "", _cursor_line, _cursor_column) do
-    spans =
-      if state.focus == :composer do
-        [
-          Span.new(" ", style: style(fg: :black, bg: @accent)),
-          Span.new("Describe the next change…", style: style(fg: @muted))
-        ]
-      else
-        [Span.new("Describe the next change…", style: style(fg: @muted))]
-      end
-
-    {Text.new([Line.new(spans)]), if(state.focus == :composer, do: 0, else: nil)}
-  end
-
-  defp wrapped_composer_text(state, value, cursor_line, cursor_column) do
-    {width, _height} = composer_inner_size(state)
-
-    {rows, cursor_row} =
-      value
-      |> String.split("\n", trim: false)
-      |> Enum.with_index()
-      |> Enum.reduce({[], nil}, fn {line, line_index}, {rows, found_cursor} ->
-        graphemes = String.graphemes(line)
-        cursor? = state.focus == :composer and line_index == cursor_line
-        column = min(cursor_column, length(graphemes))
-        projections = wrap_prose_line(graphemes, width)
-
-        projections =
-          maybe_add_end_cursor_row(projections, cursor?, column, length(graphemes), width)
-
-        {display_cursor_row, display_cursor_column} =
-          if cursor?, do: cursor_projection(projections, column, width), else: {nil, nil}
-
-        start_row = length(rows)
-
-        line_rows =
-          projections
-          |> Enum.with_index()
-          |> Enum.map(fn {projection, row_index} ->
-            if cursor? and row_index == display_cursor_row do
-              cursor_spans(projection.graphemes, display_cursor_column)
-            else
-              Line.new([Span.new(Enum.join(projection.graphemes))])
-            end
-          end)
-
-        cursor_row =
-          if cursor?, do: start_row + display_cursor_row, else: found_cursor
-
-        {rows ++ line_rows, cursor_row}
-      end)
-
-    {Text.new(rows), cursor_row}
-  end
-
-  defp wrap_prose_line([], _width), do: [%{graphemes: [], start: 0, stop: 0}]
-
-  defp wrap_prose_line(graphemes, width), do: do_wrap_prose_line(graphemes, width, 0, [])
-
-  defp do_wrap_prose_line(graphemes, width, offset, rows) when length(graphemes) <= width do
-    rows ++ [%{graphemes: graphemes, start: offset, stop: offset + length(graphemes)}]
-  end
-
-  defp do_wrap_prose_line(graphemes, width, offset, rows) do
-    window = Enum.take(graphemes, width)
-
-    break_at =
-      window
-      |> Enum.with_index()
-      |> Enum.filter(fn {grapheme, index} ->
-        whitespace?(grapheme) and index > 0 and
-          Enum.any?(Enum.take(window, index), &(not whitespace?(&1)))
-      end)
-      |> Elixir.List.last()
-      |> case do
-        {_grapheme, index} -> index
-        nil -> width
-      end
-
-    {display, consumed} =
-      if break_at < width do
-        {Enum.take(graphemes, break_at), break_at + 1}
-      else
-        {window, width}
-      end
-
-    row = %{graphemes: display, start: offset, stop: offset + break_at}
-
-    do_wrap_prose_line(
-      Enum.drop(graphemes, consumed),
-      width,
-      offset + consumed,
-      rows ++ [row]
-    )
-  end
-
-  defp maybe_add_end_cursor_row(rows, true, column, content_length, width)
-       when column == content_length do
-    case Elixir.List.last(rows) do
-      %{graphemes: graphemes, stop: ^content_length} when length(graphemes) == width ->
-        rows ++ [%{graphemes: [], start: content_length, stop: content_length}]
-
-      _other ->
-        rows
-    end
-  end
-
-  defp maybe_add_end_cursor_row(rows, _cursor?, _column, _length, _width), do: rows
-
-  defp cursor_projection(rows, column, width) do
-    last_index = length(rows) - 1
-
-    index =
-      rows
-      |> Enum.with_index()
-      |> Enum.find_value(last_index, fn {row, index} ->
-        next = Enum.at(rows, index + 1)
-
-        cond do
-          column < row.stop -> index
-          column > row.stop -> nil
-          is_nil(next) -> index
-          next.start > row.stop -> index
-          length(row.graphemes) < width -> index
-          true -> nil
-        end
-      end)
-
-    row = Enum.at(rows, index)
-    {index, column |> Kernel.-(row.start) |> max(0) |> min(length(row.graphemes))}
-  end
-
-  defp whitespace?(grapheme), do: String.match?(grapheme, ~r/^\s$/u)
-
-  defp cursor_spans(graphemes, column) do
-    {before, rest} = Enum.split(graphemes, column)
-
-    case rest do
-      [cursor | trailing] ->
-        Line.new([
-          Span.new(Enum.join(before)),
-          Span.new(cursor, style: style(fg: :black, bg: @accent)),
-          Span.new(Enum.join(trailing))
-        ])
-
-      [] ->
-        Line.new([
-          Span.new(Enum.join(before)),
-          Span.new(" ", style: style(fg: :black, bg: @accent))
-        ])
-    end
+    Alto.TUI.View.Composer.widget(%{
+      textarea: state.textarea,
+      mode: state.composer_mode,
+      focused?: state.focus == :composer,
+      size: composer_inner_size(state),
+      block: block(title, state.focus == :composer),
+      styles: %{
+        body: style(fg: :white, bg: @panel),
+        muted: style(fg: @muted),
+        cursor: style(fg: :black, bg: @accent),
+        cursor_line: style(bg: @panel)
+      }
+    })
   end
 
   defp composer_inner_size(state) do
