@@ -54,23 +54,7 @@ defmodule Alto.FrontEnd.Registry do
     pending: %{}
   ]
 
-  defmodule Subscriber do
-    @enforce_keys [:pid, :monitor, :runs, :domains, :max_buffer_messages]
-    defstruct [
-      :pid,
-      :monitor,
-      :runs,
-      :domains,
-      :max_buffer_messages,
-      buffer: {[], []},
-      buffered_count: 0,
-      buffered_bytes: 0,
-      max_buffer_bytes: 8_000_000,
-      overflow: [],
-      last_durable_seq: %{},
-      closed?: false
-    ]
-  end
+  alias Alto.FrontEnd.Registry.Subscriber
 
   @default_max_buffer_messages 10_000
   @default_max_retained_events 1_000
@@ -812,7 +796,7 @@ defmodule Alto.FrontEnd.Registry do
   # results always reach every client attached to the run.
   defp publish(state, run_id, notification, domain) do
     Enum.reduce(state.subscribers, state, fn {pid, subscriber}, state ->
-      if interested?(subscriber, run_id, domain) do
+      if Subscriber.interested?(subscriber, run_id, domain) do
         enqueue(state, pid, subscriber, notification)
       else
         state
@@ -820,106 +804,14 @@ defmodule Alto.FrontEnd.Registry do
     end)
   end
 
-  defp interested?(%Subscriber{runs: :all, domains: domains}, _run_id, domain) do
-    domain == :approval or domain == :result or MapSet.member?(domains, domain)
-  end
-
-  defp interested?(%Subscriber{runs: runs, domains: domains}, run_id, domain) do
-    MapSet.member?(runs, run_id) and
-      (domain == :approval or domain == :result or MapSet.member?(domains, domain))
-  end
-
   defp enqueue(state, pid, subscriber, notification) do
-    bytes = :erlang.external_size(notification)
-
-    if subscriber.buffered_count >= subscriber.max_buffer_messages or
-         subscriber.buffered_bytes + bytes > subscriber.max_buffer_bytes do
-      overflow =
-        case notification do
-          {:event, run_id, seq, _event} when is_integer(seq) ->
-            {:durable, run_id, Map.get(subscriber.last_durable_seq, run_id)}
-
-          {:event, run_id, nil, _event} ->
-            {:live, run_id, nil}
-
-          _other ->
-            {:live, nil, nil}
-        end
-
-      markers =
-        cond do
-          {:durable, nil, nil} in subscriber.overflow -> subscriber.overflow
-          overflow in subscriber.overflow -> subscriber.overflow
-          length(subscriber.overflow) >= 100 -> [{:durable, nil, nil}, {:live, nil, nil}]
-          true -> [overflow | subscriber.overflow]
-        end
-
-      subscriber = %{subscriber | overflow: markers}
-      %{state | subscribers: Map.put(state.subscribers, pid, subscriber)}
-    else
-      subscriber = %{
-        subscriber
-        | buffer: :queue.in({notification, bytes}, subscriber.buffer),
-          buffered_count: subscriber.buffered_count + 1,
-          buffered_bytes: subscriber.buffered_bytes + bytes
-      }
-
-      %{state | subscribers: Map.put(state.subscribers, pid, subscriber)}
-    end
+    put_in(state.subscribers[pid], Subscriber.enqueue(subscriber, notification))
   end
 
   defp deliver_pull(state, client_pid, subscriber, count) do
-    taken = min(max(count, 0), subscriber.buffered_count)
-    {batch, rest} = :queue.split(taken, subscriber.buffer)
-    pairs = :queue.to_list(batch)
-    deliveries = Enum.map(pairs, &elem(&1, 0))
-    bytes = Enum.reduce(pairs, 0, &(elem(&1, 1) + &2))
-    Enum.each(deliveries, &send(client_pid, {:alto_notification, &1}))
-
-    subscriber =
-      %{
-        subscriber
-        | buffer: rest,
-          buffered_count: subscriber.buffered_count - taken,
-          buffered_bytes: subscriber.buffered_bytes - bytes
-      }
-      |> note_delivered(deliveries)
-
-    {overflow_batch, rest_overflow} = Enum.split(subscriber.overflow, count)
-
-    overflow_notifications =
-      Enum.map(overflow_batch, fn {domain, run_id, last_seq} ->
-        {:alto_notification, {:overflow, run_id, domain, last_seq}}
-      end)
-
-    Enum.each(overflow_notifications, &send(client_pid, &1))
-
-    subscriber = %{subscriber | overflow: rest_overflow}
-
-    disconnect? =
-      state.disconnect_after_overflow == :immediately and overflow_batch != [] and
-        not subscriber.closed?
-
-    if disconnect? do
-      send(client_pid, :alto_close)
-      subscriber = %{subscriber | closed?: true}
-      %{state | subscribers: Map.put(state.subscribers, client_pid, subscriber)}
-    else
-      %{state | subscribers: Map.put(state.subscribers, client_pid, subscriber)}
-    end
-  end
-
-  defp note_delivered(subscriber, deliveries) do
-    last_durable_seq =
-      Enum.reduce(deliveries, subscriber.last_durable_seq, fn
-        {:event, run_id, seq, _event}, acc when is_integer(seq) ->
-          Map.put(acc, run_id, seq)
-
-        _other, acc ->
-          acc
-      end)
-
-    %{subscriber | last_durable_seq: last_durable_seq}
+    {subscriber, messages} = Subscriber.pull(subscriber, count, state.disconnect_after_overflow)
+    Enum.each(messages, &send(client_pid, &1))
+    put_in(state.subscribers[client_pid], subscriber)
   end
 
   ## Attach and replay
