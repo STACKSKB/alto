@@ -146,6 +146,7 @@ defmodule Alto.Runner.Execution.Parent do
             join(cell, snapshot, journal, restored, frame.remaining, frame.terminal, complete)
           else
             false -> {:error, :parent_journal_mismatch, restored}
+            {:cancelled, reason} -> {:cancelled, reason, restored}
             {:error, reason} -> {:error, reason, restored}
           end
 
