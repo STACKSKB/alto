@@ -6,42 +6,6 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
 
-  @fields [
-    :spec,
-    :checkpoint_version,
-    :parent_expires_at_ms,
-    :runner,
-    :runner_options,
-    :provider,
-    :tool_specs,
-    :approval,
-    :budget,
-    :cancel_ref,
-    :tool_context,
-    :subagent_journal,
-    :workspaces,
-    :session,
-    :session_dir,
-    :agent_identity,
-    :op_seq,
-    :prompt_config,
-    :max_steps,
-    :max_agent_depth,
-    :agent_depth,
-    :model_tools,
-    :provider_timeout,
-    :provider_retries,
-    :retry_policy,
-    :tool_presenter,
-    :tool_timeout,
-    :approval_timeout,
-    :max_approval_details_bytes,
-    :max_tool_result_bytes,
-    :max_transcript_bytes,
-    :max_events,
-    :event_sink,
-    :usage
-  ]
   defmodule State do
     @moduledoc "Parent authority and child lifecycle services, independent of its scheduler."
     defstruct [
@@ -84,13 +48,15 @@ defmodule Alto.Runner.Execution.Children do
     ]
   end
 
+  @fields Map.keys(State.__struct__()) -- [:__struct__, :policy, :events]
+
   @doc false
   def project(run),
     do:
       struct!(
         State,
         Map.take(run, @fields)
-        |> Map.put(:policy, ChildPolicy.limits!(run.spec.subagents))
+        |> Map.put(:policy, run.child_limits)
         |> Map.put(:events, Events.project(run))
       )
 
@@ -446,10 +412,6 @@ defmodule Alto.Runner.Execution.Children do
   def with_journal(data, nil), do: data
   def with_journal(data, journal), do: Map.put(data, :journal, Journal.identity(journal))
 
-  def configured_subagent_journal(policy), do: ChildPolicy.limits!(policy).journal
-
-  def configured_workspaces(policy), do: ChildPolicy.limits!(policy).workspaces
-
   defp prepare_subagent_workspaces(specs, %{workspaces: nil}), do: {:ok, specs}
 
   defp prepare_subagent_workspaces(specs, run) do
@@ -644,7 +606,7 @@ defmodule Alto.Runner.Execution.Children do
       # start or losing grant leaves the durable entry parked for inspection.
       case status do
         :ok -> :ok
-        {:cancelled, reason} -> {:error, {:cancelled, reason}}
+        {:cancelled, reason} -> {:cancelled, reason}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -775,6 +737,18 @@ defmodule Alto.Runner.Execution.Children do
   defp canonical_tool(module) when is_atom(module), do: {module, []}
   defp canonical_tool(spec), do: spec
 
+  def admit(run, agents) do
+    case Alto.Runner.Execution.Call.run(
+           fn -> ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}) end,
+           Budget.timeout(run.budget, run.tool_timeout),
+           run.cancel_ref
+         ) do
+      {:ok, result} -> result
+      {:cancelled, reason} -> {:cancelled, reason}
+      {:error, reason} -> {:error, {:subagent_policy_failed, reason}}
+    end
+  end
+
   def validate_batch(%{agents: agents}, run) when is_list(agents) do
     case run.policy do
       %{max_children: max, max_concurrency: concurrency}
@@ -787,7 +761,7 @@ defmodule Alto.Runner.Execution.Children do
             {:error, :max_children_exceeded}
 
           true ->
-            with :ok <- ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}),
+            with :ok <- admit(run, agents),
                  do: validate_batch_specs(agents, run, concurrency)
         end
 

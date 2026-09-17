@@ -25,8 +25,14 @@ defmodule Alto.Subagents.Policy do
   def implementation?(_), do: false
 
   def validate(policy) do
-    limits!(policy)
-    :ok
+    case resolve(policy) do
+      {:ok, _limits} -> :ok
+      error -> error
+    end
+  end
+
+  def resolve(policy) do
+    {:ok, limits!(policy)}
   rescue
     _ -> {:error, :invalid_subagent_policy}
   catch

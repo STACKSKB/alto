@@ -28,6 +28,7 @@ defmodule Alto.Runner.Execution do
   def abort(context, {:cancelled, reason}), do: cancelled(reason, context)
   def abort(context, reason), do: {:error, reason, result(context, nil, :error)}
 
+  alias Alto.Runner.Execution.Children
   alias Alto.Effect
   alias Alto.Effect.Outcome
   alias Alto.Event
@@ -672,11 +673,9 @@ defmodule Alto.Runner.Execution do
            run}
         else
           case with :ok <- validate_subagent_tools(spec.tools, run),
-                    do:
-                      Alto.Subagents.Policy.admit(run.spec.subagents, [spec], %{
-                        depth: run.agent_depth
-                      }) do
+                    do: Children.admit(run, [spec]) do
             :ok -> run_subagent(spec, run)
+            {:cancelled, reason} -> {:cancelled, reason, run}
             {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
           end
         end
@@ -699,6 +698,7 @@ defmodule Alto.Runner.Execution do
     else
       {:error, reason, run} -> {:error, reason, run}
       {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
+      {:cancelled, reason} -> {:cancelled, reason, run}
     end
   end
 
@@ -871,7 +871,6 @@ defmodule Alto.Runner.Execution do
         step
       )
 
-  alias Alto.Runner.Execution.Children
   defp validate_spawn(data), do: Children.validate_spawn(data)
 
   defp validate_subagent_tools(tools, run),

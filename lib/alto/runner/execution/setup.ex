@@ -37,11 +37,17 @@ defmodule Alto.Runner.Execution.Setup do
          :ok <- Alto.Context.Policy.validate(spec.context),
          :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
          :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
-         :ok <- Alto.Subagents.Policy.validate(spec.subagents),
          :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
          :ok <-
            validate_conversation_limit(Keyword.get(opts, :max_conversation_bytes, 128_000_000)),
          {:ok, budget} <- resolve_budget(opts),
+         {:ok, child_limits} <-
+           resolve_child_policy(
+             spec.subagents,
+             budget,
+             limits.tool_timeout,
+             Keyword.get(opts, :cancel_ref)
+           ),
          {:ok, provider} <- provider,
          {:ok, approval} <- approval,
          :ok <- validate_directory(cwd),
@@ -68,6 +74,7 @@ defmodule Alto.Runner.Execution.Setup do
            build_run(
              Map.merge(limits, %{
                spec: spec,
+               child_limits: child_limits,
                provider: provider,
                tools: tool_map,
                tool_definitions: definitions,
@@ -162,10 +169,10 @@ defmodule Alto.Runner.Execution.Setup do
       max_agent_depth: 0,
       workspaces:
         Keyword.get(opts, :parent_workspaces) ||
-          Alto.Runner.Execution.Children.configured_workspaces(settings.spec.subagents),
+          settings.child_limits.workspaces,
       subagent_journal:
         Keyword.get(opts, :parent_subagent_journal) ||
-          Alto.Runner.Execution.Children.configured_subagent_journal(settings.spec.subagents),
+          settings.child_limits.journal,
       resume_snapshot: true,
       tool_specs: [],
       prompt_config: []
@@ -198,6 +205,21 @@ defmodule Alto.Runner.Execution.Setup do
          function_exported?(module, :stream, 3) and function_exported?(module, :describe, 1),
        do: {:ok, {module, opts}},
        else: {:error, {:invalid_provider, module}}
+  end
+
+  defp resolve_child_policy(nil, _budget, _timeout, _cancel_ref),
+    do: Alto.Subagents.Policy.resolve(nil)
+
+  defp resolve_child_policy(policy, budget, timeout, cancel_ref) do
+    case Alto.Runner.Execution.Call.run(
+           fn -> Alto.Subagents.Policy.resolve(policy) end,
+           Budget.timeout(budget, timeout),
+           cancel_ref
+         ) do
+      {:ok, result} -> result
+      {:cancelled, reason} -> {:error, {:cancelled, reason}}
+      {:error, reason} -> {:error, {:subagent_policy_failed, reason}}
+    end
   end
 
   defp resolve_budget(opts) do
@@ -473,8 +495,8 @@ defmodule Alto.Runner.Execution.Setup do
         resume_snapshot: Keyword.fetch!(extensions, :resume_snapshot),
         max_agent_depth:
           min(
-            max_agent_depth(run.spec),
-            Keyword.get(opts, :parent_max_agent_depth, max_agent_depth(run.spec))
+            run.child_limits.max_depth,
+            Keyword.get(opts, :parent_max_agent_depth, run.child_limits.max_depth)
           ),
         tool_specs: Keyword.get(opts, :tools, []),
         prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
@@ -509,8 +531,6 @@ defmodule Alto.Runner.Execution.Setup do
       {:ok, run}
     end
   end
-
-  defp max_agent_depth(spec), do: Alto.Subagents.Policy.limits!(spec.subagents).max_depth
 
   defp add_persistence_error(run, reason),
     do: Map.update(run, :persistence_errors, [reason], &[reason | &1])

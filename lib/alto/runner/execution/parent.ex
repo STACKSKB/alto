@@ -103,6 +103,7 @@ defmodule Alto.Runner.Execution.Parent do
       end
     else
       false -> {:error, :parent_continuation_not_supported, run}
+      {:cancelled, reason} -> {:cancelled, reason, run}
       {:error, reason} -> {:error, reason, run}
       {:error, reason, failed_run} -> {:error, reason, failed_run}
     end
