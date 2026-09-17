@@ -1272,72 +1272,7 @@ defmodule Alto.TUI.App do
   defp handle_mouse(state, %Mouse{kind: "down", button: "left", x: x, y: y}) do
     {width, height} = state.dimensions
 
-    case View.hit_target(state, width, height, x, y) do
-      :left_seam ->
-        %{state | dragging: :left_seam}
-
-      :right_seam ->
-        %{state | dragging: :right_seam}
-
-      :new_workspace ->
-        open_workspace_form(state)
-
-      {:close_workspace, id} ->
-        State.close_workspace(state, id)
-
-      {:rail_row, row} ->
-        selected = state |> State.select_rail_row(row) |> prepare_selected_backend()
-
-        case Enum.at(State.rail_rows(state), row) do
-          %{kind: :project} -> State.new_task(selected)
-          _ -> %{selected | focus: :rail}
-        end
-
-      {:setting, :entry_mode} ->
-        toggle_composer_mode(state)
-
-      {:setting, :details} ->
-        toggle_details(state)
-
-      {:setting, kind} ->
-        open_overlay(state, kind)
-
-      :composer ->
-        %{state | focus: :composer}
-
-      :transcript ->
-        %{state | focus: :transcript}
-
-      :details ->
-        %{state | focus: :details}
-
-      :details_close ->
-        State.close_details_drawer(state)
-
-      :details_drawer_outside ->
-        State.close_details_drawer(state)
-
-      {:approval, decision} ->
-        decide_approval(state, approval_decision(decision))
-
-      {:overlay_row, row} ->
-        if state.overlay.kind == :workspace_form do
-          rect = WorkspaceForm.rect(width, height)
-
-          workspace_form_result(
-            state,
-            WorkspaceForm.click(state.overlay, row, x - rect.x - 1, rect.height)
-          )
-        else
-          handle_overlay_click(state, row)
-        end
-
-      :overlay_outside ->
-        %{state | overlay: nil}
-
-      _other ->
-        state
-    end
+    activate_target(state, View.hit_target(state, width, height, x, y), x)
   end
 
   defp handle_mouse(state, %Mouse{kind: "drag", x: x}) do
@@ -1365,6 +1300,49 @@ defmodule Alto.TUI.App do
   end
 
   defp handle_mouse(state, _mouse), do: state
+
+  defp activate_target(state, seam, _x) when seam in [:left_seam, :right_seam],
+    do: %{state | dragging: seam}
+
+  defp activate_target(state, :new_workspace, _x), do: open_workspace_form(state)
+  defp activate_target(state, {:close_workspace, id}, _x), do: State.close_workspace(state, id)
+
+  defp activate_target(state, {:rail_row, row}, _x) do
+    selected = state |> State.select_rail_row(row) |> prepare_selected_backend()
+
+    case Enum.at(State.rail_rows(state), row) do
+      %{kind: :project} -> State.new_task(selected)
+      _ -> %{selected | focus: :rail}
+    end
+  end
+
+  defp activate_target(state, {:setting, :entry_mode}, _x), do: toggle_composer_mode(state)
+  defp activate_target(state, {:setting, :details}, _x), do: toggle_details(state)
+  defp activate_target(state, {:setting, kind}, _x), do: open_overlay(state, kind)
+
+  defp activate_target(state, pane, _x) when pane in [:composer, :transcript, :details],
+    do: %{state | focus: pane}
+
+  defp activate_target(state, target, _x)
+       when target in [:details_close, :details_drawer_outside],
+       do: State.close_details_drawer(state)
+
+  defp activate_target(state, {:approval, decision}, _x),
+    do: decide_approval(state, approval_decision(decision))
+
+  defp activate_target(%{overlay: %{kind: :workspace_form}} = state, {:overlay_row, row}, x) do
+    {width, height} = state.dimensions
+    rect = WorkspaceForm.rect(width, height)
+
+    workspace_form_result(
+      state,
+      WorkspaceForm.click(state.overlay, row, x - rect.x - 1, rect.height)
+    )
+  end
+
+  defp activate_target(state, {:overlay_row, row}, _x), do: handle_overlay_click(state, row)
+  defp activate_target(state, :overlay_outside, _x), do: %{state | overlay: nil}
+  defp activate_target(state, _target, _x), do: state
 
   defp scroll_details(state, delta),
     do: %{
