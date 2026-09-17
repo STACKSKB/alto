@@ -1145,45 +1145,7 @@ defmodule Alto.Runner.Execution do
     {run, events, failure} =
       Enum.zip(jobs, outcomes)
       |> Enum.reduce({run, [], nil}, fn {job, outcome}, {run, events, failure} ->
-        interpreted =
-          case outcome do
-            {:ok, {:batch_oversize, reason}} ->
-              tool_failure(
-                job.id,
-                job.name,
-                reason,
-                run,
-                job.op_id,
-                Outcome.unknown(reason),
-                job.origin
-              )
-
-            {:ok, value} ->
-              tool_outcome(job.id, job.name, value, run, job.op_id, job.origin)
-              |> tool_event_summary(job.summary)
-
-            {:rejected, reason} ->
-              tool_failure(
-                job.id,
-                job.name,
-                reason,
-                run,
-                job.op_id,
-                Outcome.pre_dispatch(reason),
-                job.origin
-              )
-
-            {:error, reason} ->
-              tool_failure(
-                job.id,
-                job.name,
-                reason,
-                run,
-                job.op_id,
-                Outcome.unknown(reason),
-                job.origin
-              )
-          end
+        interpreted = batch_outcome(job, outcome, run)
 
         case interpreted do
           {:event, event, next} -> {record_event(next, event), events ++ [event], failure}
@@ -1196,6 +1158,21 @@ defmodule Alto.Runner.Execution do
       {:cancelled, reason} -> {:done, cancelled(reason, run)}
       reason -> {:done, {:error, reason, result(run, nil, :error)}}
     end
+  end
+
+  defp batch_outcome(job, {:ok, {:batch_oversize, reason}}, run),
+    do: batch_outcome(job, {:error, reason}, run)
+
+  defp batch_outcome(job, {:ok, value}, run) do
+    tool_outcome(job.id, job.name, value, run, job.op_id, job.origin)
+    |> tool_event_summary(job.summary)
+  end
+
+  defp batch_outcome(job, {kind, reason}, run) when kind in [:rejected, :error] do
+    outcome =
+      if kind == :rejected, do: Outcome.pre_dispatch(reason), else: Outcome.unknown(reason)
+
+    tool_failure(job.id, job.name, reason, run, job.op_id, outcome, job.origin)
   end
 
   defp dispatch_batch([], run, effects, rest, terminal),
