@@ -6,7 +6,7 @@ defmodule Alto.CLI do
   alias Alto.Approvals.Socket, as: SocketApproval
   alias Alto.CLI.Onboarding
   alias Alto.Config
-  alias Alto.Event
+  alias Alto.CLI.Renderer
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.UnixSocket
   alias Alto.Listeners.WebServer
@@ -94,26 +94,26 @@ defmodule Alto.CLI do
       try do
         case run_task(options, task, run_options) do
           {:ok, result} ->
-            render_final(result.output, stop_renderer(renderer))
+            Renderer.finish(result.output, Renderer.stop(renderer))
             IO.write("\n")
             report_session(result.session_id)
             :ok
 
           {:error, reason, result} ->
-            stop_renderer(renderer)
+            Renderer.stop(renderer)
             IO.write("\n")
             report_session(result.session_id)
             {:error, reason}
 
           {:error, reason} ->
-            stop_renderer(renderer)
+            Renderer.stop(renderer)
             IO.write("\n")
             {:error, reason}
         end
       after
         # A run that crashes before reaching the case above would otherwise
         # leak the renderer process.
-        stop_renderer(renderer)
+        Renderer.stop(renderer)
       end
     end
   end
@@ -532,7 +532,7 @@ defmodule Alto.CLI do
     configured = config |> Config.run_options() |> Keyword.drop([:tui])
 
     with {:ok, provider, provider_timeout} <- provider(options, configured) do
-      renderer = start_renderer(Onboarding.terminal?())
+      renderer = Renderer.start(Onboarding.terminal?())
 
       run_options =
         configured
@@ -844,63 +844,6 @@ defmodule Alto.CLI do
       true -> []
     end
   end
-
-  defp start_renderer(status?), do: spawn(fn -> render_loop(false, status?) end)
-
-  defp render_loop(streamed?, status?) do
-    receive do
-      {:event, event} ->
-        render_loop(render_event(event, status?) or streamed?, status?)
-
-      {:stop, caller, reference} ->
-        send(caller, {:renderer_stopped, reference, streamed?})
-    end
-  end
-
-  defp stop_renderer(renderer) do
-    reference = make_ref()
-    monitor = Process.monitor(renderer)
-    send(renderer, {:stop, self(), reference})
-
-    receive do
-      {:renderer_stopped, ^reference, streamed?} ->
-        Process.demonitor(monitor, [:flush])
-        streamed?
-
-      {:DOWN, ^monitor, :process, ^renderer, _reason} ->
-        false
-    after
-      1_000 ->
-        Process.demonitor(monitor, [:flush])
-        false
-    end
-  end
-
-  defp render_event(%Event{domain: :live, type: :model_delta, data: %{text: text}}, _status?) do
-    IO.write(text)
-    true
-  end
-
-  defp render_event(
-         %Event{domain: :live, type: :model_started, data: %{step: step}},
-         true
-       ) do
-    IO.puts(:stderr, "[model: request #{step}]")
-    false
-  end
-
-  defp render_event(%Event{domain: :live, type: :tool_started, data: %{name: name}}, _status?) do
-    IO.puts(:stderr, "\n[tool: #{name}]")
-    false
-  end
-
-  defp render_event(_event, _status?), do: false
-
-  defp render_final(output, streamed?) when is_binary(output) and output != "" do
-    if not streamed?, do: IO.write(output)
-  end
-
-  defp render_final(_output, _state), do: :ok
 
   defp format_reason({:http_error, status, detail}),
     do: "provider returned HTTP #{status}: #{inspect(detail)}"
