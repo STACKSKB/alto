@@ -42,171 +42,225 @@ defmodule Alto.Listeners.Connection do
   def run_command("", _registry, _send_line, _max_line_bytes), do: :ok
 
   def run_command(line, registry, send_line, max_line_bytes) do
-    case Protocol.decode_command(line) do
-      {:ok, {:attach, id, run_id, from_seq, domains}} ->
-        reply(
-          send_line,
-          max_line_bytes,
-          id,
-          Registry.attach(registry, self(), run_id, from_seq, domains),
-          %{}
-        )
+    dispatch_command(Protocol.decode_command(line), registry, send_line, max_line_bytes)
+  end
 
-        Registry.pull(registry, self(), @pull_batch)
+  defp dispatch_command(
+         {:ok, {:attach, id, run_id, from_seq, domains}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    reply(
+      send_line,
+      max_line_bytes,
+      id,
+      Registry.attach(registry, self(), run_id, from_seq, domains),
+      %{}
+    )
 
-      {:ok, {:start_run, id, config, task, resume}} ->
-        opts = if resume, do: [resume: resume], else: []
+    Registry.pull(registry, self(), @pull_batch)
+  end
 
-        case Registry.start_run(registry, config, task, opts) do
-          {:ok, run_id} ->
-            payload =
-              case Registry.run_session(registry, run_id) do
-                nil -> %{"run_id" => run_id}
-                session_id -> %{"run_id" => run_id, "session_id" => session_id}
-              end
+  defp dispatch_command(
+         {:ok, {:start_run, id, config, task, resume}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    opts = if resume, do: [resume: resume], else: []
 
-            send_ok(send_line, max_line_bytes, id, payload)
+    case Registry.start_run(registry, config, task, opts) do
+      {:ok, run_id} ->
+        payload =
+          case Registry.run_session(registry, run_id) do
+            nil -> %{"run_id" => run_id}
+            session_id -> %{"run_id" => run_id, "session_id" => session_id}
+          end
 
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
+        send_ok(send_line, max_line_bytes, id, payload)
 
-      {:ok, {:runs, id}} ->
-        case Registry.runs(registry) do
-          {:ok, runs} ->
-            send_ok(send_line, max_line_bytes, id, %{"runs" => Protocol.encode_term(runs)})
-
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
-
-      {:ok, {:sessions, id}} ->
-        case Registry.sessions(registry) do
-          {:ok, summaries} ->
-            payload = %{"sessions" => Enum.map(summaries, &Protocol.encode_term/1)}
-
-            case Protocol.ok(id, payload, max_line_bytes) do
-              {:ok, line} ->
-                send_line.(line)
-
-              {:error, :overflow} ->
-                error_reply(send_line, max_line_bytes, id, "internal", :sessions_overflow)
-            end
-
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
-
-      {:ok, {:session_transcript, id, session_id}} ->
-        case Registry.session_transcript(registry, session_id) do
-          {:ok, transcript} ->
-            send_ok(send_line, max_line_bytes, id, Protocol.encode_term(transcript))
-
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
-
-      {:ok, {:session_events, id, session_id, limit, cursor, run_id}} ->
-        with {:ok, page} <-
-               Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
-             {:ok, events} <- session_events_payload(page.events) do
-          payload = %{
-            "session_id" => session_id,
-            "events" => events,
-            "next_cursor" => page.next_cursor,
-            "last_cursor" => page.last_cursor,
-            "high_watermark" => page.high_watermark,
-            "complete" => page.complete,
-            "gap" => page.gap
-          }
-
-          send_ok(send_line, max_line_bytes, id, payload)
-        else
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
-
-      {:ok, {:cancel, id, run_id, reason}} ->
-        reply(
-          send_line,
-          max_line_bytes,
-          id,
-          Registry.cancel(registry, run_id, reason || :user),
-          %{}
-        )
-
-      {:ok, {:approval_response, id, request_id, decision}} ->
-        reply(
-          send_line,
-          max_line_bytes,
-          id,
-          Registry.approval_response(registry, request_id, decision),
-          %{}
-        )
-
-      {:ok, {:queue_claim, id, count, by}} ->
-        queue_claim(line, registry, send_line, max_line_bytes, id, count, by)
-
-      {:ok, {:queue_ack, id, claim_id}} ->
-        reply(send_line, max_line_bytes, id, Registry.queue_ack(registry, claim_id), %{})
-
-      {:ok, {:queue_release, id, claim_id}} ->
-        reply(send_line, max_line_bytes, id, Registry.queue_release(registry, claim_id), %{})
-
-      {:ok, {:ops_list, id, limit, cursor, filter}} ->
-        ops_list(registry, send_line, max_line_bytes, id, limit, cursor, filter)
-
-      {:ok, {:auth, id, _object}} ->
-        error_reply(
-          send_line,
-          max_line_bytes,
-          id,
-          "unsupported",
-          "auth is not used by the v1 default configuration"
-        )
-
-      {:ok, {:input, id, _object}} ->
-        error_reply(
-          send_line,
-          max_line_bytes,
-          id,
-          "unsupported",
-          "input is reserved and not implemented in v1"
-        )
-
-      {:ok, {:command, id, name, payload}} ->
-        case Registry.command(registry, name, payload) do
-          {:ok, result} ->
-            send_ok(send_line, max_line_bytes, id, result)
-
-          {:error, reason} ->
-            error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
-        end
-
-      {:ok, {:reload, id, _config}} ->
-        error_reply(
-          send_line,
-          max_line_bytes,
-          id,
-          "unsupported",
-          "reload is not implemented in v1"
-        )
-
-      {:error, {:unknown_type, id}} ->
-        error_reply(send_line, max_line_bytes, id, "unknown_type", "unrecognized message type")
-
-      {:error, :invalid} ->
-        error_reply(send_line, max_line_bytes, nil, "invalid", "malformed envelope")
-
-      {:error, :unsupported} ->
-        error_reply(
-          send_line,
-          max_line_bytes,
-          nil,
-          "unsupported",
-          "overrides are not accepted in v1"
-        )
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
     end
+  end
+
+  defp dispatch_command({:ok, {:runs, id}}, registry, send_line, max_line_bytes) do
+    case Registry.runs(registry) do
+      {:ok, runs} ->
+        send_ok(send_line, max_line_bytes, id, %{"runs" => Protocol.encode_term(runs)})
+
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+    end
+  end
+
+  defp dispatch_command({:ok, {:sessions, id}}, registry, send_line, max_line_bytes) do
+    case Registry.sessions(registry) do
+      {:ok, summaries} ->
+        payload = %{"sessions" => Enum.map(summaries, &Protocol.encode_term/1)}
+
+        case Protocol.ok(id, payload, max_line_bytes) do
+          {:ok, line} ->
+            send_line.(line)
+
+          {:error, :overflow} ->
+            error_reply(send_line, max_line_bytes, id, "internal", :sessions_overflow)
+        end
+
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+    end
+  end
+
+  defp dispatch_command(
+         {:ok, {:session_transcript, id, session_id}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    case Registry.session_transcript(registry, session_id) do
+      {:ok, transcript} ->
+        send_ok(send_line, max_line_bytes, id, Protocol.encode_term(transcript))
+
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+    end
+  end
+
+  defp dispatch_command(
+         {:ok, {:session_events, id, session_id, limit, cursor, run_id}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    with {:ok, page} <-
+           Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
+         {:ok, events} <- session_events_payload(page.events) do
+      payload = %{
+        "session_id" => session_id,
+        "events" => events,
+        "next_cursor" => page.next_cursor,
+        "last_cursor" => page.last_cursor,
+        "high_watermark" => page.high_watermark,
+        "complete" => page.complete,
+        "gap" => page.gap
+      }
+
+      send_ok(send_line, max_line_bytes, id, payload)
+    else
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+    end
+  end
+
+  defp dispatch_command({:ok, {:cancel, id, run_id, reason}}, registry, send_line, max_line_bytes) do
+    reply(
+      send_line,
+      max_line_bytes,
+      id,
+      Registry.cancel(registry, run_id, reason || :user),
+      %{}
+    )
+  end
+
+  defp dispatch_command(
+         {:ok, {:approval_response, id, request_id, decision}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    reply(
+      send_line,
+      max_line_bytes,
+      id,
+      Registry.approval_response(registry, request_id, decision),
+      %{}
+    )
+  end
+
+  defp dispatch_command({:ok, {:queue_claim, id, count, by}}, registry, send_line, max_line_bytes) do
+    queue_claim(registry, send_line, max_line_bytes, id, count, by)
+  end
+
+  defp dispatch_command({:ok, {:queue_ack, id, claim_id}}, registry, send_line, max_line_bytes) do
+    reply(send_line, max_line_bytes, id, Registry.queue_ack(registry, claim_id), %{})
+  end
+
+  defp dispatch_command(
+         {:ok, {:queue_release, id, claim_id}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    reply(send_line, max_line_bytes, id, Registry.queue_release(registry, claim_id), %{})
+  end
+
+  defp dispatch_command(
+         {:ok, {:ops_list, id, limit, cursor, filter}},
+         registry,
+         send_line,
+         max_line_bytes
+       ) do
+    ops_list(registry, send_line, max_line_bytes, id, limit, cursor, filter)
+  end
+
+  defp dispatch_command({:ok, {:auth, id, _object}}, _registry, send_line, max_line_bytes) do
+    error_reply(
+      send_line,
+      max_line_bytes,
+      id,
+      "unsupported",
+      "auth is not used by the v1 default configuration"
+    )
+  end
+
+  defp dispatch_command({:ok, {:input, id, _object}}, _registry, send_line, max_line_bytes) do
+    error_reply(
+      send_line,
+      max_line_bytes,
+      id,
+      "unsupported",
+      "input is reserved and not implemented in v1"
+    )
+  end
+
+  defp dispatch_command({:ok, {:command, id, name, payload}}, registry, send_line, max_line_bytes) do
+    case Registry.command(registry, name, payload) do
+      {:ok, result} ->
+        send_ok(send_line, max_line_bytes, id, result)
+
+      {:error, reason} ->
+        error_reply(send_line, max_line_bytes, id, error_code(reason), reason)
+    end
+  end
+
+  defp dispatch_command({:ok, {:reload, id, _config}}, _registry, send_line, max_line_bytes) do
+    error_reply(
+      send_line,
+      max_line_bytes,
+      id,
+      "unsupported",
+      "reload is not implemented in v1"
+    )
+  end
+
+  defp dispatch_command({:error, {:unknown_type, id}}, _registry, send_line, max_line_bytes) do
+    error_reply(send_line, max_line_bytes, id, "unknown_type", "unrecognized message type")
+  end
+
+  defp dispatch_command({:error, :invalid}, _registry, send_line, max_line_bytes) do
+    error_reply(send_line, max_line_bytes, nil, "invalid", "malformed envelope")
+  end
+
+  defp dispatch_command({:error, :unsupported}, _registry, send_line, max_line_bytes) do
+    error_reply(
+      send_line,
+      max_line_bytes,
+      nil,
+      "unsupported",
+      "overrides are not accepted in v1"
+    )
   end
 
   defp session_events_payload(records) do
@@ -240,7 +294,7 @@ defmodule Alto.Listeners.Connection do
   # estimate ever misses and the reply overflows, the just-leased records
   # are released back rather than stranded as invisible leases — storage
   # success followed by a dropped wire response is never acceptable.
-  defp queue_claim(_line, registry, send_line, max_line_bytes, id, count, by) do
+  defp queue_claim(registry, send_line, max_line_bytes, id, count, by) do
     budget = max(max_line_bytes - @claim_envelope_reserve, 0)
 
     case Registry.queue_claim(registry, count, by, budget) do
