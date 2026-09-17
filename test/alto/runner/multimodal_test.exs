@@ -48,6 +48,7 @@ defmodule Alto.Runner.MultimodalTest do
 
     assert {:ok, result} =
              Alto.run("inspect",
+               tool_presenter: {Alto.ToolDisplay, []},
                provider: {Provider, owner: self()},
                tools: [{Tool, value: content()}],
                loop: Alto.default_loop(tool_execution: {:parallel, 2}),
@@ -64,6 +65,18 @@ defmodule Alto.Runner.MultimodalTest do
     refute event.data.output =~ @png
     assert {:ok, saved} = Alto.Session.transcript(result.session_id, session_dir: dir)
     assert Enum.find(saved.messages, &(&1["role"] == "tool"))["content"] == tool["content"]
+  end
+
+  test "typed payloads have no implicit presentation or base64 text projection" do
+    assert {:ok, result} =
+             Alto.run("inspect",
+               provider: {Provider, owner: self()},
+               tools: [{Tool, value: content()}]
+             )
+
+    event = Enum.find(result.events, &(&1.type == :tool_completed))
+    assert event.data.output == ""
+    assert event.data.value == content()
   end
 
   test "native tool content becomes a typed user context without orphan tool replies" do

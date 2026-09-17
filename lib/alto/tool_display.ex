@@ -3,6 +3,9 @@ defmodule Alto.ToolDisplay do
 
   @behaviour Alto.ToolPresentation
   @impl true
+  def result(value, _options), do: Alto.Display.result(value)
+
+  @impl true
   def summary(name, arguments, _opts), do: summary(name, arguments)
 
   def summary(name, arguments) do

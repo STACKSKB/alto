@@ -1318,21 +1318,16 @@ defmodule Alto.Runner.Execution do
     # any event retention, subscriber fanout, or session persistence. An
     # oversize native value is rejected as a bounded `tool_failed` — the tool
     # ran exactly once and that fact is retained; it is never re-executed and
-    # the raw value is never stored. `output` is the separate legacy
-    # provider-facing encoding (bounded string, truncated with a marker for
-    # backward compatibility); deterministic loops must prefer `value`.
-    # Provider serialization stays at the provider boundary (transcript
-    # messages carry `output` only).
+    # the raw value is never stored. `output` is a bounded legacy string;
+    # typed content uses an optional host presenter and remains intact in
+    # `value` and transcript content. Deterministic loops must prefer `value`.
     with :ok <- check_native_result(value, run.max_tool_result_bytes),
-         {:ok, content, output} <- model_result_content(value, run.max_tool_result_bytes) do
+         {:ok, content, output} <- model_result_content(value, run) do
       run = merge_verdict(run, :completed)
 
       case add_outcome_message(run, origin, call_id, name, op_id, :completed, content) do
         {:ok, run} ->
           run = History.resolve(run, op_id)
-          # `output` is the bounded provider-facing encoding; `value` is the
-          # native term for deterministic loops. Provider serialization stays
-          # at the provider boundary instead of leaking into loop policy.
           # `call_id` preserves tool-call correlation; `operation_id` is the
           # globally unique runtime operation.
           {:event,
@@ -1619,18 +1614,21 @@ defmodule Alto.Runner.Execution do
 
   defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 
-  defp tool_summary(%{tool_presenter: nil}, name, _arguments), do: to_string(name || "tool")
-
   defp tool_summary(run, name, arguments) do
-    fallback = to_string(name || "tool")
+    present(
+      run,
+      fn -> Alto.ToolPresentation.summary(run.tool_presenter, name, arguments) end,
+      to_string(name || "tool"),
+      500
+    )
+  end
 
-    case supervised_call(
-           fn -> Alto.ToolPresentation.summary(run.tool_presenter, name, arguments) end,
-           Budget.timeout(run.budget, run.tool_timeout),
-           run.cancel_ref
-         ) do
+  defp present(%{tool_presenter: nil}, _callback, fallback, _limit), do: fallback
+
+  defp present(run, callback, fallback, limit) do
+    case supervised_call(callback, Budget.timeout(run.budget, run.tool_timeout), run.cancel_ref) do
       {:ok, text} when is_binary(text) ->
-        Alto.Text.prefix(text, 500)
+        Alto.Text.prefix(text, limit)
 
       {:cancelled, reason} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})
@@ -1641,14 +1639,24 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp model_result_content(value, limit) do
+  defp model_result_content(value, run) do
+    limit = run.max_tool_result_bytes
+
     case Alto.Content.normalize_tool_result(value, limit) do
       :not_content ->
         text = encode_tool_result(value, limit)
         {:ok, text, text}
 
       {:ok, blocks} ->
-        {:ok, blocks, encode_tool_result(blocks, limit)}
+        output =
+          present(
+            run,
+            fn -> Alto.ToolPresentation.result(run.tool_presenter, value) end,
+            "",
+            limit
+          )
+
+        {:ok, blocks, output}
 
       {:error, _} = error ->
         error
