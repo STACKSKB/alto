@@ -476,7 +476,7 @@ defmodule Alto.Runner.Execution do
           run,
           pending.request.operation_id,
           pending.origin,
-          Alto.ToolDisplay.summary(pending.request.tool, pending.request.arguments)
+          tool_summary(run, pending.request.tool, pending.request.arguments)
         )
       else
         tool_failure(
@@ -1029,76 +1029,38 @@ defmodule Alto.Runner.Execution do
   # closed without preparation, approval, or execution.
   defp execute_tool(%{id: call_id, name: name, arguments: arguments}, run, origin, op_id) do
     with {:ok, tool} <- fetch_tool(run.tools, name),
-         :ok <- check_model_exposure(name, origin, run) do
-      case prepare_tool(tool, arguments, run) do
-        {:ok, prepared, details} ->
-          case authorize_tool(call_id, name, arguments, details, tool, run, op_id) do
-            :ok ->
-              run_tool(
-                call_id,
-                name,
-                prepared,
-                tool,
-                run,
-                op_id,
-                origin,
-                Alto.ToolDisplay.summary(name, arguments)
-              )
-
-            {:suspend, request} ->
-              {:suspend, %{request: request, prepared: prepared, origin: origin}, run}
-
-            {:deny, reason} ->
-              tool_failure(
-                call_id,
-                name,
-                {:approval_denied, reason},
-                run,
-                op_id,
-                Outcome.pre_dispatch(reason),
-                origin
-              )
-
-            {:error, reason} ->
-              tool_failure(
-                call_id,
-                name,
-                {:approval_failed, reason},
-                run,
-                op_id,
-                Outcome.pre_dispatch(reason),
-                origin
-              )
-
-            {:cancelled, reason} ->
-              {:cancelled, reason, run}
-          end
-
-        {:error, reason} ->
-          tool_failure(
-            call_id,
-            name,
-            reason,
-            run,
-            op_id,
-            Outcome.pre_dispatch(reason),
-            origin
-          )
-
-        {:cancelled, reason} ->
-          {:cancelled, reason, run}
-      end
+         :ok <- check_model_exposure(name, origin, run),
+         {:ok, prepared, details} <- prepare_tool(tool, arguments, run),
+         :ok <- authorize_prepared(call_id, name, arguments, details, tool, run, op_id, prepared) do
+      run_tool(
+        call_id,
+        name,
+        prepared,
+        tool,
+        run,
+        op_id,
+        origin,
+        tool_summary(run, name, arguments)
+      )
     else
+      {:suspend, request, prepared} ->
+        {:suspend, %{request: request, prepared: prepared, origin: origin}, run}
+
+      {:cancelled, reason} ->
+        {:cancelled, reason, run}
+
       {:error, reason} ->
-        tool_failure(
-          call_id,
-          name,
-          reason,
-          run,
-          op_id,
-          Outcome.pre_dispatch(reason),
-          origin
-        )
+        tool_failure(call_id, name, reason, run, op_id, Outcome.pre_dispatch(reason), origin)
+    end
+  end
+
+  defp authorize_prepared(id, name, arguments, details, tool, run, op_id, prepared) do
+    case authorize_tool(id, name, arguments, details, tool, run, op_id) do
+      :ok -> :ok
+      {:suspend, request} -> {:suspend, request, prepared}
+      {:deny, reason} -> {:error, {:approval_denied, reason}}
+      {:error, reason} -> {:error, {:approval_failed, reason}}
+      {:cancelled, _} = cancelled -> cancelled
     end
   end
 
@@ -1161,7 +1123,7 @@ defmodule Alto.Runner.Execution do
                 op_id: op_id,
                 origin: origin,
                 tool: tool,
-                summary: Alto.ToolDisplay.summary(name, Map.get(call, :arguments_json, "{}")),
+                summary: tool_summary(run, name, Map.get(call, :arguments_json, "{}")),
                 preparation: preparation
               }
 
@@ -1657,6 +1619,28 @@ defmodule Alto.Runner.Execution do
 
   defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 
+  defp tool_summary(%{tool_presenter: nil}, name, _arguments), do: to_string(name || "tool")
+
+  defp tool_summary(run, name, arguments) do
+    fallback = to_string(name || "tool")
+
+    case supervised_call(
+           fn -> Alto.ToolPresentation.summary(run.tool_presenter, name, arguments) end,
+           Budget.timeout(run.budget, run.tool_timeout),
+           run.cancel_ref
+         ) do
+      {:ok, text} when is_binary(text) ->
+        Alto.Text.prefix(text, 500)
+
+      {:cancelled, reason} ->
+        send(self(), {:alto_cancel, run.cancel_ref, reason})
+        fallback
+
+      _ ->
+        fallback
+    end
+  end
+
   defp model_result_content(value, limit) do
     case Alto.Content.normalize_tool_result(value, limit) do
       :not_content ->
@@ -1664,7 +1648,7 @@ defmodule Alto.Runner.Execution do
         {:ok, text, text}
 
       {:ok, blocks} ->
-        {:ok, blocks, Alto.Display.result(value, limit: min(limit, 8_000))}
+        {:ok, blocks, encode_tool_result(blocks, limit)}
 
       {:error, _} = error ->
         error

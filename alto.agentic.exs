@@ -105,6 +105,7 @@ Alto.Config.new(
           Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
       {Alto.Tools.RunCommand, executor: command_executor}
     ] ++ if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++ fff_tools ++ ripwire_tools,
+  tool_presenter: {Alto.ToolDisplay, []},
   approval: Alto.Approvals.Interactive,
   prompt: Alto.Prompts.Coding,
   tui: [

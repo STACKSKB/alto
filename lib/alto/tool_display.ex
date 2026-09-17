@@ -1,6 +1,10 @@
 defmodule Alto.ToolDisplay do
   @moduledoc "Bounded, shared presentation of tool calls and their results."
 
+  @behaviour Alto.ToolPresentation
+  @impl true
+  def summary(name, arguments, _opts), do: summary(name, arguments)
+
   def summary(name, arguments) do
     args = decode(arguments)
     name = to_string(name || "tool")

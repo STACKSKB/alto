@@ -47,6 +47,7 @@ defmodule Alto.Config do
     :provider_retries,
     :retry_policy,
     :event_sink,
+    :tool_presenter,
     :tui,
     :tui_backends
   ]

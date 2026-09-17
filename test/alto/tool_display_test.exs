@@ -104,12 +104,37 @@ defmodule Alto.ToolDisplayTest do
     end
   end
 
+  defmodule Presenter do
+    @behaviour Alto.ToolPresentation
+    def summary(name, _arguments, options), do: Keyword.fetch!(options, :prefix) <> name
+  end
+
+  test "host presenters and absent presentation use the same execution path" do
+    for {presenter, expected} <- [
+          {nil, "read_file"},
+          {{Presenter, prefix: "custom "}, "custom read_file"}
+        ] do
+      assert {:ok, result} =
+               Alto.run("read",
+                 provider: {Provider, []},
+                 tools: [Alto.Tools.ReadFile],
+                 tool_presenter: presenter
+               )
+
+      assert Enum.any?(
+               result.events,
+               &(&1.type == :tool_completed and &1.data.summary == expected)
+             )
+    end
+  end
+
   test "serial and parallel execution retain informative titles in live and durable events" do
     for execution <- [:serial, {:parallel, 2}] do
       owner = self()
 
       assert {:ok, result} =
                Alto.run("read",
+                 tool_presenter: {Alto.ToolDisplay, []},
                  provider: {Provider, []},
                  tools: [Alto.Tools.ReadFile],
                  loop: Alto.default_loop(tool_execution: execution),

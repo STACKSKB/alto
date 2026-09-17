@@ -50,6 +50,7 @@ defmodule Alto.Runner.Execution.Setup do
     with :ok <- validate_spec(spec),
          :ok <- Alto.Context.Policy.validate(spec.context),
          :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
+         :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
          :ok <- Alto.Subagents.Policy.validate(spec.subagents),
          :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
          :ok <-
@@ -172,6 +173,7 @@ defmodule Alto.Runner.Execution.Setup do
       compaction_count: 0,
       provider_retries: @default_provider_retries,
       retry_policy: Keyword.get(opts, :retry_policy),
+      tool_presenter: Keyword.get(opts, :tool_presenter),
       agent_depth: 0,
       agent_identity: agent_identity,
       max_agent_depth: 0,
@@ -434,46 +436,28 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_resume_snapshot(value) when value in [true, false], do: {:ok, value}
   defp normalize_resume_snapshot(other), do: {:error, {:invalid_option, :resume_snapshot, other}}
 
-  @compaction_defaults [
-    strategy: :summary,
-    max_compactions: @default_max_compactions,
-    keep_recent_messages: @default_compaction_keep_messages,
-    keep_initial_messages: 0,
-    max_input_bytes: 100_000,
-    request_mode: :transcript,
-    max_summary_bytes: @default_compaction_max_summary_bytes,
-    max_handoff_bytes: @default_compaction_max_handoff_bytes,
-    artifact_dir: nil
+  @compaction_schema [
+    strategy: [type: :any, default: :summary],
+    max_compactions: [type: :pos_integer, default: @default_max_compactions],
+    keep_recent_messages: [type: :pos_integer, default: @default_compaction_keep_messages],
+    keep_initial_messages: [type: :non_neg_integer, default: 0],
+    max_input_bytes: [type: :pos_integer, default: 100_000],
+    request_mode: [type: {:in, [:transcript, :isolated]}, default: :transcript],
+    max_summary_bytes: [type: :pos_integer, default: @default_compaction_max_summary_bytes],
+    max_handoff_bytes: [type: :pos_integer, default: @default_compaction_max_handoff_bytes],
+    artifact_dir: [type: :any, default: nil]
   ]
 
   defp normalize_compaction(false), do: {:ok, false}
-  defp normalize_compaction(true), do: {:ok, @compaction_defaults}
+  defp normalize_compaction(true), do: normalize_compaction([])
 
   defp normalize_compaction(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      with {:ok, normalized} <- Keyword.validate(opts, @compaction_defaults),
-           :ok <- validate_compaction_strategy(Keyword.fetch!(normalized, :strategy)),
-           :ok <- positive(:max_compactions, Keyword.fetch!(normalized, :max_compactions)),
-           :ok <-
-             non_negative(
-               :keep_initial_messages,
-               Keyword.fetch!(normalized, :keep_initial_messages)
-             ),
-           :ok <- positive(:max_input_bytes, Keyword.fetch!(normalized, :max_input_bytes)),
-           true <-
-             Keyword.fetch!(normalized, :request_mode) in [:transcript, :isolated] or
-               {:error, :invalid_request_mode},
-           :ok <-
-             positive(:keep_recent_messages, Keyword.fetch!(normalized, :keep_recent_messages)),
-           :ok <- positive(:max_summary_bytes, Keyword.fetch!(normalized, :max_summary_bytes)),
-           :ok <- positive(:max_handoff_bytes, Keyword.fetch!(normalized, :max_handoff_bytes)),
-           :ok <- validate_artifact_dir(Keyword.fetch!(normalized, :artifact_dir)) do
-        {:ok, normalized}
-      else
-        {:error, reason} -> {:error, {:invalid_compaction, reason}}
-      end
+    with {:ok, normalized} <- NimbleOptions.validate(opts, @compaction_schema),
+         :ok <- validate_compaction_strategy(normalized[:strategy]),
+         :ok <- validate_artifact_dir(normalized[:artifact_dir]) do
+      {:ok, normalized}
     else
-      {:error, {:invalid_compaction, opts}}
+      {:error, reason} -> {:error, {:invalid_compaction, reason}}
     end
   end
 
