@@ -41,27 +41,27 @@ defmodule Alto.TUI.Backends.Codex do
         do: Keyword.get(codex_options, :model),
         else: state.selected_model
 
-    %{state | codex: codex, selected_model: model}
+    %{put_data(state, codex) | selected_model: model}
   end
 
-  def ui(:provider_label, state, _options), do: CodexBackend.account_label(state.codex.account)
-  def ui(:context_window, state, _options), do: state.codex.context_window
+  def ui(:provider_label, state, _options), do: CodexBackend.account_label(data(state).account)
+  def ui(:context_window, state, _options), do: data(state).context_window
 
   def ui(:quota_label, state, _options) do
-    case CodexBackend.primary_rate_limit(state.codex.rate_limits) do
+    case CodexBackend.primary_rate_limit(data(state).rate_limits) do
       %{"usedPercent" => used} when is_number(used) -> "  quota #{Float.round(used * 1.0, 1)}%"
       _ -> "  quota —"
     end
   end
 
-  def ui(:models, state, _options), do: state.codex.models
+  def ui(:models, state, _options), do: data(state).models
 
-  def ui(:activity, %{codex: %{status: status}}, _options)
+  def ui(:activity, %{backend_state: %{__MODULE__ => %{status: status}}}, _options)
       when status in [:connecting, :refreshing],
       do: "waiting for Codex connection"
 
   def ui(:sync_model, state, _options) do
-    if Enum.any?(state.codex.models, &((&1[:id] || &1["id"]) == state.selected_model)),
+    if Enum.any?(data(state).models, &((&1[:id] || &1["id"]) == state.selected_model)),
       do: state.selected_model,
       else: backend_model(state)
   end
@@ -72,7 +72,7 @@ defmodule Alto.TUI.Backends.Codex do
   def ui(:selected, state, _options), do: ensure_codex(state, true)
 
   def ui(:prepare, state, _options) do
-    if state.codex.status == :ready and is_pid(state.codex.client),
+    if data(state).status == :ready and is_pid(data(state).client),
       do: maybe_load_codex_history(state),
       else: ensure_codex(state, false)
   end
@@ -83,13 +83,13 @@ defmodule Alto.TUI.Backends.Codex do
   def ui({:overlay, :provider}, state, _options),
     do:
       {:state,
-       if(state.codex.status in [:ready, :authenticating],
+       if(data(state).status in [:ready, :authenticating],
          do: codex_account_overlay(state),
          else: ensure_codex(state, true)
        )}
 
   def ui({:overlay, :model}, state, _options) do
-    case state.codex do
+    case data(state) do
       %{status: :ready, models: [_ | _] = models} ->
         {:ok, "Codex models · type to filter",
          Enum.map(models, &%{label: Host.model_label(&1), value: Host.model_id(&1)}),
@@ -100,7 +100,11 @@ defmodule Alto.TUI.Backends.Codex do
     end
   end
 
-  def ui({:overlay, :effort}, %{codex: %{status: status}} = state, _options)
+  def ui(
+        {:overlay, :effort},
+        %{backend_state: %{__MODULE__ => %{status: status}}} = state,
+        _options
+      )
       when status != :ready,
       do: {:state, ensure_codex(state, true)}
 
@@ -128,8 +132,8 @@ defmodule Alto.TUI.Backends.Codex do
   defp handle_info({:codex_connected, result}, state) do
     case result do
       {:ok, %{client: client, account: account}} ->
-        codex = %{state.codex | client: client, status: :ready, account: account}
-        next = %{state | codex: codex}
+        codex = %{data(state) | client: client, status: :ready, account: account}
+        next = put_data(state, codex)
 
         if CodexBackend.chatgpt_account?(account) do
           {:noreply, refresh_codex(next)}
@@ -138,7 +142,7 @@ defmodule Alto.TUI.Backends.Codex do
         end
 
       {:error, reason} ->
-        next = put_in(state.codex.status, {:error, reason})
+        next = put_in(state.backend_state[__MODULE__].status, {:error, reason})
         {:noreply, codex_error_overlay(next, reason)}
     end
   end
@@ -160,8 +164,8 @@ defmodule Alto.TUI.Backends.Codex do
             state.selected_model
           end
 
-        codex = %{state.codex | models: models, rate_limits: limits, status: :ready}
-        next = %{state | codex: codex, selected_model: selected, notice: "ChatGPT ready"}
+        codex = %{data(state) | models: models, rate_limits: limits, status: :ready}
+        next = %{put_data(state, codex) | selected_model: selected, notice: "ChatGPT ready"}
 
         next =
           if state.overlay && state.overlay.kind in [:codex_account, :codex_connecting],
@@ -176,7 +180,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp handle_info({:codex_limits_refreshed, {:ok, limits}}, state),
-    do: {:noreply, put_in(state.codex.rate_limits, limits)}
+    do: {:noreply, put_in(state.backend_state[__MODULE__].rate_limits, limits)}
 
   defp handle_info({:codex_limits_refreshed, _error}, state),
     do: {:noreply, state, render?: false}
@@ -186,15 +190,14 @@ defmodule Alto.TUI.Backends.Codex do
       {:ok, %{"authUrl" => url, "loginId" => _login_id} = login} ->
         open_codex_url(state, url)
 
-        if CodexBackend.chatgpt_account?(state.codex.account) do
+        if CodexBackend.chatgpt_account?(data(state).account) do
           {:noreply, refresh_codex(state)}
         else
-          codex = %{state.codex | login: login, status: :authenticating}
+          codex = %{data(state) | login: login, status: :authenticating}
 
           next = %{
-            state
-            | codex: codex,
-              overlay: codex_login_overlay(login),
+            put_data(state, codex)
+            | overlay: codex_login_overlay(login),
               notice: "waiting for ChatGPT sign-in"
           }
 
@@ -210,7 +213,7 @@ defmodule Alto.TUI.Backends.Codex do
     case result do
       {:ok, _result} ->
         codex = %{
-          state.codex
+          data(state)
           | account: nil,
             models: [],
             rate_limits: nil,
@@ -218,7 +221,7 @@ defmodule Alto.TUI.Backends.Codex do
             status: :ready
         }
 
-        {:noreply, codex_account_overlay(%{state | codex: codex, selected_model: nil})}
+        {:noreply, codex_account_overlay(%{put_data(state, codex) | selected_model: nil})}
 
       {:error, reason} ->
         {:noreply, codex_error_overlay(state, reason)}
@@ -227,11 +230,11 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp handle_info({:codex_history_loaded, task_id, result}, state) do
     codex = %{
-      state.codex
-      | history_loading: MapSet.delete(state.codex.history_loading, task_id)
+      data(state)
+      | history_loading: MapSet.delete(data(state).history_loading, task_id)
     }
 
-    state = %{state | codex: codex}
+    state = put_data(state, codex)
 
     case result do
       {:ok, entries} ->
@@ -274,11 +277,11 @@ defmodule Alto.TUI.Backends.Codex do
           end
 
         codex = %{
-          state.codex
-          | loaded_threads: MapSet.put(state.codex.loaded_threads, thread_id)
+          data(state)
+          | loaded_threads: MapSet.put(data(state).loaded_threads, thread_id)
         }
 
-        state = %{state | codex: codex, notice: "Codex working…"}
+        state = %{put_data(state, codex) | notice: "Codex working…"}
         state = replay_codex_events(state, run)
         {:noreply, replay_codex_requests(state, run)}
 
@@ -289,14 +292,14 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp handle_info(
          {:codex_notification, client, method, params},
-         %{codex: %{client: client}} = state
+         %{backend_state: %{__MODULE__ => %{client: client}}} = state
        ) do
     {:noreply, ingest_codex_notification(state, method, params)}
   end
 
   defp handle_info(
          {:codex_request, client, id, method, params},
-         %{codex: %{client: client}} = state
+         %{backend_state: %{__MODULE__ => %{client: client}}} = state
        ) do
     {:noreply, handle_codex_request(state, id, method, params)}
   end
@@ -313,10 +316,10 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp submit_codex(state, prompt) do
     cond do
-      state.codex.status != :ready or is_nil(state.codex.client) ->
+      data(state).status != :ready or is_nil(data(state).client) ->
         ensure_codex(%{state | notice: "connect ChatGPT before sending"}, true)
 
-      not CodexBackend.chatgpt_account?(state.codex.account) ->
+      not CodexBackend.chatgpt_account?(data(state).account) ->
         codex_account_overlay(%{state | notice: "sign in with ChatGPT before sending"})
 
       is_nil(state.selected_model) or state.selected_model == "" ->
@@ -334,7 +337,7 @@ defmodule Alto.TUI.Backends.Codex do
   defp start_codex_task(state, task, prompt) do
     local_id = "codex-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
     owner = self()
-    client = state.codex.client
+    client = data(state).client
     project = State.selected_project(state)
 
     opts = [
@@ -401,72 +404,76 @@ defmodule Alto.TUI.Backends.Codex do
       entries != [] ->
         state
 
-      MapSet.member?(state.codex.history_loading, task_id) ->
+      MapSet.member?(data(state).history_loading, task_id) ->
         state
 
-      not is_pid(state.codex.client) ->
+      not is_pid(data(state).client) ->
         state
 
       true ->
         owner = self()
-        client = state.codex.client
+        client = data(state).client
 
         Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
           send(owner, {:codex_history_loaded, task_id, CodexBackend.history(client, thread_id)})
         end)
 
-        put_in(state.codex.history_loading, MapSet.put(state.codex.history_loading, task_id))
+        put_in(
+          state.backend_state[__MODULE__].history_loading,
+          MapSet.put(data(state).history_loading, task_id)
+        )
     end
   end
 
   defp ensure_codex(state, show_overlay?) do
     cond do
-      state.codex.status == :ready and is_pid(state.codex.client) and
-          Process.alive?(state.codex.client) ->
+      data(state).status == :ready and is_pid(data(state).client) and
+          Process.alive?(data(state).client) ->
         if show_overlay?, do: codex_account_overlay(state), else: state
 
-      state.codex.status == :authenticating and is_map(state.codex.login) ->
+      data(state).status == :authenticating and is_map(data(state).login) ->
         if show_overlay?,
-          do: %{state | overlay: codex_login_overlay(state.codex.login)},
+          do: %{state | overlay: codex_login_overlay(data(state).login)},
           else: state
 
-      state.codex.status == :connecting ->
+      data(state).status == :connecting ->
         if show_overlay?, do: %{state | overlay: codex_connecting_overlay()}, else: state
 
-      state.codex.status == :refreshing and is_pid(state.codex.client) ->
+      data(state).status == :refreshing and is_pid(data(state).client) ->
         if show_overlay?,
           do: %{state | overlay: codex_connecting_overlay("refreshing models and quota…")},
           else: state
 
       true ->
         owner = self()
-        opts = state.codex.options
+        opts = data(state).options
 
         Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
           send(owner, {:codex_connected, CodexBackend.connect(opts, owner)})
         end)
 
-        codex = %{state.codex | status: :connecting}
-        next = %{state | codex: codex, notice: "connecting to Codex App Server…"}
+        codex = %{data(state) | status: :connecting}
+        next = %{put_data(state, codex) | notice: "connecting to Codex App Server…"}
         if show_overlay?, do: %{next | overlay: codex_connecting_overlay()}, else: next
     end
   end
 
-  defp refresh_codex(%{codex: %{client: client}} = state) when is_pid(client) do
+  defp refresh_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
+       when is_pid(client) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
       send(owner, {:codex_refreshed, CodexBackend.refresh(client)})
     end)
 
-    put_in(state.codex.status, :refreshing)
+    put_in(state.backend_state[__MODULE__].status, :refreshing)
   end
 
   defp refresh_codex(state), do: ensure_codex(state, true)
 
   defp reconnect_codex(state) do
     codex = %{
-      state.codex
+      data(state)
       | client: nil,
         status: :idle,
         account: nil,
@@ -474,23 +481,25 @@ defmodule Alto.TUI.Backends.Codex do
         rate_limits: nil
     }
 
-    ensure_codex(%{state | codex: codex}, true)
+    ensure_codex(put_data(state, codex), true)
   end
 
-  defp start_codex_login(%{codex: %{client: client}} = state) when is_pid(client) do
+  defp start_codex_login(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
+       when is_pid(client) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
       send(owner, {:codex_login_started, CodexClient.login_chatgpt(client)})
     end)
 
-    codex = %{state.codex | status: :authenticating, login: nil}
-    %{state | codex: codex, overlay: codex_connecting_overlay("starting ChatGPT sign-in…")}
+    codex = %{data(state) | status: :authenticating, login: nil}
+    %{put_data(state, codex) | overlay: codex_connecting_overlay("starting ChatGPT sign-in…")}
   end
 
   defp start_codex_login(state), do: ensure_codex(state, true)
 
-  defp logout_codex(%{codex: %{client: client}} = state) when is_pid(client) do
+  defp logout_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
+       when is_pid(client) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
@@ -506,20 +515,21 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp logout_codex(state), do: state
 
-  defp cancel_codex_login(%{codex: %{client: client}} = state, login_id) when is_pid(client) do
+  defp cancel_codex_login(%{backend_state: %{__MODULE__ => %{client: client}}} = state, login_id)
+       when is_pid(client) do
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
       CodexClient.request(client, "account/login/cancel", %{"loginId" => login_id})
     end)
 
-    codex = %{state.codex | status: :ready, login: nil}
-    codex_account_overlay(%{state | codex: codex, notice: "ChatGPT sign-in cancelled"})
+    codex = %{data(state) | status: :ready, login: nil}
+    codex_account_overlay(%{put_data(state, codex) | notice: "ChatGPT sign-in cancelled"})
   end
 
   defp cancel_codex_login(state, _login_id), do: state
 
   defp open_codex_url(state, url) do
     owner = self()
-    opts = state.codex.options
+    opts = data(state).options
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
       send(owner, {:codex_browser_opened, CodexBackend.open_url(url, opts)})
@@ -535,7 +545,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp codex_account_overlay(state) do
-    account = state.codex.account
+    account = data(state).account
 
     {message, items} =
       cond do
@@ -588,12 +598,11 @@ defmodule Alto.TUI.Backends.Codex do
         %{label: "Retry Codex connection", value: :codex_reconnect}
       ] ++ alternative_backends(state)
 
-    codex = %{state.codex | status: {:error, reason}}
+    codex = %{data(state) | status: {:error, reason}}
 
     %{
-      state
-      | codex: codex,
-        overlay: list_overlay(:codex_error, "Codex unavailable", message, items),
+      put_data(state, codex)
+      | overlay: list_overlay(:codex_error, "Codex unavailable", message, items),
         notice: "Codex needs attention"
     }
   end
@@ -630,7 +639,7 @@ defmodule Alto.TUI.Backends.Codex do
     do: reconnect_codex_account(state)
 
   defp ingest_codex_notification(state, "account/rateLimits/updated", params),
-    do: put_in(state.codex.rate_limits, params)
+    do: put_in(state.backend_state[__MODULE__].rate_limits, params)
 
   defp ingest_codex_notification(state, method, params) do
     case find_codex_run(state, params) do
@@ -639,7 +648,8 @@ defmodule Alto.TUI.Backends.Codex do
     end
   end
 
-  defp reconnect_codex_account(%{codex: %{client: client}} = state) when is_pid(client) do
+  defp reconnect_codex_account(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
+       when is_pid(client) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
@@ -651,7 +661,7 @@ defmodule Alto.TUI.Backends.Codex do
       send(owner, {:codex_connected, result})
     end)
 
-    put_in(state.codex.status, :refreshing)
+    put_in(state.backend_state[__MODULE__].status, :refreshing)
   end
 
   defp reconnect_codex_account(state), do: state
@@ -668,8 +678,8 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp maybe_buffer_codex_event(state, method, params) do
     if Enum.any?(state.runs, fn {_id, run} -> run.kind == :codex and run.status == :starting end) do
-      pending = (state.codex.pending_events ++ [{method, params}]) |> Enum.take(-100)
-      put_in(state.codex.pending_events, pending)
+      pending = (data(state).pending_events ++ [{method, params}]) |> Enum.take(-100)
+      put_in(state.backend_state[__MODULE__].pending_events, pending)
     else
       state
     end
@@ -677,12 +687,12 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp replay_codex_events(state, run) do
     {matching, rest} =
-      Enum.split_with(state.codex.pending_events, fn {_method, params} ->
+      Enum.split_with(data(state).pending_events, fn {_method, params} ->
         params["threadId"] == run.thread_id and
           (is_nil(params["turnId"]) or params["turnId"] == run.turn_id)
       end)
 
-    state = put_in(state.codex.pending_events, rest)
+    state = put_in(state.backend_state[__MODULE__].pending_events, rest)
 
     Enum.reduce(matching, state, fn {method, params}, acc ->
       apply_codex_run_event(acc, run, method, params)
@@ -691,12 +701,12 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp replay_codex_requests(state, run) do
     {matching, rest} =
-      Enum.split_with(state.codex.pending_requests, fn {_id, _method, params} ->
+      Enum.split_with(data(state).pending_requests, fn {_id, _method, params} ->
         (params["threadId"] || params["conversationId"]) == run.thread_id and
           (is_nil(params["turnId"]) or params["turnId"] == run.turn_id)
       end)
 
-    state = put_in(state.codex.pending_requests, rest)
+    state = put_in(state.backend_state[__MODULE__].pending_requests, rest)
 
     Enum.reduce(matching, state, fn {id, method, params}, acc ->
       handle_codex_request(acc, id, method, params)
@@ -747,7 +757,10 @@ defmodule Alto.TUI.Backends.Codex do
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
     state
     |> State.put_usage(run.task_id, Alto.Usage.from_codex(usage))
-    |> put_in([Access.key!(:codex), Access.key!(:context_window)], usage["modelContextWindow"])
+    |> put_in(
+      [Access.key!(:backend_state), Access.key!(__MODULE__), Access.key!(:context_window)],
+      usage["modelContextWindow"]
+    )
   end
 
   defp apply_codex_run_event(state, run, "item/started", %{"item" => item}) do
@@ -850,7 +863,8 @@ defmodule Alto.TUI.Backends.Codex do
     |> Host.finish_queued(run.task_id, completed?)
   end
 
-  defp refresh_limits_after_turn(%{codex: %{client: client}} = state) when is_pid(client) do
+  defp refresh_limits_after_turn(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
+       when is_pid(client) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
@@ -892,12 +906,12 @@ defmodule Alto.TUI.Backends.Codex do
              run.kind == :codex and run.status == :starting
            end) do
           pending =
-            (state.codex.pending_requests ++ [{id, method, params}])
+            (data(state).pending_requests ++ [{id, method, params}])
             |> Enum.take(-20)
 
-          put_in(state.codex.pending_requests, pending)
+          put_in(state.backend_state[__MODULE__].pending_requests, pending)
         else
-          CodexClient.reject(state.codex.client, id, -32001, "no matching Alto task")
+          CodexClient.reject(data(state).client, id, -32001, "no matching Alto task")
           state
         end
 
@@ -914,14 +928,14 @@ defmodule Alto.TUI.Backends.Codex do
             pending = %{
               respond: fn decision ->
                 CodexClient.respond(
-                  state.codex.client,
+                  data(state).client,
                   id,
                   codex_approval_response(method, decision, params)
                 )
               end,
               backend: :codex,
               local_id: local_id,
-              client: state.codex.client,
+              client: data(state).client,
               request_id: id,
               method: method,
               params: params,
@@ -936,7 +950,7 @@ defmodule Alto.TUI.Backends.Codex do
 
           :read_only ->
             CodexClient.respond(
-              state.codex.client,
+              data(state).client,
               id,
               codex_approval_response(method, {:deny, :read_only}, params)
             )
@@ -945,7 +959,7 @@ defmodule Alto.TUI.Backends.Codex do
 
           :full_access ->
             CodexClient.respond(
-              state.codex.client,
+              data(state).client,
               id,
               codex_approval_response(method, :approve, params)
             )
@@ -956,7 +970,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp handle_codex_request(state, id, _method, _params) do
-    CodexClient.reject(state.codex.client, id)
+    CodexClient.reject(data(state).client, id)
     state
   end
 
@@ -1000,9 +1014,9 @@ defmodule Alto.TUI.Backends.Codex do
       ])
 
   defp backend_model(state) do
-    Keyword.get(state.codex.options, :model) ||
-      case Enum.find(state.codex.models, &Map.get(&1, :default?, false)) ||
-             List.first(state.codex.models) do
+    Keyword.get(data(state).options, :model) ||
+      case Enum.find(data(state).models, &Map.get(&1, :default?, false)) ||
+             List.first(data(state).models) do
         nil -> nil
         model -> model.id
       end
@@ -1014,4 +1028,7 @@ defmodule Alto.TUI.Backends.Codex do
       _ -> false
     end
   end
+
+  defp data(state), do: Map.fetch!(state.backend_state, __MODULE__)
+  defp put_data(state, value), do: put_in(state.backend_state[__MODULE__], value)
 end

@@ -5,7 +5,7 @@ defmodule Alto.TUI.BackendTest do
   defmodule Interactive do
     @behaviour Backend
     def cancel(run, reason, opts), do: send(opts[:owner], {:cancelled, run, reason})
-    def ui(:init, state, _opts), do: Map.put(state, :initialized, true)
+    def ui(:init, state, _opts), do: put_in(state.backend_state[__MODULE__], %{initialized: true})
     def ui(:provider_label, _state, opts), do: opts[:label]
 
     def ui({:message, :custom_message}, state, _opts),
@@ -27,10 +27,13 @@ defmodule Alto.TUI.BackendTest do
   test "custom interactive contributions use the same dispatch as built-ins" do
     state = %{
       run_options: [tui_backends: [host: {Interactive, label: "Host"}]],
+      backend_state: %{OtherAdapter => :preserved},
       selected_backend: :host
     }
 
-    assert Backend.initialize(state).initialized
+    initialized = Backend.initialize(state)
+    assert initialized.backend_state[Interactive].initialized
+    assert initialized.backend_state[OtherAdapter] == :preserved
     assert Backend.ui(state, :provider_label) == "Host"
     assert {:state, %{custom_overlay: true}} = Backend.ui(state, {:overlay, :model})
     assert {:noreply, %{received: true}} = Alto.TUI.App.handle_info(:custom_message, state)

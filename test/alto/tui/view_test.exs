@@ -145,7 +145,7 @@ defmodule Alto.TUI.ViewTest do
       details_visible?: false,
       selected_backend: :alto,
       selected_model: nil,
-      codex: %{account: nil},
+      backend_state: %{Alto.TUI.Backends.Codex => %{account: nil}},
       focus: :composer,
       overlay:
         Map.merge(

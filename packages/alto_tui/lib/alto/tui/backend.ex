@@ -11,6 +11,10 @@ defmodule Alto.TUI.Backend do
   Message contributions use the application's `handle_info` return contract;
   overlay contributions return picker items or `{:state, state}`.
 
+  Adapters keep their private UI state in `state.backend_state`, keyed by their
+  module. Initialization must preserve other adapters' entries. The host neither
+  interprets these values nor reserves a state field for built-in adapters.
+
   These are trusted host components. Runner adapters must honor the supplied
   approval policy and runtime limits. Interactive adapters own their protocol's
   equivalent controls and put their cancellation adapter on each active run.

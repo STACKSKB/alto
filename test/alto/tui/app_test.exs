@@ -625,7 +625,11 @@ defmodule Alto.TUI.AppTest do
       state
       | selected_task_id: "task",
         runs: %{"run" => run},
-        codex: %{state.codex | client: self()}
+        backend_state:
+          Map.put(state.backend_state, Alto.TUI.Backends.Codex, %{
+            state.backend_state[Alto.TUI.Backends.Codex]
+            | client: self()
+          })
     }
 
     params = %{"threadId" => "thread", "turnId" => "turn", "itemId" => "reason", "delta" => "Raw"}
@@ -1489,7 +1493,8 @@ defmodule Alto.TUI.AppTest do
     eventually(fn ->
       state = user_state(app)
 
-      state.selected_backend == :codex and state.codex.status == :ready and
+      state.selected_backend == :codex and
+        state.backend_state[Alto.TUI.Backends.Codex].status == :ready and
         state.selected_model == "gpt-test"
     end)
 
