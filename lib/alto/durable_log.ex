@@ -4,8 +4,8 @@ defmodule Alto.DurableLog do
   import Bitwise
 
   @doc "Open a private durable log before replay, under the caller's storage lock."
-  def open(path) do
-    with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
+  def open(dir, path) do
+    with :ok <- Alto.Storage.ensure_private_dir(dir, owned: true),
          :ok <- Alto.Storage.ensure_private_file(path),
          do: ensure(path)
   end

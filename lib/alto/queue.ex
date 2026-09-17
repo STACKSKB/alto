@@ -434,7 +434,7 @@ defmodule Alto.Queue do
   def init(%__MODULE__{} = state), do: {:ok, state}
 
   defp load(state) do
-    with :ok <- DurableLog.open(state.path), do: replay(state)
+    with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)
   end
 
   defp replay(state) do

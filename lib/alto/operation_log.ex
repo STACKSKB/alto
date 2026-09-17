@@ -1124,7 +1124,7 @@ defmodule Alto.OperationLog do
   ## contract as Alto.Queue; broader device guarantees are deployment-specific)
 
   defp load(state) do
-    with :ok <- DurableLog.open(state.path), do: replay(state)
+    with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)
   end
 
   defp replay(state) do
