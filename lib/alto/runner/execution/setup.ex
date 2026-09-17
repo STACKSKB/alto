@@ -452,11 +452,13 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_compaction(true), do: normalize_compaction([])
 
   defp normalize_compaction(opts) when is_list(opts) do
-    with {:ok, normalized} <- NimbleOptions.validate(opts, @compaction_schema),
+    with true <- Keyword.keyword?(opts),
+         {:ok, normalized} <- NimbleOptions.validate(opts, @compaction_schema),
          :ok <- validate_compaction_strategy(normalized[:strategy]),
          :ok <- validate_artifact_dir(normalized[:artifact_dir]) do
       {:ok, normalized}
     else
+      false -> {:error, {:invalid_compaction, opts}}
       {:error, reason} -> {:error, {:invalid_compaction, reason}}
     end
   end

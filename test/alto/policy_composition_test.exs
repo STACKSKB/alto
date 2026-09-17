@@ -65,4 +65,9 @@ defmodule Alto.PolicyCompositionTest do
     assert_raise NimbleOptions.ValidationError, fn -> Alto.Context.window(reserve_output: -1) end
     assert {:error, :invalid_subagent_policy} = Alto.Subagents.Policy.validate({String, []})
   end
+
+  test "malformed compaction lists return configuration errors before schema validation" do
+    assert {:error, {:invalid_compaction, [:invalid]}, _} =
+             Alto.run("hello", provider: Provider, compaction: [:invalid])
+  end
 end
