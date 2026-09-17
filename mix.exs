@@ -42,6 +42,7 @@ defmodule Alto.MixProject do
       links: %{"Source" => "https://github.com/STACKSKB/alto"},
       files: [
         "lib",
+        "priv",
         "mix.exs",
         "README.md",
         "LICENSE",
