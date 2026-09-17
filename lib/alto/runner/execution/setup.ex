@@ -5,19 +5,23 @@ defmodule Alto.Runner.Execution.Setup do
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   require Logger
-  @default_max_steps 32
-  @default_tool_timeout 125_000
-  @default_provider_timeout 125_000
-  @default_approval_timeout 300_000
-  @default_max_approval_details_bytes 64_000
-  @default_max_tool_result_bytes 64_000
-  @default_max_transcript_bytes 8_000_000
-  @default_max_events 1_000
   @default_provider_retries 0
   @default_max_compactions 1
   @default_compaction_keep_messages 10
   @default_compaction_max_summary_bytes 8_000
   @default_compaction_max_handoff_bytes 24_000
+  @limits_options [
+    max_steps: [type: :pos_integer, default: 32],
+    provider_timeout: [type: :pos_integer, default: 125_000],
+    tool_timeout: [type: :pos_integer, default: 125_000],
+    approval_timeout: [type: :pos_integer, default: 300_000],
+    max_approval_details_bytes: [type: :pos_integer, default: 64_000],
+    max_tool_result_bytes: [type: :pos_integer, default: 64_000],
+    max_transcript_bytes: [type: :pos_integer, default: 8_000_000],
+    max_events: [type: :pos_integer, default: 1_000]
+  ]
+  @limits_schema NimbleOptions.new!(@limits_options)
+
   def open(task, opts) do
     spec = Keyword.get(opts, :loop, Alto.default_loop())
 
@@ -26,28 +30,10 @@ defmodule Alto.Runner.Execution.Setup do
 
     tools = Keyword.get(opts, :tools, [])
     cwd = opts |> Keyword.get(:cwd, File.cwd!()) |> Path.expand()
-    max_steps = Keyword.get(opts, :max_steps, @default_max_steps)
-    provider_timeout = Keyword.get(opts, :provider_timeout, @default_provider_timeout)
-    tool_timeout = Keyword.get(opts, :tool_timeout, @default_tool_timeout)
-    approval_timeout = Keyword.get(opts, :approval_timeout, @default_approval_timeout)
     approval = normalize_approval(Keyword.get(opts, :approval, Alto.Approvals.DenyAll))
 
-    max_approval_details_bytes =
-      Keyword.get(
-        opts,
-        :max_approval_details_bytes,
-        @default_max_approval_details_bytes
-      )
-
-    max_tool_result_bytes =
-      Keyword.get(opts, :max_tool_result_bytes, @default_max_tool_result_bytes)
-
-    max_transcript_bytes =
-      Keyword.get(opts, :max_transcript_bytes, @default_max_transcript_bytes)
-
-    max_events = Keyword.get(opts, :max_events, @default_max_events)
-
-    with :ok <- validate_spec(spec),
+    with {:ok, limits} <- limits(opts),
+         :ok <- validate_spec(spec),
          :ok <- Alto.Context.Policy.validate(spec.context),
          :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
          :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
@@ -59,14 +45,6 @@ defmodule Alto.Runner.Execution.Setup do
          {:ok, provider} <- provider,
          {:ok, approval} <- approval,
          :ok <- validate_directory(cwd),
-         :ok <- positive(:max_steps, max_steps),
-         :ok <- positive(:provider_timeout, provider_timeout),
-         :ok <- positive(:tool_timeout, tool_timeout),
-         :ok <- positive(:approval_timeout, approval_timeout),
-         :ok <- positive(:max_approval_details_bytes, max_approval_details_bytes),
-         :ok <- positive(:max_tool_result_bytes, max_tool_result_bytes),
-         :ok <- positive(:max_transcript_bytes, max_transcript_bytes),
-         :ok <- positive(:max_events, max_events),
          {:ok, provider_retries} <-
            normalize_retries(Keyword.get(opts, :provider_retries, @default_provider_retries)),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
@@ -85,28 +63,20 @@ defmodule Alto.Runner.Execution.Setup do
            ),
          {:ok, prompt_setup} <- prompt_setup(opts, cwd, tools, provider),
          {:ok, messages_rev, transcript_bytes} <-
-           init_transcript(task, prompt_setup, max_transcript_bytes, opts),
+           init_transcript(task, prompt_setup, limits.max_transcript_bytes, opts),
          {:ok, run} <-
            build_run(
-             %{
+             Map.merge(limits, %{
                spec: spec,
                provider: provider,
-               provider_timeout: provider_timeout,
                tools: tool_map,
                tool_definitions: definitions,
-               tool_timeout: tool_timeout,
                approval: approval,
-               approval_timeout: approval_timeout,
-               max_approval_details_bytes: max_approval_details_bytes,
-               max_tool_result_bytes: max_tool_result_bytes,
-               max_transcript_bytes: max_transcript_bytes,
-               max_events: max_events,
-               max_steps: max_steps,
                messages_rev: messages_rev,
                transcript_bytes: transcript_bytes,
                model_tools: model_exposure,
                budget: budget
-             },
+             }),
              cwd,
              opts
            ) do
@@ -116,6 +86,19 @@ defmodule Alto.Runner.Execution.Setup do
         agent_depth: agent_depth,
         resume_snapshot: resume_snapshot
       )
+    end
+  end
+
+  defp limits(opts) do
+    case NimbleOptions.validate(
+           Keyword.take(opts, Keyword.keys(@limits_options)),
+           @limits_schema
+         ) do
+      {:ok, values} ->
+        {:ok, Map.new(values)}
+
+      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
+        {:error, {:invalid_option, key, value}}
     end
   end
 
@@ -396,9 +379,6 @@ defmodule Alto.Runner.Execution.Setup do
   defp validate_directory(path) do
     if File.dir?(path), do: :ok, else: {:error, {:invalid_cwd, path}}
   end
-
-  defp positive(_name, value) when is_integer(value) and value > 0, do: :ok
-  defp positive(name, value), do: {:error, {:invalid_option, name, value}}
 
   defp non_negative(_name, value) when is_integer(value) and value >= 0, do: :ok
   defp non_negative(name, value), do: {:error, {:invalid_option, name, value}}

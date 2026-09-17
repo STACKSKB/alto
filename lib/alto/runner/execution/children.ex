@@ -476,87 +476,88 @@ defmodule Alto.Runner.Execution.Children do
     if is_nil(provider) and is_nil(spec.loop) do
       {:error, :provider_required}
     else
-      # Nil prompt options are dropped, not inherited: an explicit nil would
-      # read as "present" to prompt resolution and conflict where absence is
-      # the neutral value. Absence and explicit nil resolve identically.
-      prompt_opts =
-        run.prompt_config
-        |> Keyword.take([:prompt, :system_prompt, :project_instructions])
-        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-
-      prompt_opts =
-        if spec.system_prompt do
-          prompt_opts
-          |> Keyword.drop([:prompt, :system_prompt])
-          |> Keyword.put(:system_prompt, spec.system_prompt)
-        else
-          prompt_opts
-        end
-
-      # A delegated task defaults to a fresh default loop: the parent's
-      # driver expects the parent's task shape, which the child task rarely
-      # shares. Recursive policies pass their own spec explicitly.
-      # Model exposure is inherited with no widening: the parent's
-      # effective subset is carried down and intersected with the child's
-      # inherited or narrowed capabilities. A child with `model_tools: nil`
-      # (absent) requests all of its resolved tools; an explicit list
-      # (including `[]`) narrows further. Native `invoke_tool` still uses
-      # full runtime capabilities; only provider-originated `run_tool`
-      # calls are exposure-checked.
-      sub_opts =
-        [
-          provider: provider,
-          provider_retries: run.provider_retries,
-          retry_policy: run.retry_policy,
-          tool_presenter: run.tool_presenter,
-          checkpoint_version: run.checkpoint_version,
-          parent_expires_at_ms: run.parent_expires_at_ms,
-          child_profile: checkpoint_profile(spec, run),
-          runner_options: run.runner_options,
-          tools: subagent_tools(spec.tools, run),
-          approval: run.approval,
-          loop: spec.loop || Alto.default_loop()
-        ] ++
-          prompt_opts ++
-          [
-            cwd: run.tool_context.cwd,
-            workspace_assignment: Map.get(spec, :workspace_assignment),
-            parent_workspaces: run.workspaces,
-            parent_subagent_journal: run.subagent_journal,
-            subagent_ticket: Map.get(spec, :subagent_ticket),
-            tool_context_metadata: run.tool_context.metadata,
-            budget: run.budget,
-            budget_account: run.budget.account,
-            max_effects: run.budget.max_effects,
-            max_model_requests: run.budget.max_model_requests,
-            run_timeout: Budget.remaining(run.budget),
-            owner: self(),
-            parent_max_agent_depth: run.max_agent_depth,
-            max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
-            provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
-            tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
-            approval_timeout: Budget.timeout(run.budget, run.approval_timeout),
-            max_approval_details_bytes: run.max_approval_details_bytes,
-            max_tool_result_bytes: run.max_tool_result_bytes,
-            max_transcript_bytes: run.max_transcript_bytes,
-            max_events: run.max_events,
-            event_sink: subagent_sink(run, spec.id),
-            session_dir: run.session_dir,
-            parent_run_id: run.tool_context.session_id,
-            agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
-            parent_model_tools: run.model_tools,
-            agent_depth: run.agent_depth + 1
-          ] ++ child_session_options(run)
-
-      sub_opts =
-        case spec.model_tools do
-          nil -> sub_opts
-          names -> Keyword.put(sub_opts, :model_tools, names)
-        end
+      sub_opts = child_options(spec, run, provider)
 
       with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run) do
         Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
       end
+    end
+  end
+
+  defp child_prompt(spec, prompt_config) do
+    prompt_opts =
+      prompt_config
+      |> Keyword.take([:prompt, :system_prompt, :project_instructions])
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    if spec.system_prompt do
+      prompt_opts
+      |> Keyword.drop([:prompt, :system_prompt])
+      |> Keyword.put(:system_prompt, spec.system_prompt)
+    else
+      prompt_opts
+    end
+  end
+
+  defp child_options(spec, run, provider) do
+    # A delegated task defaults to a fresh default loop: the parent's
+    # driver expects the parent's task shape, which the child task rarely
+    # shares. Recursive policies pass their own spec explicitly.
+    # Model exposure is inherited with no widening: the parent's
+    # effective subset is carried down and intersected with the child's
+    # inherited or narrowed capabilities. A child with `model_tools: nil`
+    # (absent) requests all of its resolved tools; an explicit list
+    # (including `[]`) narrows further. Native `invoke_tool` still uses
+    # full runtime capabilities; only provider-originated `run_tool`
+    # calls are exposure-checked.
+    sub_opts =
+      [
+        provider: provider,
+        provider_retries: run.provider_retries,
+        retry_policy: run.retry_policy,
+        tool_presenter: run.tool_presenter,
+        checkpoint_version: run.checkpoint_version,
+        parent_expires_at_ms: run.parent_expires_at_ms,
+        child_profile: checkpoint_profile(spec, run),
+        runner_options: run.runner_options,
+        tools: subagent_tools(spec.tools, run),
+        approval: run.approval,
+        loop: spec.loop || Alto.default_loop()
+      ] ++
+        child_prompt(spec, run.prompt_config) ++
+        [
+          cwd: run.tool_context.cwd,
+          workspace_assignment: Map.get(spec, :workspace_assignment),
+          parent_workspaces: run.workspaces,
+          parent_subagent_journal: run.subagent_journal,
+          subagent_ticket: Map.get(spec, :subagent_ticket),
+          tool_context_metadata: run.tool_context.metadata,
+          budget: run.budget,
+          budget_account: run.budget.account,
+          max_effects: run.budget.max_effects,
+          max_model_requests: run.budget.max_model_requests,
+          run_timeout: Budget.remaining(run.budget),
+          owner: self(),
+          parent_max_agent_depth: run.max_agent_depth,
+          max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
+          provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
+          tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
+          approval_timeout: Budget.timeout(run.budget, run.approval_timeout),
+          max_approval_details_bytes: run.max_approval_details_bytes,
+          max_tool_result_bytes: run.max_tool_result_bytes,
+          max_transcript_bytes: run.max_transcript_bytes,
+          max_events: run.max_events,
+          event_sink: subagent_sink(run, spec.id),
+          session_dir: run.session_dir,
+          parent_run_id: run.tool_context.session_id,
+          agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
+          parent_model_tools: run.model_tools,
+          agent_depth: run.agent_depth + 1
+        ] ++ child_session_options(run)
+
+    case spec.model_tools do
+      nil -> sub_opts
+      names -> Keyword.put(sub_opts, :model_tools, names)
     end
   end
 
