@@ -127,3 +127,42 @@ their order.
 
 Model discovery loads provider modules before checking their capabilities, so a
 fresh process can fetch the catalogue without a manual configuration round-trip.
+
+## Backend composition
+
+`tui_backends` is the complete ordered backend list. The UI no longer injects
+native Alto or Codex entries. Existing custom-only lists remain custom-only;
+include the built-ins explicitly when wanted:
+
+```elixir
+tui_backends: [
+  alto: {Alto.TUI.Backends.Native, label: "Alto native"},
+  codex: {Alto.TUI.Backends.Codex, label: "Codex · ChatGPT"},
+  custom: {MyBackend, []}
+]
+```
+
+The coding profile includes both built-ins. A saved task retains its backend
+identity; if that backend is omitted, it cannot start until configured again.
+New tasks select the first configured backend. Names are not reserved.
+
+Runner adapters implement `Alto.TUI.Backend.start/4` and `cancel/3`. They receive
+the catalog task, prompt, composed run options and backend options. Native Alto
+uses this contract, including session resume. Existing custom runner adapters
+need no new callbacks.
+
+Interactive adapters implement `ui/3` and `cancel/3`. Codex uses this contract to
+own its connection, sign-in, models, approvals, streaming updates and cancellation.
+Optional `ui/3` contributions are available to runner adapters too. Return
+`:pass` to retain the host behavior. Events include initialization, selection,
+submission, picker contributions, messages, model metadata, activity and settings
+labels; see `Alto.TUI.Backend` and the built-in implementations for return shapes.
+Messages are offered to configured adapters, including inactive adapters with
+running tasks. Protocol approval requests carry their own responder; the host
+provides the shared approval controls.
+
+Adapters are trusted host code with access to UI state. They must preserve their
+protocol's approval and runtime controls. Native durable-input support is a
+capability supplied by the adapter, not a special case for the `:alto` identifier.
+The legacy `codex_backend` options remain accepted by the Codex adapter; options
+on its `tui_backends` entry take precedence.

@@ -59,6 +59,7 @@ defmodule Alto.MixProject do
         "docs/conversations.md",
         "docs/multimodal-content.md",
         "docs/extensions.md",
+        "docs/sse-adapter.md",
         "docs/benchmarks.md",
         "bench/tool_batches.exs",
         "examples/README.md",

@@ -175,3 +175,57 @@ OpenAI-compatible and Anthropic adapters translate it to their respective wire
 formats. Built-in context reduction uses this hint with transcript requests;
 custom adapters can use `request_mode: :isolated` until they support it. No reducer
 response dispatches tools through the execution host.
+
+## Composing execution policies
+
+Compose these values in the relevant `alto.exs`. Execution owns cancellation,
+shared budgets, authority checks and persistence; the selected component owns
+its policy decision. Built-in implementations use the same callbacks as host code.
+
+| Configuration | Contract | Shipped implementation |
+| --- | --- | --- |
+| `loop.context` | `Alto.Context.Policy.check/3` | `Alto.Context.Window` |
+| `loop.subagents` | `Alto.Subagents.Policy.limits/1`, `admit/3` | `Alto.Subagents.Bounded` |
+| `compaction[:strategy]` | `Alto.Context.Reducer.compact/3` | `Reducers.Summary`, `Reducers.Handoff` |
+| `retry_policy` | `Alto.Retry.decide/3` | `Alto.Retry.Transient` |
+| `tool_presenter` | `Alto.ToolPresentation.summary/3` | `Alto.ToolDisplay` |
+
+Context and child policies accept either an implementing struct or
+`{Module, options}`. A context check returns `{:ok, :unavailable}`, a budget map
+with a nonnegative `:reserve_output` and optional boolean `:pressure`, or an
+error. Invalid implementations and malformed results are rejected. Child limits
+are normalized with NimbleOptions before execution enforces them; admission
+cannot expand inherited tool authority.
+
+Reducers receive structured pinned, middle and recent messages, historical tool
+schemas, limits and artifact metadata, plus a bounded model-call function. They
+return `{:ok, %{content: text, data: map, events: list, records: list}}`. Execution
+forces `tool_choice: :none`, accounts model calls, and checks replacement size,
+shrinkage and headroom before accepting it. Legacy text `reduce/3` and
+`request/3` + `decode/3` reducers still work through `Reducers.Legacy`.
+`:summary` and `:handoff` remain compatibility aliases; new profiles can name the
+implementations explicitly.
+
+```elixir
+retry_policy: {Alto.Retry.Transient, base_delay: 100, max_delay: 2_000},
+tool_presenter: {Alto.ToolDisplay, []},
+compaction: [strategy: {Alto.Context.Reducers.Handoff, []}]
+```
+
+A retry callback returns `:stop` or `{:retry, delay_ms, reason}`. Execution still
+refuses to replay an attempt after output delivery and enforces the attempt and
+time budgets. Omitted retry policy preserves the existing transient policy;
+`provider_retries: 0` disables retries. Omitted presentation emits the tool name.
+The optional `result/2` presenter callback supplies a preview for typed content;
+without it, `output` is empty and `value` retains the content. Presenter failures
+fall back to the tool name or an empty preview; presentation cannot change tool input
+or authorization.
+
+`Alto.Events.combine/1` composes synchronous sinks in order, isolating sink
+failures. CLI, registry and TUI delivery attach their host sink before the
+application sink, preserving host backpressure. Request diagnostics are composed
+with `Alto.Providers.Observe.wrap/2` in the profile; the core executor has no
+prefix-continuity dependency.
+
+NimbleOptions now owns context-window, child-limit and compaction option schemas.
+Authority relationships and domain-specific validation remain explicit.
