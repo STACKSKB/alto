@@ -761,10 +761,7 @@ defmodule Alto.Runner.Execution do
 
       notify(
         run.event_sink,
-        Event.live(:model_started, %{
-          step: step,
-          prefix: Alto.Providers.PrefixContinuity.report(request)
-        })
+        Event.live(:model_started, %{step: step})
       )
 
       outcome =

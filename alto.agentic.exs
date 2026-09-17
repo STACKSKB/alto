@@ -7,6 +7,8 @@
 # provided when the desktop process does not inherit the interactive PATH:
 # FFF_MCP=/path/to/fff-mcp and RIPWIRE_BIN=/path/to/ripwire.
 
+require Logger
+
 mix_home = System.get_env("MIX_HOME") || Path.join(System.user_home!(), ".mix")
 
 command_executor =
@@ -70,7 +72,14 @@ Alto.Config.new(
     [
       id: "openrouter",
       label: "OpenRouter",
-      provider: {Alto.Providers.OpenAICompatible, openrouter_options},
+      provider:
+        Alto.Providers.Observe.wrap(
+          {Alto.Providers.OpenAICompatible, openrouter_options},
+          fn request ->
+            report = Alto.Providers.PrefixContinuity.report(request)
+            Logger.debug(fn -> "Alto prefix continuity: #{inspect(report)}" end)
+          end
+        ),
       models: :discover,
       default_model: openrouter_model,
       credential_id: "openrouter"

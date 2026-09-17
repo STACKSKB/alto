@@ -66,17 +66,22 @@ defmodule Alto.Providers.PrefixContinuityTest do
     end
   end
 
-  test "runner exposes content-free continuity alongside existing cache usage events" do
+  test "profile composition observes requests without adding diagnostics to executor events" do
     parent = self()
 
     assert {:ok, _} =
              Alto.run("PRIVATE-BODY",
-               provider: Provider,
+               provider:
+                 Alto.Providers.Observe.wrap(Provider, fn request ->
+                   send(parent, {:prefix, PrefixContinuity.report(request)})
+                 end),
                tools: [],
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
-    assert_receive {:event, %Alto.Event{type: :model_started, data: %{step: 1, prefix: report}}}
+    assert_receive {:event, %Alto.Event{type: :model_started, data: %{step: 1} = data}}
+    refute Map.has_key?(data, :prefix)
+    assert_receive {:prefix, report}
     assert report.comparison == :unavailable
     refute JSON.encode!(report) =~ "PRIVATE-BODY"
 

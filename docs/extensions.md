@@ -5,6 +5,33 @@ around lifecycle events, configure trusted commands, transform model supplied
 tool input, select an optional renderer or front end, and choose provider
 adapters without changing the runner.
 
+## Request diagnostics by composition
+
+The executor emits `model_started` with the step number only. Request diagnostics
+are ordinary provider composition in the selected configuration file, not a
+runner option. For example, `alto.agentic.exs` wraps its OpenRouter provider:
+
+```elixir
+require Logger
+
+provider =
+  Alto.Providers.Observe.wrap({Alto.Providers.OpenAICompatible, provider_options}, fn request ->
+    report = Alto.Providers.PrefixContinuity.report(request)
+    Logger.debug(fn -> "Alto prefix continuity: #{inspect(report)}" end)
+  end)
+```
+
+Use this provider specification in `Alto.Config.new/1` or a provider profile.
+Omit the wrapper to omit diagnostics; nest wrappers to compose observers.
+Observers run for each transport attempt (including retries and reduction),
+inside the provider's existing timeout and cancellation boundary. They receive
+the request unchanged and select their own output destination. Their output
+does not count as streamed model output or suppress retries. Observer exceptions
+are isolated; a slow observer still consumes the provider call's time budget.
+Only the prefix report is content-free; arbitrary observers receive full requests
+and are trusted configuration code. Description, model discovery, model selection
+and credentials pass through to the wrapped provider.
+
 ## Transforming tool input
 
 `Alto.Tools.Transform` is a host-side input adapter. It wraps a normal tool
