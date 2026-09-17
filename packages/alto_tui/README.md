@@ -12,6 +12,18 @@ ALTO_TUI_LOCAL=1 mix deps.get
 ALTO_TUI_LOCAL=1 mix alto.tui --config ../../alto.agentic.exs
 ```
 
+While the TUI is open, standard console Logger handlers are muted and logs go to
+`$ALTO_STATE_HOME/alto/logs/tui.log` (or `$XDG_STATE_HOME/alto/logs/tui.log`, defaulting
+to `~/.local/state/alto/logs/tui.log`). Use `--log PATH` to choose another file, or
+pass `log_path: PATH` to `Alto.TUI.run/2`. Logs rotate at 5 MB with three archives.
+Console logging is restored when the TUI exits, including after a run-time failure.
+Existing file handlers remain active. Custom handlers must also avoid writing to
+the terminal while it is in use.
+
+The example profile's request-prefix diagnostics are opt-in: set
+`ALTO_REQUEST_DIAGNOSTICS=1` to include them in the log. Debug messages, warnings,
+and errors never belong directly on the active TUI screen.
+
 The example hosts runs locally in its process tree. A separate application can
 reuse the UI components and connect them to a persistent service through Alto's
 transport APIs. The profile and maintained application examples are documented in
@@ -21,6 +33,9 @@ Press Enter to send a message. While a turn is running, Enter queues one follow-
 for that task; it starts after the current turn succeeds. A second follow-up
 stays in the composer until the queued message has started. Queued messages are
 kept in memory for the lifetime of the TUI.
+Pending messages appear below the current response and in the context pane.
+When delivered, their queue notice disappears and each message becomes a separate
+`you ›` turn before its response, including when native input continues the same run.
 
 The status bar shows whether Alto is waiting for the model, executing a tool, or
 waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,

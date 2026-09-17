@@ -11,16 +11,29 @@ defmodule Alto.TUI.RunLifecycleTest do
 
     def stream(request, sink, opts) do
       send(opts[:owner], {:model_waiting, self(), request.messages})
+      respond(sink, "")
+    end
 
+    defp respond(sink, received) do
       receive do
+        {:delta, text} ->
+          sink.(Alto.Event.live(:model_delta, %{text: text}))
+          respond(sink, received <> text)
+
         {:finish, text} ->
           sink.(Alto.Event.live(:model_delta, %{text: text}))
-          {:ok, %{message: text, tool_calls: []}}
+          {:ok, %{message: received <> text, tool_calls: []}}
 
         :fail ->
           {:error, :controlled_failure}
       end
     end
+  end
+
+  defmodule LegacyBackend do
+    @behaviour Alto.TUI.Backend
+    defdelegate start(task, prompt, options, backend_options), to: Alto.TUI.Backends.Native
+    defdelegate cancel(handle, reason, options), to: Alto.TUI.Backends.Native
   end
 
   defmodule ApprovalProbe do
@@ -42,6 +55,60 @@ defmodule Alto.TUI.RunLifecycleTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root}
+  end
+
+  for backend <- [Alto.TUI.Backends.Native, LegacyBackend] do
+    test "queued input preserves distinct streamed turns with #{inspect(backend)}", %{root: root} do
+      app = start_app(root, nil, unquote(backend))
+      submit(app, "first")
+      assert_receive {:model_waiting, first, _}, 5_000
+      send(first, {:delta, "first "})
+      eventually(fn -> List.last(State.current_entries(state(app)))[:text] == "first " end)
+
+      submit(app, "next")
+      assert screen(app) =~ "Queued message: next"
+
+      assert State.current_entries(state(app)) == [
+               %{kind: :user, text: "first"},
+               %{kind: :assistant, text: "first "}
+             ]
+
+      send(first, {:finish, "done"})
+      assert_receive {:model_waiting, second, _}, 5_000
+
+      assert State.current_entries(state(app)) == [
+               %{kind: :user, text: "first"},
+               %{kind: :assistant, text: "first done"},
+               %{kind: :user, text: "next"}
+             ]
+
+      refute screen(app) =~ "Queued message:"
+      refute state(app).notice =~ "message queued"
+
+      send(second, {:finish, "second done"})
+      eventually(fn -> state(app).runs == %{} end)
+
+      expected = [
+        %{kind: :user, text: "first"},
+        %{kind: :assistant, text: "first done"},
+        %{kind: :user, text: "next"},
+        %{kind: :assistant, text: "second done"}
+      ]
+
+      assert State.current_entries(state(app)) == expected
+      rendered = screen(app)
+      assert rendered =~ "you › next"
+      assert length(Regex.scan(~r/alto ›/, rendered)) == 2
+      refute rendered =~ "Queued message:"
+      assert state(app).queued_messages == %{}
+
+      session_id = State.selected_task(state(app))["session_id"]
+
+      assert {:ok, %{messages: messages}} =
+               Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
+
+      assert Alto.ToolDisplay.transcript(messages) == expected
+    end
   end
 
   test "a queued follow-up starts after completion without changing the foreground draft", %{
@@ -70,6 +137,13 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert state(app).selected_task_id == nil
     assert ExRatatui.textarea_get_value(state(app).textarea) == "another task's draft"
     assert state(app).queued_messages == %{}
+
+    assert state(app).entries[original_task] == [
+             %{kind: :user, text: "first"},
+             %{kind: :assistant, text: "first done"},
+             %{kind: :user, text: "next"}
+           ]
+
     assert Enum.all?(state(app).runs, fn {_, run} -> run.task_id == original_task end)
     send(second, {:finish, "second done"})
     eventually(fn -> state(app).runs == %{} end)
@@ -96,6 +170,11 @@ defmodule Alto.TUI.RunLifecycleTest do
     key(app, "enter")
     assert_receive {:model_waiting, second, messages}, 5_000
     assert List.last(messages)["content"] == "next"
+
+    assert Enum.count(State.current_entries(state(app)), &(&1 == %{kind: :user, text: "next"})) ==
+             1
+
+    refute screen(app) =~ "Queued message:"
     send(second, {:finish, "done"})
     eventually(fn -> state(app).runs == %{} end)
   end
@@ -148,6 +227,13 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert_receive {:model_waiting, second, messages}, 5_000
     assert List.last(messages) == %{"role" => "user", "content" => "change direction"}
     eventually(fn -> state(app).queued_messages == %{} end)
+
+    assert List.last(State.current_entries(state(app))) == %{
+             kind: :user,
+             text: "change direction"
+           }
+
+    refute screen(app) =~ "Steering message:"
     send(second, {:finish, "second done"})
     eventually(fn -> state(app).runs == %{} end)
   end
@@ -228,7 +314,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert state(app).pending_approvals == []
   end
 
-  defp start_app(root, options \\ nil) do
+  defp start_app(root, options \\ nil, backend \\ Alto.TUI.Backends.Native) do
     options =
       options ||
         [
@@ -244,7 +330,11 @@ defmodule Alto.TUI.RunLifecycleTest do
           tools: []
         ]
 
-    config = Alto.Test.TUI.config(options ++ [session_dir: Path.join(root, "sessions")])
+    config =
+      options
+      |> Keyword.put(:tui_backends, alto: {backend, []})
+      |> Keyword.put(:session_dir, Path.join(root, "sessions"))
+      |> Alto.Test.TUI.config()
 
     {:ok, app} =
       App.start_link(
@@ -262,6 +352,12 @@ defmodule Alto.TUI.RunLifecycleTest do
   end
 
   defp state(app), do: :sys.get_state(app).user_state
+
+  defp screen(app) do
+    terminal = ExRatatui.init_test_terminal(160, 40)
+    :ok = ExRatatui.draw(terminal, App.render(state(app), %{width: 160, height: 40}))
+    ExRatatui.get_buffer_content(terminal)
+  end
 
   defp key(app, code, modifiers \\ []),
     do: Runtime.inject_event(app, %Key{code: code, kind: "press", modifiers: modifiers})

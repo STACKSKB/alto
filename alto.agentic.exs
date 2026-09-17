@@ -31,6 +31,20 @@ openrouter_options =
   ]
   |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
 
+openrouter_provider = {Alto.Providers.OpenAICompatible, openrouter_options}
+
+openrouter_provider =
+  if System.get_env("ALTO_REQUEST_DIAGNOSTICS") == "1" do
+    Alto.Providers.Observe.wrap(openrouter_provider, fn request ->
+      Logger.debug(fn ->
+        report = Alto.Providers.PrefixContinuity.report(request)
+        "Alto prefix continuity: #{inspect(report)}"
+      end)
+    end)
+  else
+    openrouter_provider
+  end
+
 external = fn env_name, executable ->
   case System.get_env(env_name) do
     path when is_binary(path) and path != "" -> path
@@ -72,14 +86,7 @@ Alto.Config.new(
     [
       id: "openrouter",
       label: "OpenRouter",
-      provider:
-        Alto.Providers.Observe.wrap(
-          {Alto.Providers.OpenAICompatible, openrouter_options},
-          fn request ->
-            report = Alto.Providers.PrefixContinuity.report(request)
-            Logger.debug(fn -> "Alto prefix continuity: #{inspect(report)}" end)
-          end
-        ),
+      provider: openrouter_provider,
       models: :discover,
       default_model: openrouter_model,
       credential_id: "openrouter"

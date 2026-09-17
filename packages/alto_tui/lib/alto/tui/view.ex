@@ -118,7 +118,7 @@ defmodule Alto.TUI.View do
       details_content
     else
       transcript =
-        if State.current_entries(state) == [], do: [], else: [content_rect(layout.transcript)]
+        if State.visible_entries(state) == [], do: [], else: [content_rect(layout.transcript)]
 
       composer =
         if ExRatatui.textarea_get_value(state.textarea) == "",
@@ -372,7 +372,7 @@ defmodule Alto.TUI.View do
   end
 
   defp transcript_text(state) do
-    case State.current_entries(state) do
+    case State.visible_entries(state) do
       [] ->
         "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
           "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
@@ -889,7 +889,7 @@ defmodule Alto.TUI.View do
   defp details_content(state, _presentation) do
     recent =
       state
-      |> State.current_entries()
+      |> State.visible_entries()
       |> Enum.filter(&(&1.kind in [:tool, :system, :error]))
       |> Enum.take(-12)
       |> Enum.map(fn entry ->

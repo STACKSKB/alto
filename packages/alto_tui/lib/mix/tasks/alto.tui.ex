@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Alto.Tui do
     project: :string,
     catalog: :string,
     credentials: :string,
+    log: :string,
     help: :boolean
   ]
   @aliases [c: :config, p: :project, h: :help]
@@ -32,6 +33,7 @@ defmodule Mix.Tasks.Alto.Tui do
         |> put_if(:project, Keyword.get(opts, :project))
         |> put_if(:path, Keyword.get(opts, :catalog))
         |> put_if(:credentials_path, Keyword.get(opts, :credentials))
+        |> put_if(:log_path, Keyword.get(opts, :log))
 
       case Alto.TUI.run(config, tui_opts) do
         :ok -> :ok
@@ -51,6 +53,7 @@ defmodule Mix.Tasks.Alto.Tui do
       --project, -p PATH  workspace to open (default: current directory)
       --catalog PATH      harness catalog override
       --credentials PATH  provider credential store override
+      --log PATH          TUI diagnostic log file override
 
     Ctrl+G is the gear leader. Follow it with B/A/P/M/E/W/T/N/D/Q.
     F2/F3/F4/F5 open approval/provider/model/backend directly; F6 toggles

@@ -364,6 +364,32 @@ defmodule Alto.TUI.State do
   def current_entries(%__MODULE__{} = state),
     do: Map.get(state.entries, state.selected_task_id || :scratch, [])
 
+  @doc "Transcript plus transient pending input, kept outside the streamed conversation."
+  def visible_entries(%__MODULE__{} = state) do
+    current_entries(state) ++ pending_entries(state)
+  end
+
+  defp pending_entries(state) do
+    pending =
+      case Map.get(state.inputs, state.selected_task_id) do
+        nil ->
+          case Map.get(state.queued_messages, state.selected_task_id) do
+            nil -> []
+            queued -> [%{text: queued.prompt, mode: :follow_up}]
+          end
+
+        input ->
+          Alto.Input.list(input)
+      end
+
+    Enum.map(pending, fn entry ->
+      label = if entry.mode == :steer, do: "Steering message: ", else: "Queued message: "
+      %{kind: :system, text: label <> entry.text}
+    end)
+  catch
+    :exit, _ -> []
+  end
+
   def put_entries(%__MODULE__{} = state, task_id, entries),
     do:
       %{state | entries: Map.put(state.entries, task_id || :scratch, bounded_entries(entries))}

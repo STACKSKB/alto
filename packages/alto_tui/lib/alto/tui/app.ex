@@ -421,10 +421,6 @@ defmodule Alto.TUI.App do
 
         state
         |> Map.update!(:queued_messages, &Map.put(&1, state.selected_task_id, submission))
-        |> State.append_entry(state.selected_task_id, %{
-          kind: :system,
-          text: "Queued message: " <> prompt
-        })
         |> Map.put(:notice, "message queued for the next turn · Esc stops current run")
     end
   end
@@ -446,7 +442,6 @@ defmodule Alto.TUI.App do
           input_id: input_id
         })
       )
-      |> State.append_entry(task_id, %{kind: :system, text: input_label(mode) <> prompt})
       |> Map.put(:notice, input_notice(mode))
     else
       {:error, :follow_up_pending} ->
@@ -465,8 +460,6 @@ defmodule Alto.TUI.App do
       else: :ok
   end
 
-  defp input_label(:steer), do: "Steering message: "
-  defp input_label(:follow_up), do: "Queued message: "
   defp input_notice(:steer), do: "steering message accepted · Enter queues a follow-up"
   defp input_notice(:follow_up), do: "message queued for the next turn · Esc stops current run"
 
@@ -937,11 +930,20 @@ defmodule Alto.TUI.App do
   defp do_ingest_event(state, task_id, %Event{type: :model_delta, data: %{text: text}}),
     do: State.append_assistant_delta(state, task_id, text)
 
-  defp do_ingest_event(state, task_id, %Event{type: :input_received, data: %{id: id}}) do
+  defp do_ingest_event(state, task_id, %Event{type: :input_received, data: %{id: id, text: text}}) do
     queued = Map.get(state.queued_messages, task_id)
 
-    if is_map(queued) and queued[:input_id] == id,
-      do: %{state | queued_messages: Map.delete(state.queued_messages, task_id)},
+    state =
+      if is_map(queued) and queued[:input_id] == id,
+        do: %{state | queued_messages: Map.delete(state.queued_messages, task_id)},
+        else: state
+
+    # Native input continues within the same run, bypassing attach_started_run.
+    # Insert its user turn before any response deltas can extend the previous one.
+    state = State.append_entry(state, task_id, %{kind: :user, text: text})
+
+    if state.selected_task_id == task_id,
+      do: %{state | notice: "message started"},
       else: state
   end
 
