@@ -265,4 +265,59 @@ defmodule Alto.Command.Executors.BubblewrapTest do
       max_output_bytes: 1_000
     }
   end
+
+  @tag skip: @bwrap_skip
+  test "protected workspace paths survive commands while ordinary files remain writable", %{
+    root: root,
+    context: context
+  } do
+    git = Path.join(root, ".git")
+    File.mkdir!(git)
+    File.write!(Path.join(git, "config"), "original")
+
+    assert {:ok, %{exit_status: 0}} =
+             Alto.Command.run(
+               %{
+                 "program" => "sh",
+                 "args" => [
+                   "-c",
+                   "printf changed > .git/config; rm -rf .git; printf ok > ordinary.txt"
+                 ]
+               },
+               context,
+               executor: {Bubblewrap, protected_paths: [".git"]}
+             )
+
+    assert File.read!(Path.join(git, "config")) == "original"
+    assert File.read!(Path.join(root, "ordinary.txt")) == "ok"
+
+    assert {:ok, %{exit_status: 0}} =
+             Alto.Command.run(
+               %{"program" => "sh", "args" => ["-c", "printf approved > .git/config"]},
+               context,
+               executor: {Bubblewrap, protected_paths: []}
+             )
+
+    assert File.read!(Path.join(git, "config")) == "approved"
+  end
+
+  @tag skip: @bwrap_skip
+  test "protection does not create metadata in a non-repository", %{root: root, context: context} do
+    assert {:ok, %{exit_status: 0}} =
+             Alto.Command.run(%{"program" => "true"}, context,
+               executor: {Bubblewrap, protected_paths: [".git"]}
+             )
+
+    refute File.exists?(Path.join(root, ".git"))
+  end
+
+  test "protected paths cannot escape or alias another location", %{root: root, context: context} do
+    File.mkdir!(Path.join(root, "metadata"))
+    File.ln_s!("metadata", Path.join(root, ".git"))
+
+    for path <- ["../outside", "/etc", ".", ".git"] do
+      assert {:error, {:invalid_protected_path, ^path}} =
+               prepare_with_opts(context, protected_paths: [path])
+    end
+  end
 end

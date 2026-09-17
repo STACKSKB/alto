@@ -71,6 +71,9 @@ defmodule Alto.Providers.OpenAICompatible do
         |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
         |> Alto.Providers.PromptCache.compatible(request, config)
 
+      body =
+        if request[:tool_choice] == :none, do: Map.put(body, "tool_choice", "none"), else: body
+
       state = new_request_state(config.max_event_bytes, config.max_response_bytes)
 
       into = fn {:data, data}, {req, response} ->

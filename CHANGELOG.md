@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Confine project instruction files to the workspace and bound reads before loading.
+- Reject oversized compaction inputs intact, support pinned initial messages, and
+  append built-in reduction instructions to the original conversation by default.
+- Add optional executor-backed stdio launch for MCP, and sandbox FFF/Ripwire in
+  the coding profile with executor-specific client reuse.
+- Add composable protected paths for sandbox mounts and native file-tool wrappers;
+  the CLI and coding profile protect `.git`, with explicit Git mutation authority.
+- Authenticate loopback WebSocket upgrades by default using a per-listener token;
+  preserve custom authentication and explicit trusted-transport configuration.
 - Add exact multi-edit batches with bounded descriptor reads and approval diffs;
   keep original-snapshot matching and stale-write rejection.
 - Add explicit bounded parallel tool groups with ordered outcomes, shared budgets,

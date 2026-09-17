@@ -15,8 +15,9 @@ defmodule Alto.Context.TranscriptTest do
       %{"role" => "assistant", "content" => "done"}
     ]
 
-    for keep <- 1..length(messages) do
-      {system, old, recent} = Transcript.split(messages, keep)
+    for keep <- 1..length(messages), initial <- 0..length(messages) do
+      {system, old, recent} = Transcript.split(messages, keep, initial)
+      assert :ok = Transcript.validate(system)
       assert :ok = Transcript.validate(system ++ old)
       assert :ok = Transcript.validate(system ++ recent)
       assert system ++ old ++ recent == messages

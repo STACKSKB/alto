@@ -141,6 +141,11 @@ defmodule Alto.Providers.Anthropic do
       body =
         if has_system?, do: Map.put(body, "system", system_content), else: body
 
+      body =
+        if request[:tool_choice] == :none,
+          do: Map.put(body, "tool_choice", %{"type" => "none"}),
+          else: body
+
       tools =
         Enum.map(Map.get(request, :tools, []), fn %{"function" => tool} ->
           %{

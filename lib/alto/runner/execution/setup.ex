@@ -343,9 +343,19 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp resolve_project_instructions(opts, cwd, _provider) do
     case Keyword.get(opts, :project_instructions) do
-      nil -> {:ok, nil}
-      :auto -> Alto.Project.load(cwd)
-      other -> {:error, {:invalid_project_instructions, other}}
+      nil ->
+        {:ok, nil}
+
+      :auto ->
+        Alto.Project.load(cwd)
+
+      options when is_list(options) ->
+        if Keyword.keyword?(options),
+          do: Alto.Project.load(cwd, options),
+          else: {:error, {:invalid_project_instructions, options}}
+
+      other ->
+        {:error, {:invalid_project_instructions, other}}
     end
   end
 
@@ -425,6 +435,9 @@ defmodule Alto.Runner.Execution.Setup do
     strategy: :summary,
     max_compactions: @default_max_compactions,
     keep_recent_messages: @default_compaction_keep_messages,
+    keep_initial_messages: 0,
+    max_input_bytes: 100_000,
+    request_mode: :transcript,
     max_summary_bytes: @default_compaction_max_summary_bytes,
     max_handoff_bytes: @default_compaction_max_handoff_bytes,
     artifact_dir: nil
@@ -438,6 +451,15 @@ defmodule Alto.Runner.Execution.Setup do
       with {:ok, normalized} <- Keyword.validate(opts, @compaction_defaults),
            :ok <- validate_compaction_strategy(Keyword.fetch!(normalized, :strategy)),
            :ok <- positive(:max_compactions, Keyword.fetch!(normalized, :max_compactions)),
+           :ok <-
+             non_negative(
+               :keep_initial_messages,
+               Keyword.fetch!(normalized, :keep_initial_messages)
+             ),
+           :ok <- positive(:max_input_bytes, Keyword.fetch!(normalized, :max_input_bytes)),
+           true <-
+             Keyword.fetch!(normalized, :request_mode) in [:transcript, :isolated] or
+               {:error, :invalid_request_mode},
            :ok <-
              positive(:keep_recent_messages, Keyword.fetch!(normalized, :keep_recent_messages)),
            :ok <- positive(:max_summary_bytes, Keyword.fetch!(normalized, :max_summary_bytes)),

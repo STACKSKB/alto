@@ -575,3 +575,29 @@ available only when the host configures the corresponding stores.
 compiled configurations. Clients should use `attach` and `from_seq` with the
 retained event window, and treat an `overflow` message as the explicit signal
 that replay history is incomplete.
+
+## Web transport authentication
+
+The optional loopback WebServer now authenticates upgrades by default, in addition
+to rejecting foreign browser origins. `auth: :token` generates a new 256-bit
+capability per listener lifetime. `Alto.Listeners.WebServer.url/1` returns the GUI
+URL with that token in its fragment; the CLI prints this URL on `--serve`. The HTML
+page does not contain or disclose the token. Treat the launch URL as a credential.
+The GUI moves the token to tab-local session storage, removes the fragment from
+browser history, and supplies it in a WebSocket subprotocol header.
+
+Native clients send `Authorization: Bearer TOKEN` on `GET /ws`. Browser clients
+offer both `alto.v1` and `alto-auth.TOKEN` in `Sec-WebSocket-Protocol`; the server
+selects `alto.v1` without reflecting the credential. Missing, incorrect, or
+ambiguous credentials receive HTTP 403 before protocol initialization. Native
+clients may omit Origin but still need authentication; authenticated browser
+connections must still pass the loopback-origin/port check. Protocol envelopes,
+approval messages, and Unix-socket behavior are unchanged.
+
+Listener configuration can select `auth: {:token, token}` (at least 32 URL-safe
+characters), `{MyVerifier, options}` implementing
+`Alto.Listeners.WebAuth.authorize/2`, or explicit `auth: :none` for a host that
+provides its own trusted transport. Verifiers return `:ok` or `{:error, reason}`;
+invalid results and exceptions deny access. Custom authentication may require a
+custom client. Existing WebSocket clients must now supply a credential or hosts
+must explicitly select a different policy.

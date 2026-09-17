@@ -12,6 +12,15 @@ defmodule Alto.Command.Executors.Unsandboxed do
   end
 
   @impl true
+  def open(%Invocation{} = invocation, opts) do
+    ExternalProcess.open(
+      invocation.executable,
+      invocation.args,
+      Keyword.put(opts, :cwd, invocation.cwd)
+    )
+  end
+
+  @impl true
   def execute(%Invocation{} = invocation) do
     started_ms = System.monotonic_time(:millisecond)
 

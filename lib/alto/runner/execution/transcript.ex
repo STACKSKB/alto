@@ -4,8 +4,11 @@ defmodule Alto.Runner.Execution.Transcript do
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Events
-  @default_compaction_summary_input_bytes 100_000
+
   @fields [
+    :tool_definitions,
+    :model_tools,
+    :request_model_tools,
     :messages_rev,
     :transcript_bytes,
     :max_transcript_bytes,
@@ -26,6 +29,9 @@ defmodule Alto.Runner.Execution.Transcript do
   defmodule State do
     @moduledoc "Transcript, model-compaction capabilities, and retained events."
     defstruct [
+      :tool_definitions,
+      :model_tools,
+      :request_model_tools,
       :messages_rev,
       :transcript_bytes,
       :max_transcript_bytes,
@@ -141,19 +147,23 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   defp compact_middle(run, required_headroom, reason) do
-    case Keyword.fetch!(run.compaction, :strategy) do
-      :summary -> summarize_middle(run, required_headroom, reason)
-      :handoff -> handoff_middle(run, required_headroom, reason)
-      {module, opts} -> custom_compaction(run, module, opts, required_headroom, reason)
+    {_pinned, middle, _recent} = reduction_parts(run)
+    limit = Keyword.get(run.compaction, :max_input_bytes, 100_000)
+    bytes = byte_size(render_for_summary(middle))
+
+    if bytes > limit do
+      record_compact_failed(run, {:compaction_input_limit, bytes, limit})
+    else
+      case Keyword.fetch!(run.compaction, :strategy) do
+        :summary -> summarize_middle(run, required_headroom, reason)
+        :handoff -> handoff_middle(run, required_headroom, reason)
+        {module, opts} -> custom_compaction(run, module, opts, required_headroom, reason)
+      end
     end
   end
 
   defp custom_compaction(run, module, opts, required_headroom, reason) do
-    {system, middle, recent} =
-      Transcript.split(
-        Enum.reverse(run.messages_rev),
-        Keyword.fetch!(run.compaction, :keep_recent_messages)
-      )
+    {system, middle, recent} = reduction_parts(run)
 
     limit = Keyword.fetch!(run.compaction, :max_summary_bytes)
     input = render_for_summary(middle)
@@ -370,11 +380,8 @@ defmodule Alto.Runner.Execution.Transcript do
     do: {:error, :compaction_requires_provider, run}
 
   defp summarize_middle(run, required_headroom, reason) do
-    keep = Keyword.fetch!(run.compaction, :keep_recent_messages)
     max_summary = Keyword.fetch!(run.compaction, :max_summary_bytes)
-    messages = Enum.reverse(run.messages_rev)
-
-    {system, middle, recent} = Transcript.split(messages, keep)
+    {system, middle, recent} = reduction_parts(run)
 
     if middle == [] do
       {:error, :transcript_uncompactable, run}
@@ -395,11 +402,8 @@ defmodule Alto.Runner.Execution.Transcript do
     do: {:error, :compaction_requires_provider, run}
 
   defp handoff_middle(run, required_headroom, reason) do
-    keep = Keyword.fetch!(run.compaction, :keep_recent_messages)
     max_handoff = Keyword.fetch!(run.compaction, :max_handoff_bytes)
-    messages = Enum.reverse(run.messages_rev)
-
-    {system, middle, recent} = Transcript.split(messages, keep)
+    {system, middle, recent} = reduction_parts(run)
 
     if middle == [] do
       {:error, :transcript_uncompactable, run}
@@ -442,10 +446,16 @@ defmodule Alto.Runner.Execution.Transcript do
           with :ok <- take_compaction_model(run) do
             provider.stream(
               %{
-                messages: [
-                  %{"role" => "user", "content" => Alto.Handoff.prompt(input, max_handoff)}
-                ],
-                tools: []
+                messages:
+                  reduction_request(
+                    run,
+                    system,
+                    middle,
+                    Alto.Handoff.prompt(input, max_handoff),
+                    Alto.Handoff.prompt("Use the preceding conversation.", max_handoff)
+                  ),
+                tools: reduction_tools(run),
+                tool_choice: :none
               },
               sink,
               provider_opts
@@ -599,10 +609,16 @@ defmodule Alto.Runner.Execution.Transcript do
           with :ok <- take_compaction_model(run) do
             provider.stream(
               %{
-                messages: [
-                  %{"role" => "user", "content" => prompt <> "\n\nTranscript:\n" <> input}
-                ],
-                tools: []
+                messages:
+                  reduction_request(
+                    run,
+                    system,
+                    middle,
+                    prompt <> "\n\nTranscript:\n" <> input,
+                    prompt <> " Use the preceding conversation."
+                  ),
+                tools: reduction_tools(run),
+                tool_choice: :none
               },
               sink,
               provider_opts
@@ -776,32 +792,46 @@ defmodule Alto.Runner.Execution.Transcript do
     Enum.reduce(messages, 0, fn message, total -> total + byte_size(JSON.encode!(message)) end)
   end
 
-  # The summarizer sees the most recent slice of the dropped middle,
-  # capped in bytes and cut on a UTF-8 boundary so the prompt stays valid.
-  defp render_for_summary(messages) do
-    rendered =
-      messages
-      |> Enum.map(fn
-        %{"role" => role, "content" => content} when is_binary(content) -> role <> ": " <> content
-        %{"role" => role} = message -> role <> ": " <> JSON.encode!(message)
+  defp reduction_parts(run) do
+    Transcript.split(
+      Enum.reverse(run.messages_rev),
+      Keyword.fetch!(run.compaction, :keep_recent_messages),
+      Keyword.get(run.compaction, :keep_initial_messages, 0)
+    )
+  end
+
+  defp reduction_tools(run) do
+    if Keyword.get(run.compaction, :request_mode, :transcript) == :transcript do
+      exposure = Map.get(run, :request_model_tools) || Map.get(run, :model_tools)
+
+      Enum.filter(Map.get(run, :tool_definitions) || [], fn tool ->
+        is_nil(exposure) or MapSet.member?(exposure, tool["function"]["name"])
       end)
-      |> Enum.join("\n")
-
-    take_trailing_bytes(rendered, @default_compaction_summary_input_bytes)
-  end
-
-  defp take_trailing_bytes(rendered, max) do
-    drop_to_valid(rendered, max(byte_size(rendered) - max, 0))
-  end
-
-  defp drop_to_valid(rendered, start) do
-    tail = binary_part(rendered, start, byte_size(rendered) - start)
-
-    if String.valid?(tail) do
-      tail
     else
-      drop_to_valid(rendered, start + 1)
+      []
     end
+  end
+
+  defp reduction_request(run, pinned, middle, isolated_prompt, transcript_prompt) do
+    case Keyword.get(run.compaction, :request_mode, :transcript) do
+      :isolated -> [%{"role" => "user", "content" => isolated_prompt}]
+      :transcript -> pinned ++ middle ++ [%{"role" => "user", "content" => transcript_prompt}]
+    end
+  end
+
+  # Every removed message reaches the reducer. The caller rejects oversized
+  # input before dispatch instead of silently discarding the oldest facts.
+  defp render_for_summary(messages) do
+    messages
+    |> Enum.map(fn
+      %{"role" => role, "content" => content} = message
+      when is_binary(content) and map_size(message) == 2 ->
+        role <> ": " <> content
+
+      %{"role" => role} = message ->
+        role <> ": " <> JSON.encode!(message)
+    end)
+    |> Enum.join("\n")
   end
 
   defp record_event(run, event), do: %{run | events: Events.record(run.events, event)}

@@ -104,7 +104,16 @@ defmodule Alto.Listeners.WebServerTest do
     start_supervised!({WebServer, registry: registry, port: 0, name: listener})
     port = WebServer.bound_port(listener)
 
-    %{registry: registry, listener: listener, port: port}
+    token =
+      WebServer.url(listener)
+      |> URI.parse()
+      |> Map.fetch!(:fragment)
+      |> URI.decode_query()
+      |> Map.fetch!("token")
+
+    Process.put(:web_token, token)
+
+    %{registry: registry, listener: listener, port: port, token: token}
   end
 
   test "serves the GUI page on GET /", %{port: port} do
@@ -218,7 +227,62 @@ defmodule Alto.Listeners.WebServerTest do
     assert %{"type" => "error", "id" => "c-9", "code" => "unknown_run"} = error
   end
 
+  test "missing and incorrect credentials cannot upgrade, including without Origin", %{
+    port: port,
+    token: token
+  } do
+    for origin <- [nil, "http://localhost:#{port}"],
+        credential <- [nil, String.duplicate("x", 43)] do
+      {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])
+      headers = if origin, do: "Origin: #{origin}\r\n", else: ""
+      headers = headers <> if credential, do: "Authorization: Bearer #{credential}\r\n", else: ""
+
+      :ok =
+        :gen_tcp.send(
+          socket,
+          "GET /ws HTTP/1.1\r\nHost: localhost:#{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" <>
+            headers <> "\r\n"
+        )
+
+      {:ok, response} = :gen_tcp.recv(socket, 0, 2_000)
+      assert response =~ "403"
+      refute response =~ token
+      :gen_tcp.close(socket)
+    end
+  end
+
+  test "authenticated native clients need no Origin header", %{port: port} do
+    {socket, buffer} = ws_connect(port, nil)
+    {hello, _buffer} = recv_envelope(socket, buffer)
+    assert hello["type"] == "hello"
+    :gen_tcp.close(socket)
+  end
+
   ## WebSocket test helpers
+
+  @tag skip: if(System.find_executable("node"), do: nil, else: "requires Node WebSocket")
+  test "browser-compatible WebSocket client authenticates using the token subprotocol", %{
+    port: port,
+    token: token
+  } do
+    script = """
+    const socket = new WebSocket(process.argv[1], ['alto.v1', 'alto-auth.' + process.argv[2]]);
+    const timeout = setTimeout(() => process.exit(2), 5000);
+    socket.onerror = () => process.exit(3);
+    socket.onmessage = event => {
+      if (JSON.parse(event.data).type === 'hello') {
+        clearTimeout(timeout); socket.close(); console.log('authenticated');
+      }
+    };
+    """
+
+    assert {"authenticated\n", 0} =
+             System.cmd(
+               System.find_executable("node"),
+               ["-e", script, "ws://127.0.0.1:#{port}/ws", token],
+               stderr_to_stdout: true
+             )
+  end
 
   defp ws_connect(port, origin) do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
@@ -233,6 +297,7 @@ defmodule Alto.Listeners.WebServerTest do
         key <>
         "\r\n" <>
         "Sec-WebSocket-Version: 13\r\n" <>
+        "Sec-WebSocket-Protocol: alto-auth.#{Process.get(:web_token)}\r\n" <>
         if(origin, do: "Origin: " <> origin <> "\r\n", else: "") <>
         "\r\n"
 

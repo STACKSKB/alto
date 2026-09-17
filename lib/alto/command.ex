@@ -33,6 +33,13 @@ defmodule Alto.Command do
     executor.execute(execution)
   end
 
+  @doc "Open an already prepared execution for a bounded, retained stdio client."
+  def open(%Prepared{executor: executor, execution: execution}, opts \\ []) do
+    if function_exported?(executor, :open, 2),
+      do: executor.open(execution, opts),
+      else: {:error, {:executor_stdio_unsupported, executor}}
+  end
+
   @spec run(map(), Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, prepared} <- prepare(arguments, context, opts) do

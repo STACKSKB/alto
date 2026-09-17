@@ -25,6 +25,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
            validate_workspace_mode(Keyword.get(opts, :workspace, :read_write)),
          {:ok, read_only_paths} <- paths_option(opts, :read_only_paths),
          {:ok, writable_paths} <- paths_option(opts, :writable_paths),
+         {:ok, protected_paths} <- protected_paths(invocation.cwd, opts),
          {:ok, environment} <- environment(Keyword.get(opts, :env, %{})) do
       arguments =
         namespace_args(network) ++
@@ -34,6 +35,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
           mount_args(invocation.cwd, invocation.cwd, workspace_mode) ++
           Enum.flat_map(read_only_paths, &mount_args(&1, &1, :read_only)) ++
           Enum.flat_map(writable_paths, &mount_args(&1, &1, :read_write)) ++
+          Enum.flat_map(protected_paths, &protect_args/1) ++
           ["--chdir", invocation.cwd, "--clearenv"] ++
           environment_args(environment) ++
           ["--", invocation.executable | invocation.args]
@@ -59,6 +61,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
         workspace: workspace_mode,
         read_only_paths: read_only_paths,
         writable_paths: writable_paths,
+        protected_paths: protected_paths,
         environment_variables: environment |> Map.keys() |> Enum.sort()
       }
 
@@ -72,6 +75,15 @@ defmodule Alto.Command.Executors.Bubblewrap do
       {:ok, result} -> {:ok, Map.put(result, :sandbox, sandbox)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @impl true
+  def open(%Execution{invocation: invocation}, opts) do
+    # Target environment is fixed by prepare/2 inside --clearenv. A stdio host
+    # cannot inject new environment authority after preparation.
+    if Keyword.get(opts, :env, %{}) == %{},
+      do: Unsandboxed.open(invocation, Keyword.delete(opts, :env)),
+      else: {:error, :configure_environment_on_executor}
   end
 
   defp resolve_bubblewrap(opts) do
@@ -120,6 +132,38 @@ defmodule Alto.Command.Executors.Bubblewrap do
   end
 
   defp valid_mount_path?(_path), do: false
+
+  # Apply protected workspace mounts last; ordinary writable mounts must not
+  # override them. Absent paths have no existing metadata to protect.
+  defp protected_paths(cwd, opts) do
+    paths = Keyword.get(opts, :protected_paths, [])
+
+    if is_list(paths) do
+      Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
+        with true <- is_binary(path) and Path.type(path) == :relative and path != ".",
+             {:ok, resolved} <- Alto.Tools.Path.resolve(path, cwd),
+             true <- resolved != Path.expand(cwd),
+             true <- resolved == Path.expand(path, cwd),
+             {:ok, stat} <- File.lstat(resolved) do
+          if stat.type in [:regular, :directory],
+            do: {:cont, {:ok, acc ++ [resolved]}},
+            else: {:halt, {:error, {:invalid_protected_path, path}}}
+        else
+          {:error, :enoent} ->
+            {:cont, {:ok, acc}}
+
+          _ ->
+            {:halt, {:error, {:invalid_protected_path, path}}}
+        end
+      end)
+    else
+      {:error, {:invalid_protected_paths, paths}}
+    end
+  end
+
+  defp protect_args(path) do
+    ["--ro-bind", path, path]
+  end
 
   defp environment(extra) when is_map(extra), do: environment(Map.to_list(extra))
 
@@ -171,7 +215,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
 
   defp mount_args(source, destination, mode) do
     bind = if mode == :read_only, do: "--ro-bind", else: "--bind"
-    directory_args(destination) ++ [bind, source, destination]
+    directory_args(Path.dirname(destination)) ++ [bind, source, destination]
   end
 
   defp directory_args(path) do

@@ -37,7 +37,7 @@ defmodule Alto.Project do
     max_bytes = Keyword.get(opts, :max_bytes, @max_instruction_bytes)
 
     Enum.find_value(files, {:ok, nil}, fn name ->
-      case read_instructions(Path.join(cwd, name), max_bytes) do
+      case read_instructions(name, cwd, max_bytes) do
         :missing -> nil
         {:ok, instructions} -> {:ok, instructions}
         {:error, reason} -> {:error, {name, reason}}
@@ -45,18 +45,44 @@ defmodule Alto.Project do
     end)
   end
 
-  defp read_instructions(path, max_bytes) do
-    case File.read(path) do
-      {:ok, content} ->
-        with :ok <- validate_utf8(content) do
-          {:ok, bounded(path, content, max_bytes)}
+  defp read_instructions(name, cwd, max_bytes) do
+    with true <- (is_integer(max_bytes) and max_bytes > 0) or {:error, :invalid_max_bytes},
+         {:ok, path} <- Alto.Tools.Path.resolve(name, cwd),
+         {:ok, %{type: :regular}} <- File.stat(path) do
+      File.open(path, [:read, :binary], fn io ->
+        case IO.binread(io, max_bytes + 4) do
+          :eof -> {:ok, bounded(path, "", max_bytes)}
+          {:error, reason} -> {:error, reason}
+          content -> decode_bounded(path, content, max_bytes)
         end
+      end)
+      |> case do
+        {:ok, result} -> result
+        error -> error
+      end
+    else
+      {:error, :enoent} -> :missing
+      {:ok, _stat} -> {:error, :instructions_not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-      {:error, :enoent} ->
-        :missing
+  defp decode_bounded(path, content, max_bytes) when byte_size(content) > max_bytes do
+    # At most three trailing bytes can be an incomplete UTF-8 code point.
+    # Never hide malformed bytes earlier in the retained prefix.
+    prefix = binary_part(content, 0, max_bytes)
 
-      {:error, reason} ->
-        {:error, reason}
+    case :unicode.characters_to_binary(prefix, :utf8, :utf8) do
+      kept when is_binary(kept) -> {:ok, %{bounded(path, kept, max_bytes) | truncated: true}}
+      {:incomplete, kept, _tail} -> {:ok, %{bounded(path, kept, max_bytes) | truncated: true}}
+      {:error, _kept, _tail} -> {:error, :instructions_not_utf8}
+    end
+  end
+
+  defp decode_bounded(path, content, max_bytes) do
+    case validate_utf8(content) do
+      :ok -> {:ok, bounded(path, content, max_bytes)}
+      error -> error
     end
   end
 
@@ -64,31 +90,12 @@ defmodule Alto.Project do
     if String.valid?(content), do: :ok, else: {:error, :instructions_not_utf8}
   end
 
-  defp bounded(path, content, max_bytes) when byte_size(content) <= max_bytes do
+  defp bounded(path, content, _max_bytes) do
     %{
       path: path,
       file: Path.basename(path),
       instructions: content,
       truncated: false
     }
-  end
-
-  defp bounded(path, content, max_bytes) do
-    %{
-      path: path,
-      file: Path.basename(path),
-      instructions: truncate_to_code_point(binary_part(content, 0, max_bytes)),
-      truncated: true
-    }
-  end
-
-  defp truncate_to_code_point(kept) do
-    if String.valid?(kept) do
-      kept
-    else
-      # binary_part may cut the last code point; drop whole trailing bytes
-      # until the remainder is valid UTF-8 again.
-      truncate_to_code_point(binary_part(kept, 0, byte_size(kept) - 1))
-    end
   end
 end

@@ -450,7 +450,7 @@ defmodule Alto.CLI do
     do: "listening on #{Path.expand(Keyword.fetch!(opts, :path))}"
 
   defp describe_listener(WebServer, _opts, listener),
-    do: "serving GUI at http://127.0.0.1:#{WebServer.bound_port(listener)}"
+    do: "serving GUI at #{WebServer.url(listener)}"
 
   defp describe_listener(Webhook, opts, listener) do
     paths =
@@ -793,7 +793,10 @@ defmodule Alto.CLI do
       []
     else
       [ListFiles, ReadFile, SearchFiles] ++
-        if(write_enabled?, do: [EditFile, WriteFile], else: []) ++
+        if(write_enabled?,
+          do: Enum.map([EditFile, WriteFile], &Alto.Tools.ProtectPaths.wrap(&1, [".git"])),
+          else: []
+        ) ++
         command_tools(command_mode, options)
     end
   end
@@ -829,7 +832,8 @@ defmodule Alto.CLI do
       if Keyword.get(options, :allow_command_network, false), do: :inherit, else: :disabled
 
     [
-      {RunCommand, executor: {Alto.Command.Executors.Bubblewrap, network: network}}
+      {RunCommand,
+       executor: {Alto.Command.Executors.Bubblewrap, network: network, protected_paths: [".git"]}}
     ]
   end
 

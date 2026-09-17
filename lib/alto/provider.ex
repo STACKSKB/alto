@@ -1,5 +1,12 @@
 defmodule Alto.Provider do
-  @moduledoc "Contract for provider adapters. Provider calls run under runtime supervision."
+  @moduledoc """
+  Contract for provider adapters. Provider calls run under runtime supervision.
+
+  A request may set `tool_choice: :none` to retain historical tool schemas while
+  requesting text only (for example, context reduction). Adapters translate it
+  to their wire protocol. Reduction never dispatches returned tool calls, even
+  if an adapter or model ignores this hint.
+  """
 
   alias Alto.Event
 

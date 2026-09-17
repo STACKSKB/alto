@@ -72,3 +72,79 @@ renderer without changing tools or providers. Provider adapters are also
 optional dependencies at the application boundary. A host can select a native
 adapter or an OpenAI-compatible endpoint and keep credentials, retries, and
 provider-specific setup outside the core execution contract.
+
+## Composable isolation and protected paths
+
+The library keeps executor selection explicit. `Alto.Command` still defaults to
+`Unsandboxed` for trusted host workflows; the CLI requires `--allow-command` for
+that authority. `--sandbox-command` and the shipped coding profile select
+Bubblewrap with networking disabled and existing `.git` metadata read-only.
+Ordinary workspace files remain writable. This protects metadata, not all work
+against deletion; hosts can select `workspace: :read_only` or isolated workspaces.
+
+Bubblewrap accepts `protected_paths: [".git", "other-metadata"]`, relative to the
+workspace. These read-only mounts are applied after configured writable mounts.
+Paths escaping the workspace or resolving through symlinks are rejected. Missing
+paths are skipped without creating host files. A Git worktree's `.git` file is
+protected, but its external Git directory is not automatically exposed. Hosts
+must configure additional mounts explicitly when they need that directory.
+`protected_paths: []` retains unrestricted workspace writes. The dedicated,
+approval-required Git mutation tool in the coding profile uses that explicit
+setting; ordinary command and analysis tools keep `.git` protected.
+
+Native file tools can apply the same policy through the existing transform seam:
+
+```elixir
+Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"])
+Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"])
+```
+
+The wrapper rejects lexical and resolved targets within protected paths, including
+symlink aliases, while retaining the wrapped tool's approval and frozen preparation
+contracts. Unwrapped tools retain their workspace-wide behavior. The CLI and
+coding profile use these wrappers; custom hosts select their own paths and tools.
+
+## Retained subprocesses
+
+MCP server options and `Alto.Tools.FFF.tools/1` accept an `executor:` using the same
+`Alto.Command.Executor` contract as command tools. Executors may implement the
+optional `open(prepared, transport_options)` callback, returning an
+`Alto.External.Process`. MCP owns framing, request deadlines, message limits and
+process lifetime. An executor without `open/2` fails closed; Alto never falls back
+to host execution. Client reuse includes the executor and its options in its key.
+Existing custom executors implementing only `prepare/2` and `execute/1` continue
+to work for ordinary command tools.
+
+```elixir
+sandbox = {Alto.Command.Executors.Bubblewrap,
+  network: :disabled, protected_paths: [".git"],
+  env: %{"MY_TOOL_SETTING" => "value"}}
+
+Alto.Tools.FFF.tools(executable: "/usr/local/bin/fff-mcp", executor: sandbox)
+{Alto.Tools.Ripwire, executable: "/usr/local/bin/ripwire", executor: sandbox}
+```
+
+Put sandbox environment variables in the executor's `env:` option. Bubblewrap
+rejects additional transport-level environment overrides after preparation.
+Unsandboxed MCP retains its existing server-level `env:` option. Both adapters
+remain unsandboxed unless a host selects an executor; the shipped coding profile
+selects Bubblewrap for both, exposes the selected executable read-only, and gives
+it a temporary home. Additional language runtimes or caches outside `/usr` and
+`/etc` require explicit mounts. Missing sandbox support is an error, not a fallback.
+
+## Project instruction inputs
+
+`project_instructions: :auto` loads `alto.md` or `AGENTS.md`. A host can instead
+provide `[files: ["CUSTOM.md"], max_bytes: 16_000]`, or `nil` to disable discovery.
+Candidates must resolve inside the workspace and be regular files. The loader
+reads only the configured prefix plus four bytes for UTF-8 boundary handling,
+rejects malformed retained text, and marks truncation. It does not scan or validate
+the omitted tail. Prompt builders remain replaceable, and resume retains the
+stored prompt rather than reloading these files.
+
+Provider adapters can honor the protocol-neutral request hint `tool_choice: :none`
+while retaining schemas needed by historical tool messages. The built-in
+OpenAI-compatible and Anthropic adapters translate it to their respective wire
+formats. Built-in context reduction uses this hint with transcript requests;
+custom adapters can use `request_mode: :isolated` until they support it. No reducer
+response dispatches tools through the execution host.

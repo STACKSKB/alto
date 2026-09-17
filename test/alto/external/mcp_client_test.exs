@@ -226,4 +226,96 @@ defmodule Alto.External.MCP.ClientTest do
       eventually(fun, attempts - 1)
     end
   end
+
+  defmodule RecordingExecutor do
+    @behaviour Alto.Command.Executor
+    def prepare(invocation, opts), do: {:ok, {invocation, opts}, %{backend: :recording}}
+    def execute(_), do: {:error, :stdio_only}
+
+    def open({invocation, opts}, transport) do
+      send(opts[:owner], {:executor_opened, opts[:label]})
+      Alto.Command.Executors.Unsandboxed.open(invocation, transport)
+    end
+  end
+
+  defmodule NoStdioExecutor do
+    @behaviour Alto.Command.Executor
+    def prepare(invocation, _), do: {:ok, invocation, %{backend: :no_stdio}}
+    def execute(_), do: raise("must not execute as fallback")
+  end
+
+  test "retained clients use the selected executor and partition reuse by its options", %{
+    root: root,
+    server: server
+  } do
+    base = [command: server, cwd: root, startup_timeout: 5_000]
+    first = Keyword.put(base, :executor, {RecordingExecutor, owner: self(), label: :first})
+    second = Keyword.put(base, :executor, {RecordingExecutor, owner: self(), label: :second})
+    assert {:ok, one} = Client.ensure_started(first)
+    assert_received {:executor_opened, :first}
+    assert {:ok, ^one} = Client.ensure_started(first)
+    refute_received {:executor_opened, :first}
+    assert {:ok, two} = Client.ensure_started(second)
+    assert_received {:executor_opened, :second}
+    refute one == two
+    Client.stop(one)
+    Client.stop(two)
+    assert {:error, _} = Client.ensure_started(Keyword.put(base, :executor, NoStdioExecutor))
+  end
+
+  @tag skip:
+         if(System.find_executable("bwrap") && System.find_executable("python3"),
+           do: nil,
+           else: "requires Bubblewrap and Python"
+         )
+  test "MCP runs with no host secrets or network and cannot alter protected metadata", %{
+    root: root
+  } do
+    outside = root <> "-outside"
+    File.write!(outside, "synthetic secret")
+    on_exit(fn -> File.rm(outside) end)
+    File.mkdir!(Path.join(root, ".git"))
+    File.write!(Path.join(root, ".git/config"), "original")
+    host_net = File.read_link!("/proc/self/ns/net")
+    script = Path.join(root, "probe.py")
+
+    File.write!(script, """
+    import json, os, sys
+    for line in sys.stdin:
+        request = json.loads(line)
+        if 'id' not in request:
+            continue
+        if request['method'] == 'initialize':
+            result = {'protocolVersion': '2025-11-25', 'capabilities': {}, 'serverInfo': {'name': 'probe', 'version': '1'}}
+        else:
+            try:
+                with open('.git/config', 'w') as f:
+                    f.write('bad')
+                protected = False
+            except OSError:
+                protected = True
+            result = {'outside_visible': os.path.exists(sys.argv[1]), 'network': os.readlink('/proc/self/ns/net'), 'protected': protected, 'configured': os.getenv('ALTO_MCP_EXPLICIT'), 'home': os.getenv('HOME')}
+        print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+    """)
+
+    assert {:ok, client} =
+             Client.ensure_started(
+               command: "/usr/bin/python3",
+               args: [script, outside],
+               cwd: root,
+               executor:
+                 {Alto.Command.Executors.Bubblewrap,
+                  protected_paths: [".git"], env: %{"ALTO_MCP_EXPLICIT" => "yes"}},
+               startup_timeout: 5_000
+             )
+
+    on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
+    assert {:ok, result} = Client.call_tool(client, "probe", %{})
+    assert result["outside_visible"] == false
+    assert result["protected"] == true
+    assert result["configured"] == "yes"
+    assert result["home"] == "/tmp/alto-home"
+    refute result["network"] == host_net
+    assert File.read!(Path.join(root, ".git/config")) == "original"
+  end
 end

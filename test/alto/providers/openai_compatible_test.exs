@@ -437,4 +437,33 @@ defmodule Alto.Providers.OpenAICompatibleTest do
     ihdr = <<width::32, height::32, 8, 2, 0, 0, 0>>
     signature <> <<13::32, "IHDR", ihdr::binary, :erlang.crc32(["IHDR", ihdr])::32>>
   end
+
+  test "text-only reduction retains historical schemas and disables tool choice" do
+    configure_adapter(self(), 200, "application/json", [
+      JSON.encode!(%{"choices" => [%{"message" => %{"content" => "summary"}}]})
+    ])
+
+    tool = %{
+      "type" => "function",
+      "function" => %{"name" => "read_file", "parameters" => %{"type" => "object"}}
+    }
+
+    request = %{
+      messages: [%{"role" => "user", "content" => "Summarize"}],
+      tools: [tool],
+      tool_choice: :none,
+      options: %{"tool_choice" => "auto"}
+    }
+
+    assert {:ok, _} =
+             OpenAICompatible.stream(request, fn _ -> :ok end,
+               model: "test-model",
+               req_options: [adapter: Adapter]
+             )
+
+    assert_receive {:http_request, wire}
+    body = JSON.decode!(wire.body)
+    assert body["tool_choice"] == "none"
+    assert body["tools"] == [tool]
+  end
 end

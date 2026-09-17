@@ -6,7 +6,7 @@ defmodule Alto.FrontEnd.Gui do
   front-end protocol over a same-origin WebSocket (`GET /ws`), attaching to
   all runs, streaming model deltas and tool activity, answering approval
   requests, and starting or cancelling runs from the browser. The server's
-  origin check is what makes serving this page safe.
+  origin check and configured upgrade authentication protect the connection.
   """
 
   @spec html() :: String.t()
@@ -349,7 +349,7 @@ defmodule Alto.FrontEnd.Gui do
 
       function connect() {
         const proto = location.protocol === "https:" ? "wss://" : "ws://";
-        ws = new WebSocket(proto + location.host + "/ws");
+        ws = new WebSocket(proto + location.host + "/ws", token ? ["alto.v1", "alto-auth." + token] : ["alto.v1"]);
         ws.onopen = () => {
           setStatus(true, "connected");
           ws.send(JSON.stringify({ v: 1, type: "attach", id: "gui-attach" }));
@@ -368,6 +368,12 @@ defmodule Alto.FrontEnd.Gui do
         ws.onerror = () => ws.close();
       }
 
+      const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
+      const token = fragmentToken || sessionStorage.getItem("alto-token");
+      if (fragmentToken) {
+        sessionStorage.setItem("alto-token", fragmentToken);
+        history.replaceState(null, "", location.pathname + location.search);
+      }
       wire();
       connect();
       </script>

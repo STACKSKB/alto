@@ -57,4 +57,31 @@ defmodule Alto.ProjectTest do
     assert {:ok, %{file: "CLAUDE.md", instructions: "claude"}} =
              Project.load(root, files: ["CLAUDE.md"])
   end
+
+  test "rejects escaping instruction symlinks and configured traversal", %{root: root} do
+    outside = root <> "-outside"
+    File.write!(outside, "synthetic secret")
+    on_exit(fn -> File.rm(outside) end)
+    File.ln_s!(outside, Path.join(root, "AGENTS.md"))
+    assert {:error, {"AGENTS.md", {:path_outside_workspace, _}}} = Project.load(root)
+    assert {:error, {_, {:path_outside_workspace, _}}} = Project.load(root, files: [outside])
+  end
+
+  test "keeps confined symlinks and rejects nonregular instruction files", %{root: root} do
+    File.write!(Path.join(root, "instructions.txt"), "local instructions")
+    File.ln_s!("instructions.txt", Path.join(root, "AGENTS.md"))
+    assert {:ok, %{instructions: "local instructions"}} = Project.load(root)
+    File.mkdir!(Path.join(root, "alto.md"))
+    assert {:error, {"alto.md", :instructions_not_regular}} = Project.load(root)
+  end
+
+  test "reads only the configured prefix, allowing UTF-8 boundary cuts but not malformed bytes",
+       %{root: root} do
+    path = Path.join(root, "AGENTS.md")
+    File.write!(path, "aé" <> String.duplicate("x", 1_000_000))
+    assert {:ok, %{instructions: "a", truncated: true}} = Project.load(root, max_bytes: 2)
+    File.write!(path, <<?a, 255, ?x, ?x, ?x, ?x>>)
+    assert {:error, {"AGENTS.md", :instructions_not_utf8}} = Project.load(root, max_bytes: 2)
+    assert {:error, {_, :invalid_max_bytes}} = Project.load(root, max_bytes: 0)
+  end
 end

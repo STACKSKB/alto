@@ -15,13 +15,15 @@ defmodule Alto.Context.Transcript do
   def validate(_, _), do: {:error, :invalid_messages}
 
   @doc "Keep at least the requested recent messages, moving the split back to a complete boundary."
-  def split(messages, keep) do
+  def split(messages, keep, keep_initial \\ 0) do
     {system, rest} =
       case messages do
         [%{"role" => "system"} = system | rest] -> {[system], rest}
         rest -> {[], rest}
       end
 
+    {initial, rest} = take_initial(rest, keep_initial)
+    system = system ++ initial
     target = max(length(rest) - keep, 0)
 
     {boundary, _pending} =
@@ -37,6 +39,24 @@ defmodule Alto.Context.Transcript do
 
     {middle, recent} = Enum.split(rest, boundary)
     {system, middle, recent}
+  end
+
+  defp take_initial(messages, count) do
+    {boundary, _pending} =
+      messages
+      |> Enum.with_index(1)
+      |> Enum.reduce_while({0, %{}}, fn {message, index}, {_boundary, pending} = acc ->
+        if index > count and pending == %{} do
+          {:halt, acc}
+        else
+          case consume(message, {:ok, pending}) do
+            {:cont, {:ok, next}} -> {:cont, {index, next}}
+            _ -> {:halt, acc}
+          end
+        end
+      end)
+
+    Enum.split(messages, boundary)
   end
 
   def bytes(messages), do: Enum.reduce(messages, 0, &(byte_size(JSON.encode!(&1)) + &2))

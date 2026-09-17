@@ -283,6 +283,7 @@ defmodule Alto.External.MCP.Client do
       args: [],
       cwd: File.cwd!(),
       env: %{},
+      executor: Alto.Command.Executors.Unsandboxed,
       protocol_version: @protocol_version,
       startup_timeout: @default_timeout,
       request_timeout: @default_timeout,
@@ -338,6 +339,7 @@ defmodule Alto.External.MCP.Client do
         :args,
         :cwd,
         :env,
+        :executor,
         :protocol_version,
         :startup_timeout,
         :request_timeout,
@@ -355,11 +357,22 @@ defmodule Alto.External.MCP.Client do
     executable = System.find_executable(command) || if(File.regular?(command), do: command)
 
     if executable do
-      case ExternalProcess.open(executable, Keyword.fetch!(opts, :args),
-             cwd: Keyword.fetch!(opts, :cwd),
-             env: Keyword.fetch!(opts, :env),
-             startup_timeout: Keyword.fetch!(opts, :startup_timeout)
-           ) do
+      context = %Alto.Tool.Context{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
+
+      result =
+        with {:ok, prepared} <-
+               Alto.Command.prepare(
+                 %{"program" => executable, "args" => Keyword.fetch!(opts, :args)},
+                 context,
+                 executor: Keyword.fetch!(opts, :executor)
+               ) do
+          Alto.Command.open(prepared,
+            env: Keyword.fetch!(opts, :env),
+            startup_timeout: Keyword.fetch!(opts, :startup_timeout)
+          )
+        end
+
+      case result do
         {:ok, _process} = ok -> ok
         {:error, reason} -> {:error, {:mcp_port_open_failed, reason}}
       end

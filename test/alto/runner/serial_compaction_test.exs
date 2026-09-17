@@ -46,6 +46,7 @@ defmodule Alto.Runner.SerialCompactionTest do
     @impl true
     def stream(request, _sink, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:stream_call, request.messages})
+      send(Keyword.fetch!(opts, :test_pid), {:stream_request, request})
 
       cond do
         summarize?(request.messages) ->
@@ -507,5 +508,122 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert {:error, {:invalid_option, :provider_retries, -1}, _} =
              Alto.run("go", base_opts(provider_retries: -1))
+  end
+
+  test "oversized reduction input fails intact and a raised bound includes early requirements", %{
+    dir: dir
+  } do
+    marker = "EARLY_REQUIREMENT_MUST_SURVIVE"
+
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open(marker,
+        provider: {ScriptedProvider, test_pid: self()},
+        max_transcript_bytes: 300_000,
+        compaction: [strategy: {DeterministicReducer, owner: self()}, keep_recent_messages: 1],
+        session: Session.generate_id(),
+        session_dir: dir
+      )
+
+    state = Alto.Runner.Execution.Transcript.project(run)
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{
+        "role" => "user",
+        "content" => String.duplicate("x", 120_000)
+      })
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{"role" => "user", "content" => "Continue."})
+
+    assert {:error, {:compaction_input_limit, _, 100_000}, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    refute_received {:deterministic_input, _}
+    state = %{state | compaction: Keyword.put(state.compaction, :max_input_bytes, 200_000)}
+    assert {:ok, _} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert_received {:deterministic_input, input}
+    assert input =~ marker
+    assert input =~ String.duplicate("x", 120_000)
+  end
+
+  test "hosts can pin initial requirements while reducing later history", %{dir: dir} do
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open("Pinned requirement",
+        provider: {ScriptedProvider, test_pid: self()},
+        max_transcript_bytes: 20_000,
+        compaction: [
+          strategy: {DeterministicReducer, owner: self()},
+          keep_initial_messages: 1,
+          keep_recent_messages: 1
+        ],
+        session: Session.generate_id(),
+        session_dir: dir
+      )
+
+    state = Alto.Runner.Execution.Transcript.project(run)
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{
+        "role" => "user",
+        "content" => String.duplicate("work", 500)
+      })
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{"role" => "user", "content" => "Continue."})
+
+    assert {:ok, reduced} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert hd(Enum.reverse(reduced.messages_rev))["content"] == "Pinned requirement"
+    assert_received {:deterministic_input, input}
+    refute input =~ "Pinned requirement"
+  end
+
+  test "built-in reducers retain the conversation prefix or honor isolated request mode", %{
+    dir: dir
+  } do
+    for mode <- [:transcript, :isolated] do
+      {:ok, run} =
+        Alto.Runner.Execution.Setup.open("EARLY_CONSTRAINT",
+          provider: {ScriptedProvider, test_pid: self()},
+          tools: [EchoTool],
+          max_transcript_bytes: 20_000,
+          compaction: [request_mode: mode, keep_recent_messages: 1],
+          session: Session.generate_id(),
+          session_dir: dir
+        )
+
+      state = Alto.Runner.Execution.Transcript.project(run)
+
+      {:ok, state} =
+        Alto.Runner.Execution.Transcript.append(state, %{
+          "role" => "assistant",
+          "content" => String.duplicate("work", 500)
+        })
+
+      {:ok, state} =
+        Alto.Runner.Execution.Transcript.append(state, %{
+          "role" => "user",
+          "content" => "Continue."
+        })
+
+      assert {:ok, _reduced} = Alto.Runner.Execution.Transcript.reduce(state)
+      assert_received {:stream_call, request}
+      assert_received {:stream_request, envelope}
+      assert envelope.tool_choice == :none
+
+      if mode == :transcript do
+        assert [%{"function" => %{"name" => "echo"}}] = envelope.tools
+      else
+        assert envelope.tools == []
+      end
+
+      if mode == :transcript do
+        assert Enum.drop(request, -1) == Enum.drop(Enum.reverse(state.messages_rev), -1)
+      else
+        assert length(request) == 1
+      end
+
+      assert JSON.encode!(request) =~ "EARLY_CONSTRAINT"
+    end
   end
 end

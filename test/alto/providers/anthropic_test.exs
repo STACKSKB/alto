@@ -429,4 +429,30 @@ defmodule Alto.Providers.AnthropicTest do
     components = <<3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0>>
     <<0xFF, 0xD8, 0xFF, 0xC0, 17::16, 8, height::16, width::16, components::binary, 0xFF, 0xD9>>
   end
+
+  test "text-only reduction retains historical tool schemas with native tool choice" do
+    opts =
+      configure(%{
+        "content" => [%{"type" => "text", "text" => "summary"}],
+        "stop_reason" => "end_turn"
+      })
+
+    tool = %{
+      "type" => "function",
+      "function" => %{"name" => "read_file", "parameters" => %{"type" => "object"}}
+    }
+
+    request = %{
+      messages: [%{"role" => "user", "content" => "Summarize"}],
+      tools: [tool],
+      tool_choice: :none,
+      options: %{"tool_choice" => %{"type" => "auto"}}
+    }
+
+    assert {:ok, _} = Anthropic.stream(request, fn _ -> :ok end, opts)
+    assert_receive {:request, wire}
+    body = JSON.decode!(wire.body)
+    assert body["tool_choice"] == %{"type" => "none"}
+    assert [%{"name" => "read_file"}] = body["tools"]
+  end
 end

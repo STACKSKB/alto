@@ -119,4 +119,34 @@ defmodule Alto.Tools.TransformTest do
     assert {:ok, %{"value" => 1, "normalized" => true}} =
              Transform.run_prepared(raw_prepared, context(), elem(raw_spec, 1))
   end
+
+  test "protected-path composition blocks direct and symlink writes while preserving approvals" do
+    root = Path.join(System.tmp_dir!(), "alto-protect-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(root, ".git"))
+    File.write!(Path.join(root, ".git/config"), "original")
+    File.ln_s!(".git", Path.join(root, "alias"))
+    on_exit(fn -> File.rm_rf!(root) end)
+    context = %Context{session_id: "protect", cwd: root}
+    {module, opts} = Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"])
+    assert module.approval(opts) == :required
+
+    for path <- [".git/config", "alias/config", Path.join(root, ".git/config")] do
+      assert {:error, {:protected_path, ^path}} =
+               module.prepare(%{"path" => path, "content" => "bad"}, context, opts)
+    end
+
+    assert {:ok, prepared, _} =
+             module.prepare(%{"path" => ".gitignore", "content" => "ignored"}, context, opts)
+
+    assert {:ok, _} = module.run_prepared(prepared, context, opts)
+    assert File.read!(Path.join(root, ".gitignore")) == "ignored"
+    assert File.read!(Path.join(root, ".git/config")) == "original"
+    {module, opts} = Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [])
+
+    assert {:ok, prepared, _} =
+             module.prepare(%{"path" => ".git/config", "content" => "explicit"}, context, opts)
+
+    assert {:ok, _} = module.run_prepared(prepared, context, opts)
+    assert File.read!(Path.join(root, ".git/config")) == "explicit"
+  end
 end

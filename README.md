@@ -92,7 +92,11 @@ mix alto --allow-write --sandbox-command "Run the focused tests"
 ```
 
 The Bubblewrap executor gives the command a writable workspace, a read-only
-runtime, a fresh temporary directory, and no network by default. Use
+runtime, a fresh temporary directory, and no network by default. With
+`--sandbox-command`, existing `.git` metadata is mounted read-only. CLI native
+file tools also protect `.git`; the coding profile
+provides a separate approved Git-mutation capability. Hosts can configure these
+policies independently (see [extension boundaries](docs/extensions.md)). Use
 `--allow-command` only for an explicitly unsandboxed executor. Alto prompts for
 mutating and command tools unless `--approve-all` is selected.
 
@@ -139,7 +143,9 @@ WebSocket clients. The server streams bounded durable and live events, accepts
 trusted configuration names, exposes approval responses, and supports bounded
 session and queue inspection. Clients cannot send Elixir code or inline loop,
 provider, tool, or policy modules. See [PROTOCOL.md](./PROTOCOL.md) for the
-wire contract.
+wire contract. WebSocket upgrades require a generated token by default; open the
+capability URL printed by `--serve`. Native clients send a Bearer token, and hosts
+can replace the listener authentication policy.
 
 ## Examples
 

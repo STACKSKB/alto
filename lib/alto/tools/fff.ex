@@ -70,6 +70,7 @@ defmodule Alto.Tools.FFF do
       command: executable,
       args: args,
       cwd: :workspace,
+      executor: Keyword.get(opts, :executor, Alto.Command.Executors.Unsandboxed),
       startup_timeout: Keyword.get(opts, :startup_timeout, 30_000),
       request_timeout: Keyword.get(opts, :request_timeout, 30_000),
       max_message_bytes: Keyword.get(opts, :max_message_bytes, 2_000_000),
