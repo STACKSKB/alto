@@ -477,21 +477,12 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp normalize_compaction(other), do: {:error, {:invalid_compaction, other}}
 
-  defp validate_compaction_strategy(strategy) when strategy in [:summary, :handoff], do: :ok
-
-  defp validate_compaction_strategy({module, opts}) when is_atom(module) and is_list(opts) do
-    deterministic? = function_exported?(module, :reduce, 3)
-
-    provider_backed? =
-      function_exported?(module, :request, 3) and function_exported?(module, :decode, 3)
-
-    if Code.ensure_loaded?(module) and (deterministic? or provider_backed?) and
-         Keyword.keyword?(opts),
-       do: :ok,
-       else: {:error, {:invalid_strategy, module}}
+  defp validate_compaction_strategy(strategy) do
+    case Alto.Context.Reducer.resolve(strategy) do
+      {:ok, _} -> :ok
+      error -> error
+    end
   end
-
-  defp validate_compaction_strategy(strategy), do: {:error, {:invalid_strategy, strategy}}
 
   defp validate_artifact_dir(nil), do: :ok
   defp validate_artifact_dir(path) when is_binary(path) and path != "", do: :ok

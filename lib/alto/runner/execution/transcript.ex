@@ -147,482 +147,69 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   defp compact_middle(run, required_headroom, reason) do
-    {_pinned, middle, _recent} = reduction_parts(run)
-    limit = Keyword.get(run.compaction, :max_input_bytes, 100_000)
-    bytes = byte_size(render_for_summary(middle))
-
-    if bytes > limit do
-      record_compact_failed(run, {:compaction_input_limit, bytes, limit})
-    else
-      case Keyword.fetch!(run.compaction, :strategy) do
-        :summary -> summarize_middle(run, required_headroom, reason)
-        :handoff -> handoff_middle(run, required_headroom, reason)
-        {module, opts} -> custom_compaction(run, module, opts, required_headroom, reason)
-      end
-    end
-  end
-
-  defp custom_compaction(run, module, opts, required_headroom, reason) do
-    {system, middle, recent} = reduction_parts(run)
-
-    limit = Keyword.fetch!(run.compaction, :max_summary_bytes)
-    input = render_for_summary(middle)
+    {pinned, middle, recent} = reduction_parts(run)
+    text = Alto.Context.Reducer.render(middle)
+    limit = Keyword.fetch!(run.compaction, :max_input_bytes)
 
     cond do
+      byte_size(text) > limit ->
+        record_compact_failed(run, {:compaction_input_limit, byte_size(text), limit})
+
       middle == [] ->
         {:error, :transcript_uncompactable, run}
 
-      function_exported?(module, :reduce, 3) ->
-        deterministic_compaction(
-          run,
-          module,
-          opts,
-          system,
-          middle,
-          recent,
-          input,
-          limit,
-          required_headroom,
-          reason
-        )
-
-      is_nil(run.provider) ->
-        {:error, :compaction_requires_provider, run}
-
       true ->
-        provider_compaction(
-          run,
-          module,
-          opts,
-          system,
-          middle,
-          recent,
-          input,
-          limit,
-          required_headroom,
-          reason
-        )
-    end
-  end
+        input = reduction_input(run, pinned, middle, recent, text, reason)
 
-  defp deterministic_compaction(
-         run,
-         module,
-         opts,
-         system,
-         middle,
-         recent,
-         input,
-         limit,
-         required_headroom,
-         reason
-       ) do
-    outcome =
-      supervised_call(
-        fn ->
-          with {:ok, content} <- module.reduce(input, limit, opts),
-               :ok <- validate_replacement(content, limit) do
-            {:ok, content}
-          end
-        end,
-        Budget.timeout(run.budget, run.provider_timeout),
-        run.cancel_ref
-      )
-
-    finish_custom_compaction(
-      outcome,
-      run,
-      system,
-      middle,
-      recent,
-      input,
-      limit,
-      required_headroom,
-      reason,
-      0
-    )
-  end
-
-  defp provider_compaction(
-         run,
-         module,
-         opts,
-         system,
-         middle,
-         recent,
-         input,
-         limit,
-         required_headroom,
-         reason
-       ) do
-    {provider, provider_opts} = run.provider
-    sink = compaction_sink(run.event_sink)
-
-    outcome =
-      supervised_call(
-        fn ->
-          with {:ok, request} <- module.request(input, limit, opts),
-               true <-
-                 is_map(request) and is_list(request[:messages]) and request[:tools] in [nil, []],
-               :ok <- take_compaction_model(run),
-               {:ok, completion} <-
-                 provider.stream(Map.put(request, :tools, []), sink, provider_opts),
-               {:ok, content} <- module.decode(completion, limit, opts),
-               :ok <- validate_replacement(content, limit) do
-            {:ok, content, Map.get(completion, :usage)}
-          else
-            {:error, _} = error -> error
-            _ -> {:error, :invalid_compaction_result}
-          end
-        end,
-        Budget.timeout(run.budget, run.provider_timeout),
-        run.cancel_ref
-      )
-
-    finish_custom_compaction(
-      outcome,
-      run,
-      system,
-      middle,
-      recent,
-      input,
-      limit,
-      required_headroom,
-      reason,
-      1
-    )
-  end
-
-  defp finish_custom_compaction(
-         {:ok, {:ok, content}},
-         run,
-         system,
-         middle,
-         recent,
-         input,
-         limit,
-         required_headroom,
-         reason,
-         model_requests
-       ) do
-    apply_summary(
-      run,
-      system,
-      middle,
-      transcript_part_bytes(middle),
-      byte_size(input),
-      recent,
-      content,
-      limit,
-      required_headroom,
-      reason,
-      model_requests
-    )
-  end
-
-  defp finish_custom_compaction(
-         {:ok, {:ok, content, usage}},
-         run,
-         system,
-         middle,
-         recent,
-         input,
-         limit,
-         required_headroom,
-         reason,
-         model_requests
-       ) do
-    run = %{run | usage: Usage.merge(run.usage, Usage.normalize(usage))}
-
-    finish_custom_compaction(
-      {:ok, {:ok, content}},
-      run,
-      system,
-      middle,
-      recent,
-      input,
-      limit,
-      required_headroom,
-      reason,
-      model_requests
-    )
-  end
-
-  defp finish_custom_compaction(
-         {:cancelled, cancel_reason},
-         run,
-         _system,
-         _middle,
-         _recent,
-         _input,
-         _limit,
-         _headroom,
-         _reason,
-         _model_requests
-       ),
-       do: {:error, {:cancelled, cancel_reason}, run}
-
-  defp finish_custom_compaction(
-         other,
-         run,
-         _system,
-         _middle,
-         _recent,
-         _input,
-         _limit,
-         _headroom,
-         _reason,
-         _model_requests
-       ),
-       do: record_compact_failed(run, {:custom_compaction_failed, other})
-
-  defp summarize_middle(%{provider: nil} = run, _required_headroom, _reason),
-    do: {:error, :compaction_requires_provider, run}
-
-  defp summarize_middle(run, required_headroom, reason) do
-    max_summary = Keyword.fetch!(run.compaction, :max_summary_bytes)
-    {system, middle, recent} = reduction_parts(run)
-
-    if middle == [] do
-      {:error, :transcript_uncompactable, run}
-    else
-      summarize_replacement(
-        run,
-        system,
-        middle,
-        recent,
-        max_summary,
-        required_headroom,
-        reason
-      )
-    end
-  end
-
-  defp handoff_middle(%{provider: nil} = run, _required_headroom, _reason),
-    do: {:error, :compaction_requires_provider, run}
-
-  defp handoff_middle(run, required_headroom, reason) do
-    max_handoff = Keyword.fetch!(run.compaction, :max_handoff_bytes)
-    {system, middle, recent} = reduction_parts(run)
-
-    if middle == [] do
-      {:error, :transcript_uncompactable, run}
-    else
-      generate_handoff(
-        run,
-        system,
-        middle,
-        recent,
-        max_handoff,
-        required_headroom,
-        reason
-      )
-    end
-  end
-
-  defp generate_handoff(
-         run,
-         system,
-         middle,
-         recent,
-         max_handoff,
-         required_headroom,
-         reason
-       ) do
-    middle_bytes = transcript_part_bytes(middle)
-    input = render_for_summary(middle)
-    input_bytes = byte_size(input)
-    {provider, provider_opts} = run.provider
-    sink = compaction_sink(run.event_sink)
-
-    notify(
-      run.event_sink,
-      Event.live(:context_handoff_started, %{dropped_messages: length(middle)})
-    )
-
-    outcome =
-      supervised_call(
-        fn ->
-          with :ok <- take_compaction_model(run) do
-            provider.stream(
-              %{
-                messages:
-                  reduction_request(
-                    run,
-                    system,
-                    middle,
-                    Alto.Handoff.prompt(input, max_handoff),
-                    Alto.Handoff.prompt("Use the preceding conversation.", max_handoff)
-                  ),
-                tools: reduction_tools(run),
-                tool_choice: :none
-              },
-              sink,
-              provider_opts
-            )
-          end
-        end,
-        Budget.timeout(run.budget, run.provider_timeout),
-        run.cancel_ref
-      )
-
-    case outcome do
-      {:ok, {:ok, %{message: message} = completion}} when is_binary(message) ->
-        run = %{run | usage: Usage.merge(run.usage, Usage.normalize(Map.get(completion, :usage)))}
-
-        with {:ok, artifact} <- Alto.Handoff.decode(message, max_handoff),
-             {:ok, published} <-
-               Alto.Handoff.persist(
-                 run.session,
-                 handoff_run_id(run),
-                 artifact,
-                 handoff_persist_opts(run)
-               ) do
-          apply_handoff(
-            run,
-            system,
-            middle,
-            middle_bytes,
-            input_bytes,
-            recent,
-            artifact,
-            published,
-            required_headroom,
-            reason
-          )
+        with {:ok, {module, opts}} <- Alto.Context.Reducer.resolve(run.compaction[:strategy]) do
+          execute_reducer(run, input, module, opts, required_headroom)
         else
           {:error, reason} -> record_compact_failed(run, reason)
         end
-
-      {:cancelled, reason} ->
-        {:error, {:cancelled, reason}, run}
-
-      {:ok, _other} ->
-        record_compact_failed(run, :handoff_response_empty)
-
-      {:error, reason} ->
-        record_compact_failed(run, {:handoff_failed, reason})
     end
   end
 
-  defp apply_handoff(
-         run,
-         system,
-         middle,
-         middle_bytes,
-         input_bytes,
-         recent,
-         artifact,
-         published,
-         required_headroom,
-         reason
-       ) do
-    rendered = Alto.Handoff.render(artifact)
+  defp reduction_input(run, pinned, middle, recent, text, reason) do
+    count = compaction_count(run) + 1
 
-    header = "[alto handoff: artifacts at #{published.directory}]"
-
-    replacement =
-      system ++ [%{"role" => "user", "content" => header <> "\n\n" <> rendered}] ++ recent
-
-    bytes = transcript_part_bytes(replacement)
-
-    case apply_replacement(run, replacement, bytes, required_headroom, 1) do
-      {:ok, run, count} ->
-        data = %{
-          strategy: :handoff,
-          reason: reason,
-          compaction_count: count,
-          dropped_messages: length(middle),
-          dropped_bytes: middle_bytes,
-          source_bytes: input_bytes,
-          handoff_bytes: byte_size(rendered),
-          kept_messages: length(recent),
-          directory: published.directory,
-          files: published.files,
-          next_step: artifact.next_step
-        }
-
-        run = record_event(run, Event.durable(:context_handoff_created, data))
-        run = record_event(run, Event.durable(:context_compacted, data))
-
-        run =
-          case Session.append(
-                 run.session,
-                 Session.handoff_record(Map.put(data, :run_id, run.run_id)),
-                 session_dir_opt(run)
-               ) do
-            :ok -> run
-            {:error, persistence_reason} -> add_persistence_error(run, persistence_reason)
-          end
-
-        {:ok, run}
-
-      {:error, headroom_reason} ->
-        record_compact_failed(run, headroom_reason)
-    end
+    %{
+      pinned: pinned,
+      middle: middle,
+      recent: recent,
+      text: text,
+      middle_bytes: transcript_part_bytes(middle),
+      tools: reduction_tools(run),
+      request_mode: run.compaction[:request_mode],
+      max_summary_bytes: run.compaction[:max_summary_bytes],
+      max_handoff_bytes: run.compaction[:max_handoff_bytes],
+      session: run.session,
+      run_id: run.run_id,
+      reason: reason,
+      count: count,
+      artifact_id: if(count == 1, do: run.run_id, else: run.run_id <> "-context-#{count}"),
+      artifact_options:
+        [session_dir: run.session_dir] ++
+          if(run.compaction[:artifact_dir],
+            do: [artifact_dir: run.compaction[:artifact_dir]],
+            else: []
+          ),
+      notify: fn event -> notify(run.event_sink, event) end
+    }
   end
 
-  defp handoff_run_id(run) do
-    case compaction_count(run) + 1 do
-      1 -> run.run_id
-      count -> run.run_id <> "-context-#{count}"
-    end
-  end
-
-  defp handoff_persist_opts(run) do
-    base = session_dir_opt(run)
-
-    case Keyword.fetch!(run.compaction, :artifact_dir) do
-      nil -> base
-      directory -> Keyword.put(base, :artifact_dir, directory)
-    end
-  end
-
-  defp summarize_replacement(
-         run,
-         system,
-         middle,
-         recent,
-         max_summary,
-         required_headroom,
-         reason
-       ) do
-    middle_bytes = transcript_part_bytes(middle)
-    input = render_for_summary(middle)
-    summarizable_bytes = byte_size(input)
-
-    prompt =
-      "Summarize this agent work transcript so the run can continue without it. " <>
-        "Preserve: the active task and any plan, key decisions taken, files read or modified, " <>
-        "tool outcomes the next steps depend on, errors and how they were handled, and anything " <>
-        "explicitly marked unresolved. Omit pleasantries and repetition. " <>
-        "Reply with plain text under #{max_summary} bytes, no tool calls."
-
-    {provider, provider_opts} = run.provider
-    sink = compaction_sink(run.event_sink)
-
-    notify(run.event_sink, Event.live(:context_compacting, %{dropped_messages: length(middle)}))
-
+  defp execute_reducer(run, input, module, opts, headroom) do
     outcome =
       supervised_call(
         fn ->
-          with :ok <- take_compaction_model(run) do
-            provider.stream(
-              %{
-                messages:
-                  reduction_request(
-                    run,
-                    system,
-                    middle,
-                    prompt <> "\n\nTranscript:\n" <> input,
-                    prompt <> " Use the preceding conversation."
-                  ),
-                tools: reduction_tools(run),
-                tool_choice: :none
-              },
-              sink,
-              provider_opts
-            )
+          key = make_ref()
+          Process.put(key, {0, Usage.new()})
+
+          try do
+            model = fn request -> reduction_model(run, request, key) end
+            result = module.compact(input, model, opts)
+            {result, Process.get(key)}
+          after
+            Process.delete(key)
           end
         end,
         Budget.timeout(run.budget, run.provider_timeout),
@@ -630,96 +217,108 @@ defmodule Alto.Runner.Execution.Transcript do
       )
 
     case outcome do
-      {:ok, {:ok, %{message: message} = completion}} when is_binary(message) and message != "" ->
-        run = %{run | usage: Usage.merge(run.usage, Usage.normalize(Map.get(completion, :usage)))}
+      {:ok, {{:ok, product}, {requests, usage}}} ->
+        run = %{run | usage: Usage.merge(run.usage, usage)}
+        apply_product(run, input, product, headroom, requests)
 
-        apply_summary(
-          run,
-          system,
-          middle,
-          middle_bytes,
-          summarizable_bytes,
-          recent,
-          message,
-          max_summary,
-          required_headroom,
-          reason,
-          1
-        )
+      {:ok, {{:error, reason}, _}} ->
+        record_compact_failed(run, reason)
 
       {:cancelled, reason} ->
         {:error, {:cancelled, reason}, run}
 
-      {:ok, _other} ->
-        record_compact_failed(run, :compaction_summary_empty)
-
-      {:error, reason} ->
-        record_compact_failed(run, {:compaction_failed, reason})
+      other ->
+        record_compact_failed(run, {:compaction_failed, other})
     end
   end
 
-  defp apply_summary(
-         run,
-         system,
-         middle,
-         middle_bytes,
-         summarizable_bytes,
-         recent,
-         message,
-         max_summary,
-         required_headroom,
-         reason,
-         model_requests
-       ) do
-    summary = message |> binary_part(0, min(byte_size(message), max_summary)) |> trim_utf8_tail()
+  defp reduction_model(%{provider: nil}, _request, _key),
+    do: {:error, :compaction_requires_provider}
 
-    header =
-      "[alto compaction: summarized #{length(middle)} messages; full history in session log]"
+  defp reduction_model(run, request, key) when is_map(request) do
+    {count, usage} = Process.get(key)
+    {provider, opts} = run.provider
 
-    replacement =
-      system ++ [%{"role" => "user", "content" => header <> "\n" <> summary}] ++ recent
+    with true <- is_list(request[:messages]) and is_list(Map.get(request, :tools, [])),
+         :ok <- take_compaction_model(%{run | model_requests: run.model_requests + count}) do
+      Process.put(key, {count + 1, usage})
+      request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
 
-    bytes = transcript_part_bytes(replacement)
+      case provider.stream(request, compaction_sink(run.event_sink), opts) do
+        {:ok, completion} = result when is_map(completion) ->
+          Process.put(key, {count + 1, Usage.merge(usage, Usage.normalize(completion[:usage]))})
+          result
 
-    case apply_replacement(run, replacement, bytes, required_headroom, model_requests) do
-      {:ok, run, count} ->
-        data = %{
-          strategy: :summary,
-          reason: reason,
-          compaction_count: count,
-          dropped_messages: length(middle),
-          dropped_bytes: middle_bytes,
-          summarized_bytes: summarizable_bytes,
-          summary_bytes: byte_size(summary),
-          kept_messages: length(recent)
-        }
-
-        run = record_event(run, Event.durable(:context_compacted, data))
-
-        persisted =
-          Session.append(
-            run.session,
-            Session.compaction_record(%{
-              run_id: run.run_id,
-              dropped_messages: length(middle),
-              dropped_bytes: middle_bytes,
-              summary_bytes: byte_size(summary),
-              summary: summary
-            }),
-            session_dir_opt(run)
-          )
-
-        run =
-          case persisted do
-            {:error, persistence_reason} -> add_persistence_error(run, persistence_reason)
-            _ -> run
-          end
-
-        {:ok, run}
-
-      {:error, headroom_reason} ->
-        record_compact_failed(run, headroom_reason)
+        other ->
+          other
+      end
+    else
+      false -> {:error, :invalid_compaction_request}
+      {:error, _} = error -> error
     end
+  end
+
+  defp reduction_model(_run, _request, _key), do: {:error, :invalid_compaction_request}
+
+  defp apply_product(
+         run,
+         input,
+         %{content: content, data: data, events: events, records: records} = product,
+         headroom,
+         requests
+       )
+       when is_binary(content) and content != "" and is_map(data) and is_list(events) and
+              is_list(records) do
+    replacement = input.pinned ++ [%{"role" => "user", "content" => content}] ++ input.recent
+
+    with true <-
+           String.valid?(content) and Enum.all?(events, &is_atom/1) and
+             Enum.all?(records, &is_map/1),
+         true <- valid_product_size?(product, run.compaction[:max_input_bytes]),
+         {:ok, run, count} <-
+           apply_replacement(
+             run,
+             replacement,
+             transcript_part_bytes(replacement),
+             headroom,
+             requests
+           ) do
+      data =
+        Map.merge(data, %{
+          reason: input.reason,
+          compaction_count: count,
+          dropped_messages: length(input.middle),
+          dropped_bytes: input.middle_bytes,
+          kept_messages: length(input.recent)
+        })
+
+      run =
+        Enum.reduce(events ++ [:context_compacted], run, fn type, run ->
+          record_event(run, Event.durable(type, data))
+        end)
+
+      run =
+        Enum.reduce(records, run, fn record, run ->
+          case Session.append(run.session, record, session_dir_opt(run)) do
+            :ok -> run
+            {:error, reason} -> add_persistence_error(run, reason)
+          end
+        end)
+
+      {:ok, run}
+    else
+      false -> record_compact_failed(run, :invalid_compaction_result)
+      {:error, reason} -> record_compact_failed(run, reason)
+    end
+  end
+
+  defp apply_product(run, _input, _product, _headroom, _requests),
+    do: record_compact_failed(run, :invalid_compaction_result)
+
+  defp valid_product_size?(product, limit) do
+    byte_size(JSON.encode!(product)) <= limit
+  rescue
+    _ -> false
   end
 
   defp apply_replacement(run, replacement, bytes, required_headroom, model_requests) do
@@ -756,13 +355,6 @@ defmodule Alto.Runner.Execution.Transcript do
      }}
   end
 
-  defp validate_replacement(content, limit)
-       when is_binary(content) and content != "" and byte_size(content) <= limit do
-    if String.valid?(content), do: :ok, else: {:error, :invalid_compaction_result}
-  end
-
-  defp validate_replacement(_content, _limit), do: {:error, :invalid_compaction_result}
-
   defp take_compaction_model(%{model_requests: count, max_steps: limit}) when count >= limit,
     do: {:error, {:model_step_limit, limit}}
 
@@ -776,12 +368,6 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   defp max_compactions(run), do: Keyword.get(run.compaction, :max_compactions, 1)
-
-  defp trim_utf8_tail(text) do
-    if String.valid?(text),
-      do: text,
-      else: trim_utf8_tail(binary_part(text, 0, byte_size(text) - 1))
-  end
 
   defp record_compact_failed(run, reason) do
     run = record_event(run, Event.durable(:context_compact_failed, %{error: reason}))
@@ -810,28 +396,6 @@ defmodule Alto.Runner.Execution.Transcript do
     else
       []
     end
-  end
-
-  defp reduction_request(run, pinned, middle, isolated_prompt, transcript_prompt) do
-    case Keyword.get(run.compaction, :request_mode, :transcript) do
-      :isolated -> [%{"role" => "user", "content" => isolated_prompt}]
-      :transcript -> pinned ++ middle ++ [%{"role" => "user", "content" => transcript_prompt}]
-    end
-  end
-
-  # Every removed message reaches the reducer. The caller rejects oversized
-  # input before dispatch instead of silently discarding the oldest facts.
-  defp render_for_summary(messages) do
-    messages
-    |> Enum.map(fn
-      %{"role" => role, "content" => content} = message
-      when is_binary(content) and map_size(message) == 2 ->
-        role <> ": " <> content
-
-      %{"role" => role} = message ->
-        role <> ": " <> JSON.encode!(message)
-    end)
-    |> Enum.join("\n")
   end
 
   defp record_event(run, event), do: %{run | events: Events.record(run.events, event)}
