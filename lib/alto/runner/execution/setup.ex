@@ -4,7 +4,6 @@ defmodule Alto.Runner.Execution.Setup do
   alias Alto.Tool.Context
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
-  alias Alto.Subagents.Bounded, as: BoundedSubagents
   require Logger
   @default_max_steps 32
   @default_tool_timeout 125_000
@@ -49,6 +48,8 @@ defmodule Alto.Runner.Execution.Setup do
     max_events = Keyword.get(opts, :max_events, @default_max_events)
 
     with :ok <- validate_spec(spec),
+         :ok <- Alto.Context.Policy.validate(spec.context),
+         :ok <- Alto.Subagents.Policy.validate(spec.subagents),
          :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
          :ok <-
            validate_conversation_limit(Keyword.get(opts, :max_conversation_bytes, 128_000_000)),
@@ -550,11 +551,7 @@ defmodule Alto.Runner.Execution.Setup do
     end
   end
 
-  defp max_agent_depth(%{subagents: %BoundedSubagents{max_depth: max}})
-       when is_integer(max) and max >= 0,
-       do: max
-
-  defp max_agent_depth(_spec), do: 0
+  defp max_agent_depth(spec), do: Alto.Subagents.Policy.limits!(spec.subagents).max_depth
 
   defp add_persistence_error(run, reason),
     do: Map.update(run, :persistence_errors, [reason], &[reason | &1])

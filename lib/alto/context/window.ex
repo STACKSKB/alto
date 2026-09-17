@@ -1,6 +1,8 @@
 defmodule Alto.Context.Window do
   @moduledoc "A context cap resolved against the selected model's advertised window."
 
+  @behaviour Alto.Context.Policy
+
   defstruct [
     :max_tokens,
     reserve_output: 0,
@@ -23,47 +25,23 @@ defmodule Alto.Context.Window do
           reserve_output: non_neg_integer()
         }
 
+  @options_schema [
+    max_tokens: [type: {:or, [:pos_integer, nil]}, default: nil],
+    reserve_output: [type: :non_neg_integer, default: 0],
+    estimator: [type: {:or, [{:fun, 1}, nil]}, default: nil],
+    compact_at: [type: {:or, [:float, :integer, nil]}, default: nil],
+    usage_estimation: [type: :boolean, default: false]
+  ]
+
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
-    opts =
-      Keyword.validate!(opts,
-        max_tokens: nil,
-        reserve_output: 0,
-        estimator: nil,
-        compact_at: nil,
-        usage_estimation: false
-      )
+    opts = NimbleOptions.validate!(opts, @options_schema)
+    fraction = opts[:compact_at]
 
-    max_tokens = Keyword.fetch!(opts, :max_tokens)
-    reserve_output = Keyword.fetch!(opts, :reserve_output)
-
-    if max_tokens != nil and (not is_integer(max_tokens) or max_tokens <= 0) do
-      raise ArgumentError, "max_tokens must be a positive integer or nil"
-    end
-
-    if not is_integer(reserve_output) or reserve_output < 0 do
-      raise ArgumentError, "reserve_output must be a non-negative integer"
-    end
-
-    if not is_boolean(Keyword.fetch!(opts, :usage_estimation)),
-      do: raise(ArgumentError, "usage_estimation must be a boolean")
-
-    estimator = Keyword.fetch!(opts, :estimator)
-    compact_at = Keyword.fetch!(opts, :compact_at)
-
-    if compact_at != nil and (not is_number(compact_at) or compact_at <= 0 or compact_at > 1),
+    if fraction != nil and (fraction <= 0 or fraction > 1),
       do: raise(ArgumentError, "compact_at must be a fraction greater than zero and at most one")
 
-    if estimator != nil and not is_function(estimator, 1),
-      do: raise(ArgumentError, "estimator must be a unary function or nil")
-
-    %__MODULE__{
-      max_tokens: max_tokens,
-      reserve_output: reserve_output,
-      estimator: estimator,
-      compact_at: compact_at,
-      usage_estimation: Keyword.fetch!(opts, :usage_estimation)
-    }
+    struct!(__MODULE__, opts)
   end
 
   @spec resolve(t(), pos_integer()) :: budget()

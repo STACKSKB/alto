@@ -3,7 +3,7 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.{Event, Usage}
   alias Alto.Runner.Budget
   alias Alto.Subagents.Journal
-  alias Alto.Subagents.Bounded, as: BoundedSubagents
+  alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
 
   @fields [
@@ -84,7 +84,7 @@ defmodule Alto.Runner.Execution.Children do
       struct!(
         State,
         Map.take(run, @fields)
-        |> Map.put(:policy, run.spec.subagents)
+        |> Map.put(:policy, ChildPolicy.limits!(run.spec.subagents))
         |> Map.put(:events, Events.project(run))
       )
 
@@ -440,11 +440,9 @@ defmodule Alto.Runner.Execution.Children do
   def with_journal(data, nil), do: data
   def with_journal(data, journal), do: Map.put(data, :journal, Journal.identity(journal))
 
-  def configured_subagent_journal(%BoundedSubagents{journal: journal}), do: journal
-  def configured_subagent_journal(_), do: nil
+  def configured_subagent_journal(policy), do: ChildPolicy.limits!(policy).journal
 
-  def configured_workspaces(%BoundedSubagents{workspaces: manager}), do: manager
-  def configured_workspaces(_), do: nil
+  def configured_workspaces(policy), do: ChildPolicy.limits!(policy).workspaces
 
   defp prepare_subagent_workspaces(specs, %{workspaces: nil}), do: {:ok, specs}
 
@@ -689,7 +687,7 @@ defmodule Alto.Runner.Execution.Children do
 
   defp child_session_options(%{session: nil}), do: [session: nil, resume_snapshot: false]
 
-  defp child_session_options(%{policy: %BoundedSubagents{sessions: :separate}} = run),
+  defp child_session_options(%{policy: %{sessions: :separate}} = run),
     do: [session: :new, resume_snapshot: true, parent_session_id: run.session]
 
   defp child_session_options(run),
@@ -769,12 +767,18 @@ defmodule Alto.Runner.Execution.Children do
 
   def validate_batch(%{agents: agents}, run) when is_list(agents) do
     case run.policy do
-      %BoundedSubagents{max_children: max, max_concurrency: concurrency}
+      %{max_children: max, max_concurrency: concurrency}
       when max in 1..64 and concurrency in 1..max//1 ->
         cond do
-          run.agent_depth >= run.max_agent_depth -> {:error, :max_depth_exceeded}
-          agents == [] or length(agents) > max -> {:error, :max_children_exceeded}
-          true -> validate_batch_specs(agents, run, concurrency)
+          run.agent_depth >= run.max_agent_depth ->
+            {:error, :max_depth_exceeded}
+
+          agents == [] or length(agents) > max ->
+            {:error, :max_children_exceeded}
+
+          true ->
+            with :ok <- ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}),
+                 do: validate_batch_specs(agents, run, concurrency)
         end
 
       _ ->

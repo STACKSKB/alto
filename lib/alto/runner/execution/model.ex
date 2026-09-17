@@ -4,7 +4,7 @@ defmodule Alto.Runner.Execution.Model do
   alias Alto.Event
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
-  alias Alto.Context.Window
+  alias Alto.Context.Policy
 
   defmodule Capabilities do
     @moduledoc "The bounded capabilities required for one provider request."
@@ -21,9 +21,9 @@ defmodule Alto.Runner.Execution.Model do
   end
 
   @doc "Check a request against a provider's context window and reserve output."
-  @spec check_context(map(), Window.t(), module(), keyword(), Capabilities.t()) ::
+  @spec check_context(map(), term(), module(), keyword(), Capabilities.t()) ::
           {:ok, map()} | {:error, term()}
-  def check_context(request, %Window{} = policy, provider, provider_opts, %Capabilities{} = caps) do
+  def check_context(request, policy, provider, provider_opts, %Capabilities{} = caps) do
     checked =
       Call.run(
         fn ->
@@ -44,7 +44,7 @@ defmodule Alto.Runner.Execution.Model do
             |> Map.put(:context_identity, identity)
             |> Map.put(:context_observation, observation)
 
-          {request, Window.check(policy, request, description)}
+          {request, Policy.check(policy, request, description)}
         end,
         Budget.timeout(caps.budget, caps.provider_timeout),
         caps.cancel_ref

@@ -560,18 +560,6 @@ defmodule Alto.Runner.Checkpoint do
     end)
   end
 
-  defp fingerprint_data(%Alto.Subagents.Bounded{} = policy) do
-    %{
-      "kind" => "alto_subagents_bounded",
-      "max_depth" => policy.max_depth,
-      "max_children" => policy.max_children,
-      "max_concurrency" => policy.max_concurrency,
-      "sessions" => policy.sessions,
-      "workspaces" => stable_resource(policy.workspaces),
-      "journal" => stable_resource(policy.journal)
-    }
-  end
-
   defp fingerprint_data(value) when is_map(value),
     do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
 
@@ -599,8 +587,11 @@ defmodule Alto.Runner.Checkpoint do
 
   def decode(_), do: {:error, :invalid_checkpoint_data}
 
-  defp stable_subagents(%Alto.Subagents.Bounded{} = policy), do: fingerprint_data(policy)
-  defp stable_subagents(value), do: fingerprint_data(value)
+  defp stable_subagents(nil), do: nil
+
+  defp stable_subagents(policy) do
+    Alto.Subagents.Policy.fingerprint(policy, &stable_resource/1) |> fingerprint_data()
+  end
 
   defp stable_resource(nil), do: nil
 

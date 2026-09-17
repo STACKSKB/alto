@@ -37,7 +37,6 @@ defmodule Alto.Runner.Execution do
   alias Alto.Session
   alias Alto.Transition
   alias Alto.Usage
-  alias Alto.Context.Window
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
 
@@ -672,7 +671,11 @@ defmodule Alto.Runner.Execution do
           {:event, Event.durable(:subagent_failed, %{id: spec.id, error: :max_depth_exceeded}),
            run}
         else
-          case validate_subagent_tools(spec.tools, run) do
+          case with :ok <- validate_subagent_tools(spec.tools, run),
+                    do:
+                      Alto.Subagents.Policy.admit(run.spec.subagents, [spec], %{
+                        depth: run.agent_depth
+                      }) do
             :ok -> run_subagent(spec, run)
             {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
           end
@@ -836,7 +839,9 @@ defmodule Alto.Runner.Execution do
     )
   end
 
-  defp check_context(request, %{spec: %{context: %Window{} = policy}} = run) do
+  defp check_context(request, %{spec: %{context: nil}}), do: {:ok, request}
+
+  defp check_context(request, %{spec: %{context: policy}} = run) do
     {provider, opts} = run.provider
 
     Alto.Runner.Execution.Model.check_context(
@@ -847,9 +852,6 @@ defmodule Alto.Runner.Execution do
       model_capabilities(run)
     )
   end
-
-
-  defp check_context(request, _run), do: {:ok, request}
 
   defp stream_with_retries(provider, request, sink, opts, run, step),
     do:

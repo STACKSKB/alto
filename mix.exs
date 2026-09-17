@@ -28,6 +28,7 @@ defmodule Alto.MixProject do
       {:plug, "~> 1.20"},
       {:plug_crypto, "~> 2.2"},
       {:req, "~> 0.7.4"},
+      {:nimble_options, "~> 1.1"},
       {:server_sent_events, "~> 1.1"},
       {:thousand_island, "~> 1.5"},
       {:websock, "~> 0.5"},

@@ -3,6 +3,12 @@ defmodule Alto.Subagents do
 
   defmodule Bounded do
     @moduledoc false
+    @behaviour Alto.Subagents.Policy
+    @impl true
+    def limits(state), do: Map.from_struct(state)
+    @impl true
+    def admit(_state, _agents, _context), do: :ok
+
     defstruct max_depth: 0,
               max_children: 16,
               max_concurrency: 1,
