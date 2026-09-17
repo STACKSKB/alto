@@ -72,6 +72,25 @@ defmodule Alto.ConfigTest do
     end
   end
 
+  test "TUI schemas retain integer bounds and reject duplicate keys" do
+    for value <- [39, 101, 40.0, nil] do
+      assert_raise ArgumentError,
+                   ~r/:narrow_context_width must be an integer from 40 to 100/,
+                   fn ->
+                     Config.new(tui: [narrow_context_width: value])
+                   end
+    end
+
+    for value <- [40, 100] do
+      assert Config.run_options(Config.new(tui: [narrow_context_width: value]))[:tui] ==
+               [narrow_context_width: value]
+    end
+
+    assert_raise ArgumentError, ~r/TUI configuration options must be unique/, fn ->
+      Config.new(tui: [approval_auto_open: true, approval_auto_open: false])
+    end
+  end
+
   test "accepts the integration-host options" do
     config =
       Config.new(

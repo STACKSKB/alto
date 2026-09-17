@@ -56,10 +56,17 @@ defmodule Alto.FrontEnd.Registry do
 
   alias Alto.FrontEnd.Registry.Subscriber
 
-  @default_max_buffer_messages 10_000
-  @default_max_retained_events 1_000
-  @default_max_finished_runs 100
-  @default_max_claim_bytes 1_046_528
+  @capacity_options [
+    max_buffer_messages: [type: :non_neg_integer, default: 10_000],
+    max_buffer_bytes: [type: :non_neg_integer, default: 8_000_000],
+    max_retained_events: [type: :non_neg_integer, default: 1_000],
+    max_active_runs: [type: :non_neg_integer, default: 32],
+    max_subscribers: [type: :non_neg_integer, default: 128],
+    max_finished_runs: [type: :non_neg_integer, default: 100],
+    max_claim_bytes: [type: :non_neg_integer, default: 1_046_528],
+    command_timeout: [type: :pos_integer, default: 30_000]
+  ]
+  @capacity_schema NimbleOptions.new!(@capacity_options)
   @max_task_bytes 1_000_000
 
   ## Client API
@@ -305,34 +312,24 @@ defmodule Alto.FrontEnd.Registry do
   def init(opts) do
     {sessions_enabled, session_dir} = normalize_sessions(opts)
 
-    state = %{
-      resolver: Keyword.fetch!(opts, :config_resolver),
-      cwd: Keyword.get(opts, :cwd, File.cwd!()),
-      queue: Keyword.get(opts, :queue),
-      ledger: Keyword.get(opts, :ledger),
-      max_buffer_messages: Keyword.get(opts, :max_buffer_messages, @default_max_buffer_messages),
-      max_buffer_bytes: Keyword.get(opts, :max_buffer_bytes, 8_000_000),
-      max_active_runs: Keyword.get(opts, :max_active_runs, 32),
-      max_subscribers: Keyword.get(opts, :max_subscribers, 128),
-      max_retained_events: Keyword.get(opts, :max_retained_events, @default_max_retained_events),
-      max_finished_runs: Keyword.get(opts, :max_finished_runs, @default_max_finished_runs),
-      max_claim_bytes: Keyword.get(opts, :max_claim_bytes, @default_max_claim_bytes),
-      commands: Keyword.get(opts, :commands, %{}),
-      command_timeout: Keyword.get(opts, :command_timeout, 30_000),
-      sessions_enabled: sessions_enabled,
-      session_dir: session_dir,
-      disconnect_after_overflow:
-        validate_disconnect(Keyword.get(opts, :disconnect_after_overflow, :never)),
-      subscribers: %{},
-      runs: %{},
-      finished_order: []
-    }
+    with {:ok, capacity} <- capacity_options(opts),
+         :ok <- validate_commands(Keyword.get(opts, :commands, %{})) do
+      state =
+        Map.merge(capacity, %{
+          resolver: Keyword.fetch!(opts, :config_resolver),
+          cwd: Keyword.get(opts, :cwd, File.cwd!()),
+          queue: Keyword.get(opts, :queue),
+          ledger: Keyword.get(opts, :ledger),
+          commands: Keyword.get(opts, :commands, %{}),
+          sessions_enabled: sessions_enabled,
+          session_dir: session_dir,
+          disconnect_after_overflow:
+            validate_disconnect(Keyword.get(opts, :disconnect_after_overflow, :never)),
+          subscribers: %{},
+          runs: %{},
+          finished_order: []
+        })
 
-    with :ok <- validate_capacity_options(state),
-         :ok <- validate_max_finished_runs(state.max_finished_runs),
-         :ok <- validate_max_claim_bytes(state.max_claim_bytes),
-         :ok <- validate_commands(state.commands),
-         :ok <- validate_command_timeout(state.command_timeout) do
       {:ok, state}
     else
       {:error, reason} -> {:stop, reason}
@@ -354,14 +351,8 @@ defmodule Alto.FrontEnd.Registry do
     {enabled, dir}
   end
 
-  defp validate_max_claim_bytes(n) when is_integer(n) and n >= 0, do: :ok
-  defp validate_max_claim_bytes(n), do: {:error, {:invalid_max_claim_bytes, n}}
-
   defp validate_owner(owner) when is_pid(owner), do: :ok
   defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
-
-  defp validate_command_timeout(value) when is_integer(value) and value > 0, do: :ok
-  defp validate_command_timeout(value), do: {:error, {:invalid_option, :command_timeout, value}}
 
   defp validate_commands(commands) when is_map(commands) do
     if Enum.all?(commands, fn {name, callback} ->
@@ -375,9 +366,6 @@ defmodule Alto.FrontEnd.Registry do
 
   defp validate_commands(commands), do: {:error, {:invalid_option, :commands, commands}}
 
-  defp validate_max_finished_runs(n) when is_integer(n) and n >= 0, do: :ok
-  defp validate_max_finished_runs(n), do: {:error, {:invalid_max_finished_runs, n}}
-
   defp validate_disconnect(:never), do: :never
 
   defp validate_disconnect(:immediately), do: :immediately
@@ -385,18 +373,22 @@ defmodule Alto.FrontEnd.Registry do
   defp validate_disconnect(other),
     do: raise(ArgumentError, "invalid disconnect_after_overflow: #{inspect(other)}")
 
-  defp validate_capacity_options(state) do
-    keys = [
-      :max_buffer_messages,
-      :max_buffer_bytes,
-      :max_retained_events,
-      :max_active_runs,
-      :max_subscribers
-    ]
+  defp capacity_options(opts) do
+    case NimbleOptions.validate(
+           Keyword.take(opts, Keyword.keys(@capacity_options)),
+           @capacity_schema
+         ) do
+      {:ok, options} ->
+        {:ok, Map.new(options)}
 
-    case Enum.find(keys, fn key -> not is_integer(state[key]) or state[key] < 0 end) do
-      nil -> :ok
-      key -> {:error, {:invalid_option, key, state[key]}}
+      {:error, %NimbleOptions.ValidationError{key: :max_finished_runs, value: value}} ->
+        {:error, {:invalid_max_finished_runs, value}}
+
+      {:error, %NimbleOptions.ValidationError{key: :max_claim_bytes, value: value}} ->
+        {:error, {:invalid_max_claim_bytes, value}}
+
+      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
+        {:error, {:invalid_option, key, value}}
     end
   end
 
@@ -927,7 +919,7 @@ defmodule Alto.FrontEnd.Registry do
 
   defp track_finished(state, run_id) do
     order = (Map.get(state, :finished_order, []) ++ [run_id]) |> Enum.uniq()
-    limit = Map.get(state, :max_finished_runs, @default_max_finished_runs)
+    limit = Map.get(state, :max_finished_runs, @capacity_options[:max_finished_runs][:default])
     overflow = max(length(order) - limit, 0)
 
     {evict, order} = Enum.split(order, overflow)

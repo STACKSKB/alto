@@ -52,13 +52,21 @@ defmodule Alto.Config do
     :tui_backends
   ]
 
-  @allowed_tui_options [
-    :type_to_compose,
-    :narrow_context,
-    :narrow_context_width,
-    :narrow_context_fullscreen_below,
-    :approval_auto_open
+  @tui_options [
+    type_to_compose: [type: :boolean],
+    narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
+    narrow_context_width: [type: {:in, 40..100}],
+    narrow_context_fullscreen_below: [type: {:in, 0..300}],
+    approval_auto_open: [type: :boolean]
   ]
+  @tui_schema NimbleOptions.new!(@tui_options)
+  @tui_errors %{
+    type_to_compose: "must be a boolean",
+    narrow_context: "must be :adaptive, :drawer, or :fullscreen",
+    narrow_context_width: "must be an integer from 40 to 100",
+    narrow_context_fullscreen_below: "must be an integer from 0 to 300",
+    approval_auto_open: "must be a boolean"
+  }
 
   @enforce_keys [:run_options]
   defstruct [:run_options]
@@ -69,75 +77,42 @@ defmodule Alto.Config do
   @spec new(keyword()) :: t()
   def new(run_options \\ [])
 
-  def new(run_options) when is_list(run_options) do
-    unless Keyword.keyword?(run_options) do
-      raise ArgumentError, "Alto configuration must be a keyword list"
-    end
-
-    keys = Keyword.keys(run_options)
-    unknown = Enum.reject(keys, &(&1 in @allowed_options)) |> Enum.uniq()
-
-    cond do
-      unknown != [] ->
-        raise ArgumentError, "unknown Alto configuration options: #{inspect(unknown)}"
-
-      length(keys) != MapSet.size(MapSet.new(keys)) ->
-        raise ArgumentError, "Alto configuration options must be unique"
-
-      true ->
-        validate_tui_options!(Keyword.get(run_options, :tui, []))
-        %__MODULE__{run_options: run_options}
-    end
+  def new(run_options) do
+    validate_keys!(run_options, @allowed_options, "Alto")
+    validate_tui_options!(Keyword.get(run_options, :tui, []))
+    %__MODULE__{run_options: run_options}
   end
 
-  def new(_other), do: raise(ArgumentError, "Alto configuration must be a keyword list")
-
-  defp validate_tui_options!(options) when is_list(options) do
-    unless Keyword.keyword?(options) do
-      raise ArgumentError, "Alto TUI configuration must be a keyword list"
-    end
+  defp validate_keys!(options, allowed, label) do
+    unless is_list(options) and Keyword.keyword?(options),
+      do: raise(ArgumentError, "#{label} configuration must be a keyword list")
 
     keys = Keyword.keys(options)
-    unknown = Enum.reject(keys, &(&1 in @allowed_tui_options)) |> Enum.uniq()
+    unknown = Enum.reject(keys, &(&1 in allowed)) |> Enum.uniq()
 
     cond do
       unknown != [] ->
-        raise ArgumentError, "unknown Alto TUI configuration options: #{inspect(unknown)}"
+        raise ArgumentError, "unknown #{label} configuration options: #{inspect(unknown)}"
 
       length(keys) != MapSet.size(MapSet.new(keys)) ->
-        raise ArgumentError, "Alto TUI configuration options must be unique"
-
-      not is_boolean(Keyword.get(options, :type_to_compose, true)) ->
-        raise ArgumentError, "Alto TUI :type_to_compose must be a boolean"
-
-      Keyword.get(options, :narrow_context, :adaptive) not in [:adaptive, :drawer, :fullscreen] ->
-        raise ArgumentError,
-              "Alto TUI :narrow_context must be :adaptive, :drawer, or :fullscreen"
-
-      not valid_integer_range?(Keyword.get(options, :narrow_context_width, 75), 40, 100) ->
-        raise ArgumentError, "Alto TUI :narrow_context_width must be an integer from 40 to 100"
-
-      not valid_integer_range?(
-        Keyword.get(options, :narrow_context_fullscreen_below, 72),
-        0,
-        300
-      ) ->
-        raise ArgumentError,
-              "Alto TUI :narrow_context_fullscreen_below must be an integer from 0 to 300"
-
-      not is_boolean(Keyword.get(options, :approval_auto_open, true)) ->
-        raise ArgumentError, "Alto TUI :approval_auto_open must be a boolean"
+        raise ArgumentError, "#{label} configuration options must be unique"
 
       true ->
         :ok
     end
   end
 
-  defp validate_tui_options!(_other),
-    do: raise(ArgumentError, "Alto TUI configuration must be a keyword list")
+  defp validate_tui_options!(options) do
+    validate_keys!(options, Keyword.keys(@tui_options), "Alto TUI")
 
-  defp valid_integer_range?(value, low, high),
-    do: is_integer(value) and value >= low and value <= high
+    case NimbleOptions.validate(options, @tui_schema) do
+      {:ok, _} ->
+        :ok
+
+      {:error, %NimbleOptions.ValidationError{key: key}} ->
+        raise ArgumentError, "Alto TUI #{inspect(key)} #{@tui_errors[key]}"
+    end
+  end
 
   @doc "Return the validated runner options stored in a configuration."
   @spec run_options(t()) :: keyword()

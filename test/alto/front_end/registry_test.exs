@@ -150,6 +150,21 @@ defmodule Alto.FrontEnd.RegistryTest do
     registry
   end
 
+  test "capacity schemas preserve public validation errors and allow zero capacities" do
+    resolver = fn _ -> {:ok, []} end
+    assert {:ok, state} = Registry.init(config_resolver: resolver, max_active_runs: 0)
+    assert state.max_active_runs == 0
+
+    for {key, error} <- [
+          max_active_runs: {:invalid_option, :max_active_runs, -1},
+          max_claim_bytes: {:invalid_max_claim_bytes, -1},
+          max_finished_runs: {:invalid_max_finished_runs, -1},
+          command_timeout: {:invalid_option, :command_timeout, -1}
+        ] do
+      assert {:stop, ^error} = Registry.init([{:config_resolver, resolver}, {key, -1}])
+    end
+  end
+
   test "start_run rejects unknown configurations and invalid tasks", %{
     registry: registry,
     root: root
