@@ -917,18 +917,7 @@ defmodule Alto.Queue do
         {:reply, {:ok, []}, state}
 
       {:ok, claimed} ->
-        logs =
-          Enum.map(claimed, fn record ->
-            %{
-              "v" => @version,
-              "type" => "claim",
-              "id" => record.id,
-              "claim_id" => record.claim_id,
-              "by" => record.claimed_by,
-              "until_ms" => record.lease_until_ms,
-              "at_ms" => now
-            }
-          end)
+        logs = Enum.map(claimed, &Map.put(claim_log(&1), "at_ms", now))
 
         # One append for the whole batch: either every claim is durable or
         # none is. The previous per-record loop could persist the first
@@ -1532,19 +1521,22 @@ defmodule Alto.Queue do
     if record.status == :claimed do
       [
         put,
-        %{
-          "v" => @version,
-          "type" => "claim",
-          "id" => id,
-          "claim_id" => record.claim_id,
-          "by" => record.claimed_by,
-          "by_exact" => SessionStore.encode_term(record.claimed_by),
-          "until_ms" => record.lease_until_ms
-        }
+        Map.put(claim_log(record), "by_exact", SessionStore.encode_term(record.claimed_by))
       ]
     else
       [put]
     end
+  end
+
+  defp claim_log(%Record{} = record) do
+    %{
+      "v" => @version,
+      "type" => "claim",
+      "id" => record.id,
+      "claim_id" => record.claim_id,
+      "by" => record.claimed_by,
+      "until_ms" => record.lease_until_ms
+    }
   end
 
   # Canonical records were synced before replacement, so a missing record is
