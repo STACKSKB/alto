@@ -17,6 +17,13 @@ defmodule Alto.Subagents.Policy do
     journal: [type: :any, default: nil]
   ]
 
+  def implementation?(module) when is_atom(module),
+    do:
+      Code.ensure_loaded?(module) and function_exported?(module, :limits, 1) and
+        function_exported?(module, :admit, 3)
+
+  def implementation?(_), do: false
+
   def validate(policy) do
     limits!(policy)
     :ok
@@ -38,7 +45,7 @@ defmodule Alto.Subagents.Policy do
 
   def limits!(policy) do
     {module, state} = participant(policy)
-    true = Code.ensure_loaded?(module) and function_exported?(module, :admit, 3)
+    true = implementation?(module)
 
     limits =
       module.limits(state) |> Map.to_list() |> NimbleOptions.validate!(@schema) |> Map.new()
@@ -64,7 +71,21 @@ defmodule Alto.Subagents.Policy do
     {module, state} = participant(policy)
     limits = limits!(policy)
     state = if is_struct(state), do: Map.from_struct(state), else: state
-    state = if is_map(state), do: Map.drop(state, [:workspaces, :journal]), else: state
+
+    state =
+      cond do
+        is_map(state) ->
+          Map.drop(state, [:workspaces, :journal])
+
+        is_list(state) ->
+          if Keyword.keyword?(state),
+            do: Keyword.drop(state, [:workspaces, :journal]),
+            else: state
+
+        true ->
+          state
+      end
+
     limits = limits |> Map.update!(:workspaces, resource) |> Map.update!(:journal, resource)
     %{module: module, code: module.module_info(:md5), state: state, limits: limits}
   end

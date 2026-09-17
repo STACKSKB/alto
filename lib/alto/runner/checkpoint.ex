@@ -560,6 +560,19 @@ defmodule Alto.Runner.Checkpoint do
     end)
   end
 
+  defp fingerprint_data(%module{} = value) do
+    if Alto.Subagents.Policy.implementation?(module),
+      do: stable_subagents(value),
+      else:
+        Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
+  end
+
+  defp fingerprint_data({module, _options} = value) when is_atom(module) do
+    if Alto.Subagents.Policy.implementation?(module),
+      do: stable_subagents(value),
+      else: value |> Tuple.to_list() |> Enum.map(&fingerprint_data/1) |> List.to_tuple()
+  end
+
   defp fingerprint_data(value) when is_map(value),
     do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
 
