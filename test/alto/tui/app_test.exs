@@ -743,6 +743,26 @@ defmodule Alto.TUI.AppTest do
            ) =~ "from clipboard"
   end
 
+  test "backend recovery offers only configured alternatives and selects them", context do
+    for alternatives <- [[], [local: {Alto.TUI.Backends.Native, label: "Local runner"}]] do
+      config =
+        context.config.run_options
+        |> Keyword.put(:tui_backends, [codex: {Alto.TUI.Backends.Codex, []}] ++ alternatives)
+        |> Alto.Config.new()
+
+      assert {:ok, state} = State.new(config, project: context.root, path: context.catalog)
+      assert {:noreply, state} = App.handle_info({:codex_connected, {:error, :offline}}, state)
+      assert length(state.overlay.items) == 1 + length(alternatives)
+
+      if alternatives != [] do
+        state = put_in(state.overlay.index, 1)
+        assert {:noreply, selected} = App.handle_event(%Key{code: "enter"}, state)
+        assert selected.selected_backend == :local
+        assert selected.overlay == nil
+      end
+    end
+  end
+
   test "custom backends start providerless and retain configured approval", context do
     config =
       Alto.Test.TUI.config(

@@ -1189,6 +1189,9 @@ defmodule Alto.TUI.App do
       %{value: nil} ->
         state
 
+      %{value: {:select_backend, backend}} ->
+        select_backend(state, backend)
+
       %{value: :new_workspace} ->
         open_workspace_form(state)
 

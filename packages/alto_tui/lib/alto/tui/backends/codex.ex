@@ -553,18 +553,16 @@ defmodule Alto.TUI.Backends.Codex do
           {
             "Codex is using an API key, not ChatGPT subscription access.",
             [
-              %{label: "Sign in with ChatGPT subscription…", value: :codex_login},
-              %{label: "Use Alto native backend", value: :alto}
-            ]
+              %{label: "Sign in with ChatGPT subscription…", value: :codex_login}
+            ] ++ alternative_backends(state)
           }
 
         true ->
           {
             "Sign in through the official managed ChatGPT OAuth flow. Alto never receives the token.",
             [
-              %{label: "Sign in with ChatGPT subscription…", value: :codex_login},
-              %{label: "Use Alto native backend", value: :alto}
-            ]
+              %{label: "Sign in with ChatGPT subscription…", value: :codex_login}
+            ] ++ alternative_backends(state)
           }
       end
 
@@ -585,10 +583,10 @@ defmodule Alto.TUI.Backends.Codex do
   defp codex_error_overlay(state, reason) do
     message = reason |> Host.human_error() |> Host.redact_secrets() |> String.slice(0, 500)
 
-    items = [
-      %{label: "Retry Codex connection", value: :codex_reconnect},
-      %{label: "Use Alto native backend", value: :alto}
-    ]
+    items =
+      [
+        %{label: "Retry Codex connection", value: :codex_reconnect}
+      ] ++ alternative_backends(state)
 
     codex = %{state.codex | status: {:error, reason}}
 
@@ -598,6 +596,13 @@ defmodule Alto.TUI.Backends.Codex do
         overlay: list_overlay(:codex_error, "Codex unavailable", message, items),
         notice: "Codex needs attention"
     }
+  end
+
+  defp alternative_backends(state) do
+    state.run_options
+    |> Alto.TUI.Backend.items()
+    |> Enum.reject(&(&1.value == state.selected_backend))
+    |> Enum.map(&%{label: "Use " <> &1.label, value: {:select_backend, &1.value}})
   end
 
   defp list_overlay(kind, title, message, items) do
