@@ -283,20 +283,7 @@ defmodule Alto.Tools.EditFile do
     %{content: utf8_prefix(content, limit), truncated: true}
   end
 
-  defp utf8_prefix(content, limit) do
-    prefix = binary_part(content, 0, limit)
-    trim_invalid_suffix(prefix, min(3, byte_size(prefix)))
-  end
-
-  defp trim_invalid_suffix(prefix, 0), do: prefix
-
-  defp trim_invalid_suffix(prefix, remaining) do
-    if String.valid?(prefix) do
-      prefix
-    else
-      trim_invalid_suffix(binary_part(prefix, 0, byte_size(prefix) - 1), remaining - 1)
-    end
-  end
+  defp utf8_prefix(content, limit), do: Alto.Text.prefix(content, limit)
 
   defp validate_size(size) when size <= @max_file_bytes, do: :ok
   defp validate_size(_size), do: {:error, {:file_too_large, @max_file_bytes}}

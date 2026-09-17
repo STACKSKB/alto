@@ -351,19 +351,7 @@ defmodule Alto.Harness.Catalog do
 
   defp valid_text?(value), do: is_binary(value) and value != "" and String.valid?(value)
 
-  defp bounded_string(value, max) when is_binary(value) do
-    if byte_size(value) <= max do
-      value
-    else
-      value |> binary_part(0, max) |> trim_to_utf8()
-    end
-  end
-
-  defp trim_to_utf8(value) do
-    if String.valid?(value),
-      do: value,
-      else: trim_to_utf8(binary_part(value, 0, byte_size(value) - 1))
-  end
+  defp bounded_string(value, max) when is_binary(value), do: Alto.Text.prefix(value, max)
 
   defp check_catalog_size(encoded) do
     if byte_size(encoded) <= @max_catalog_bytes do

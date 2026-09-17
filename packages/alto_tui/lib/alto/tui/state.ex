@@ -666,18 +666,10 @@ defmodule Alto.TUI.State do
 
   defp bounded_entries(_), do: []
 
-  defp bounded_value(value) when is_binary(value) and byte_size(value) > 64_000 do
-    prefix = binary_part(value, 0, 63_950) |> valid_utf8_prefix()
-    prefix <> "\n[display shortened; see session log]"
-  end
+  defp bounded_value(value) when is_binary(value),
+    do: Alto.Text.truncate(value, 64_000, "\n[display shortened; see session log]")
 
   defp bounded_value(value), do: value
-
-  defp valid_utf8_prefix(value) do
-    if String.valid?(value),
-      do: value,
-      else: valid_utf8_prefix(binary_part(value, 0, byte_size(value) - 1))
-  end
 
   defp evict_inactive_caches(%__MODULE__{} = state) do
     active = Enum.map(state.runs, fn {_id, run} -> run.task_id end)

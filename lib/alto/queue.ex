@@ -458,24 +458,7 @@ defmodule Alto.Queue do
     end
   end
 
-  defp bounded_read(path, max) do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, max + 1) do
-            {:error, reason} -> {:error, reason}
-            :eof -> {:ok, <<>>}
-            content when byte_size(content) > max -> {:error, {:too_large, max + 1, max}}
-            content -> {:ok, content}
-          end
-
-        File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+  defp bounded_read(path, max), do: Alto.BoundedFile.read(path, max)
 
   # A crash mid-append leaves a torn final line: bytes with no trailing
   # newline that do not decode. Discard exactly that tail and truncate the

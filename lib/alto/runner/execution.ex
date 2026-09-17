@@ -848,6 +848,7 @@ defmodule Alto.Runner.Execution do
     )
   end
 
+
   defp check_context(request, _run), do: {:ok, request}
 
   defp stream_with_retries(provider, request, sink, opts, run, step),
@@ -1645,14 +1646,7 @@ defmodule Alto.Runner.Execution do
     "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
   end
 
-  defp notify(sink, event) do
-    sink.(event)
-    :ok
-  rescue
-    _error -> :ok
-  catch
-    _kind, _reason -> :ok
-  end
+  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 
   defp model_result_content(value, limit) do
     case Alto.Content.normalize_tool_result(value, limit) do
@@ -1678,13 +1672,8 @@ defmodule Alto.Runner.Execution do
       bound_tool_result(inspect(%{encoding_error: Exception.message(error), value: value}), limit)
   end
 
-  defp bound_tool_result(encoded, limit) do
-    if byte_size(encoded) <= limit do
-      encoded
-    else
-      String.slice(encoded, 0, limit) <> "\n[alto: tool result truncated]"
-    end
-  end
+  defp bound_tool_result(encoded, limit),
+    do: Alto.Text.truncate(encoded, limit, "\n[alto: tool result truncated]")
 
   defp new_run(task, opts) do
     # Account attachment can perform storage I/O before a context exists.

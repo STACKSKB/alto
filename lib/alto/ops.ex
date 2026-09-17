@@ -410,23 +410,7 @@ defmodule Alto.Ops do
 
   defp reason_of(_evidence, class), do: "#{class}"
 
-  defp truncate(binary, max) when is_binary(binary) do
-    if byte_size(binary) <= max do
-      binary
-    else
-      # Reserve 3 bytes for the ASCII ellipsis so the total stays bounded.
-      kept = binary_part(binary, 0, max - 3)
-      kept = if String.valid?(kept), do: kept, else: trim_last_byte(kept)
-      kept <> "..."
-    end
-  end
-
-  defp trim_last_byte(<<>>), do: <<>>
-
-  defp trim_last_byte(binary) do
-    trimmed = binary_part(binary, 0, byte_size(binary) - 1)
-    if String.valid?(trimmed), do: trimmed, else: trim_last_byte(trimmed)
-  end
+  defp truncate(binary, max), do: Alto.Text.truncate(binary, max, "...")
 
   defp filter_items(items, :all), do: items
   defp filter_items(items, status), do: Enum.filter(items, &(&1.status == status))
