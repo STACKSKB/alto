@@ -10,11 +10,26 @@ defmodule Alto.Providers.OpenAICompatible do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.SSE
+  alias Alto.Providers.{HTTPOptions, SSE}
   alias Alto.Providers.OpenAICompatible.Stream
 
   @default_base_url "https://openrouter.ai/api/v1"
-  @default_timeout 120_000
+  @config_schema HTTPOptions.stream_schema()
+  @config_errors [
+    model: :model_required,
+    endpoint: {:value, :invalid_endpoint},
+    timeout: {:value, :invalid_timeout},
+    max_event_bytes: {:value, :invalid_max_event_bytes},
+    max_response_bytes: {:value, :invalid_max_response_bytes},
+    supports_images: {:value, :invalid_supports_images}
+  ]
+  @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
+                   [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
+  @models_errors [
+    endpoint: {:value, :invalid_models_endpoint},
+    timeout: {:value, :invalid_timeout},
+    max_models_response_bytes: {:value, :invalid_max_models_response_bytes}
+  ]
   @default_max_event_bytes 1_000_000
   @default_max_response_bytes 2_000_000
   @default_max_models_response_bytes 8_000_000
@@ -468,60 +483,26 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp config(opts) do
-    model = Keyword.get(opts, :model)
     base_url = Keyword.get(opts, :base_url, @default_base_url)
 
     endpoint =
       Keyword.get(opts, :endpoint, String.trim_trailing(base_url, "/") <> "/chat/completions")
 
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    max_event_bytes = Keyword.get(opts, :max_event_bytes, @default_max_event_bytes)
-    max_response_bytes = Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
-    supports_images = Keyword.get(opts, :supports_images, false)
-
-    cond do
-      not is_binary(model) or model == "" ->
-        {:error, :model_required}
-
-      not valid_endpoint?(endpoint) ->
-        {:error, {:invalid_endpoint, endpoint}}
-
-      not is_integer(timeout) or timeout <= 0 ->
-        {:error, {:invalid_timeout, timeout}}
-
-      not is_integer(max_event_bytes) or max_event_bytes <= 0 ->
-        {:error, {:invalid_max_event_bytes, max_event_bytes}}
-
-      not is_integer(max_response_bytes) or max_response_bytes <= 0 ->
-        {:error, {:invalid_max_response_bytes, max_response_bytes}}
-
-      not is_boolean(supports_images) ->
-        {:error, {:invalid_supports_images, supports_images}}
-
-      true ->
-        headers =
-          [
-            {"accept", "text/event-stream"},
-            {"content-type", "application/json"},
-            {"user-agent", "alto/0.1.0-dev"}
-          ]
-          |> maybe_authorize(Keyword.get(opts, :api_key))
-          |> Kernel.++(Keyword.get(opts, :headers, []))
-
-        {:ok,
-         %{
-           model: model,
-           reasoning_effort: Keyword.get(opts, :reasoning_effort),
-           reasoning_format: Alto.Reasoning.format(opts),
-           prompt_cache: Keyword.get(opts, :prompt_cache, true),
-           endpoint: endpoint,
-           headers: headers,
-           timeout: timeout,
-           max_event_bytes: max_event_bytes,
-           max_response_bytes: max_response_bytes,
-           supports_images: supports_images,
-           req_options: Keyword.get(opts, :req_options, [])
-         }}
+    with {:ok, config} <-
+           HTTPOptions.validate(
+             Keyword.put(opts, :endpoint, endpoint),
+             @config_schema,
+             @config_errors
+           ) do
+      {:ok,
+       Map.merge(config, %{
+         reasoning_effort: Keyword.get(opts, :reasoning_effort),
+         reasoning_format: Alto.Reasoning.format(opts),
+         prompt_cache: Keyword.get(opts, :prompt_cache, true),
+         headers:
+           headers(opts, [{"accept", "text/event-stream"}, {"content-type", "application/json"}]),
+         req_options: Keyword.get(opts, :req_options, [])
+       })}
     end
   end
 
@@ -531,37 +512,28 @@ defmodule Alto.Providers.OpenAICompatible do
     endpoint =
       Keyword.get(opts, :models_endpoint, String.trim_trailing(base_url, "/") <> "/models")
 
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-
-    max_response_bytes =
-      Keyword.get(opts, :max_models_response_bytes, @default_max_models_response_bytes)
-
-    cond do
-      not valid_endpoint?(endpoint) ->
-        {:error, {:invalid_models_endpoint, endpoint}}
-
-      not is_integer(timeout) or timeout <= 0 ->
-        {:error, {:invalid_timeout, timeout}}
-
-      not is_integer(max_response_bytes) or max_response_bytes <= 0 ->
-        {:error, {:invalid_max_models_response_bytes, max_response_bytes}}
-
-      true ->
-        headers =
-          [{"accept", "application/json"}, {"user-agent", "alto/0.1.0-dev"}]
-          |> maybe_authorize(Keyword.get(opts, :api_key))
-          |> Kernel.++(Keyword.get(opts, :headers, []))
-
-        {:ok,
-         %{
-           endpoint: endpoint,
-           query: Keyword.get(opts, :model_query, []),
-           headers: headers,
-           timeout: timeout,
-           max_response_bytes: max_response_bytes,
-           req_options: Keyword.get(opts, :req_options, [])
-         }}
+    with {:ok, config} <-
+           HTTPOptions.validate(
+             Keyword.put(opts, :endpoint, endpoint),
+             @models_schema,
+             @models_errors
+           ) do
+      {:ok,
+       %{
+         endpoint: config.endpoint,
+         timeout: config.timeout,
+         max_response_bytes: config.max_models_response_bytes,
+         query: Keyword.get(opts, :model_query, []),
+         headers: headers(opts, [{"accept", "application/json"}]),
+         req_options: Keyword.get(opts, :req_options, [])
+       }}
     end
+  end
+
+  defp headers(opts, headers) do
+    (headers ++ [{"user-agent", "alto/0.1.0-dev"}])
+    |> maybe_authorize(Keyword.get(opts, :api_key))
+    |> Kernel.++(Keyword.get(opts, :headers, []))
   end
 
   defp maybe_authorize(headers, key) when is_binary(key) and key != "" do
@@ -569,16 +541,4 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp maybe_authorize(headers, _key), do: headers
-
-  defp valid_endpoint?(endpoint) when is_binary(endpoint) do
-    case URI.parse(endpoint) do
-      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) ->
-        true
-
-      _other ->
-        false
-    end
-  end
-
-  defp valid_endpoint?(_endpoint), do: false
 end

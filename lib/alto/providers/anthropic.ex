@@ -13,13 +13,25 @@ defmodule Alto.Providers.Anthropic do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.SSE
+  alias Alto.Providers.{HTTPOptions, SSE}
   alias Alto.Providers.Anthropic.Stream
 
   @default_base_url "https://api.anthropic.com/v1"
-  @default_timeout 120_000
-  @default_max_event_bytes 1_000_000
-  @default_max_response_bytes 2_000_000
+  @config_schema List.insert_at(
+                   HTTPOptions.stream_schema(),
+                   1,
+                   {:api_key,
+                    [type: {:custom, HTTPOptions, :nonempty_string, []}, required: true]}
+                 )
+  @config_errors [
+    model: :model_required,
+    api_key: :api_key_required,
+    endpoint: {:value, :invalid_endpoint},
+    timeout: {:value, :invalid_timeout},
+    max_event_bytes: {:value, :invalid_max_event_bytes},
+    max_response_bytes: :invalid_response_limit,
+    supports_images: {:value, :invalid_supports_images}
+  ]
   @state_key :alto_anthropic_stream
   @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking cache_control)
 
@@ -47,70 +59,26 @@ defmodule Alto.Providers.Anthropic do
   end
 
   defp config(opts) do
-    model = Keyword.get(opts, :model)
-    api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url, @default_base_url)
     endpoint = Keyword.get(opts, :endpoint, String.trim_trailing(base_url, "/") <> "/messages")
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    max_event_bytes = Keyword.get(opts, :max_event_bytes, @default_max_event_bytes)
-    max_response_bytes = Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
-    supports_images = Keyword.get(opts, :supports_images, false)
 
-    cond do
-      not is_binary(model) or model == "" ->
-        {:error, :model_required}
-
-      not is_binary(api_key) or api_key == "" ->
-        {:error, :api_key_required}
-
-      not valid_endpoint?(endpoint) ->
-        {:error, {:invalid_endpoint, endpoint}}
-
-      not is_integer(timeout) or timeout <= 0 ->
-        {:error, {:invalid_timeout, timeout}}
-
-      not is_integer(max_event_bytes) or max_event_bytes <= 0 ->
-        {:error, {:invalid_max_event_bytes, max_event_bytes}}
-
-      not is_integer(max_response_bytes) or max_response_bytes <= 0 ->
-        # Keep the original adapter's public error for this existing limit;
-        # max_event_bytes is the only new bound exposed by the SSE transport.
-        {:error, :invalid_response_limit}
-
-      not is_boolean(supports_images) ->
-        {:error, {:invalid_supports_images, supports_images}}
-
-      true ->
-        {:ok,
-         %{
-           model: model,
-           prompt_cache: Keyword.get(opts, :prompt_cache, true),
-           api_key: api_key,
-           endpoint: endpoint,
-           timeout: timeout,
-           max_event_bytes: max_event_bytes,
-           max_response_bytes: max_response_bytes,
-           supports_images: supports_images,
-           max_tokens: Keyword.get(opts, :max_tokens),
-           thinking: Keyword.get(opts, :thinking),
-           reasoning_effort: Keyword.get(opts, :reasoning_effort),
-           streaming: Keyword.get(opts, :streaming, true),
-           req_options: Keyword.get(opts, :req_options, [])
-         }}
+    with {:ok, config} <-
+           HTTPOptions.validate(
+             Keyword.put(opts, :endpoint, endpoint),
+             @config_schema,
+             @config_errors
+           ) do
+      {:ok,
+       Map.merge(config, %{
+         prompt_cache: Keyword.get(opts, :prompt_cache, true),
+         max_tokens: Keyword.get(opts, :max_tokens),
+         thinking: Keyword.get(opts, :thinking),
+         reasoning_effort: Keyword.get(opts, :reasoning_effort),
+         streaming: Keyword.get(opts, :streaming, true),
+         req_options: Keyword.get(opts, :req_options, [])
+       })}
     end
   end
-
-  defp valid_endpoint?(endpoint) when is_binary(endpoint) do
-    case URI.parse(endpoint) do
-      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) ->
-        true
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_endpoint?(_), do: false
 
   defp request_body(request, config) do
     options =
