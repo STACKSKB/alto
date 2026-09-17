@@ -2,16 +2,6 @@ defmodule Alto.Runner.Execution.Events do
   @moduledoc "Bounded event retention, durable projection, and conservative outcome accounting."
   alias Alto.{Event, Session}
 
-  @fields [
-    :session,
-    :session_dir,
-    :event_sink,
-    :events_rev,
-    :events_dropped,
-    :max_events,
-    :verdict,
-    :persistence_errors
-  ]
   defmodule State do
     @moduledoc "Event retention and storage capabilities, independent of a scheduler."
     defstruct [
@@ -26,6 +16,8 @@ defmodule Alto.Runner.Execution.Events do
       :run_id
     ]
   end
+
+  @fields Map.keys(State.__struct__()) -- [:__struct__, :run_id]
 
   @doc false
   def project(run),

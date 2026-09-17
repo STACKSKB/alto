@@ -5,27 +5,6 @@ defmodule Alto.Runner.Execution.Transcript do
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Events
 
-  @fields [
-    :tool_definitions,
-    :model_tools,
-    :request_model_tools,
-    :messages_rev,
-    :transcript_bytes,
-    :max_transcript_bytes,
-    :compaction,
-    :compacted?,
-    :compaction_count,
-    :session,
-    :session_dir,
-    :provider,
-    :provider_timeout,
-    :budget,
-    :cancel_ref,
-    :event_sink,
-    :max_steps,
-    :model_requests,
-    :usage
-  ]
   defmodule State do
     @moduledoc "Transcript, model-compaction capabilities, and retained events."
     defstruct [
@@ -52,6 +31,8 @@ defmodule Alto.Runner.Execution.Transcript do
       :events
     ]
   end
+
+  @fields Map.keys(State.__struct__()) -- [:__struct__, :run_id, :events]
 
   @doc false
   def project(run),
