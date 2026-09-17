@@ -990,11 +990,10 @@ defmodule Alto.TUI.App do
           run_options =
             run_options
             |> Keyword.put(:session, session_id)
-            |> Keyword.put(:resume, %{
-              messages: snapshot.messages,
-              transcript_bytes: snapshot.transcript_bytes,
-              revision: snapshot.revision
-            })
+            |> Keyword.put(
+              :resume,
+              Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
+            )
 
           Alto.start(prompt, run_options)
         end

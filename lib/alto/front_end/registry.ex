@@ -1204,11 +1204,12 @@ defmodule Alto.FrontEnd.Registry do
 
   defp resume_opts(session_id, state) when is_binary(session_id) do
     case Alto.Session.transcript(session_id, session_dir: state.session_dir) do
-      {:ok, %{messages: messages, transcript_bytes: bytes, revision: revision}} ->
+      {:ok, snapshot} ->
         {:ok,
          [
            session: session_id,
-           resume: %{messages: messages, transcript_bytes: bytes, revision: revision}
+           resume:
+             Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
          ]}
 
       {:error, reason} ->

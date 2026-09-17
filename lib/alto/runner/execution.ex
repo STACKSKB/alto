@@ -776,11 +776,7 @@ defmodule Alto.Runner.Execution do
         {:ok, {:ok, completion}} ->
           usage = Usage.normalize(if(is_map(completion), do: Map.get(completion, :usage)))
 
-          observation = %{
-            messages: request.messages,
-            tools: request.tools,
-            input_tokens: usage.input_tokens
-          }
+          observation = Alto.Context.Observation.new(request, usage.input_tokens)
 
           complete_model(Map.put(run, :context_observation, observation), completion)
 
@@ -828,6 +824,7 @@ defmodule Alto.Runner.Execution do
            messages: Enum.reverse(run.messages_rev),
            session_id: run.session || run.tool_context.session_id,
            context_observation: Map.get(run, :context_observation),
+           resume_context_observation: Map.get(run, :resume_context_observation),
            tools: tools,
            options: stringify_top_keys(options),
            loop: request
@@ -1738,6 +1735,11 @@ defmodule Alto.Runner.Execution do
       run_id: run.tool_context.session_id,
       agent_identity: run.tool_context.agent_identity,
       transcript_revision: run.transcript_revision,
+      context_observation:
+        Alto.Context.Observation.dump(
+          Map.get(run, :context_observation),
+          Enum.reverse(run.messages_rev)
+        ),
       resolved_operations: Map.get(run, :resolved_operations, []),
       transcript_persisted:
         Map.get(run, :history_digest) ==

@@ -66,14 +66,13 @@ defmodule Alto do
     dir_opts = Keyword.take(opts, [:session_dir])
 
     case Alto.Session.transcript(session_id, dir_opts) do
-      {:ok, %{messages: messages, transcript_bytes: bytes, revision: revision}} ->
+      {:ok, snapshot} ->
         opts
         |> Keyword.put(:session, session_id)
-        |> Keyword.put(:resume, %{
-          messages: messages,
-          transcript_bytes: bytes,
-          revision: revision
-        })
+        |> Keyword.put(
+          :resume,
+          Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
+        )
         |> then(&Runner.run(task, &1))
 
       {:error, reason} ->

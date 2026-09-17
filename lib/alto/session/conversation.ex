@@ -31,7 +31,8 @@ defmodule Alto.Session.Conversation do
           required(:summary) => String.t() | nil,
           required(:settled) => boolean(),
           required(:conversation_bytes) => non_neg_integer(),
-          optional(:unsettled) => map()
+          optional(:unsettled) => map(),
+          optional(:context_observation) => map() | nil
         }
 
   @doc "Persist one complete conversation boundary and advance the branch head."
@@ -171,6 +172,7 @@ defmodule Alto.Session.Conversation do
              settled,
              retained_bytes
            ),
+         entry <- Map.put(entry, "context_observation", Keyword.get(opts, :context_observation)),
          {:ok, encoded} <- encode_bounded(entry),
          conversation_bytes <- retained_bytes + byte_size(encoded),
          :ok <-
@@ -237,6 +239,7 @@ defmodule Alto.Session.Conversation do
   defp snapshot(entry, entry_bytes) do
     %{
       messages: entry["messages"],
+      context_observation: entry["context_observation"],
       transcript_bytes: entry["transcript_bytes"],
       revision: entry["revision"],
       entry_id: entry["entry_id"],
@@ -292,6 +295,7 @@ defmodule Alto.Session.Conversation do
       "settled" => snapshot.settled,
       "conversation_bytes" => snapshot.conversation_bytes,
       "messages" => snapshot.messages,
+      "context_observation" => Map.get(snapshot, :context_observation),
       "transcript_bytes" => snapshot.transcript_bytes
     }
 
@@ -325,6 +329,7 @@ defmodule Alto.Session.Conversation do
       {:ok,
        %{
          messages: messages,
+         context_observation: Map.get(record, "context_observation"),
          transcript_bytes: bytes,
          revision: revision,
          entry_id: Map.get(record, "entry_id", entry_id(id, revision)),

@@ -1,4 +1,5 @@
 ExUnit.start()
+Code.require_file("support/resume_context_fixture.ex", __DIR__)
 
 # Deliberate crash/suspend tests inspect the optional task host, never clients.
 defmodule Alto.Test.Runner do

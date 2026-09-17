@@ -38,6 +38,11 @@ defmodule Alto.Runner.Execution.History do
         max_conversation_bytes: run.max_conversation_bytes,
         expected_revision: run.transcript_revision,
         resolved_operations: run.resolved_operations,
+        context_observation:
+          Alto.Context.Observation.dump(
+            Map.get(run, :context_observation),
+            Enum.reverse(run.messages_rev)
+          ),
         allow_pending: Keyword.get(opts, :allow_pending, false)
       ]
 

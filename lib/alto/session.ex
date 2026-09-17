@@ -225,7 +225,14 @@ defmodule Alto.Session do
   def transcript(id, opts \\ []) do
     case Conversation.resume(id, opts) do
       {:ok, snapshot} ->
-        {:ok, Map.take(snapshot, [:messages, :transcript_bytes, :revision, :unsettled])}
+        {:ok,
+         Map.take(snapshot, [
+           :messages,
+           :transcript_bytes,
+           :revision,
+           :unsettled,
+           :context_observation
+         ])}
 
       {:error, :enoent} ->
         if File.exists?(log_path(dir(opts), id)) do

@@ -26,13 +26,32 @@ defmodule Alto.Runner.Execution.Model do
   def check_context(request, %Window{} = policy, provider, provider_opts, %Capabilities{} = caps) do
     checked =
       Call.run(
-        fn -> Window.check(policy, request, provider.describe(provider_opts)) end,
+        fn ->
+          description = provider.describe(provider_opts)
+          identity = Alto.Context.Observation.identity(provider, provider_opts, description)
+
+          observation =
+            Map.get(request, :context_observation) ||
+              Alto.Context.Observation.restore(
+                Map.get(request, :resume_context_observation),
+                request.messages,
+                request.tools,
+                identity
+              )
+
+          request =
+            request
+            |> Map.put(:context_identity, identity)
+            |> Map.put(:context_observation, observation)
+
+          {request, Window.check(policy, request, description)}
+        end,
         Budget.timeout(caps.budget, caps.provider_timeout),
         caps.cancel_ref
       )
 
     case checked do
-      {:ok, {:ok, budget}} ->
+      {:ok, {request, {:ok, budget}}} ->
         request =
           if is_map(budget) and Map.get(budget, :pressure, false),
             do: Map.put(request, :context_pressure, true),
@@ -40,7 +59,7 @@ defmodule Alto.Runner.Execution.Model do
 
         reserve_output(request, budget)
 
-      {:ok, {:error, reason}} ->
+      {:ok, {_request, {:error, reason}}} ->
         {:error, reason}
 
       {:cancelled, reason} ->

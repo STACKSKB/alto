@@ -167,6 +167,7 @@ defmodule Alto.Runner.Execution.Session do
              result.transcript_revision || state.transcript_revision
            )
            |> Keyword.put(:resolved_operations, result.resolved_operations)
+           |> Keyword.put(:context_observation, result.context_observation)
            |> Keyword.put(:allow_pending, true)
            |> Keyword.put(:max_conversation_bytes, state.max_conversation_bytes)
          ) do

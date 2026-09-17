@@ -134,6 +134,8 @@ defmodule Alto.Runner.Execution.Setup do
       max_conversation_bytes: Keyword.get(opts, :max_conversation_bytes, 128_000_000),
       resolved_operations: [],
       history_digest: nil,
+      resume_context_observation:
+        Map.get(Keyword.get(opts, :resume) || %{}, :context_observation),
       checkpoint_version: Keyword.get(opts, :checkpoint_version),
       subagent_ticket: Keyword.get(opts, :subagent_ticket),
       child_profile: Keyword.get(opts, :child_profile),
