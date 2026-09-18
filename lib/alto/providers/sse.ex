@@ -1,152 +1,120 @@
 defmodule Alto.Providers.SSE do
   @moduledoc """
-  Bounded provider response framing around ServerSentEvents.Parser.
+  ServerSentEvents.Parser with bounded wire accounting and raw JSON fallback.
 
-  The envelope owns raw JSON fallback, wire byte limits and EOF flushing.
-  The library owns SSE field interpretation and data assembly. Lines are
-  normalized only after byte accounting, preserving split CRLF and UTF-8.
+  Original chunks go directly to the library; it owns parsing and CRLF handling.
+  The counters scan line endings only to enforce a per-event wire limit across
+  arbitrary chunk boundaries. A total response limit is enforced by StreamEnvelope.
   """
+  alias ServerSentEvents.Parser
 
   @enforce_keys [:max_event_bytes]
-  defstruct buffer: "",
-            parser: nil,
+  defstruct parser: nil,
             frame_bytes: 0,
+            line_bytes: 0,
+            prefix: "",
+            cr?: false,
             raw_rev: [],
             raw_bytes: 0,
             sse?: false,
             max_event_bytes: 1_000_000
 
-  @type t :: %__MODULE__{
-          buffer: binary(),
-          parser: ServerSentEvents.Parser.t(),
-          frame_bytes: non_neg_integer(),
-          raw_rev: [binary()] | nil,
-          raw_bytes: non_neg_integer(),
-          sse?: boolean(),
-          max_event_bytes: pos_integer()
-        }
+  def new(limit) when is_integer(limit) and limit > 0,
+    do: %__MODULE__{max_event_bytes: limit, parser: Parser.new()}
 
-  @spec new(pos_integer()) :: t()
-  def new(max_event_bytes) when is_integer(max_event_bytes) and max_event_bytes > 0,
-    do: %__MODULE__{max_event_bytes: max_event_bytes, parser: ServerSentEvents.Parser.new()}
-
-  @spec feed(t(), binary()) :: {:ok, t(), [binary()]} | {:error, term()}
-  def feed(%__MODULE__{} = state, chunk) when is_binary(chunk) do
-    state = capture_raw(state, chunk)
-
-    with {:ok, state, payloads} <- consume_lines(state, state.buffer <> chunk, [], false),
-         :ok <- validate_pending(state) do
-      {:ok, state, Enum.reverse(payloads)}
+  def feed(state, chunk) when is_binary(chunk) do
+    with {:ok, next} <- account_wire(state, chunk),
+         {:ok, next} <- capture_raw(next, chunk) do
+      {events, parser} = Parser.parse(next.parser, chunk)
+      {:ok, %{next | parser: parser}, Enum.map(events, & &1.data)}
     end
   end
 
-  @spec finish(t()) :: {:ok, [binary()]} | {:raw, binary()} | {:error, term()}
-  def finish(%__MODULE__{sse?: false, raw_rev: raw_rev}),
-    do: {:raw, raw_rev |> Enum.reverse() |> IO.iodata_to_binary()}
-
-  def finish(%__MODULE__{} = state) do
-    with {:ok, state, payloads} <- consume_lines(state, state.buffer, [], true),
-         {:ok, state, payloads} <- consume_final_line(state, payloads),
-         :ok <- validate_pending(state) do
-      {_state, payloads} = dispatch_frame(state, payloads)
-      {:ok, Enum.reverse(payloads)}
-    end
+  def finish(%{sse?: false, raw_rev: raw} = state) do
+    if sse_field?(state.prefix),
+      do: flush(state),
+      else: {:raw, raw |> Enum.reverse() |> IO.iodata_to_binary()}
   end
 
-  defp consume_lines(state, binary, payloads, final?) do
-    case take_line(binary, final?) do
-      {:line, line, rest, ending_bytes} ->
-        with {:ok, state} <- account_line(state, line, ending_bytes) do
-          {state, payloads} = consume_line(state, line, payloads)
-          consume_lines(state, rest, payloads, final?)
-        end
+  def finish(state), do: flush(state)
 
-      :more ->
-        {:ok, %{state | buffer: binary}, payloads}
-    end
+  defp flush(state) do
+    # Explicit provider EOF policy: deliver an unfinished final event.
+    {events, _} = Parser.parse(state.parser, "\n\n")
+    {:ok, Enum.map(events, & &1.data)}
   end
 
-  defp take_line(binary, final?) do
-    case :binary.match(binary, ["\r", "\n"]) do
+  defp account_wire(state, ""), do: {:ok, state}
+
+  defp account_wire(%{cr?: true} = state, "\n" <> rest) do
+    with {:ok, state} <- add_bytes(state, 1),
+         do: account_wire(end_line(state), rest)
+  end
+
+  defp account_wire(%{cr?: true} = state, rest),
+    do: account_wire(end_line(state), rest)
+
+  defp account_wire(state, chunk) do
+    case :binary.match(chunk, ["\r", "\n"]) do
       :nomatch ->
-        :more
+        add_text(state, chunk)
 
       {index, 1} ->
-        ending = binary_part(binary, index, 1)
+        <<text::binary-size(index), ending, rest::binary>> = chunk
 
-        if ending == "\r" and index + 1 == byte_size(binary) and not final? do
-          :more
-        else
-          following = index + 1
-
-          {ending_bytes, rest_start} =
-            if ending == "\r" and following < byte_size(binary) and
-                 binary_part(binary, following, 1) == "\n" do
-              {2, following + 1}
-            else
-              {1, following}
-            end
-
-          line = binary_part(binary, 0, index)
-          rest = binary_part(binary, rest_start, byte_size(binary) - rest_start)
-          {:line, line, rest, ending_bytes}
+        with {:ok, state} <- add_text(state, text),
+             {:ok, state} <- add_bytes(state, 1) do
+          next = if ending == ?\r, do: %{state | cr?: true}, else: end_line(state)
+          account_wire(next, rest)
         end
     end
   end
 
-  defp account_line(state, line, ending_bytes) do
-    bytes = state.frame_bytes + byte_size(line) + ending_bytes
+  defp add_text(state, text) do
+    with {:ok, state} <- add_bytes(state, byte_size(text)) do
+      needed = max(6 - byte_size(state.prefix), 0)
+      prefix = state.prefix <> binary_part(text, 0, min(needed, byte_size(text)))
+      {:ok, %{state | line_bytes: state.line_bytes + byte_size(text), prefix: prefix}}
+    end
+  end
 
-    if bytes <= state.max_event_bytes,
-      do: {:ok, %{state | frame_bytes: bytes, buffer: ""}},
+  defp add_bytes(state, bytes) do
+    size = state.frame_bytes + bytes
+
+    if size <= state.max_event_bytes,
+      do: {:ok, %{state | frame_bytes: size}},
       else: {:error, {:sse_event_too_large, state.max_event_bytes}}
   end
 
-  defp consume_line(state, line, payloads) do
-    state = if sse_line?(line), do: %{state | sse?: true, raw_rev: nil, raw_bytes: 0}, else: state
-    {events, parser} = ServerSentEvents.Parser.parse(state.parser, line <> "\n")
-    state = %{state | parser: parser, frame_bytes: if(line == "", do: 0, else: state.frame_bytes)}
-    {state, Enum.reverse(Enum.map(events, & &1.data), payloads)}
+  defp end_line(state) do
+    sse? = state.sse? or sse_field?(state.prefix)
+
+    %{
+      state
+      | line_bytes: 0,
+        prefix: "",
+        cr?: false,
+        sse?: sse?,
+        frame_bytes: if(state.line_bytes == 0, do: 0, else: state.frame_bytes)
+    }
   end
 
-  defp sse_line?(":" <> _), do: true
+  defp sse_field?(":" <> _), do: true
 
-  defp sse_line?(line) do
+  defp sse_field?(prefix) do
     Enum.any?(["data", "event", "id", "retry"], fn field ->
-      line == field or String.starts_with?(line, field <> ":")
+      prefix == field or String.starts_with?(prefix, field <> ":")
     end)
   end
 
-  defp dispatch_frame(state, payloads), do: consume_line(state, "", payloads)
+  defp capture_raw(%{sse?: true} = state, _chunk),
+    do: {:ok, %{state | raw_rev: nil, raw_bytes: 0}}
 
-  defp consume_final_line(%{buffer: ""} = state, payloads), do: {:ok, state, payloads}
+  defp capture_raw(state, chunk) do
+    size = state.raw_bytes + byte_size(chunk)
 
-  defp consume_final_line(state, payloads) do
-    line = state.buffer
-
-    with {:ok, state} <- account_line(state, line, 0) do
-      {state, payloads} = consume_line(state, line, payloads)
-      {:ok, %{state | buffer: ""}, payloads}
-    end
-  end
-
-  defp capture_raw(%{raw_rev: nil} = state, _chunk), do: state
-
-  defp capture_raw(state, chunk),
-    do: %{state | raw_rev: [chunk | state.raw_rev], raw_bytes: state.raw_bytes + byte_size(chunk)}
-
-  defp validate_pending(state) do
-    pending_bytes = state.frame_bytes + byte_size(state.buffer)
-
-    cond do
-      pending_bytes > state.max_event_bytes ->
-        {:error, {:sse_event_too_large, state.max_event_bytes}}
-
-      is_list(state.raw_rev) and state.raw_bytes > state.max_event_bytes ->
-        {:error, {:sse_event_too_large, state.max_event_bytes}}
-
-      true ->
-        :ok
-    end
+    if size <= state.max_event_bytes,
+      do: {:ok, %{state | raw_rev: [chunk | state.raw_rev], raw_bytes: size}},
+      else: {:error, {:sse_event_too_large, state.max_event_bytes}}
   end
 end

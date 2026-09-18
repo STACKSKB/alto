@@ -358,10 +358,10 @@ defmodule Alto.Providers.OpenAICompatibleTest do
   test "SSE accepts bare CR lines, joins data lines, and removes one optional space" do
     state = SSE.new(100)
 
-    assert {:ok, state, []} =
+    assert {:ok, state, ["first\n  indented"]} =
              SSE.feed(state, "event: message\rdata: first\rdata:   indented\r\r")
 
-    assert {:ok, ["first\n  indented"]} = SSE.finish(state)
+    assert {:ok, []} = SSE.finish(state)
   end
 
   test "non-SSE response fallback preserves raw bytes including blank lines" do

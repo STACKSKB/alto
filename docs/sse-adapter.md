@@ -6,19 +6,15 @@ The library handles field interpretation, optional whitespace and multiline data
 It supports incremental parsing but does not impose Alto's byte limits, preserve
 non-SSE JSON fallback, or flush incomplete events at EOF.
 
-The shared envelope therefore accounts original wire bytes before passing complete,
-normalized lines to the library. This also preserves Alto's delayed handling of
-split CRLF. EOF explicitly flushes a final data frame; raw fallback is byte-for-byte.
-Provider-specific JSON interpretation and stream lifecycle stay in their adapters.
+Original chunks go directly to the library, which owns parsing and split-CRLF
+handling. Alto's separate counters enforce the per-event wire-byte limit without
+rewriting chunks or buffering lines. `StreamEnvelope` bounds total response bytes,
+including keepalives and comments, identically for both providers. EOF explicitly
+flushes a final data frame; raw JSON fallback is byte-for-byte.
 
 Compatibility tests exercise every two-chunk split of multibyte/CRLF input,
 comments, multiline data, unfinished frames, raw bodies and per-frame limits.
-Existing provider and streaming retry tests cover the HTTP integration.
-
-This is a compatibility adapter, not a complete replacement of Alto's framing
-code. The library owns field interpretation; the envelope still scans lines to
-bound original wire bytes before buffering and to retain raw-response behavior.
-The initial adoption removed 142 physical lines including tests and documentation.
+Provider and streaming retry tests cover the shared HTTP integration.
 
 ## Persistence-library assessment
 
