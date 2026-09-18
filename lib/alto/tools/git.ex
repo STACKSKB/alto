@@ -71,6 +71,7 @@ defmodule Alto.Tools.Git do
 
   defp normalize_result(%{termination: :timeout}), do: {:error, :git_timeout}
   defp normalize_result(%{termination: :output_limit}), do: {:error, :git_output_limit}
+  defp normalize_result(%{truncated: true}), do: {:error, :git_output_limit}
   defp normalize_result(%{exit_status: 0} = result), do: {:ok, result}
 
   defp normalize_result(%{exit_status: status, output: output}),

@@ -509,6 +509,7 @@ defmodule Alto.Workspaces.Git do
         case Command.run(command, %Context{session_id: "alto-workspace-git", cwd: cwd}) do
           {:ok, %{termination: :timeout}} -> {:error, :git_timeout}
           {:ok, %{termination: :output_limit}} -> {:error, :git_output_limit}
+          {:ok, %{truncated: true}} -> {:error, :git_output_limit}
           {:ok, %{exit_status: 0, output: output}} -> {:ok, output}
           {:ok, %{exit_status: status, output: output}} -> {:error, {:git_failed, status, output}}
           {:ok, other} -> {:error, {:git_uncertain, other}}

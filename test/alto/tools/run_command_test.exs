@@ -40,18 +40,84 @@ defmodule Alto.Tools.RunCommandTest do
              RunCommand.run(%{"program" => "printf", "args" => ["%s", "hello"]}, context)
   end
 
-  test "stops reading and closes the port at the output limit", %{context: context} do
+  test "drains after the output limit while retaining bounded head and tail", %{context: context} do
     assert {:ok,
             %{
-              output: "abc",
-              exit_status: nil,
-              termination: :output_limit,
+              output: "def",
+              exit_status: 0,
+              termination: :exit,
               truncated: true
             }} =
              RunCommand.run(
                %{"program" => "printf", "args" => ["abcdef"], "max_output_bytes" => 3},
                context
              )
+  end
+
+  test "retains the final diagnostic tail after a capped command exits", %{context: context} do
+    assert {:ok, result} =
+             RunCommand.run(
+               %{
+                 "program" => "sh",
+                 "args" => ["-c", "printf 'head-output'; printf 'final-error' >&2; exit 7"],
+                 "max_output_bytes" => 12
+               },
+               context
+             )
+
+    assert result.exit_status == 7
+    assert result.termination == :exit
+    assert result.truncated
+    assert result.output =~ "final-error"
+    assert byte_size(result.output) <= 12
+  end
+
+  test "retains both ends and an elision marker for larger caps", %{context: context} do
+    content = "START" <> String.duplicate("😀", 100) <> "END"
+
+    assert {:ok, result} =
+             RunCommand.run(
+               %{"program" => "printf", "args" => ["%s", content], "max_output_bytes" => 64},
+               context
+             )
+
+    assert String.starts_with?(result.output, "START")
+    assert String.ends_with?(result.output, "END")
+    assert result.output =~ "output truncated"
+    assert String.valid?(result.output)
+    assert byte_size(result.output) <= 64
+  end
+
+  test "keeps split UTF-8 output as text at a capture edge", %{context: context} do
+    assert {:ok, result} =
+             RunCommand.run(
+               %{
+                 "program" => "sh",
+                 "args" => [
+                   "-c",
+                   "printf 'prefix'; printf '\\360\\237\\230'; sleep 0.01; printf '\\200'"
+                 ],
+                 "max_output_bytes" => 8
+               },
+               context
+             )
+
+    assert result.truncated
+    assert is_binary(result.output)
+    refute Map.has_key?(result, :output_base64)
+    assert String.valid?(result.output)
+    assert byte_size(result.output) <= 8
+  end
+
+  test "encodes genuinely binary output instead of forcing UTF-8", %{context: context} do
+    assert {:ok, result} =
+             RunCommand.run(
+               %{"program" => "sh", "args" => ["-c", "printf '\\377\\376'"]},
+               context
+             )
+
+    assert result.encoding == "base64"
+    assert Base.decode64!(result.output_base64) == <<255, 254>>
   end
 
   # The deadline covers process spawn and trampoline setup as well as
