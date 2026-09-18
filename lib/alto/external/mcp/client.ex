@@ -67,25 +67,15 @@ defmodule Alto.External.MCP.Client do
   @spec stop(pid()) :: :ok
   def stop(pid), do: GenServer.stop(pid, :normal)
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name))
+  def start_link(opts), do: JSONRPC.start_link(__MODULE__, opts)
 
   @doc false
   def child_spec(opts) do
-    %{
-      id: {__MODULE__, Keyword.get(opts, :name)},
-      start: {__MODULE__, :start_link, [opts]},
-      restart: :temporary
-    }
+    JSONRPC.child_spec(__MODULE__, opts)
   end
 
   @impl true
-  def format_status(status) do
-    # Transport configuration can carry credentials in argv/environment.
-    Map.update(status, :state, %{}, fn state ->
-      %{phase: state.phase, pending_count: map_size(state.pending)}
-    end)
-    |> Map.put(:message, :redacted)
-  end
+  def format_status(status), do: JSONRPC.format_status(status)
 
   @impl true
   def init(opts) do
@@ -294,7 +284,7 @@ defmodule Alto.External.MCP.Client do
 
     with {:ok, opts} <- Keyword.validate(opts, defaults),
          command when is_binary(command) and command != "" <- Keyword.get(opts, :command),
-         executable when is_binary(executable) <- resolve_executable(command),
+         executable when is_binary(executable) <- ExternalProcess.resolve_executable(command),
          args when is_list(args) <- Keyword.fetch!(opts, :args),
          true <- Enum.all?(args, &is_binary/1),
          cwd when is_binary(cwd) <- Keyword.fetch!(opts, :cwd),
@@ -307,10 +297,6 @@ defmodule Alto.External.MCP.Client do
       nil -> {:error, {:mcp_executable_not_found, Keyword.get(opts, :command)}}
       _other -> {:error, {:invalid_mcp_options, opts}}
     end
-  end
-
-  defp resolve_executable(command) do
-    System.find_executable(command) || if(File.regular?(command), do: Path.expand(command))
   end
 
   defp positive_options(opts) do
@@ -349,7 +335,10 @@ defmodule Alto.External.MCP.Client do
       ])
 
     "mcp:" <>
-      Base.url_encode64(:crypto.hash(:sha256, :erlang.term_to_binary(identity)), padding: false)
+      Base.url_encode64(
+        :crypto.hash(:sha256, :erlang.term_to_binary(identity, [:deterministic])),
+        padding: false
+      )
   end
 
   defp open_port(opts) do

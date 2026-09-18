@@ -84,4 +84,28 @@ defmodule Alto.External.ProcessTest do
     refute File.exists?(child)
     refute File.exists?(grandchild)
   end
+
+  test "missing and non-executable paths return startup errors" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "alto-missing-executable-#{System.unique_integer([:positive])}"
+      )
+
+    assert {:error, {:process_open_failed, :enoent}} = ExternalProcess.open(path, [])
+    File.write!(path, "not executable")
+    File.chmod!(path, 0o600)
+    on_exit(fn -> File.rm(path) end)
+    assert {:error, {:process_open_failed, :eacces}} = ExternalProcess.open(path, [])
+  end
+
+  test "readiness handshake does not consume the command's standard input" do
+    {:ok, process} =
+      ExternalProcess.open(System.find_executable("cat"), [], startup_timeout: 1_000)
+
+    port = ExternalProcess.port(process)
+    assert Port.command(port, "client payload\n")
+    assert_receive {^port, {:data, "client payload\n"}}, 1_000
+    assert :ok = ExternalProcess.close(process)
+  end
 end

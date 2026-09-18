@@ -1,6 +1,24 @@
 defmodule Alto.External.JSONRPC do
   @moduledoc false
 
+  def start_link(module, opts),
+    do: GenServer.start_link(module, opts, name: Keyword.get(opts, :name))
+
+  def child_spec(module, opts) do
+    %{
+      id: {module, Keyword.get(opts, :name)},
+      start: {module, :start_link, [opts]},
+      restart: :temporary
+    }
+  end
+
+  def format_status(status) do
+    Map.update(status, :state, %{}, fn state ->
+      %{phase: state.phase, pending_count: map_size(state.pending)}
+    end)
+    |> Map.put(:message, :redacted)
+  end
+
   def request(state, method, params, reply, owner, timeout, limit_error) do
     limit = Keyword.fetch!(state.opts, :max_pending_requests)
 
