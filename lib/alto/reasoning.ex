@@ -68,7 +68,7 @@ defmodule Alto.Reasoning do
 
   @doc "Extract only readable provider reasoning, preferring structured text over duplicate aliases."
   def text(message) when is_map(message) do
-    details = Map.get(message, "reasoning_details", []) || []
+    details = Map.get(message, "reasoning_details") || []
 
     structured =
       Enum.map_join(details, "", fn

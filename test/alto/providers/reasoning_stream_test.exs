@@ -62,6 +62,21 @@ defmodule Alto.Providers.ReasoningStreamTest do
     assert Enum.map(completion.provider_fields["reasoning_details"], & &1["id"]) == ["z", "a"]
   end
 
+  test "reasoning detail merge preserves false values and index zero" do
+    delta = %{
+      "reasoning_details" => [
+        %{"index" => 0, "type" => "reasoning.text", "text" => "x", "signature" => true},
+        %{"index" => 0, "signature" => false}
+      ]
+    }
+
+    stream = Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ -> :ok end)
+
+    assert {:ok, completion} = Stream.result(stream)
+    assert completion.provider_fields["reasoning_details"] ==
+             [%{"index" => 0, "type" => "reasoning.text", "text" => "x", "signature" => false}]
+  end
+
   test "JSON fallback and reasoning_content use the same readable event" do
     owner = self()
     message = %{"content" => "Answer", "reasoning_content" => "Provider explanation"}

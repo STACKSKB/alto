@@ -170,7 +170,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
                                                                           {acc, order} ->
         key = detail["index"] || detail["id"] || fallback
 
-        order = if Map.has_key?(acc, key), do: order, else: order ++ [key]
+        order = if Map.has_key?(acc, key), do: order, else: [key | order]
 
         updated =
           Map.update(acc, key, detail, fn previous ->
@@ -178,7 +178,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
               if key in ["text", "summary", "signature", "data"] and is_binary(left) and
                    is_binary(right),
                  do: left <> right,
-                 else: right || left
+                 else: if(is_nil(right), do: left, else: right)
             end)
           end)
 
@@ -206,7 +206,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
         Map.put(
           fields,
           "reasoning_details",
-          Enum.map(state.reasoning_order, &Map.fetch!(state.reasoning_details, &1))
+          Enum.map(Enum.reverse(state.reasoning_order), &Map.fetch!(state.reasoning_details, &1))
         )
   end
 

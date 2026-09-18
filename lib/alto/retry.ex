@@ -1,5 +1,7 @@
 defmodule Alto.Retry do
   @moduledoc "Retry decision contract. Execution owns delivery fences, deadlines and attempt budgets."
+  require Logger
+
   @callback decide(term(), pos_integer(), keyword()) ::
               :stop | {:retry, non_neg_integer(), term()}
 
@@ -23,8 +25,25 @@ defmodule Alto.Retry do
       _ -> :stop
     end
   rescue
-    _ -> :stop
+    exception ->
+      log_policy_failure(module, exception)
+      :stop
   catch
-    _, _ -> :stop
+    kind, value ->
+      log_policy_failure(module, {kind, value})
+      :stop
   end
+
+  defp log_policy_failure(module, exception) do
+    # Keep diagnostics useful without serializing the provider reason or an
+    # exception message, either of which may contain credentials or prompts.
+    Logger.warning("retry policy failed; stopping retries",
+      retry_policy: inspect(module, limit: 1, printable_limit: 64),
+      failure: failure_kind(exception)
+    )
+  end
+
+  defp failure_kind({kind, _value}) when kind in [:throw, :exit], do: kind
+  defp failure_kind(exception) when is_exception(exception), do: exception.__struct__
+  defp failure_kind(_), do: :unknown
 end

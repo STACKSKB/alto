@@ -46,4 +46,45 @@ defmodule Alto.RetryTest do
       Agent.stop(counter)
     end
   end
+
+  test "transient policy adds deterministic bounded jitter" do
+    policy = {Alto.Retry.Transient, base_delay: 100, max_delay: 150, random_source: fn -> 0.5 end}
+
+    assert Alto.Retry.decide(policy, {:transport_error, :closed}, 1) ==
+             {:retry, 50, :transport}
+  end
+
+  test "jitter remains effective at the exponential delay cap" do
+    for {sample, delay} <- [{0.0, 0}, {0.5, 75}, {1.0, 150}] do
+      assert {:retry, ^delay, {:http, 503}} =
+               Alto.Retry.decide(
+                 {Alto.Retry.Transient,
+                  base_delay: 100, max_delay: 150, random_source: fn -> sample end},
+                 {:http_error, 503, nil},
+                 4
+               )
+    end
+
+    assert {:retry, 150, :transport} =
+             Alto.Retry.decide(
+               {Alto.Retry.Transient, base_delay: 100, max_delay: 150, jitter: false},
+               {:transport_error, :closed},
+               4
+             )
+  end
+
+  defmodule BrokenPolicy do
+    def decide(_, _, _), do: raise("sensitive provider content")
+  end
+
+  test "policy defects are diagnosed without logging provider content" do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :stop = Alto.Retry.decide({BrokenPolicy, []}, :secret, 1)
+      end)
+
+    assert log =~ "retry policy failed"
+    refute log =~ "sensitive provider content"
+    refute log =~ "secret"
+  end
 end
