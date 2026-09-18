@@ -26,17 +26,9 @@ defmodule Alto.Storage do
 
     with {:ok, port} <- acquire(lock_path, opts) do
       try do
-        result = fun.()
+        fun.()
+      after
         do_release(port)
-        result
-      rescue
-        error ->
-          do_release(port)
-          reraise error, __STACKTRACE__
-      catch
-        kind, reason ->
-          do_release(port)
-          :erlang.raise(kind, reason, __STACKTRACE__)
       end
     else
       {:error, {:timeout, timeout}} -> {:error, {:storage_lock_timeout, lock_path, timeout}}
@@ -111,6 +103,8 @@ defmodule Alto.Storage do
         {:error, :flock_unavailable}
 
       executable ->
+        # Cross-VM writers need an OS lock, not a BEAM-local mutex. --no-fork
+        # replaces flock with the waiting shell, which retains the lock fd.
         command = "exec 2>/dev/null; printf '#{@ready}'; IFS= read -r _"
         wait = timeout_seconds(timeout)
 
@@ -118,7 +112,7 @@ defmodule Alto.Storage do
           Port.open({:spawn_executable, executable}, [
             :binary,
             :exit_status,
-            {:args, ["-x", "-w", wait, path, "-c", command]}
+            {:args, ["-F", "-x", "-w", wait, path, "-c", command]}
           ])
 
         await_ready(port, System.monotonic_time(:millisecond) + timeout, <<>>)

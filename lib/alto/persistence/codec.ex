@@ -16,8 +16,8 @@ defmodule Alto.Persistence.Codec do
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
     with true <- valid_limit?(max_bytes),
-         true <- portable?(term, 0),
          true <- :erlang.external_size(term) <= max_bytes,
+         true <- portable?(term, 0),
          binary <- :erlang.term_to_binary(term),
          true <- byte_size(binary) <= max_bytes do
       {:ok, Base.encode64(binary)}
