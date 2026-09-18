@@ -219,6 +219,26 @@ defmodule Alto.Command.Executors.BubblewrapTest do
     refute inspect(details) =~ secret
   end
 
+  test "does not create directories below the read-only system bind for existing mounts", %{
+    context: context
+  } do
+    if File.dir?("/usr/local/share") do
+      assert {:ok, prepared, _details} =
+               prepare_with_opts(context, read_only_paths: ["/usr/local/share"])
+
+      args = prepared.invocation.args
+
+      for path <- ["/usr", "/usr/local"] do
+        refute Enum.chunk_every(args, 2, 1, :discard) |> Enum.member?(["--dir", path])
+      end
+
+      assert Enum.any?(
+               Enum.chunk_every(args, 3, 1, :discard),
+               &(&1 == ["--ro-bind", "/usr/local/share", "/usr/local/share"])
+             )
+    end
+  end
+
   test "option-validation failures prevent the target command and never fall back to the host", %{
     context: context,
     root: root
@@ -281,7 +301,7 @@ defmodule Alto.Command.Executors.BubblewrapTest do
                  "program" => "sh",
                  "args" => [
                    "-c",
-                   "printf changed > .git/config; rm -rf .git; printf ok > ordinary.txt"
+                   "printf changed > .git/config; if mv .git/config .git/renamed; then exit 41; fi; rm -rf .git; printf ok > ordinary.txt"
                  ]
                },
                context,
@@ -299,6 +319,31 @@ defmodule Alto.Command.Executors.BubblewrapTest do
              )
 
     assert File.read!(Path.join(git, "config")) == "approved"
+  end
+
+  @tag skip: @bwrap_skip
+  test "a protected file cannot be removed or renamed inside a writable workspace", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "protected.txt")
+    File.write!(path, "original")
+
+    assert {:ok, %{exit_status: 0}} =
+             Alto.Command.run(
+               %{
+                 "program" => "sh",
+                 "args" => [
+                   "-c",
+                   "if rm protected.txt; then exit 41; fi; if mv protected.txt moved.txt; then exit 42; fi"
+                 ]
+               },
+               context,
+               executor: {Bubblewrap, protected_paths: ["protected.txt"]}
+             )
+
+    assert File.read!(path) == "original"
+    refute File.exists?(Path.join(root, "moved.txt"))
   end
 
   @tag skip: @bwrap_skip

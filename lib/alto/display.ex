@@ -1,5 +1,10 @@
 defmodule Alto.Display do
-  @moduledoc "Bounded, readable presentation of returned data; never evaluates diagnostic text."
+  @moduledoc """
+  Bounded, readable presentation of returned data; never evaluates diagnostic text.
+
+  Secret redaction is a cosmetic, best-effort safeguard for known credential
+  fields and token formats. It is not a secrecy boundary for arbitrary text.
+  """
 
   @limit 8_000
   @items 30
@@ -69,7 +74,7 @@ defmodule Alto.Display do
         case decoded(value) do
           {:ok, data} -> render(data, mode, depth + 1)
           :invalid_diagnostic -> "Diagnostic details are unavailable"
-          :plain -> if(mode == :error, do: error_text(value), else: value)
+          :plain -> if(mode == :error, do: error_text(clean(value)), else: value)
         end
     end
   end
@@ -286,9 +291,21 @@ defmodule Alto.Display do
   defp clean(text) do
     text
     |> String.replace(~r/[\x00-\x08\x0B-\x1F\x7F-\x9F]/u, "")
+    |> String.replace(~r/\b(?:sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+)\b/, "[REDACTED]")
+    |> String.replace(~r/(?i)(authorization:\s*basic\s+)[^\s"',}\]]+/, "\\1[REDACTED]")
     |> String.replace(~r/(?i)(bearer\s+)[^\s"',}\]]+/, "\\1[REDACTED]")
+    |> String.replace(
+      ~r/(?i)(x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)(\s*[:=]\s*)[^\s"',}\]]+/,
+      "\\1\\2[REDACTED]"
+    )
   end
 
-  defp bound(text, limit),
-    do: if(String.length(text) > limit, do: String.slice(text, 0, limit) <> "…", else: text)
+  defp bound(text, limit) when byte_size(text) <= limit, do: text
+
+  defp bound(text, limit) do
+    case String.split_at(text, limit) do
+      {head, ""} -> head
+      {head, _rest} -> head <> "…"
+    end
+  end
 end

@@ -70,9 +70,13 @@ defmodule Alto.Providers.ReasoningStreamTest do
       ]
     }
 
-    stream = Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ -> :ok end)
+    stream =
+      Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ ->
+        :ok
+      end)
 
     assert {:ok, completion} = Stream.result(stream)
+
     assert completion.provider_fields["reasoning_details"] ==
              [%{"index" => 0, "type" => "reasoning.text", "text" => "x", "signature" => false}]
   end

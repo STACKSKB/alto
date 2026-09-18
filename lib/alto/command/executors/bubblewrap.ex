@@ -1,5 +1,10 @@
 defmodule Alto.Command.Executors.Bubblewrap do
-  @moduledoc "Linux namespace executor with an isolated filesystem and optional network."
+  @moduledoc """
+  Linux namespace executor with an isolated filesystem and optional network.
+
+  Bubblewrap provides namespace and filesystem isolation here; it does not
+  provide seccomp syscall filtering.
+  """
 
   @behaviour Alto.Command.Executor
 
@@ -146,7 +151,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
              true <- resolved == Path.expand(path, cwd),
              {:ok, stat} <- File.lstat(resolved) do
           if stat.type in [:regular, :directory],
-            do: {:cont, {:ok, acc ++ [resolved]}},
+            do: {:cont, {:ok, [resolved | acc]}},
             else: {:halt, {:error, {:invalid_protected_path, path}}}
         else
           {:error, :enoent} ->
@@ -156,6 +161,10 @@ defmodule Alto.Command.Executors.Bubblewrap do
             {:halt, {:error, {:invalid_protected_path, path}}}
         end
       end)
+      |> case do
+        {:ok, paths} -> {:ok, Enum.reverse(paths)}
+        error -> error
+      end
     else
       {:error, {:invalid_protected_paths, paths}}
     end
@@ -224,9 +233,12 @@ defmodule Alto.Command.Executors.Bubblewrap do
     |> Path.split()
     |> Enum.drop(1)
     |> Enum.scan("/", &Path.join(&2, &1))
-    |> Enum.reject(&(&1 in @reserved_destinations))
+    |> Enum.reject(&(&1 in @reserved_destinations or under_system_bind?(&1)))
     |> Enum.flat_map(&["--dir", &1])
   end
+
+  defp under_system_bind?(path),
+    do: Enum.any?(@system_paths, &(&1 == path or String.starts_with?(path, &1 <> "/")))
 
   defp environment_args(environment) do
     environment

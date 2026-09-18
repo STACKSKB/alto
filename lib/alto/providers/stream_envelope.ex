@@ -110,9 +110,6 @@ defmodule Alto.Providers.StreamEnvelope do
           {:ok, response} -> decoder.from_response(response, sink)
           {:error, error} -> {:error, {:invalid_provider_response, error}}
         end
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 end

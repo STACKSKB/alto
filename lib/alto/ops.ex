@@ -212,10 +212,10 @@ defmodule Alto.Ops do
     try do
       case Alto.Queue.snapshot_page(queue, cursor, 100) do
         {:ok, %{records: records, next_cursor: nil}} ->
-          {:ok, acc ++ records}
+          {:ok, Enum.reverse(Enum.reduce(records, acc, &[&1 | &2]))}
 
         {:ok, %{records: records, next_cursor: next_cursor}} ->
-          snapshot_pages(queue, next_cursor, acc ++ records)
+          snapshot_pages(queue, next_cursor, Enum.reduce(records, acc, &[&1 | &2]))
 
         {:error, reason} ->
           {:error, {:queue_unavailable, reason}}
@@ -239,11 +239,15 @@ defmodule Alto.Ops do
             live = Map.get(live_by_key, key)
             rows = ledger_rows(status, key, attempts, recovery, live)
 
-            {:cont, {:ok, items ++ rows}}
+            {:cont, {:ok, Enum.reverse(rows, items)}}
           else
             {:error, reason} -> {:halt, {:error, reason}}
           end
         end)
+        |> case do
+          {:ok, items} -> {:ok, Enum.reverse(items)}
+          error -> error
+        end
       end
     end
   end

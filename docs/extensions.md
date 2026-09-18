@@ -131,6 +131,26 @@ symlink aliases, while retaining the wrapped tool's approval and frozen preparat
 contracts. Unwrapped tools retain their workspace-wide behavior. The CLI and
 coding profile use these wrappers; custom hosts select their own paths and tools.
 
+## Per-tool resource limits
+
+Compose limits with tool specifications in the host's `alto.exs`:
+
+```elixir
+tools: [
+  {Alto.Tools.WriteFile, max_bytes: 512_000, preview_bytes: 2_048},
+  {Alto.Tools.EditFile, max_file_bytes: 2_000_000, max_edits: 50},
+  {Alto.Tools.ReadFile, max_bytes: 32_000},
+  {Alto.Tools.ListFiles, max_entries: 200},
+  {Alto.Tools.SearchFiles, max_files: 500, max_matches: 50, max_line_graphemes: 200}
+]
+```
+
+NimbleOptions validates these host options. Model arguments remain subject to the
+host's ceilings. Prepared writes and edits retain the validated limits with the
+approved operation. Larger tool limits may also require a larger runner result
+budget. Search additionally accepts `max_entries`, `max_file_bytes`,
+`max_query_bytes`, and `excluded_directories`; existing defaults are unchanged.
+
 ## Retained subprocesses
 
 MCP server options and `Alto.Tools.FFF.tools/1` accept an `executor:` using the same

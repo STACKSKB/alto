@@ -2,6 +2,28 @@ defmodule Alto.DisplayTest do
   use ExUnit.Case, async: true
   alias Alto.Display
 
+  test "redacts known credentials in displayed text" do
+    for secret <- [
+          "sk-example_secret",
+          "ghp_example_secret",
+          "Bearer opaque",
+          "Authorization: Basic dXNlcjpwYXNz",
+          "x-api-key: opaque",
+          "?api_key=opaque"
+        ] do
+      text = Display.error(secret)
+      assert text =~ "[REDACTED]"
+      refute text =~ "example_secret"
+      refute text =~ "opaque"
+      refute text =~ "dXNlcjpwYXNz"
+    end
+  end
+
+  test "does not mark short multibyte text as truncated" do
+    text = String.duplicate("😀", 2_001)
+    assert Display.error(text) == text
+  end
+
   test "provider errors retain the cause and useful fields without Elixir syntax" do
     error =
       {:http_error, 400,

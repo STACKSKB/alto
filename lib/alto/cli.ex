@@ -422,7 +422,8 @@ defmodule Alto.CLI do
     do: "listening on #{Path.expand(Keyword.fetch!(opts, :path))}"
 
   defp describe_listener(WebServer, _opts, listener),
-    do: "serving WebSocket at #{WebServer.url(listener)} (token: #{WebServer.token(listener) || "none"})"
+    do:
+      "serving WebSocket at #{WebServer.url(listener)} (token: #{WebServer.token(listener) || "none"})"
 
   defp describe_listener(Webhook, opts, listener) do
     paths =
