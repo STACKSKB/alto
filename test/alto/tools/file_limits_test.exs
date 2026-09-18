@@ -11,6 +11,13 @@ defmodule Alto.Tools.FileLimitsTest do
     %{root: root, context: %Context{session_id: "limits", cwd: root}}
   end
 
+  test "write previews preserve UTF-8 at configured byte boundaries", %{context: context} do
+    assert {:ok, _prepared, %{preview: %{content: "a", truncated: true}}} =
+             Alto.Tools.WriteFile.prepare(%{"path" => "new.txt", "content" => "a😀"}, context,
+               preview_bytes: 2
+             )
+  end
+
   test "list_files uses the host entry limit and rejects malformed options", %{
     root: root,
     context: context

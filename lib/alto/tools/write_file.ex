@@ -197,20 +197,11 @@ defmodule Alto.Tools.WriteFile do
     do: %{content: content, truncated: false}
 
   defp preview(content, limit) do
-    %{content: binary_part(content, 0, limit), truncated: true}
+    %{content: Alto.Text.prefix(content, limit), truncated: true}
   end
 
-  defp validate_options(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      case NimbleOptions.validate(opts, @options_schema) do
-        {:ok, values} -> {:ok, Map.new(values)}
-        {:error, reason} -> {:error, {:invalid_write_options, reason}}
-      end
-    else
-      {:error, {:invalid_write_options, opts}}
-    end
-  end
+  defp validate_options(opts),
+    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_write_options)
 
-  defp validate_options(opts), do: {:error, {:invalid_write_options, opts}}
   defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

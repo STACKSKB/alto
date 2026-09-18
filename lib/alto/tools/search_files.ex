@@ -293,21 +293,11 @@ defmodule Alto.Tools.SearchFiles do
     if rest == "", do: prefix, else: prefix <> "…"
   end
 
-  defp validate_options(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      case NimbleOptions.validate(opts, @options_schema) do
-        {:ok, values} ->
-          {:ok, values |> Map.new() |> Map.update!(:excluded_directories, &MapSet.new/1)}
-
-        {:error, reason} ->
-          {:error, {:invalid_search_options, reason}}
-      end
-    else
-      {:error, {:invalid_search_options, opts}}
-    end
+  defp validate_options(opts) do
+    with {:ok, limits} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_search_options),
+         do: {:ok, Map.update!(limits, :excluded_directories, &MapSet.new/1)}
   end
-
-  defp validate_options(opts), do: {:error, {:invalid_search_options, opts}}
 
   defp validate_options!(opts) do
     case validate_options(opts) do

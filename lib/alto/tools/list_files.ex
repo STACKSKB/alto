@@ -72,17 +72,8 @@ defmodule Alto.Tools.ListFiles do
     end
   end
 
-  defp validate_options(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      case NimbleOptions.validate(opts, @options_schema) do
-        {:ok, values} -> {:ok, Map.new(values)}
-        {:error, reason} -> {:error, {:invalid_list_files_options, reason}}
-      end
-    else
-      {:error, {:invalid_list_files_options, opts}}
-    end
-  end
+  defp validate_options(opts),
+    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_list_files_options)
 
-  defp validate_options(opts), do: {:error, {:invalid_list_files_options, opts}}
   defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end
