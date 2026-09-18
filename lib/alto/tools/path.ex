@@ -17,4 +17,11 @@ defmodule Alto.Tools.Path do
   end
 
   def resolve(path, _cwd), do: {:error, {:invalid_path, path}}
+
+  def revalidate(path, expected, cwd) do
+    with {:ok, resolved} <- resolve(path, cwd),
+         true <- resolved == expected or {:error, {:prepared_path_changed, path}} do
+      {:ok, resolved}
+    end
+  end
 end

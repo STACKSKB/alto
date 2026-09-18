@@ -7,12 +7,18 @@ defmodule Alto.Tools.ListFiles do
   alias Alto.Tools.Path, as: SafePath
 
   @max_entries 500
+  @options_schema [max_entries: [type: :pos_integer, default: @max_entries]]
 
   @impl true
   def name, do: :list_files
 
   @impl true
-  def schema do
+  def schema, do: schema([])
+
+  @impl true
+  def schema(opts) when is_list(opts) do
+    limits = validate_options!(opts)
+
     %{
       description: "List one directory inside the workspace (non-recursive and bounded).",
       parameters: %{
@@ -23,6 +29,10 @@ defmodule Alto.Tools.ListFiles do
         additionalProperties: false
       }
     }
+    |> put_in(
+      [:parameters, :properties, :path, :description],
+      "Directory path; defaults to the workspace root (up to #{limits.max_entries} entries)."
+    )
   end
 
   @impl true
@@ -33,19 +43,25 @@ defmodule Alto.Tools.ListFiles do
 
   @impl true
   def run(arguments, %Context{} = context) do
+    run(arguments, context, [])
+  end
+
+  @impl true
+  def run(arguments, %Context{} = context, opts) do
     path = Map.get(arguments, "path", ".")
 
-    with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+    with {:ok, limits} <- validate_options(opts),
+         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, names} <- File.ls(resolved) do
       sorted = Enum.sort(names)
-      selected = Enum.take(sorted, @max_entries)
+      selected = Enum.take(sorted, limits.max_entries)
 
       entries =
         Enum.map(selected, fn name ->
           %{name: name, type: entry_type(Path.join(resolved, name))}
         end)
 
-      {:ok, %{path: path, entries: entries, truncated: length(sorted) > @max_entries}}
+      {:ok, %{path: path, entries: entries, truncated: length(sorted) > limits.max_entries}}
     end
   end
 
@@ -55,4 +71,18 @@ defmodule Alto.Tools.ListFiles do
       {:error, _reason} -> :unknown
     end
   end
+
+  defp validate_options(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case NimbleOptions.validate(opts, @options_schema) do
+        {:ok, values} -> {:ok, Map.new(values)}
+        {:error, reason} -> {:error, {:invalid_list_files_options, reason}}
+      end
+    else
+      {:error, {:invalid_list_files_options, opts}}
+    end
+  end
+
+  defp validate_options(opts), do: {:error, {:invalid_list_files_options, opts}}
+  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

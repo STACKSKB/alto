@@ -48,6 +48,93 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              WriteFile.run(%{"path" => "../outside.txt", "content" => "no"}, context)
   end
 
+  test "host-configured write limits apply during preparation and stay frozen", %{
+    context: context
+  } do
+    assert {:error, {:content_too_large, 3}} =
+             WriteFile.run(%{"path" => "too.txt", "content" => "1234"}, context, max_bytes: 3)
+
+    assert {:ok, prepared, _details} =
+             WriteFile.prepare(%{"path" => "ok.txt", "content" => "1234"}, context, max_bytes: 4)
+
+    assert {:ok, %{bytes_written: 4}} = WriteFile.run_prepared(prepared, context, max_bytes: 1)
+    assert {:error, {:invalid_write_options, _}} = WriteFile.run(%{}, context, max_bytes: 0)
+  end
+
+  test "host-configured edit limits bound files, replacements, and edit counts", %{
+    root: root,
+    context: context
+  } do
+    File.write!(Path.join(root, "edit.txt"), "abcdef")
+
+    assert {:error, {:file_too_large, 3}} =
+             EditFile.run(
+               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
+               context,
+               max_file_bytes: 3
+             )
+
+    assert {:error, {:replacement_too_large, 1}} =
+             EditFile.run(
+               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "long"},
+               context,
+               max_replacement_bytes: 1
+             )
+
+    assert {:error, {:too_many_edits, 1}} =
+             EditFile.run(
+               %{
+                 "path" => "edit.txt",
+                 "edits" => [
+                   %{"old_text" => "a", "new_text" => "b"},
+                   %{"old_text" => "c", "new_text" => "d"}
+                 ]
+               },
+               context,
+               max_edits: 1
+             )
+
+    assert {:error, {:invalid_edit_options, _}} =
+             EditFile.run(%{}, context, max_input_bytes: 0)
+  end
+
+  test "host-configured search limits skip large files and bound line output", %{
+    root: root,
+    context: context
+  } do
+    File.write!(Path.join(root, "large.txt"), "needle\n" <> String.duplicate("x", 20))
+
+    assert {:ok, %{matches: [], scanned_files: 0}} =
+             SearchFiles.run(%{"query" => "needle"}, context, max_file_bytes: 3)
+
+    assert {:ok, %{matches: [%{text: text}]}} =
+             SearchFiles.run(%{"query" => "needle"}, context, max_line_graphemes: 3)
+
+    assert text == "nee…"
+  end
+
+  test "host-configured search bounds cap traversal and result counts", %{
+    root: root,
+    context: context
+  } do
+    File.write!(Path.join(root, "a.txt"), "needle\nneedle\n")
+    File.write!(Path.join(root, "b.txt"), "needle\n")
+
+    assert {:ok, %{scanned_files: 1, truncated: true}} =
+             SearchFiles.run(%{"query" => "needle"}, context, max_files: 1)
+
+    assert {:ok, %{scanned_files: 0, truncated: true}} =
+             SearchFiles.run(%{"query" => "needle"}, context, max_entries: 1)
+
+    assert {:ok, %{matches: matches, truncated: true}} =
+             SearchFiles.run(%{"query" => "needle"}, context, max_matches: 1)
+
+    assert length(matches) == 1
+
+    assert {:error, {:query_too_large, 2}} =
+             SearchFiles.run(%{"query" => "long"}, context, max_query_bytes: 2)
+  end
+
   test "read_file's maximum result stays within the runner's native bound", %{
     root: root,
     context: context
@@ -148,6 +235,20 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert length(result.matches) == 100
     assert result.truncated
     assert hd(result.matches) == %{path: "sample.txt", line: 1, text: "line 1: .*"}
+  end
+
+  test "search truncates long grapheme lines at the configured display bound", %{
+    root: root,
+    context: context
+  } do
+    line = String.duplicate("界", 400) <> " needle"
+    File.write!(Path.join(root, "unicode.txt"), line)
+
+    assert {:ok, %{matches: [%{text: text}]}} =
+             SearchFiles.run(%{"path" => "unicode.txt", "query" => "needle"}, context)
+
+    assert String.length(text) == 301
+    assert String.ends_with?(text, "…")
   end
 
   test "search validates query and case options", %{context: context} do

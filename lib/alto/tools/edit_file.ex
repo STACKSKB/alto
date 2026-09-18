@@ -4,6 +4,7 @@ defmodule Alto.Tools.EditFile do
   @behaviour Alto.Tool
 
   alias Alto.Tool.Context
+  alias Alto.BoundedFile
   alias Alto.Tools.AtomicWrite
   alias Alto.Tools.Path, as: SafePath
   alias Alto.Tools.UnifiedDiff
@@ -16,12 +17,25 @@ defmodule Alto.Tools.EditFile do
   @max_edits 100
   @preview_bytes 4_096
   @patch_bytes 16_384
+  @options_schema [
+    max_file_bytes: [type: :pos_integer, default: @max_file_bytes],
+    max_replacement_bytes: [type: :pos_integer, default: @max_replacement_bytes],
+    max_edits: [type: :pos_integer, default: @max_edits],
+    max_input_bytes: [type: :pos_integer, default: @max_edit_input_bytes],
+    preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
+    patch_bytes: [type: :non_neg_integer, default: @patch_bytes]
+  ]
 
   @impl true
   def name, do: :edit_file
 
   @impl true
-  def schema do
+  def schema, do: schema([])
+
+  @impl true
+  def schema(opts) when is_list(opts) do
+    limits = validate_options!(opts)
+
     edit = %{
       type: "object",
       properties: %{
@@ -36,7 +50,7 @@ defmodule Alto.Tools.EditFile do
       additionalProperties: false
     }
 
-    %{
+    schema = %{
       description:
         "Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
       parameters: %{
@@ -49,7 +63,7 @@ defmodule Alto.Tools.EditFile do
           edits: %{
             type: "array",
             minItems: 1,
-            maxItems: @max_edits,
+            maxItems: limits.max_edits,
             items: edit,
             description: "Exact replacements, all matched against the original file snapshot."
           },
@@ -65,6 +79,12 @@ defmodule Alto.Tools.EditFile do
         additionalProperties: false
       }
     }
+
+    put_in(
+      schema,
+      [:parameters, :properties, :edits, :items, :properties, :new_text, :maxLength],
+      limits.max_replacement_bytes
+    )
   end
 
   @impl true
@@ -77,39 +97,72 @@ defmodule Alto.Tools.EditFile do
   def prepare(arguments, %Context{} = context), do: prepare_edit(arguments, context)
 
   @impl true
+  def prepare(arguments, %Context{} = context, opts), do: prepare_edit(arguments, context, opts)
+
+  @impl true
   def run_prepared(prepared, %Context{} = context) do
     with {:ok, resolved} <- revalidate_target(prepared, context),
-         {:ok, stat, content} <- read_snapshot(resolved),
+         {:ok, stat, content} <-
+           read_snapshot(
+             resolved,
+             Map.get(prepared, :limits, %{max_file_bytes: @max_file_bytes}).max_file_bytes
+           ),
          :ok <- validate_fingerprint(prepared, stat, content),
-         :ok <- AtomicWrite.write(resolved, prepared.updated, prepared.mode) do
-      {:ok,
-       %{
-         path: prepared.path,
-         replacements: prepared.replacements,
-         bytes_before: byte_size(content),
-         bytes_after: byte_size(prepared.updated),
-         patch: Map.get(prepared, :patch)
-       }}
+         write_result <- AtomicWrite.write(resolved, prepared.updated, prepared.mode) do
+      case write_result do
+        :ok ->
+          {:ok,
+           %{
+             path: prepared.path,
+             replacements: prepared.replacements,
+             bytes_before: byte_size(content),
+             bytes_after: byte_size(prepared.updated),
+             patch: Map.get(prepared, :patch)
+           }}
+
+        {:error, {:post_rename_sync_failed, reason}} ->
+          {:unknown, reason}
+
+        other ->
+          other
+      end
     end
   end
 
   @impl true
+  def run_prepared(prepared, %Context{} = context, _opts), do: run_prepared(prepared, context)
+
+  @impl true
   def run(arguments, %Context{} = context) do
-    with {:ok, prepared, _details} <- prepare(arguments, context) do
-      run_prepared(prepared, context)
+    run(arguments, context, [])
+  end
+
+  @impl true
+  def run(arguments, %Context{} = context, opts) do
+    with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
+      run_prepared(prepared, context, opts)
     end
   end
 
-  defp prepare_edit(arguments, %Context{} = context) when is_map(arguments) do
+  defp prepare_edit(arguments, %Context{} = context), do: prepare_edit(arguments, context, [])
+
+  defp prepare_edit(arguments, %Context{} = context, opts)
+       when is_map(arguments) and is_list(opts) do
+    with {:ok, limits} <- validate_options(opts) do
+      prepare_edit(arguments, context, limits)
+    end
+  end
+
+  defp prepare_edit(arguments, %Context{} = context, limits) when is_map(arguments) do
     path = Map.get(arguments, "path")
 
     with {:ok, edits} <- normalize_edits(arguments),
-         :ok <- validate_edits(edits),
+         :ok <- validate_edits(edits, limits),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, stat, content} <- read_snapshot(resolved),
+         {:ok, stat, content} <- read_snapshot(resolved, limits.max_file_bytes),
          :ok <- validate_utf8(content),
-         {:ok, updated, replacements} <- apply_edits(content, edits),
-         :ok <- validate_size(byte_size(updated)) do
+         {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes),
+         :ok <- validate_size(byte_size(updated), limits.max_file_bytes) do
       prepared = %{
         operation: :edit_file,
         path: path,
@@ -118,7 +171,8 @@ defmodule Alto.Tools.EditFile do
         replacements: replacements,
         fingerprint: fingerprint(content),
         mode: stat.mode,
-        patch: UnifiedDiff.render(path, content, updated, @patch_bytes)
+        patch: UnifiedDiff.render(path, content, updated, limits.patch_bytes),
+        limits: limits
       }
 
       details = %{
@@ -126,7 +180,7 @@ defmodule Alto.Tools.EditFile do
         replacements: replacements,
         bytes_before: byte_size(content),
         bytes_after: byte_size(updated),
-        preview: bounded(content: updated, limit: @preview_bytes),
+        preview: bounded(content: updated, limit: limits.preview_bytes),
         patch: prepared.patch
       }
 
@@ -134,7 +188,7 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp prepare_edit(_arguments, _context), do: {:error, :edit_arguments_must_be_object}
+  defp prepare_edit(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   defp normalize_edits(arguments) do
     has_edits? = Map.has_key?(arguments, "edits")
@@ -164,30 +218,30 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp validate_edits(edits) when length(edits) > @max_edits,
-    do: {:error, {:too_many_edits, @max_edits}}
+  defp validate_edits(edits, limits) when length(edits) > limits.max_edits,
+    do: {:error, {:too_many_edits, limits.max_edits}}
 
-  defp validate_edits(edits) do
-    with {:ok, input_bytes} <- validate_each_edit(edits),
+  defp validate_edits(edits, limits) do
+    with {:ok, input_bytes} <- validate_each_edit(edits, limits),
          true <-
-           input_bytes <= @max_edit_input_bytes or
-             {:error, {:edit_input_too_large, @max_edit_input_bytes}} do
+           input_bytes <= limits.max_input_bytes or
+             {:error, {:edit_input_too_large, limits.max_input_bytes}} do
       :ok
     end
   end
 
-  defp validate_each_edit(edits) do
+  defp validate_each_edit(edits, limits) do
     edits
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, 0}, fn {edit, index}, {:ok, total} ->
-      case validate_edit(edit) do
+      case validate_edit(edit, limits) do
         {:ok, bytes} -> {:cont, {:ok, total + bytes}}
         {:error, reason} -> {:halt, {:error, edit_error(index, reason, length(edits))}}
       end
     end)
   end
 
-  defp validate_edit(edit) when is_map(edit) do
+  defp validate_edit(edit, limits) when is_map(edit) do
     old_text = Map.get(edit, "old_text")
     new_text = Map.get(edit, "new_text")
     replace_all? = Map.get(edit, "replace_all", false)
@@ -205,8 +259,8 @@ defmodule Alto.Tools.EditFile do
       not String.valid?(new_text) ->
         {:error, :new_text_must_be_utf8}
 
-      byte_size(new_text) > @max_replacement_bytes ->
-        {:error, {:replacement_too_large, @max_replacement_bytes}}
+      byte_size(new_text) > limits.max_replacement_bytes ->
+        {:error, {:replacement_too_large, limits.max_replacement_bytes}}
 
       replace_all? not in [true, false] ->
         {:error, :replace_all_must_be_boolean}
@@ -216,50 +270,21 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp validate_edit(_edit), do: {:error, :edit_must_be_object}
+  defp validate_edit(_edit, _limits), do: {:error, :edit_must_be_object}
 
   defp edit_error(_index, reason, 1), do: reason
   defp edit_error(index, reason, _count), do: {:invalid_edit, index, reason}
 
   defp revalidate_target(%{operation: :edit_file, path: path, resolved: expected}, context) do
-    with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         true <- resolved == expected or {:error, {:prepared_path_changed, path}} do
-      {:ok, resolved}
-    end
+    SafePath.revalidate(path, expected, context.cwd)
   end
 
   defp revalidate_target(_prepared, _context), do: {:error, :invalid_prepared_edit}
 
-  defp read_snapshot(path) do
-    case :file.open(String.to_charlist(path), [:read, :binary]) do
-      {:ok, file} ->
-        try do
-          with {:ok, info} <- :file.read_file_info(file),
-               stat = File.Stat.from_record(info),
-               true <- stat.type == :regular or {:error, {:not_a_file, path}},
-               {:ok, content} <- read_bounded(file, @max_file_bytes + 1),
-               :ok <- validate_size(byte_size(content)) do
-            {:ok, stat, content}
-          end
-        after
-          :file.close(file)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp read_bounded(file, limit), do: read_bounded(file, limit, [])
-
-  defp read_bounded(_file, 0, chunks),
-    do: {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-
-  defp read_bounded(file, remaining, chunks) do
-    case :file.read(file, remaining) do
-      {:ok, ""} -> {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-      {:ok, chunk} -> read_bounded(file, remaining - byte_size(chunk), [chunk | chunks])
-      :eof -> {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+  defp read_snapshot(path, max_file_bytes) do
+    case BoundedFile.snapshot(path, max_file_bytes) do
+      {:ok, %{content: nil}} -> {:error, {:file_too_large, max_file_bytes}}
+      {:ok, %{stat: stat, content: content}} -> {:ok, stat, content}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -285,17 +310,17 @@ defmodule Alto.Tools.EditFile do
 
   defp utf8_prefix(content, limit), do: Alto.Text.prefix(content, limit)
 
-  defp validate_size(size) when size <= @max_file_bytes, do: :ok
-  defp validate_size(_size), do: {:error, {:file_too_large, @max_file_bytes}}
+  defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok
+  defp validate_size(_size, max_file_bytes), do: {:error, {:file_too_large, max_file_bytes}}
 
   defp validate_utf8(content) do
     if String.valid?(content), do: :ok, else: {:error, :file_is_not_utf8}
   end
 
-  defp apply_edits(content, edits) do
+  defp apply_edits(content, edits, max_file_bytes) do
     with {:ok, replacements} <- collect_replacements(content, edits),
          :ok <- reject_overlaps(replacements),
-         :ok <- validate_updated_size(content, replacements) do
+         :ok <- validate_updated_size(content, replacements, max_file_bytes) do
       {:ok, replace_ranges(content, replacements), length(replacements)}
     end
   end
@@ -348,13 +373,13 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp validate_updated_size(content, replacements) do
+  defp validate_updated_size(content, replacements, max_file_bytes) do
     size =
       Enum.reduce(replacements, byte_size(content), fn replacement, total ->
         total - replacement.length + byte_size(replacement.replacement)
       end)
 
-    validate_size(size)
+    validate_size(size, max_file_bytes)
   end
 
   defp replace_ranges(content, replacements) do
@@ -369,4 +394,18 @@ defmodule Alto.Tools.EditFile do
     tail = binary_part(content, offset, byte_size(content) - offset)
     [tail | chunks] |> Enum.reverse() |> IO.iodata_to_binary()
   end
+
+  defp validate_options(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case NimbleOptions.validate(opts, @options_schema) do
+        {:ok, values} -> {:ok, Map.new(values)}
+        {:error, reason} -> {:error, {:invalid_edit_options, reason}}
+      end
+    else
+      {:error, {:invalid_edit_options, opts}}
+    end
+  end
+
+  defp validate_options(opts), do: {:error, {:invalid_edit_options, opts}}
+  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

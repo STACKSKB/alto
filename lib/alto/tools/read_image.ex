@@ -4,6 +4,7 @@ defmodule Alto.Tools.ReadImage do
   @behaviour Alto.Tool
 
   alias Alto.Content
+  alias Alto.BoundedFile
   alias Alto.Image.Metadata
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -169,35 +170,9 @@ defmodule Alto.Tools.ReadImage do
   defp read_bounded(path, max_encoded_bytes) do
     limit = raw_limit(max_encoded_bytes)
 
-    case :file.open(String.to_charlist(path), [:read, :binary]) do
-      {:ok, file} ->
-        try do
-          with {:ok, info} <- :file.read_file_info(file),
-               stat = File.Stat.from_record(info),
-               true <- stat.type == :regular or {:error, {:not_a_file, path}},
-               {:ok, data} <- read_bounded(file, limit + 1, []),
-               true <-
-                 byte_size(data) <= limit or
-                   {:error, {:image_encoded_too_large, max_encoded_bytes}} do
-            {:ok, data}
-          end
-        after
-          :file.close(file)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp read_bounded(_file, 0, chunks),
-    do: {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-
-  defp read_bounded(file, remaining, chunks) do
-    case :file.read(file, remaining) do
-      {:ok, ""} -> {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-      {:ok, chunk} -> read_bounded(file, remaining - byte_size(chunk), [chunk | chunks])
-      :eof -> {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+    case BoundedFile.snapshot(path, limit) do
+      {:ok, %{content: data}} when is_binary(data) -> {:ok, data}
+      {:ok, %{content: nil}} -> {:error, {:image_encoded_too_large, max_encoded_bytes}}
       {:error, reason} -> {:error, reason}
     end
   end

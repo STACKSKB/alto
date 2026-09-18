@@ -11,6 +11,10 @@ defmodule Alto.Tools.AtomicWrite do
   When `mode` is given, the temp file is chmod'ed to it before the rename. When
   it is omitted, an existing target's mode is preserved; a new target uses the
   default umask permissions.
+
+  The parent directory is synced after rename. If that sync fails, the rename
+  may already have succeeded and the returned `{:error, {:post_rename_sync_failed, reason}}`
+  is therefore an uncertain outcome for callers.
   """
   @spec write(binary(), binary(), non_neg_integer() | nil) :: :ok | {:error, term()}
   def write(path, content, mode \\ nil) do
@@ -29,17 +33,23 @@ defmodule Alto.Tools.AtomicWrite do
     result =
       case File.open(temp, [:write, :binary, :exclusive]) do
         {:ok, io} ->
-          result =
-            with :ok <- maybe_chmod(temp, mode),
-                 :ok <- :file.write(io, content),
-                 :ok <- :file.sync(io),
-                 :ok <- File.close(io),
-                 :ok <- File.rename(temp, path) do
-              :ok
+          write_result =
+            try do
+              with :ok <- maybe_chmod(temp, mode),
+                   :ok <- :file.write(io, content),
+                   :ok <- :file.sync(io),
+                   do: :ok
+            after
+              File.close(io)
             end
 
-          if result != :ok, do: File.close(io)
-          result
+          with :ok <- write_result,
+               :ok <- File.rename(temp, path) do
+            case Alto.DurableLog.sync_directory(Path.dirname(path)) do
+              :ok -> :ok
+              {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
+            end
+          end
 
         {:error, reason} ->
           {:error, reason}

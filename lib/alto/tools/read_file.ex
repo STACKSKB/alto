@@ -11,12 +11,18 @@ defmodule Alto.Tools.ReadFile do
   # bound instead of advertising a content limit that can be rejected after
   # the read has already completed.
   @max_bytes 47_000
+  @options_schema [max_bytes: [type: :pos_integer, default: @max_bytes]]
 
   @impl true
   def name, do: :read_file
 
   @impl true
-  def schema do
+  def schema, do: schema([])
+
+  @impl true
+  def schema(opts) when is_list(opts) do
+    limits = validate_options!(opts)
+
     %{
       description: "Read a bounded byte range from a file inside the workspace.",
       parameters: %{
@@ -30,7 +36,7 @@ defmodule Alto.Tools.ReadFile do
           limit: %{
             type: "integer",
             minimum: 1,
-            maximum: @max_bytes,
+            maximum: limits.max_bytes,
             description: "Maximum bytes to read."
           }
         },
@@ -48,11 +54,17 @@ defmodule Alto.Tools.ReadFile do
 
   @impl true
   def run(arguments, %Context{} = context) do
+    run(arguments, context, [])
+  end
+
+  @impl true
+  def run(arguments, %Context{} = context, opts) do
     path = Map.get(arguments, "path")
     offset = Map.get(arguments, "offset", 0)
-    limit = Map.get(arguments, "limit", @max_bytes)
 
-    with :ok <- valid_range(offset, limit),
+    with {:ok, limits} <- validate_options(opts),
+         limit <- Map.get(arguments, "limit", limits.max_bytes),
+         :ok <- valid_range(offset, limit, limits.max_bytes),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd) do
       case :file.open(String.to_charlist(resolved), [:read, :binary]) do
         {:ok, file} ->
@@ -101,10 +113,24 @@ defmodule Alto.Tools.ReadFile do
     end
   end
 
-  defp valid_range(offset, limit)
+  defp valid_range(offset, limit, max_bytes)
        when is_integer(offset) and offset >= 0 and is_integer(limit) and limit > 0 and
-              limit <= @max_bytes,
+              limit <= max_bytes,
        do: :ok
 
-  defp valid_range(offset, limit), do: {:error, {:invalid_range, offset, limit}}
+  defp valid_range(offset, limit, _max_bytes), do: {:error, {:invalid_range, offset, limit}}
+
+  defp validate_options(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case NimbleOptions.validate(opts, @options_schema) do
+        {:ok, values} -> {:ok, Map.new(values)}
+        {:error, reason} -> {:error, {:invalid_read_file_options, reason}}
+      end
+    else
+      {:error, {:invalid_read_file_options, opts}}
+    end
+  end
+
+  defp validate_options(opts), do: {:error, {:invalid_read_file_options, opts}}
+  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end
