@@ -8,14 +8,6 @@ defmodule Alto.Usage do
   cache-hit rate instead of estimating one from transcript bytes.
   """
 
-  @enforce_keys [
-    :input_tokens,
-    :output_tokens,
-    :total_tokens,
-    :cached_input_tokens,
-    :last_input_tokens,
-    :requests
-  ]
   defstruct input_tokens: 0,
             output_tokens: 0,
             total_tokens: 0,
@@ -36,20 +28,13 @@ defmodule Alto.Usage do
 
   @doc "Return zeroed accounting."
   @spec new() :: t()
-  def new do
-    %__MODULE__{
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      cached_input_tokens: 0,
-      last_input_tokens: 0,
-      requests: 0
-    }
-  end
+  def new, do: %__MODULE__{}
 
   @doc "Normalize one provider response usage object."
   @spec normalize(map() | nil | term()) :: t()
   def normalize(usage) when is_map(usage) do
+    usage = normalize_keys(usage)
+
     base_input =
       integer(usage, ~w(prompt_tokens input_tokens prompt_token_count inputTokenCount))
 
@@ -72,8 +57,8 @@ defmodule Alto.Usage do
         nested_integer(usage, ~w(prompt_tokens_details input_tokens_details), ~w(cached_tokens))
       )
 
-    total = integer(usage, ~w(total_tokens total_token_count totalTokenCount))
-    total = if total == 0, do: input + output, else: total
+    total =
+      optional_integer(usage, ~w(total_tokens total_token_count totalTokenCount), input + output)
 
     %__MODULE__{
       input_tokens: input,
@@ -137,32 +122,46 @@ defmodule Alto.Usage do
   @doc "Rehydrate normalized accounting received through an event or session."
   @spec from_map(map()) :: t()
   def from_map(map) when is_map(map) do
+    map = normalize_keys(map)
+    input_tokens = integer(map, ~w(input_tokens))
+    last_input_tokens = optional_integer(map, ~w(last_input_tokens), input_tokens)
+    cached_input_tokens = min(integer(map, ~w(cached_input_tokens)), input_tokens)
+    last_cached_input_tokens = min(integer(map, ~w(last_cached_input_tokens)), last_input_tokens)
+
     %__MODULE__{
-      input_tokens: integer(map, ~w(input_tokens)),
+      input_tokens: input_tokens,
       output_tokens: integer(map, ~w(output_tokens)),
       total_tokens: integer(map, ~w(total_tokens)),
-      cached_input_tokens: integer(map, ~w(cached_input_tokens)),
-      last_input_tokens:
-        integer(map, ~w(last_input_tokens)) |> default_last_input(integer(map, ~w(input_tokens))),
-      last_cached_input_tokens: integer(map, ~w(last_cached_input_tokens)),
+      cached_input_tokens: cached_input_tokens,
+      last_input_tokens: last_input_tokens,
+      last_cached_input_tokens: last_cached_input_tokens,
       requests: integer(map, ~w(requests))
     }
   end
 
   @doc "Project an authoritative Codex App Server thread/tokenUsage snapshot."
   @spec from_codex(map()) :: t()
+  def from_codex(%{total: total, last: last}) when is_map(total) and is_map(last),
+    do: from_codex(%{"total" => total, "last" => last})
+
   def from_codex(%{"total" => total, "last" => last}) when is_map(total) and is_map(last) do
+    total = normalize_keys(total)
+    last = normalize_keys(last)
     input = integer(total, ~w(inputTokens))
     output = integer(total, ~w(outputTokens))
+    last_input = integer(last, ~w(inputTokens))
+    cached = min(integer(total, ~w(cachedInputTokens)), input)
+    last_cached = min(integer(last, ~w(cachedInputTokens)), last_input)
 
     %__MODULE__{
       input_tokens: input,
       output_tokens: output,
-      total_tokens: integer(total, ~w(totalTokens)) |> default_total(input + output),
-      cached_input_tokens: min(integer(total, ~w(cachedInputTokens)), input),
-      last_input_tokens: integer(last, ~w(inputTokens)),
-      last_cached_input_tokens: integer(last, ~w(cachedInputTokens)),
-      requests: 1
+      total_tokens: optional_integer(total, ~w(totalTokens), input + output),
+      cached_input_tokens: cached,
+      last_input_tokens: last_input,
+      last_cached_input_tokens: last_cached,
+      # tokenUsage is a cumulative snapshot; it does not identify a request count.
+      requests: 0
     }
   end
 
@@ -171,7 +170,7 @@ defmodule Alto.Usage do
   defp nested_integer(map, parents, children) do
     Enum.find_value(parents, 0, fn parent ->
       case value(map, parent) do
-        nested when is_map(nested) -> integer(nested, children)
+        nested when is_map(nested) -> nested |> normalize_keys() |> integer(children)
         _other -> nil
       end
     end)
@@ -186,19 +185,27 @@ defmodule Alto.Usage do
     end)
   end
 
-  defp present?(map, keys), do: Enum.any?(keys, &(not is_nil(value(map, &1))))
-
-  defp value(map, key) do
-    Map.get(map, key) ||
-      Enum.find_value(map, fn
-        {atom, value} when is_atom(atom) -> if Atom.to_string(atom) == key, do: value
-        _other -> nil
-      end)
+  defp optional_integer(map, keys, default) do
+    if Enum.any?(keys, fn key ->
+         case value(map, key) do
+           n when is_integer(n) and n >= 0 -> true
+           _other -> false
+         end
+       end),
+       do: integer(map, keys),
+       else: default
   end
 
-  defp default_last_input(0, input), do: input
-  defp default_last_input(value, _input), do: value
+  defp present?(map, keys), do: Enum.any?(keys, &(not is_nil(value(map, &1))))
 
-  defp default_total(0, computed), do: computed
-  defp default_total(value, _computed), do: value
+  defp value(map, key), do: Map.get(map, key)
+
+  defp normalize_keys(map) do
+    string_keys = for {key, value} when is_binary(key) <- map, into: %{}, do: {key, value}
+
+    atom_keys =
+      for {key, value} when is_atom(key) <- map, into: %{}, do: {Atom.to_string(key), value}
+
+    Map.merge(atom_keys, string_keys)
+  end
 end

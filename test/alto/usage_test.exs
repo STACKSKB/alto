@@ -48,4 +48,60 @@ defmodule Alto.UsageTest do
     assert Usage.new() == Usage.normalize(nil)
     assert Usage.cache_hit_rate(Usage.new()) == 0.0
   end
+
+  test "preserves explicit zero fields while defaulting only missing fields" do
+    assert Usage.normalize(%{"input_tokens" => 12, "output_tokens" => 3, "total_tokens" => 0}).total_tokens ==
+             0
+
+    assert Usage.from_map(%{
+             "input_tokens" => 12,
+             "total_tokens" => 0,
+             "last_input_tokens" => 0,
+             "cached_input_tokens" => 99,
+             "last_cached_input_tokens" => 99
+           }) == %Usage{
+             input_tokens: 12,
+             output_tokens: 0,
+             total_tokens: 0,
+             cached_input_tokens: 12,
+             last_input_tokens: 0,
+             last_cached_input_tokens: 0,
+             requests: 0
+           }
+
+    assert Usage.from_map(%{"input_tokens" => 12}).last_input_tokens == 12
+  end
+
+  test "accepts atom keys and clamps rehydrated cache counts" do
+    usage =
+      Usage.from_map(%{
+        input_tokens: 10,
+        last_input_tokens: 4,
+        cached_input_tokens: 99,
+        last_cached_input_tokens: 99
+      })
+
+    assert usage.input_tokens == 10
+    assert usage.cached_input_tokens == 10
+    assert usage.last_cached_input_tokens == 4
+  end
+
+  test "codex snapshots preserve zeros and do not claim a request count" do
+    usage =
+      Usage.from_codex(%{
+        "total" => %{
+          "inputTokens" => 10,
+          "outputTokens" => 2,
+          "totalTokens" => 0,
+          "cachedInputTokens" => 99
+        },
+        "last" => %{"inputTokens" => 0, "cachedInputTokens" => 99}
+      })
+
+    assert usage.total_tokens == 0
+    assert usage.last_input_tokens == 0
+    assert usage.cached_input_tokens == 10
+    assert usage.last_cached_input_tokens == 0
+    assert usage.requests == 0
+  end
 end
