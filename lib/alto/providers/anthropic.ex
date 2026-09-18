@@ -13,7 +13,7 @@ defmodule Alto.Providers.Anthropic do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.{HTTPOptions, SSE}
+  alias Alto.Providers.{HTTPOptions, StreamEnvelope}
   alias Alto.Providers.Anthropic.Stream
 
   @default_base_url "https://api.anthropic.com/v1"
@@ -32,7 +32,6 @@ defmodule Alto.Providers.Anthropic do
     max_response_bytes: :invalid_response_limit,
     supports_images: {:value, :invalid_supports_images}
   ]
-  @state_key :alto_anthropic_stream
   @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking cache_control)
 
   @impl true
@@ -50,12 +49,11 @@ defmodule Alto.Providers.Anthropic do
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
     with {:ok, config} <- config(opts),
          {:ok, body} <- request_body(request, config),
-         {:ok, response} <- send_request(body, config, sink),
-         {:ok, completion} <- response_result(response, sink, config) do
+         {:ok, completion} <- send_request(body, config, sink) do
       {:ok, completion}
     end
   rescue
-    error -> {:error, {:invalid_anthropic_request, Exception.message(error)}}
+    error -> {:error, {:provider_exception, error, __STACKTRACE__}}
   end
 
   defp config(opts) do
@@ -262,149 +260,13 @@ defmodule Alto.Providers.Anthropic do
   end
 
   defp send_request(body, config, sink) do
-    into = fn {:data, data}, {request, response} ->
-      state = Req.Response.get_private(response, @state_key, new_request_state(config))
-      next = consume_http_chunk(state, response.status, data, sink)
-      response = Req.Response.put_private(response, @state_key, next)
-
-      if next.error, do: {:halt, {request, response}}, else: {:cont, {request, response}}
-    end
-
-    options = [
-      url: config.endpoint,
-      headers: [
-        {"accept", if(config.streaming, do: "text/event-stream", else: "application/json")},
-        {"x-api-key", config.api_key},
-        {"anthropic-version", "2023-06-01"},
-        {"content-type", "application/json"}
-      ],
-      body: JSON.encode!(body),
-      into: into,
-      raw: true,
-      retry: false,
-      receive_timeout: config.timeout,
-      request_timeout: config.timeout
+    headers = [
+      {"accept", if(config.streaming, do: "text/event-stream", else: "application/json")},
+      {"x-api-key", config.api_key},
+      {"anthropic-version", "2023-06-01"},
+      {"content-type", "application/json"}
     ]
 
-    case Req.post(Keyword.merge(config.req_options, options)) do
-      {:ok, response} -> {:ok, response}
-      {:error, reason} -> {:error, {:transport_error, reason}}
-    end
-  end
-
-  defp new_request_state(config) do
-    %{
-      sse: SSE.new(config.max_event_bytes),
-      completion: Stream.new(config.max_response_bytes),
-      error: nil,
-      error_body: [],
-      error_body_bytes: 0,
-      response_bytes: 0,
-      max_response_bytes: config.max_response_bytes,
-      max_error_body_bytes: min(config.max_response_bytes, 64_000)
-    }
-  end
-
-  defp consume_http_chunk(state, status, data, sink) do
-    response_bytes = state.response_bytes + byte_size(data)
-
-    cond do
-      response_bytes > state.max_response_bytes ->
-        %{
-          state
-          | response_bytes: response_bytes,
-            error: {:model_response_too_large, state.max_response_bytes}
-        }
-
-      status in 200..299 ->
-        case SSE.feed(state.sse, data) do
-          {:ok, sse, payloads} ->
-            completion =
-              Enum.reduce(payloads, state.completion, fn payload, acc ->
-                Stream.consume(acc, payload, sink)
-              end)
-
-            %{
-              state
-              | sse: sse,
-                completion: completion,
-                response_bytes: response_bytes,
-                error: completion.error
-            }
-
-          {:error, reason} ->
-            %{state | response_bytes: response_bytes, error: reason}
-        end
-
-      true ->
-        error_body_bytes = state.error_body_bytes + byte_size(data)
-
-        if error_body_bytes <= state.max_error_body_bytes,
-          do: %{
-            state
-            | error_body: [data | state.error_body],
-              error_body_bytes: error_body_bytes,
-              response_bytes: response_bytes
-          },
-          else: %{state | response_bytes: response_bytes}
-    end
-  end
-
-  defp response_result(%Req.Response{status: status} = response, sink, config)
-       when status in 200..299 do
-    state = Req.Response.get_private(response, @state_key, new_request_state(config))
-
-    with nil <- state.error,
-         {:ok, completion_state} <- finish_stream(state, sink),
-         {:ok, result} <- Stream.result(completion_state) do
-      {:ok, result}
-    else
-      {:error, reason} -> {:error, reason}
-      reason -> {:error, reason}
-    end
-  end
-
-  defp response_result(%Req.Response{status: status} = response, _sink, config) do
-    state = Req.Response.get_private(response, @state_key, new_request_state(config))
-
-    if state.error do
-      {:error, state.error}
-    else
-      response_error(state, status)
-    end
-  end
-
-  defp response_error(state, status) do
-    body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
-
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
-  end
-
-  defp finish_stream(state, sink) do
-    case SSE.finish(state.sse) do
-      {:ok, payloads} ->
-        completion =
-          Enum.reduce(payloads, state.completion, fn payload, acc ->
-            Stream.consume(acc, payload, sink)
-          end)
-
-        {:ok, completion}
-
-      {:raw, raw} ->
-        case JSON.decode(raw) do
-          {:ok, response} -> Stream.from_response(response, sink)
-          {:error, error} -> {:error, {:invalid_provider_response, error}}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    StreamEnvelope.post(config, body, headers, Stream, sink)
   end
 end

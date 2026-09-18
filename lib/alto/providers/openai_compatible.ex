@@ -10,7 +10,7 @@ defmodule Alto.Providers.OpenAICompatible do
   @behaviour Alto.Provider
 
   alias Alto.Content
-  alias Alto.Providers.{HTTPOptions, SSE}
+  alias Alto.Providers.{HTTPOptions, StreamEnvelope}
   alias Alto.Providers.OpenAICompatible.Stream
 
   @default_base_url "https://openrouter.ai/api/v1"
@@ -30,10 +30,7 @@ defmodule Alto.Providers.OpenAICompatible do
     timeout: {:value, :invalid_timeout},
     max_models_response_bytes: {:value, :invalid_max_models_response_bytes}
   ]
-  @default_max_event_bytes 1_000_000
-  @default_max_response_bytes 2_000_000
   @default_max_models_response_bytes 8_000_000
-  @state_key :alto_openai_compatible_stream
   @models_state_key :alto_openai_compatible_models
 
   @impl true
@@ -63,8 +60,7 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
     with {:ok, config} <- config(opts),
-         {:ok, response} <- request(config, request, sink),
-         {:ok, completion} <- response_result(response, sink) do
+         {:ok, completion} <- request(config, request, sink) do
       {:ok, completion}
     end
   rescue
@@ -89,32 +85,7 @@ defmodule Alto.Providers.OpenAICompatible do
       body =
         if request[:tool_choice] == :none, do: Map.put(body, "tool_choice", "none"), else: body
 
-      state = new_request_state(config.max_event_bytes, config.max_response_bytes)
-
-      into = fn {:data, data}, {req, response} ->
-        current = Req.Response.get_private(response, @state_key, state)
-        next = consume_http_chunk(current, response.status, data, sink)
-        response = Req.Response.put_private(response, @state_key, next)
-
-        if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
-      end
-
-      options =
-        [
-          url: config.endpoint,
-          body: JSON.encode!(body),
-          headers: config.headers,
-          into: into,
-          raw: true,
-          retry: false,
-          receive_timeout: config.timeout,
-          request_timeout: config.timeout
-        ] ++ config.req_options
-
-      case Req.post(options) do
-        {:ok, response} -> {:ok, response}
-        {:error, error} -> {:error, {:transport_error, error}}
-      end
+      StreamEnvelope.post(config, body, config.headers, Stream, sink)
     end
   end
 
@@ -383,96 +354,6 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp string_list(value) when is_list(value), do: Enum.filter(value, &is_binary/1)
   defp string_list(_value), do: []
-
-  defp response_result(%Req.Response{status: status} = response, sink)
-       when status in 200..299 do
-    state =
-      Req.Response.get_private(
-        response,
-        @state_key,
-        new_request_state(@default_max_event_bytes, @default_max_response_bytes)
-      )
-
-    with nil <- state.error,
-         {:ok, completion_state} <- finish_stream(state, sink),
-         {:ok, result} <- Stream.result(completion_state) do
-      {:ok, result}
-    else
-      {:error, reason} -> {:error, reason}
-      reason -> {:error, reason}
-    end
-  end
-
-  defp response_result(%Req.Response{status: status} = response, _sink) do
-    state =
-      Req.Response.get_private(
-        response,
-        @state_key,
-        new_request_state(@default_max_event_bytes, @default_max_response_bytes)
-      )
-
-    body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
-
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _error} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
-  end
-
-  defp finish_stream(state, sink) do
-    case SSE.finish(state.sse) do
-      {:ok, payloads} ->
-        completion = Enum.reduce(payloads, state.completion, &Stream.consume(&2, &1, sink))
-        {:ok, completion}
-
-      {:raw, raw} ->
-        with {:ok, response} <- JSON.decode(raw),
-             {:ok, completion} <- Stream.from_response(response, sink) do
-          {:ok, completion}
-        else
-          {:error, error} -> {:error, {:invalid_provider_response, error}}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp consume_http_chunk(state, status, data, sink) when status in 200..299 do
-    case SSE.feed(state.sse, data) do
-      {:ok, sse, payloads} ->
-        completion = Enum.reduce(payloads, state.completion, &Stream.consume(&2, &1, sink))
-        %{state | sse: sse, completion: completion, error: completion.error}
-
-      {:error, reason} ->
-        %{state | error: reason}
-    end
-  end
-
-  defp consume_http_chunk(state, _status, data, _sink) do
-    size = state.error_body_bytes + byte_size(data)
-
-    if size <= state.max_error_body_bytes do
-      %{state | error_body: [data | state.error_body], error_body_bytes: size}
-    else
-      state
-    end
-  end
-
-  defp new_request_state(max_event_bytes, max_response_bytes) do
-    %{
-      sse: SSE.new(max_event_bytes),
-      completion: Stream.new(max_response_bytes),
-      error: nil,
-      error_body: [],
-      error_body_bytes: 0,
-      max_error_body_bytes: 64_000
-    }
-  end
 
   defp maybe_put_tools(body, []), do: body
 
