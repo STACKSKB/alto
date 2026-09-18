@@ -93,7 +93,7 @@ the configured command executor: sandboxed commands are appropriate for model
 requested work, while unsandboxed commands belong to explicitly trusted host
 workflows and should be configured with narrow permissions.
 
-Renderers are optional front ends. The CLI, TUI, GUI, and protocol clients
+Renderers are optional front ends. The CLI, TUI, WebSocket, and protocol clients
 consume the same events and approval handles; a host can provide another
 renderer without changing tools or providers. Provider adapters are also
 optional dependencies at the application boundary. A host can select a native

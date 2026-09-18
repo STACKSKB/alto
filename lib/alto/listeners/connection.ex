@@ -32,6 +32,14 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
+  @doc "Return the initial hello envelope without requiring a mutable collector."
+  def hello_lines(registry, max_line_bytes) do
+    case init_client(registry, max_line_bytes, fn line -> [line] end) do
+      lines when is_list(lines) -> lines
+      _ -> []
+    end
+  end
+
   @doc "Decode and dispatch one command line; replies go through send_line."
   # The sender must not emit empty lines; the receiver ignores them
   # (the protocol contract framing rules) rather than answering with an error.
@@ -45,21 +53,33 @@ defmodule Alto.Listeners.Connection do
     dispatch_command(Protocol.decode_command(line), registry, send_line, max_line_bytes)
   end
 
+  @doc "Dispatch one command and collect its synchronous reply envelopes."
+  def command_lines("", _registry, _max_line_bytes), do: []
+
+  def command_lines(line, registry, max_line_bytes) do
+    case run_command(line, registry, fn envelope -> [envelope] end, max_line_bytes) do
+      lines when is_list(lines) -> lines
+      _ -> []
+    end
+  end
+
   defp dispatch_command(
          {:ok, {:attach, id, run_id, from_seq, domains}},
          registry,
          send_line,
          max_line_bytes
        ) do
-    reply(
-      send_line,
-      max_line_bytes,
-      id,
-      Registry.attach(registry, self(), run_id, from_seq, domains),
-      %{}
-    )
+    result =
+      reply(
+        send_line,
+        max_line_bytes,
+        id,
+        Registry.attach(registry, self(), run_id, from_seq, domains),
+        %{}
+      )
 
     Registry.pull(registry, self(), @pull_batch)
+    result
   end
 
   defp dispatch_command(
@@ -409,26 +429,36 @@ defmodule Alto.Listeners.Connection do
           Protocol.overflow(server_message_id(), run_id, domain, last_seq, max_line_bytes)
       end
 
-    case encoded do
-      {:ok, line} ->
-        send_line.(line)
+    result =
+      case encoded do
+        {:ok, line} ->
+          send_line.(line)
 
-      {:error, :overflow} ->
-        # The envelope itself is over the announced bound; the overflow
-        # notice (small by construction) tells the client what was lost.
-        {:ok, line} =
-          Protocol.overflow(
-            server_message_id(),
-            run_id_of(notification),
-            overflow_domain(notification),
-            nil,
-            max_line_bytes
-          )
+        {:error, :overflow} ->
+          # The envelope itself is over the announced bound; the overflow
+          # notice (small by construction) tells the client what was lost.
+          {:ok, line} =
+            Protocol.overflow(
+              server_message_id(),
+              run_id_of(notification),
+              overflow_domain(notification),
+              nil,
+              max_line_bytes
+            )
 
-        send_line.(line)
-    end
+          send_line.(line)
+      end
 
     Registry.pull(registry, self(), @pull_batch)
+    result
+  end
+
+  @doc "Encode one notification and collect its synchronous envelope."
+  def notification_lines(notification, registry, max_line_bytes) do
+    case emit(notification, registry, max_line_bytes, fn line -> [line] end) do
+      lines when is_list(lines) -> lines
+      _ -> []
+    end
   end
 
   defp reply(send_line, max_line_bytes, id, :ok, payload),

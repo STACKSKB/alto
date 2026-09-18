@@ -56,10 +56,10 @@ defmodule Alto.CLI.Arguments do
       --config FILE             load trusted compiled Elixir configuration
       --no-config               ignore ALTO_CONFIG and the per-user config
       --setup                   configure OpenRouter key and default model, then exit
-      --serve                   run as a resident server (Unix socket + browser GUI)
+      --serve                   run as a resident server (Unix socket + WebSocket)
       --socket PATH             socket path (default: $XDG_STATE_HOME/alto/alto.sock,
                                 else ~/.local/state/alto/alto.sock)
-      --port PORT               GUI port on 127.0.0.1 (default: 4747)
+      --port PORT               WebSocket port on 127.0.0.1 (default: 4747)
 
     Model:
       -m, --model MODEL          model identifier (or ALTO_MODEL); otherwise use
@@ -94,7 +94,7 @@ defmodule Alto.CLI.Arguments do
     Configuration defaults to ALTO_CONFIG, then ~/.config/alto/config.exs (or
     $XDG_CONFIG_HOME/alto/config.exs). Configuration is trusted arbitrary Elixir.
     With --serve, the loaded configuration is served to front ends as "default";
-    served runs answer approvals in the GUI instead of the terminal, and a
+    served runs answer approvals through the WebSocket instead of the terminal, and a
     `listeners:` entry in the configuration selects the transports.
     One-shot runs persist to $XDG_STATE_HOME/alto/sessions (else
     ~/.local/state) and print their session id; continue one with

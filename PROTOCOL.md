@@ -58,8 +58,8 @@ authorization and execution at its existing boundaries.
   `Alto.Listeners.UnixSocket`.
 - **WebSocket transport (shipped).** One envelope per text frame, same bytes,
   served by `Alto.Listeners.WebServer`: a localhost HTTP listener whose
-  `GET /` serves the built-in single-page GUI (`Alto.FrontEnd.Gui`) and whose
-  `GET /ws` upgrades to the front-end protocol. Upgrades are accepted only
+  `GET /ws` upgrades to the front-end protocol. Other HTTP paths return 404.
+  Upgrades are accepted only
   from same-origin pages (or non-browser clients with no `Origin` header).
   Bandit, Plug, and WebSock own HTTP and RFC 6455 mechanics; Alto's
   transport-independent `Alto.Listeners.Connection` owns envelopes and
@@ -566,8 +566,8 @@ command and write-tool invocations on runs it can see.
 
 The shipped listeners are `Alto.Listeners.UnixSocket` and
 `Alto.Listeners.WebServer`; both use the same envelope validation, command
-dispatch, bounded notifications, and approval correlation. The built-in GUI is
-a client of the WebSocket transport. Queue, session, and operator commands are
+dispatch, bounded notifications, and approval correlation. WebSocket clients
+use the WebSocket transport directly. Queue, session, and operator commands are
 available only when the host configures the corresponding stores.
 
 `input` and `reload` are reserved message types and return `unsupported` in v1.
@@ -580,11 +580,10 @@ that replay history is incomplete.
 
 The optional loopback WebServer now authenticates upgrades by default, in addition
 to rejecting foreign browser origins. `auth: :token` generates a new 256-bit
-capability per listener lifetime. `Alto.Listeners.WebServer.url/1` returns the GUI
-URL with that token in its fragment; the CLI prints this URL on `--serve`. The HTML
-page does not contain or disclose the token. Treat the launch URL as a credential.
-The GUI moves the token to tab-local session storage, removes the fragment from
-browser history, and supplies it in a WebSocket subprotocol header.
+capability per listener lifetime. `Alto.Listeners.WebServer.url/1` returns the
+WebSocket endpoint; the CLI prints the token separately on `--serve`. Treat the
+token as a credential and send it in a WebSocket subprotocol or Authorization
+header.
 
 Native clients send `Authorization: Bearer TOKEN` on `GET /ws`. Browser clients
 offer both `alto.v1` and `alto-auth.TOKEN` in `Sec-WebSocket-Protocol`; the server

@@ -120,6 +120,35 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
            }
   end
 
+  test "collected command APIs return synchronous replies without process state" do
+    name = String.to_atom("conn-lines-#{System.unique_integer([:positive])}")
+    {:ok, pid} = Registry.start_link(name: name, config_resolver: fn _ -> {:error, :unknown} end)
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    assert Connection.hello_lines(name, Connection.default_max_line_bytes()) |> length() == 1
+    assert Connection.command_lines("", name, Connection.default_max_line_bytes()) == []
+
+    attach =
+      JSON.encode!(%{
+        "v" => 1,
+        "type" => "attach",
+        "id" => "attach-1",
+        "run_id" => "missing-run"
+      })
+
+    assert [line] = Connection.command_lines(attach, name, Connection.default_max_line_bytes())
+    assert %{"type" => "error", "id" => "attach-1"} = JSON.decode!(IO.iodata_to_binary(line))
+
+    assert [notification] =
+             Connection.notification_lines(
+               {:overflow, "missing-run", :live, nil},
+               name,
+               Connection.default_max_line_bytes()
+             )
+
+    assert JSON.decode!(IO.iodata_to_binary(notification))["type"] == "overflow"
+  end
+
   test "oversized transcript replies fail explicitly instead of timing out" do
     dir =
       Path.join(

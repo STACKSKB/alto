@@ -22,8 +22,11 @@ defmodule Alto.Listeners.WebServer do
   @spec bound_port(GenServer.server()) :: :inet.port_number()
   def bound_port(server \\ __MODULE__), do: GenServer.call(server, :bound_port)
 
-  @doc "Local GUI capability URL. Treat its fragment as a credential."
+  @doc "Local WebSocket endpoint URL. Authentication is sent in the upgrade request."
   def url(server \\ __MODULE__), do: GenServer.call(server, :url)
+
+  @doc "The generated authentication token, when token authentication is enabled."
+  def token(server \\ __MODULE__), do: GenServer.call(server, :token)
 
   @impl true
   def init(opts) do
@@ -66,9 +69,10 @@ defmodule Alto.Listeners.WebServer do
   def handle_call(:bound_port, _from, state), do: {:reply, state.port, state}
 
   def handle_call(:url, _from, state) do
-    fragment = if state.token, do: "#token=" <> state.token, else: ""
-    {:reply, "http://127.0.0.1:#{state.port}/" <> fragment, state}
+    {:reply, "ws://127.0.0.1:#{state.port}/ws", state}
   end
+
+  def handle_call(:token, _from, state), do: {:reply, state.token, state}
 
   @impl true
   def format_status(status), do: Map.update(status, :state, %{}, &Map.drop(&1, [:token]))
@@ -84,15 +88,7 @@ defmodule Alto.Listeners.WebServer do
 
     import Plug.Conn
 
-    alias Alto.FrontEnd.Gui
-
     def init(opts), do: opts
-
-    def call(%Plug.Conn{method: "GET", request_path: "/"} = conn, _opts) do
-      conn
-      |> response_headers("text/html; charset=utf-8")
-      |> send_resp(200, Gui.html())
-    end
 
     def call(%Plug.Conn{method: "GET", request_path: "/ws"} = conn, opts) do
       if allowed_origin?(conn) and
@@ -167,10 +163,7 @@ defmodule Alto.Listeners.WebServer do
         max_line_bytes: Keyword.fetch!(opts, :max_line_bytes)
       }
 
-      lines =
-        collect(fn send_line ->
-          Connection.init_client(state.registry, state.max_line_bytes, send_line)
-        end)
+      lines = Connection.hello_lines(state.registry, state.max_line_bytes)
 
       Registry.pull(state.registry, self(), Connection.pull_batch())
       Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
@@ -180,7 +173,7 @@ defmodule Alto.Listeners.WebServer do
     @impl true
     def handle_in({payload, opcode: :text}, state)
         when byte_size(payload) <= state.max_line_bytes do
-      lines = collect(&Connection.run_command(payload, state.registry, &1, state.max_line_bytes))
+      lines = Connection.command_lines(payload, state.registry, state.max_line_bytes)
       push(lines, state)
     end
 
@@ -200,7 +193,7 @@ defmodule Alto.Listeners.WebServer do
     def handle_info(:alto_close, state), do: {:stop, :normal, 1000, state}
 
     def handle_info({:alto_notification, notification}, state) do
-      lines = collect(&Connection.emit(notification, state.registry, state.max_line_bytes, &1))
+      lines = Connection.notification_lines(notification, state.registry, state.max_line_bytes)
       push(lines, state)
     end
 
@@ -215,22 +208,6 @@ defmodule Alto.Listeners.WebServer do
       end
 
       :ok
-    end
-
-    defp collect(fun) do
-      key = {__MODULE__, make_ref()}
-      Process.put(key, [])
-
-      try do
-        fun.(fn line ->
-          Process.put(key, [line | Process.get(key)])
-          :ok
-        end)
-
-        key |> Process.get() |> Enum.reverse()
-      after
-        Process.delete(key)
-      end
     end
 
     defp push([], state), do: {:ok, state}

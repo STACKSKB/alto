@@ -140,7 +140,7 @@ defmodule Alto.CLI do
   ## The server loads one trusted configuration (same discovery as one-shot
   ## runs) and serves it to front ends under the name `"default"`, plus one
   ## entry per key of the optional `runs:` map (named compiled run specs for
-  ## webhook endpoints such as `"job"`). The GUI's config field
+  ## webhook endpoints such as `"job"`). The WebSocket client's config field
   ## defaults to `"default"`, and `start_run` with any other name fails with
   ## `unknown_config`. Runs started this way have no terminal to prompt on,
   ## so approval is forced to `Alto.Approvals.Socket` unless the operator
@@ -422,7 +422,7 @@ defmodule Alto.CLI do
     do: "listening on #{Path.expand(Keyword.fetch!(opts, :path))}"
 
   defp describe_listener(WebServer, _opts, listener),
-    do: "serving GUI at #{WebServer.url(listener)}"
+    do: "serving WebSocket at #{WebServer.url(listener)} (token: #{WebServer.token(listener) || "none"})"
 
   defp describe_listener(Webhook, opts, listener) do
     paths =
@@ -811,7 +811,7 @@ defmodule Alto.CLI do
     do: "could not bind socket #{path}: #{inspect(reason)}"
 
   defp format_reason({:listen_failed, reason}),
-    do: "could not listen for the GUI: #{inspect(reason)}"
+    do: "could not listen for the WebSocket: #{inspect(reason)}"
 
   defp format_reason({:config_load_failed, path, reason}),
     do: "could not load config #{path}: #{inspect(reason)}"

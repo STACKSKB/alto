@@ -104,27 +104,22 @@ defmodule Alto.Listeners.WebServerTest do
     start_supervised!({WebServer, registry: registry, port: 0, name: listener})
     port = WebServer.bound_port(listener)
 
-    token =
-      WebServer.url(listener)
-      |> URI.parse()
-      |> Map.fetch!(:fragment)
-      |> URI.decode_query()
-      |> Map.fetch!("token")
+    assert WebServer.url(listener) == "ws://127.0.0.1:#{port}/ws"
+    token = WebServer.token(listener)
 
     Process.put(:web_token, token)
 
     %{registry: registry, listener: listener, port: port, token: token}
   end
 
-  test "serves the GUI page on GET /", %{port: port} do
+  test "does not serve a browser page on GET /", %{port: port} do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
 
     :ok = :gen_tcp.send(socket, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
     {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
 
-    assert response =~ "200 OK"
-    assert response =~ "text/html; charset=utf-8"
-    assert response =~ "<title>Alto</title>"
+    assert response =~ "404"
+    refute response =~ "text/html"
   end
 
   test "rejects websocket upgrades from foreign origins", %{port: port} do
