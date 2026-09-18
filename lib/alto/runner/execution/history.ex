@@ -28,7 +28,7 @@ defmodule Alto.Runner.Execution.History do
     do: {:error, :session_history_requires_session, run}
 
   def persist(%{session_history: :settled, resume_snapshot: true} = run, opts) do
-    digest = :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev))
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic]))
 
     if run.history_digest == digest and run.resolved_operations == [] do
       {:ok, run}

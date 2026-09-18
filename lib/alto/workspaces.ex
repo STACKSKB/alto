@@ -7,7 +7,7 @@ defmodule Alto.Workspaces do
   Interrupted operations are never silently repeated. The caller owns worker
   assignment and integration policy; this module starts no worker or scheduler.
   """
-  alias Alto.{DurableLog, OperationLog, Storage}
+  alias Alto.{BoundedFile, DurableLog, OperationLog, Storage}
   alias Alto.Workspaces.Snapshot
 
   @enforce_keys [:root, :ledger, :backend, :backend_options]
@@ -58,7 +58,7 @@ defmodule Alto.Workspaces do
     with {:ok, %Snapshot{source: source, metadata: metadata}} <- normalize_snapshot(snapshot),
          :ok <- valid_identity(identity),
          :ok <- separate_root(manager.root, source) do
-      id = "ws-" <> hash(:erlang.term_to_binary(identity))
+      id = workspace_id(manager, identity)
 
       workspace = %{
         "id" => id,
@@ -412,7 +412,11 @@ defmodule Alto.Workspaces do
          true <- is_binary(info.workspace["source"]),
          true <- info.workspace["cwd"] == Path.join([manager.root, id, "checkout"]),
          true <-
-           not check_backend? or info.workspace["backend_fingerprint"] == fingerprint(manager),
+           not check_backend? or
+             info.workspace["backend_fingerprint"] in [
+               fingerprint(manager),
+               legacy_fingerprint(manager)
+             ],
          :ok <- safe_path(info.workspace["cwd"]) do
       {:ok, info}
     else
@@ -575,21 +579,22 @@ defmodule Alto.Workspaces do
   defp json_map(_), do: {:error, :invalid_workspace_snapshot}
 
   defp read_bounded(path, max) do
-    with {:ok, io} <- File.open(path, [:read, :binary, :raw]) do
-      try do
-        case IO.binread(io, max + 1) do
-          :eof -> {:ok, ""}
-          bytes when is_binary(bytes) and byte_size(bytes) <= max -> {:ok, bytes}
-          bytes when is_binary(bytes) -> {:error, :workspace_patch_too_large}
-          {:error, _} = error -> error
-        end
-      after
-        File.close(io)
-      end
+    case BoundedFile.read(path, max) do
+      {:error, {:too_large, _, _}} -> {:error, :workspace_patch_too_large}
+      result -> result
     end
   end
 
   defp fingerprint(manager),
+    do:
+      hash(
+        :erlang.term_to_binary(
+          {manager.backend, manager.backend.module_info(:md5), manager.backend_options},
+          [:deterministic]
+        )
+      )
+
+  defp legacy_fingerprint(manager),
     do:
       hash(
         :erlang.term_to_binary(
@@ -598,5 +603,16 @@ defmodule Alto.Workspaces do
       )
 
   defp hash(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
+
+  defp workspace_id(manager, identity) do
+    current = "ws-" <> hash(:erlang.term_to_binary(identity, [:deterministic]))
+    legacy = "ws-" <> hash(:erlang.term_to_binary(identity))
+
+    case get(manager, legacy) do
+      {:ok, _} -> legacy
+      _ -> current
+    end
+  end
+
   defp attempt_id, do: "wa-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 end

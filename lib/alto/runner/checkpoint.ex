@@ -82,7 +82,9 @@ defmodule Alto.Runner.Checkpoint do
     with true <-
            packet["version"] == run.checkpoint_version and is_binary(run.checkpoint_version),
          {:ok, fingerprint} <- fingerprint(run),
-         true <- packet["fingerprint"] == fingerprint,
+         true <-
+           packet["fingerprint"] == fingerprint or
+             packet["fingerprint"] == legacy_fingerprint(run),
          true <- is_nil(packet["kind"]),
          true <- decision in [:approve, :deny],
          true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
@@ -115,8 +117,6 @@ defmodule Alto.Runner.Checkpoint do
       {:error, _} = error -> error
       _ -> {:error, :invalid_checkpoint}
     end
-  rescue
-    _ -> {:error, :invalid_checkpoint}
   end
 
   def restore(_, _, _, _), do: {:error, :invalid_checkpoint}
@@ -215,7 +215,9 @@ defmodule Alto.Runner.Checkpoint do
          true <- packet["kind"] == "parent" and packet["stage"] in ["children", "frame"],
          true <- packet["version"] == run.checkpoint_version,
          {:ok, fingerprint} <- fingerprint(run),
-         true <- packet["fingerprint"] == fingerprint,
+         true <-
+           packet["fingerprint"] == fingerprint or
+             packet["fingerprint"] == legacy_fingerprint(run),
          {:ok, _} <- encode(packet),
          {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
          true <- store == packet["store"],
@@ -265,8 +267,6 @@ defmodule Alto.Runner.Checkpoint do
       {:error, _} = error -> error
       _ -> {:error, :invalid_parent_checkpoint}
     end
-  rescue
-    _ -> {:error, :invalid_parent_checkpoint}
   catch
     :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
   end
@@ -349,8 +349,6 @@ defmodule Alto.Runner.Checkpoint do
       {:error, _} = error -> error
       _ -> {:error, :child_checkpoint_mismatch}
     end
-  rescue
-    _ -> {:error, :invalid_child_checkpoint}
   end
 
   defp parent_capabilities(run) do
@@ -530,6 +528,14 @@ defmodule Alto.Runner.Checkpoint do
   defp valid_agent_identity?(_), do: false
 
   defp fingerprint(run) do
+    with {:ok, data} <- fingerprint_data_for(run) do
+      {:ok,
+       :crypto.hash(:sha256, :erlang.term_to_binary(data, [:deterministic]))
+       |> Base.encode16(case: :lower)}
+    end
+  end
+
+  defp fingerprint_data_for(run) do
     tools =
       Enum.map(run.tools, fn {name, tool} ->
         {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.approval,
@@ -543,12 +549,20 @@ defmodule Alto.Runner.Checkpoint do
        run.model_tools, run.tool_context.cwd, Map.get(run, :session_history, :completed),
        Map.get(run, :max_conversation_bytes, 128_000_000)}
 
-    {:ok,
-     :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data)))
-     |> Base.encode16(case: :lower)}
+    {:ok, fingerprint_data(data)}
   catch
     {__MODULE__, :durable_identity_unavailable, reason} ->
       {:error, {:durable_identity_unavailable, reason}}
+  end
+
+  defp legacy_fingerprint(run) do
+    case fingerprint_data_for(run) do
+      {:ok, data} ->
+        :crypto.hash(:sha256, :erlang.term_to_binary(data)) |> Base.encode16(case: :lower)
+
+      {:error, _} ->
+        nil
+    end
   end
 
   # Fun ETF includes its creating process. Bind the code and closed-over

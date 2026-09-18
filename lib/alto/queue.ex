@@ -1378,7 +1378,7 @@ defmodule Alto.Queue do
 
   defp recovery_key(operation_key, revision) do
     digest =
-      :crypto.hash(:sha256, :erlang.term_to_binary({operation_key, revision}))
+      :crypto.hash(:sha256, :erlang.term_to_binary({operation_key, revision}, [:deterministic]))
       |> Base.url_encode64(padding: false)
 
     "recovery-" <> digest

@@ -1706,7 +1706,7 @@ defmodule Alto.Runner.Execution do
       resolved_operations: Map.get(run, :resolved_operations, []),
       transcript_persisted:
         Map.get(run, :history_digest) ==
-          :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev)) and
+          :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic])) and
           Map.get(run, :resolved_operations, []) == [],
       usage: Usage.to_map(run.usage),
       persistence: persistence_status(Enum.reverse(run.persistence_errors))

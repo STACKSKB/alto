@@ -14,6 +14,8 @@ defmodule Alto.Runner.CheckpointTest do
       File.write!(Path.join(context.cwd, "first"), "1", [:append])
       {:ok, "first"}
     end
+
+    def run(arguments, context, _opts), do: run(arguments, context)
   end
 
   defmodule Guarded do
@@ -70,6 +72,14 @@ defmodule Alto.Runner.CheckpointTest do
     end
 
     def load_checkpoint(state, _spec), do: {:ok, state}
+  end
+
+  defmodule RaisingLoadLoop do
+    @behaviour Alto.Loop
+    def init(task, spec), do: Alto.Loops.Rule.init(task, spec)
+    def handle_event(event, state, spec), do: Alto.Loops.Rule.handle_event(event, state, spec)
+    def dump_checkpoint(state, spec), do: Alto.Loops.Rule.dump_checkpoint(state, spec)
+    def load_checkpoint(_state, _spec), do: raise("checkpoint programmer error")
   end
 
   setup do
@@ -183,6 +193,42 @@ defmodule Alto.Runner.CheckpointTest do
 
     assert {:error, {:checkpoint_process_failed, :timeout}, _} = Serial.run("{}", opts)
     refute File.exists?(Path.join(dir, "guarded"))
+  end
+
+  test "a programmer error in checkpoint restore is not relabeled invalid_checkpoint", %{
+    opts: opts
+  } do
+    opts = Keyword.put(opts, :loop, Alto.loop(RaisingLoadLoop, steps: ["guarded"]))
+    assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
+    assert {:ok, run} = Alto.Runner.Execution.Setup.open("{}", opts)
+
+    assert_raise RuntimeError, "checkpoint programmer error", fn ->
+      Alto.Runner.Checkpoint.restore(run, suspended.checkpoint, :approve, opts)
+    end
+  end
+
+  test "checkpoint fingerprints remain deterministic for large tool option maps", %{
+    opts: opts
+  } do
+    tool_options = Map.new(1..40, &{"key-#{&1}", &1})
+    equivalent_options = tool_options |> Map.to_list() |> Enum.reverse() |> Map.new()
+
+    opts = Keyword.put(opts, :tools, [{First, options: tool_options}, Guarded])
+    assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
+
+    equivalent = Keyword.put(opts, :tools, [{First, options: equivalent_options}, Guarded])
+
+    assert {:ok, _resumed} =
+             Serial.run(
+               "{}",
+               Keyword.put(equivalent, :checkpoint, {suspended.checkpoint, :approve})
+             )
+
+    changed_options = Map.put(tool_options, "key-40", :changed)
+    changed = Keyword.put(opts, :tools, [{First, options: changed_options}, Guarded])
+
+    assert {:error, :checkpoint_mismatch, _} =
+             Serial.run("{}", Keyword.put(changed, :checkpoint, {suspended.checkpoint, :approve}))
   end
 
   test "a later suspension preserves the consumed effect budget", %{opts: opts, dir: dir} do
