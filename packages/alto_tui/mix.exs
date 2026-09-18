@@ -18,7 +18,8 @@ defmodule AltoTUI.MixProject do
         links: %{"Source" => "https://github.com/STACKSKB/alto/tree/v0.0.1/packages/alto_tui"},
         files: ["lib", "mix.exs", "README.md", "LICENSE"]
       ],
-      deps: [alto_dep, {:ex_ratatui, "~> 0.13.1"}]
+      deps: [alto_dep, {:ex_ratatui, "~> 0.13.1"}],
+      elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"])
     ]
   end
 

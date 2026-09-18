@@ -31,8 +31,7 @@ defmodule Alto.MixProject do
       {:nimble_options, "~> 1.1"},
       {:server_sent_events, "~> 1.1"},
       {:thousand_island, "~> 1.5"},
-      {:websock, "~> 0.5"},
-      {:ex_ratatui, "~> 0.13.1", only: [:dev, :test], runtime: false}
+      {:websock, "~> 0.5"}
     ]
   end
 
@@ -42,7 +41,6 @@ defmodule Alto.MixProject do
       links: %{"Source" => "https://github.com/STACKSKB/alto"},
       files: [
         "lib",
-        "priv",
         "mix.exs",
         "README.md",
         "LICENSE",
@@ -71,5 +69,6 @@ defmodule Alto.MixProject do
   end
 
   defp elixirc_paths(:prod), do: ["lib"]
-  defp elixirc_paths(_env), do: ["lib", "packages/alto_tui/lib"]
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 end
