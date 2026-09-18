@@ -182,15 +182,21 @@ defmodule Alto.Runner.Execution.Transcript do
     outcome =
       supervised_call(
         fn ->
-          key = make_ref()
-          Process.put(key, {0, Usage.new()})
+          {:ok, accounting} = Agent.start_link(fn -> {0, Usage.new()} end)
 
           try do
-            model = fn request -> reduction_model(run, request, key) end
+            model = fn request ->
+              try do
+                Agent.get_and_update(accounting, &reduction_model(run, request, &1), :infinity)
+              catch
+                :exit, _ -> {:error, :reduction_model_closed}
+              end
+            end
+
             result = module.compact(input, model, opts)
-            {result, Process.get(key)}
+            {result, Agent.get(accounting, & &1, :infinity)}
           after
-            Process.delete(key)
+            if Process.alive?(accounting), do: Agent.stop(accounting)
           end
         end,
         Budget.timeout(run.budget, run.provider_timeout),
@@ -199,10 +205,21 @@ defmodule Alto.Runner.Execution.Transcript do
 
     case outcome do
       {:ok, {{:ok, product}, {requests, usage}}} ->
-        run = %{run | usage: Usage.merge(run.usage, usage)}
-        apply_product(run, input, product, headroom, requests)
+        run = %{
+          run
+          | usage: Usage.merge(run.usage, usage),
+            model_requests: run.model_requests + requests
+        }
 
-      {:ok, {{:error, reason}, _}} ->
+        apply_product(run, input, product, headroom, 0)
+
+      {:ok, {{:error, reason}, {requests, usage}}} ->
+        run = %{
+          run
+          | usage: Usage.merge(run.usage, usage),
+            model_requests: run.model_requests + requests
+        }
+
         record_compact_failed(run, reason)
 
       {:cancelled, reason} ->
@@ -213,33 +230,31 @@ defmodule Alto.Runner.Execution.Transcript do
     end
   end
 
-  defp reduction_model(%{provider: nil}, _request, _key),
-    do: {:error, :compaction_requires_provider}
+  defp reduction_model(%{provider: nil}, _request, accounting),
+    do: {{:error, :compaction_requires_provider}, accounting}
 
-  defp reduction_model(run, request, key) when is_map(request) do
-    {count, usage} = Process.get(key)
+  defp reduction_model(run, request, {count, usage} = accounting) when is_map(request) do
     {provider, opts} = run.provider
 
     with true <- is_list(request[:messages]) and is_list(Map.get(request, :tools, [])),
          :ok <- take_compaction_model(%{run | model_requests: run.model_requests + count}) do
-      Process.put(key, {count + 1, usage})
       request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
 
       case provider.stream(request, compaction_sink(run.event_sink), opts) do
         {:ok, completion} = result when is_map(completion) ->
-          Process.put(key, {count + 1, Usage.merge(usage, Usage.normalize(completion[:usage]))})
-          result
+          {result, {count + 1, Usage.merge(usage, Usage.normalize(completion[:usage]))}}
 
         other ->
-          other
+          {other, {count + 1, usage}}
       end
     else
-      false -> {:error, :invalid_compaction_request}
-      {:error, _} = error -> error
+      false -> {{:error, :invalid_compaction_request}, accounting}
+      {:error, _} = error -> {error, accounting}
     end
   end
 
-  defp reduction_model(_run, _request, _key), do: {:error, :invalid_compaction_request}
+  defp reduction_model(_run, _request, accounting),
+    do: {{:error, :invalid_compaction_request}, accounting}
 
   defp apply_product(
          run,

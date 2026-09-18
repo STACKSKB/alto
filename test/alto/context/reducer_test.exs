@@ -15,13 +15,15 @@ defmodule Alto.Context.ReducerTest do
     def compact(input, model, opts) do
       send(opts[:owner], {:input, input.middle, input.tools})
 
-      with {:ok, completion} <- model.(%{messages: input.middle, tools: input.tools}) do
+      with {:ok, completion} <-
+             Task.async(fn -> model.(%{messages: input.middle, tools: input.tools}) end)
+             |> Task.await() do
         {:ok, %{content: completion.message, data: %{strategy: :custom}, events: [], records: []}}
       end
     end
   end
 
-  test "custom reducers see structured context and retain schemas without executing calls" do
+  test "custom reducers can call the bounded model from a Task and retain schemas" do
     dir = Path.join(System.tmp_dir!(), "alto-reducer-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
 
