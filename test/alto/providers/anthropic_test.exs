@@ -189,6 +189,7 @@ defmodule Alto.Providers.AnthropicTest do
 
   test "thinking is readable and signed content is replayed unchanged with selected effort" do
     blocks = [
+      %{"type" => "text", "text" => "Checking."},
       %{"type" => "thinking", "thinking" => "Check the file", "signature" => "signed"},
       %{"type" => "redacted_thinking", "data" => "opaque"},
       %{
@@ -208,6 +209,8 @@ defmodule Alto.Providers.AnthropicTest do
     assert {:ok, completion} =
              Anthropic.stream(%{messages: [], tools: []}, &send(owner, &1), opts)
 
+    assert completion.message == "Checking."
+    assert_received %{type: :model_delta, data: %{text: "Checking."}}
     assert_received %{type: :model_reasoning_delta, data: %{text: text}}
     assert text =~ "Check the file"
     refute text =~ "opaque"
@@ -234,17 +237,27 @@ defmodule Alto.Providers.AnthropicTest do
     assert hd(JSON.decode!(replay.body)["messages"])["content"] == blocks
   end
 
-  test "unknown content and truncated responses cannot silently become successful completions" do
+  test "malformed content blocks cannot become successful completions" do
     request = %{messages: [%{"role" => "user", "content" => "go"}], tools: []}
 
-    opts =
-      configure(%{
-        "content" => [%{"type" => "thinking", "thinking" => "hidden"}],
-        "stop_reason" => "end_turn"
-      })
+    for block <- [
+          %{"type" => "text"},
+          %{"type" => "text", "text" => 42},
+          %{"type" => "thinking", "thinking" => "hidden"},
+          %{"type" => "thinking", "thinking" => "hidden", "signature" => 42},
+          %{"type" => "redacted_thinking", "data" => nil},
+          %{"type" => "tool_use", "id" => "call", "name" => "echo", "input" => nil},
+          %{"type" => "tool_use", "id" => "", "name" => "echo", "input" => %{}}
+        ] do
+      opts = configure(%{"content" => [block], "stop_reason" => "end_turn"})
 
-    assert {:error, :unsupported_anthropic_content} =
-             Anthropic.stream(request, fn _ -> :ok end, opts)
+      assert {:error, :unsupported_anthropic_content} =
+               Anthropic.stream(request, fn _ -> :ok end, opts)
+    end
+  end
+
+  test "truncated responses cannot become successful completions" do
+    request = %{messages: [%{"role" => "user", "content" => "go"}], tools: []}
 
     opts =
       configure(%{
