@@ -28,7 +28,6 @@ defmodule Alto.TUI.Backends.Codex do
       models: [],
       rate_limits: nil,
       context_window: nil,
-      login: nil,
       history_loading: MapSet.new(),
       pending_messages: []
     }
@@ -54,7 +53,8 @@ defmodule Alto.TUI.Backends.Codex do
   def ui(:models, state, _options), do: data(state).models
 
   def ui(:activity, %{backend_state: %{__MODULE__ => %{status: status}}}, _options)
-      when status in [:connecting, :refreshing],
+      when status in [:connecting, :refreshing] or
+             (is_tuple(status) and elem(status, 0) == :authenticating),
       do: "waiting for Codex connection"
 
   def ui(:sync_model, state, _options) do
@@ -69,7 +69,7 @@ defmodule Alto.TUI.Backends.Codex do
   def ui(:selected, state, _options), do: ensure_codex(state, true)
 
   def ui(:prepare, state, _options) do
-    if data(state).status == :ready and is_pid(data(state).client),
+    if ready?(state),
       do: maybe_load_codex_history(state),
       else: ensure_codex(state, false)
   end
@@ -78,12 +78,7 @@ defmodule Alto.TUI.Backends.Codex do
     do: {:ok, "Codex approval and sandbox level", @codex_approval_items, state.approval_level}
 
   def ui({:overlay, :provider}, state, _options),
-    do:
-      {:state,
-       if(data(state).status in [:ready, :authenticating],
-         do: codex_account_overlay(state),
-         else: ensure_codex(state, true)
-       )}
+    do: {:state, ensure_codex(state, true)}
 
   def ui({:overlay, :model}, state, _options) do
     case data(state) do
@@ -190,7 +185,7 @@ defmodule Alto.TUI.Backends.Codex do
         if CodexBackend.chatgpt_account?(data(state).account) do
           {:noreply, refresh_codex(state)}
         else
-          codex = %{data(state) | login: login, status: :authenticating}
+          codex = %{data(state) | status: {:authenticating, login}}
 
           next = %{
             put_data(state, codex)
@@ -214,7 +209,6 @@ defmodule Alto.TUI.Backends.Codex do
           | account: nil,
             models: [],
             rate_limits: nil,
-            login: nil,
             status: :ready
         }
 
@@ -294,7 +288,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp submit_codex(state, prompt) do
     cond do
-      data(state).status != :ready or is_nil(data(state).client) ->
+      not ready?(state) ->
         ensure_codex(%{state | notice: "connect ChatGPT before sending"}, true)
 
       not CodexBackend.chatgpt_account?(data(state).account) ->
@@ -387,13 +381,19 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp ensure_codex(state, show_overlay?) do
     cond do
-      data(state).status == :ready and is_pid(data(state).client) and
-          Process.alive?(data(state).client) ->
+      ready?(state) ->
         if show_overlay?, do: codex_account_overlay(state), else: state
 
-      data(state).status == :authenticating and is_map(data(state).login) ->
+      match?({:authenticating, login} when is_map(login), data(state).status) ->
+        {:authenticating, login} = data(state).status
+
         if show_overlay?,
-          do: %{state | overlay: codex_login_overlay(data(state).login)},
+          do: %{state | overlay: codex_login_overlay(login)},
+          else: state
+
+      data(state).status == {:authenticating, :pending} ->
+        if show_overlay?,
+          do: %{state | overlay: codex_connecting_overlay("starting ChatGPT sign-in…")},
           else: state
 
       data(state).status == :connecting ->
@@ -405,12 +405,9 @@ defmodule Alto.TUI.Backends.Codex do
           else: state
 
       true ->
-        owner = self()
         opts = data(state).options
-
-        Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-          send(owner, {:codex_connected, CodexBackend.connect(opts, owner)})
-        end)
+        owner = self()
+        async_send(:codex_connected, fn -> CodexBackend.connect(opts, owner) end)
 
         codex = %{data(state) | status: :connecting}
         next = %{put_data(state, codex) | notice: "connecting to Codex App Server…"}
@@ -420,11 +417,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    owner = self()
-
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {:codex_refreshed, CodexBackend.refresh(client)})
-    end)
+    async_send(:codex_refreshed, fn -> CodexBackend.refresh(client) end)
 
     put_in(state.backend_state[__MODULE__].status, :refreshing)
   end
@@ -446,13 +439,9 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp start_codex_login(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    owner = self()
+    async_send(:codex_login_started, fn -> CodexClient.login_chatgpt(client) end)
 
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {:codex_login_started, CodexClient.login_chatgpt(client)})
-    end)
-
-    codex = %{data(state) | status: :authenticating, login: nil}
+    codex = %{data(state) | status: {:authenticating, :pending}}
     %{put_data(state, codex) | overlay: codex_connecting_overlay("starting ChatGPT sign-in…")}
   end
 
@@ -460,11 +449,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp logout_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    owner = self()
-
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {:codex_logout_finished, CodexClient.logout(client)})
-    end)
+    async_send(:codex_logout_finished, fn -> CodexClient.logout(client) end)
 
     %{
       state
@@ -481,19 +466,15 @@ defmodule Alto.TUI.Backends.Codex do
       CodexClient.request(client, "account/login/cancel", %{"loginId" => login_id})
     end)
 
-    codex = %{data(state) | status: :ready, login: nil}
+    codex = %{data(state) | status: :ready}
     codex_account_overlay(%{put_data(state, codex) | notice: "ChatGPT sign-in cancelled"})
   end
 
   defp cancel_codex_login(state, _login_id), do: state
 
   defp open_codex_url(state, url) do
-    owner = self()
     opts = data(state).options
-
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {:codex_browser_opened, CodexBackend.open_url(url, opts)})
-    end)
+    async_send(:codex_browser_opened, fn -> CodexBackend.open_url(url, opts) end)
 
     %{state | notice: "opened ChatGPT sign-in in your browser"}
   end
@@ -610,15 +591,10 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp reconnect_codex_account(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    owner = self()
-
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      result =
-        with {:ok, account} <- CodexClient.account(client) do
-          {:ok, %{client: client, account: account}}
-        end
-
-      send(owner, {:codex_connected, result})
+    async_send(:codex_connected, fn ->
+      with {:ok, account} <- CodexClient.account(client) do
+        {:ok, %{client: client, account: account}}
+      end
     end)
 
     put_in(state.backend_state[__MODULE__].status, :refreshing)
@@ -800,11 +776,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_limits_after_turn(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    owner = self()
-
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {:codex_limits_refreshed, CodexClient.rate_limits(client)})
-    end)
+    async_send(:codex_limits_refreshed, fn -> CodexClient.rate_limits(client) end)
 
     state
   end
@@ -938,6 +910,19 @@ defmodule Alto.TUI.Backends.Codex do
         nil -> nil
         model -> model.id
       end
+  end
+
+  defp ready?(state) do
+    data(state).status == :ready and is_pid(data(state).client) and
+      Process.alive?(data(state).client)
+  end
+
+  defp async_send(tag, fun) do
+    owner = self()
+
+    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
+      send(owner, {tag, fun.()})
+    end)
   end
 
   defp selected?(state) do

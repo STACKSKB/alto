@@ -2,6 +2,7 @@ defmodule Alto.TUI.AppTest do
   use ExUnit.Case, async: false
 
   alias Alto.TUI.{App, State, View}
+  alias Alto.TUI.Backends.Codex
   alias ExRatatui.Event.{Key, Mouse}
   alias ExRatatui.Runtime
 
@@ -53,6 +54,36 @@ defmodule Alto.TUI.AppTest do
     end
 
     def cancel(%{handle: handle}, reason, _opts), do: Alto.cancel(handle, reason)
+  end
+
+  defmodule ControllableCodexClient do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+
+    @impl true
+    def init(owner), do: {:ok, %{owner: owner, login_from: nil}}
+
+    @impl true
+    def handle_call(
+          {:request, "account/login/start", _params, _deadline},
+          from,
+          %{login_from: nil} = state
+        ) do
+      send(state.owner, {:codex_login_requested, self()})
+      {:noreply, %{state | login_from: from}}
+    end
+
+    def handle_call({:request, "account/login/cancel", params, _deadline}, _from, state) do
+      send(state.owner, {:codex_login_cancelled, params})
+      {:reply, {:ok, %{}}, state}
+    end
+
+    @impl true
+    def handle_info({:finish_login, result}, %{login_from: from} = state) when not is_nil(from) do
+      GenServer.reply(from, result)
+      {:noreply, %{state | login_from: nil}}
+    end
   end
 
   setup do
@@ -783,6 +814,69 @@ defmodule Alto.TUI.AppTest do
         assert selected.overlay == nil
       end
     end
+  end
+
+  test "Codex login lifecycle keeps prepare inert and stores login in status", context do
+    config =
+      context.config
+      |> Map.update!(:run_options, fn options ->
+        Keyword.put(options, :tui_backends, codex: {Codex, []})
+      end)
+
+    assert {:ok, state} = State.new(config, project: context.root, path: context.catalog)
+    test_owner = self()
+    client = start_supervised!({ControllableCodexClient, test_owner})
+
+    state =
+      state
+      |> put_in([Access.key!(:backend_state), Access.key!(Codex), Access.key!(:client)], client)
+      |> put_in([Access.key!(:backend_state), Access.key!(Codex), Access.key!(:status)], :ready)
+      |> put_in(
+        [Access.key!(:backend_state), Access.key!(Codex), Access.key!(:options)],
+        open_url: fn url ->
+          send(test_owner, {:codex_url_opened, url})
+          :ok
+        end
+      )
+
+    pending = Codex.ui({:select, :codex_login}, state, [])
+    assert pending.backend_state[Codex].status == {:authenticating, :pending}
+    assert_receive {:codex_login_requested, ^client}
+
+    prepared = Codex.ui(:prepare, pending, [])
+    assert prepared.backend_state[Codex].client == client
+    assert prepared.backend_state[Codex].status == {:authenticating, :pending}
+    refute_receive {:codex_login_requested, ^client}, 50
+
+    login = %{"authUrl" => "https://chatgpt.test/oauth", "loginId" => "login-1"}
+    send(client, {:finish_login, {:ok, login}})
+    assert_receive {:codex_login_started, {:ok, ^login}}
+
+    assert {:noreply, authenticating} =
+             Codex.ui({:message, {:codex_login_started, {:ok, login}}}, prepared, [])
+
+    assert_receive {:codex_url_opened, "https://chatgpt.test/oauth"}
+    assert authenticating.backend_state[Codex].status == {:authenticating, login}
+    assert authenticating.overlay.kind == :codex_account
+
+    cancelled = Codex.ui({:select, {:codex_cancel_login, "login-1"}}, authenticating, [])
+    assert cancelled.backend_state[Codex].status == :ready
+    assert_receive {:codex_login_cancelled, %{"loginId" => "login-1"}}
+
+    pending = Codex.ui({:select, :codex_login}, cancelled, [])
+    assert_receive {:codex_login_requested, ^client}
+    send(client, {:finish_login, {:error, :oauth_failed}})
+    assert_receive {:codex_login_started, {:error, :oauth_failed}}
+
+    assert {:noreply, failed} =
+             Codex.ui(
+               {:message, {:codex_login_started, {:error, :oauth_failed}}},
+               pending,
+               []
+             )
+
+    assert failed.backend_state[Codex].status == {:error, :oauth_failed}
+    assert failed.overlay.kind == :codex_error
   end
 
   test "custom backends start providerless and retain configured approval", context do
