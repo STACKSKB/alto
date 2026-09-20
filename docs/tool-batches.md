@@ -11,7 +11,7 @@ Alto.Config.new(
 ```
 
 `Alto.Effect.run_tools(calls, concurrency)` exposes the same mechanism to other
-trusted loops. Both shipped execution hosts understand the effect. The default
+trusted loops. The built-in execution host handles the effect. The default
 loop still emits serial calls unless configured otherwise.
 
 Only tools declaring both `execution_mode: :parallel` and `approval: :never`

@@ -80,7 +80,7 @@ defmodule Alto.Runner.DurableDeadlineTest do
     # Manual admission lets initialization settle before the ledger is stalled.
     {:ok, handle} =
       Alto.start(%{},
-        runner: Alto.Runner.Stepped,
+        runner: Alto.Runner.Serial,
         runner_options: [mode: :manual, controller: self()],
         loop: Alto.rule_loop(steps: ["missing_tool"]),
         budget_account: account,
@@ -91,7 +91,7 @@ defmodule Alto.Runner.DurableDeadlineTest do
     :sys.suspend(ledger)
 
     try do
-      Alto.Runner.Stepped.advance(ticket)
+      Alto.Runner.Serial.advance(ticket)
       assert {:error, :await_timeout} = Alto.await(handle, 20)
       Alto.cancel(handle, :storage_stalled)
       assert {:error, {:cancelled, :storage_stalled}, _} = Alto.await(handle, 500)

@@ -1,7 +1,7 @@
 # Recovering a parent batch
 
 Alto can optionally retain a parent continuation before a `spawn_agents` batch
-dispatches any child. This boundary is shared by Serial and Stepped. It is
+dispatches any child. Automatic and manual execution share this boundary. It is
 separate from an approval checkpoint and from the enclosing Consumer claim.
 
 Configure the trusted parent with `continuation_store: parent_ledger`, a

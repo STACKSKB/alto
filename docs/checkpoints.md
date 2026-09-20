@@ -74,8 +74,8 @@ used by short queue examples. Checkpoints do not make an uncertain external
 effect automatically retryable. Interruptions after resumed dispatch still
 require authoritative reconciliation or explicit operator review.
 
-Checkpoint packets include a versioned shared continuation format. Serial and
-Stepped use that same format. Journal and workspace bindings use the durable
+Checkpoint packets use one versioned continuation format for automatic and
+manual execution. Journal and workspace bindings use the durable
 store identity, not the current server PID; restarting the same store preserves
 the binding. Unavailable or different stores fail closed. Tool/loop code and
 explicit checkpoint version checks still apply.

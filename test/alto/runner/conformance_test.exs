@@ -5,8 +5,6 @@ defmodule Alto.Runner.ConformanceTest do
   alias Alto.Event
   alias Alto.Transition
 
-  @runners [Alto.Runner.Serial, Alto.Runner.Stepped]
-
   defmodule PreparedTool do
     @behaviour Alto.Tool
 
@@ -170,113 +168,113 @@ defmodule Alto.Runner.ConformanceTest do
     )
   end
 
-  test "native prepared tool approval is shared by Serial and Stepped" do
-    for runner <- @runners do
-      assert {:ok, result} =
-               Alto.run(
-                 %{},
-                 base_opts(runner,
-                   loop: Alto.loop(NativeLoop),
-                   tools: [PreparedTool],
-                   approval: Alto.Approvals.AllowAll
-                 )
+  test "native prepared tool approval is shared by Serial" do
+    runner = Alto.Runner.Serial
+
+    assert {:ok, result} =
+             Alto.run(
+               %{},
+               base_opts(runner,
+                 loop: Alto.loop(NativeLoop),
+                 tools: [PreparedTool],
+                 approval: Alto.Approvals.AllowAll
                )
+             )
 
-      assert result.output == "prepared"
-      assert_receive {:prepared_ran, "prepared"}
+    assert result.output == "prepared"
+    assert_receive {:prepared_ran, "prepared"}
 
-      assert {:ok, denied} =
-               Alto.run(
-                 %{},
-                 base_opts(runner,
-                   loop: Alto.loop(NativeLoop),
-                   tools: [PreparedTool],
-                   approval: Alto.Approvals.DenyAll
-                 )
+    assert {:ok, denied} =
+             Alto.run(
+               %{},
+               base_opts(runner,
+                 loop: Alto.loop(NativeLoop),
+                 tools: [PreparedTool],
+                 approval: Alto.Approvals.DenyAll
                )
+             )
 
-      assert {:failed, {:approval_denied, :policy_denied}} = denied.output
-      refute_receive {:prepared_ran, _}
-    end
+    assert {:failed, {:approval_denied, :policy_denied}} = denied.output
+    refute_receive {:prepared_ran, _}
   end
 
-  test "provider completion and normalized usage are shared by both runners" do
-    for runner <- @runners do
-      assert {:ok, result} =
-               Alto.run(
-                 "hello",
-                 base_opts(runner,
-                   loop: Alto.chat_loop(),
-                   provider: {AnswerProvider, test_pid: self(), answer: "answer"}
-                 )
-               )
+  test "provider completion and normalized usage are shared by Serial" do
+    runner = Alto.Runner.Serial
 
-      assert result.output == "answer"
-      assert result.usage.input_tokens == 3
-      assert result.usage.output_tokens == 2
-      assert result.usage.requests == 1
-      assert_receive :provider_called
-    end
+    assert {:ok, result} =
+             Alto.run(
+               "hello",
+               base_opts(runner,
+                 loop: Alto.chat_loop(),
+                 provider: {AnswerProvider, test_pid: self(), answer: "answer"}
+               )
+             )
+
+    assert result.output == "answer"
+    assert result.usage.input_tokens == 3
+    assert result.usage.output_tokens == 2
+    assert result.usage.requests == 1
+    assert_receive :provider_called
   end
 
-  test "cancellation while a provider is running is exposed through both runner handles" do
-    for runner <- @runners do
-      assert {:ok, handle} =
-               Alto.start(
-                 "wait",
-                 base_opts(runner,
-                   loop: Alto.chat_loop(),
-                   provider: {BlockingProvider, test_pid: self()},
-                   provider_timeout: 5_000,
-                   run_timeout: 5_000
-                 )
-               )
+  test "cancellation while a provider is running is exposed through the Serial runner handle" do
+    runner = Alto.Runner.Serial
 
-      assert_receive {:provider_started, _pid}, 2_000
-      assert :ok = Alto.cancel(handle, :conformance_cancel)
-      assert {:error, {:cancelled, :conformance_cancel}, _result} = Alto.await(handle, 2_000)
-    end
+    assert {:ok, handle} =
+             Alto.start(
+               "wait",
+               base_opts(runner,
+                 loop: Alto.chat_loop(),
+                 provider: {BlockingProvider, test_pid: self()},
+                 provider_timeout: 5_000,
+                 run_timeout: 5_000
+               )
+             )
+
+    assert_receive {:provider_started, _pid}, 2_000
+    assert :ok = Alto.cancel(handle, :conformance_cancel)
+    assert {:error, {:cancelled, :conformance_cancel}, _result} = Alto.await(handle, 2_000)
   end
 
   test "checkpoint suspension and resume preserve the shared prepared continuation" do
-    for runner <- @runners do
-      opts =
-        base_opts(runner,
-          loop: Alto.loop(NativeLoop),
-          tools: [PreparedTool],
-          approval: Alto.Approvals.Checkpoint,
-          checkpoint_version: "conformance-1"
-        )
+    runner = Alto.Runner.Serial
 
-      assert {:error, :approval_suspended, suspended} = Alto.run(%{}, opts)
-      assert is_map(suspended.checkpoint)
+    opts =
+      base_opts(runner,
+        loop: Alto.loop(NativeLoop),
+        tools: [PreparedTool],
+        approval: Alto.Approvals.Checkpoint,
+        checkpoint_version: "conformance-1"
+      )
 
-      packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
-      resumed = Keyword.put(opts, :checkpoint, {packet, :approve})
-      assert {:ok, result} = Alto.run(%{}, resumed)
-      assert result.output == "prepared"
-      assert_receive {:prepared_ran, "prepared"}
-    end
+    assert {:error, :approval_suspended, suspended} = Alto.run(%{}, opts)
+    assert is_map(suspended.checkpoint)
+
+    packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
+    resumed = Keyword.put(opts, :checkpoint, {packet, :approve})
+    assert {:ok, result} = Alto.run(%{}, resumed)
+    assert result.output == "prepared"
+    assert_receive {:prepared_ran, "prepared"}
   end
 
   test "child batch uses the selected runner and shared effect budget" do
-    for runner <- @runners do
-      assert {:ok, result} =
-               Alto.run(
-                 :parent,
-                 base_opts(runner,
-                   loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 1)),
-                   provider: {AnswerProvider, test_pid: self(), answer: "child"},
-                   max_effects: 2
-                 )
-               )
+    runner = Alto.Runner.Serial
 
-      assert {:completed, %{status: :ok, output: "child"}} = result.output
-    end
+    assert {:ok, result} =
+             Alto.run(
+               :parent,
+               base_opts(runner,
+                 loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 1)),
+                 provider: {AnswerProvider, test_pid: self(), answer: "child"},
+                 max_effects: 2
+               )
+             )
+
+    assert {:completed, %{status: :ok, output: "child"}} = result.output
   end
 
   test "registry runs a configured selected runner through its public result surface" do
-    runner = Alto.Runner.Stepped
+    runner = Alto.Runner.Serial
     name = String.to_atom("conformance-registry-#{System.unique_integer([:positive])}")
 
     resolver = fn
@@ -296,11 +294,11 @@ defmodule Alto.Runner.ConformanceTest do
     assert {:ok, %{output: :registry_ok}} = eventually_result(name, run_id)
   end
 
-  test "manual Stepped tickets admit one frame and stale tickets do not advance later frames" do
+  test "manual Serial tickets admit one frame and stale tickets do not advance later frames" do
     assert {:ok, handle} =
              Alto.start(
                %{},
-               base_opts(Alto.Runner.Stepped,
+               base_opts(Alto.Runner.Serial,
                  loop: Alto.rule_loop(steps: ["registry_echo", "registry_echo"]),
                  tools: [RegistryTool],
                  runner_options: [mode: :manual, controller: self()]
@@ -309,22 +307,22 @@ defmodule Alto.Runner.ConformanceTest do
 
     assert_receive {:alto_step_ready, first, %{pending_effects: 1}}, 2_000
     refute_receive {:tool_ran, _}, 100
-    assert :ok = Alto.Runner.Stepped.advance(first)
+    assert :ok = Alto.Runner.Serial.advance(first)
     assert_receive {:tool_ran, :registry}, 2_000
 
     # The actual tool has no side effect; receiving the next ticket proves the
     # first frame was admitted. A duplicate first ticket must be ignored.
     assert_receive {:alto_step_ready, second, _}, 2_000
-    assert :ok = Alto.Runner.Stepped.advance(first)
+    assert :ok = Alto.Runner.Serial.advance(first)
     refute_receive {:tool_ran, _}, 100
-    assert :ok = Alto.Runner.Stepped.advance(second)
+    assert :ok = Alto.Runner.Serial.advance(second)
     assert_receive {:tool_ran, :registry}, 2_000
     assert {:ok, %{output: [:registry_ok, :registry_ok]}} = Alto.await(handle, 2_000)
 
     assert {:ok, cancel_handle} =
              Alto.start(
                %{},
-               base_opts(Alto.Runner.Stepped,
+               base_opts(Alto.Runner.Serial,
                  loop: Alto.rule_loop(steps: ["registry_echo"]),
                  tools: [RegistryTool],
                  runner_options: [mode: :manual, controller: self()],
@@ -339,7 +337,7 @@ defmodule Alto.Runner.ConformanceTest do
     assert {:ok, deadline_handle} =
              Alto.start(
                %{},
-               base_opts(Alto.Runner.Stepped,
+               base_opts(Alto.Runner.Serial,
                  loop: Alto.rule_loop(steps: ["registry_echo"]),
                  tools: [RegistryTool],
                  runner_options: [mode: :manual, controller: self()],
@@ -349,6 +347,31 @@ defmodule Alto.Runner.ConformanceTest do
 
     assert_receive {:alto_step_ready, _deadline_ticket, _}, 2_000
     assert {:error, :run_timeout, _} = Alto.await(deadline_handle, 2_000)
+
+    parent = self()
+
+    controller =
+      spawn(fn ->
+        receive do
+          message ->
+            send(parent, message)
+            Process.sleep(:infinity)
+        end
+      end)
+
+    assert {:ok, owner_handle} =
+             Alto.start(
+               %{},
+               base_opts(Alto.Runner.Serial,
+                 loop: Alto.rule_loop(steps: ["registry_echo"]),
+                 tools: [RegistryTool],
+                 runner_options: [mode: :manual, controller: controller]
+               )
+             )
+
+    assert_receive {:alto_step_ready, _owner_ticket, _}, 2_000
+    Process.exit(controller, :kill)
+    assert {:error, {:cancelled, {:step_controller_down, _}}, _} = Alto.await(owner_handle, 2_000)
   end
 
   defp eventually_result(name, run_id, attempts \\ 100)

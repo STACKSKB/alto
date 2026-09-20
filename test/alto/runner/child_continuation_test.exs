@@ -219,10 +219,10 @@ defmodule Alto.Runner.ChildContinuationTest do
     entry
   end
 
-  for runner <- [Alto.Runner.Serial, Alto.Runner.Stepped], sessions <- [:separate, :shared] do
-    test "#{runner} resumes only decided sibling with #{sessions} transcript ownership",
+  for sessions <- [:separate, :shared] do
+    test "Serial resumes only decided sibling with #{sessions} transcript ownership",
          context do
-      options = opts(context, unquote(runner), unquote(sessions))
+      options = opts(context, Alto.Runner.Serial, unquote(sessions))
 
       assert {:error, {:children_pending, {:child_pending, "one", "suspended"}}, parked} =
                Alto.run(%{agents: [agent("one"), agent("two")]}, options)
@@ -286,7 +286,7 @@ defmodule Alto.Runner.ChildContinuationTest do
     ledger = start_supervised!({OperationLog, context.ledger_opts})
     {:ok, account} = Account.open(ledger, "budget", max_effects: 50, max_model_requests: 20)
     context = %{context | ledger: ledger, account: account}
-    options = context |> opts(Alto.Runner.Stepped) |> Keyword.put(:continuation, identity)
+    options = context |> opts(Alto.Runner.Serial) |> Keyword.put(:continuation, identity)
     assert {:error, {:children_pending, _}, parked} = Alto.run(:ignored, options)
     {_, batch} = journal(context, parked)
     {:ok, [second]} = Continuation.suspended(batch)
@@ -355,7 +355,7 @@ defmodule Alto.Runner.ChildContinuationTest do
     source = Path.join(context.dir, "source")
     File.mkdir_p!(source)
     File.cp!(Path.join(context.dir, "input"), Path.join(source, "input"))
-    options = Keyword.put(opts(context, Alto.Runner.Stepped), :cwd, source)
+    options = Keyword.put(opts(context, Alto.Runner.Serial), :cwd, source)
 
     manager =
       Alto.Workspaces.new(
@@ -405,56 +405,53 @@ defmodule Alto.Runner.ChildContinuationTest do
     assert File.read!(Path.join(source, "diffs")) == "1"
   end
 
-  for runner <- [Alto.Runner.Serial, Alto.Runner.Stepped] do
-    test "a failed child restore preserves its worked workspace for retry with #{runner}",
-         context do
-      source = Path.join(context.dir, "source")
-      File.mkdir_p!(source)
-      File.cp!(Path.join(context.dir, "input"), Path.join(source, "input"))
-      options = Keyword.put(opts(context, unquote(runner)), :cwd, source)
+  test "a failed child restore preserves its worked workspace for retry", context do
+    source = Path.join(context.dir, "source")
+    File.mkdir_p!(source)
+    File.cp!(Path.join(context.dir, "input"), Path.join(source, "input"))
+    options = Keyword.put(opts(context, Alto.Runner.Serial), :cwd, source)
 
-      manager =
-        Alto.Workspaces.new(
-          root: Path.join(context.dir, "workspaces"),
-          ledger: context.ledger,
-          backend: WorkspaceBackend
-        )
+    manager =
+      Alto.Workspaces.new(
+        root: Path.join(context.dir, "workspaces"),
+        ledger: context.ledger,
+        backend: WorkspaceBackend
+      )
 
-      loop = options[:loop]
+    loop = options[:loop]
 
-      options =
-        Keyword.put(options, :loop, %{loop | subagents: %{loop.subagents | workspaces: manager}})
+    options =
+      Keyword.put(options, :loop, %{loop | subagents: %{loop.subagents | workspaces: manager}})
 
-      agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
-      assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent]}, options)
-      {identity, batch} = journal(context, parked)
-      {:ok, [entry]} = Continuation.suspended(batch)
-      assert entry.state == :suspended
-      assert entry.workspace.status == "worked"
-      worked = entry.workspace
-      decide(batch, "one", :approve)
+    agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
+    assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent]}, options)
+    {identity, batch} = journal(context, parked)
+    {:ok, [entry]} = Continuation.suspended(batch)
+    assert entry.state == :suspended
+    assert entry.workspace.status == "worked"
+    worked = entry.workspace
+    decide(batch, "one", :approve)
 
-      :persistent_term.put({ChildLoop, :reject_restore}, true)
+    :persistent_term.put({ChildLoop, :reject_restore}, true)
 
-      on_exit(fn -> :persistent_term.erase({ChildLoop, :reject_restore}) end)
+    on_exit(fn -> :persistent_term.erase({ChildLoop, :reject_restore}) end)
 
-      options = Keyword.put(options, :continuation, identity)
+    options = Keyword.put(options, :continuation, identity)
 
-      assert {:error, {:children_pending, {:child_pending, "one", "decided"}}, _failed} =
-               Alto.run(:ignored, options)
+    assert {:error, {:children_pending, {:child_pending, "one", "decided"}}, _failed} =
+             Alto.run(:ignored, options)
 
-      assert {:ok, current} = Alto.Workspaces.get(manager, worked.id)
-      assert current == worked
-      assert {:ok, [%{state: :decided, workspace: ^worked}]} = Continuation.suspended(batch)
-      refute File.exists?(Path.join(worked.workspace["cwd"], "effect-one"))
+    assert {:ok, current} = Alto.Workspaces.get(manager, worked.id)
+    assert current == worked
+    assert {:ok, [%{state: :decided, workspace: ^worked}]} = Continuation.suspended(batch)
+    refute File.exists?(Path.join(worked.workspace["cwd"], "effect-one"))
 
-      assert {:ok, result} = Alto.run(:ignored, options)
-      assert [child] = result.output
-      assert child.workspace.status == "frozen"
-      assert child.workspace.id == worked.id
-      assert File.read!(Path.join(worked.workspace["cwd"], "effect-one")) == "original"
-      assert File.read!(Path.join(worked.workspace["cwd"], "prepared-one")) == "1"
-    end
+    assert {:ok, result} = Alto.run(:ignored, options)
+    assert [child] = result.output
+    assert child.workspace.status == "frozen"
+    assert child.workspace.id == worked.id
+    assert File.read!(Path.join(worked.workspace["cwd"], "effect-one")) == "original"
+    assert File.read!(Path.join(worked.workspace["cwd"], "prepared-one")) == "1"
   end
 
   test "a claimed child with uncertain dispatch remains parked and cannot be approved again",
@@ -479,7 +476,7 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   test "host downtime consumes the original absolute expiry", context do
-    options = Keyword.put(opts(context, Alto.Runner.Stepped), :run_timeout, 750)
+    options = Keyword.put(opts(context, Alto.Runner.Serial), :run_timeout, 750)
     assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent("one")]}, options)
     {identity, batch} = journal(context, parked)
     decide(batch, "one", :approve)
@@ -521,7 +518,7 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   test "cancelling a recovered parent promptly cancels its blocked resumed child", context do
-    options = opts(context, Alto.Runner.Stepped)
+    options = opts(context, Alto.Runner.Serial)
     assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent("one")]}, options)
     {identity, batch} = journal(context, parked)
     decide(batch, "one", :approve)

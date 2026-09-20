@@ -206,9 +206,8 @@ bounded to 1 MB. Symlink paths and repository filters remain unsupported.
 
 ### Replaceable execution hosts
 
-The default `Alto.Runner.Serial` and the optional `Alto.Runner.Stepped` compose
-shared execution components. Select a host with `runner:` in `Alto.Config` or
+The default `Alto.Runner.Serial` composes shared execution components. Select a host with `runner:` in `Alto.Config` or
 run options. Handles are opaque and results use `Alto.Runner.Result`; registry
 and TUI integrations consume completion notifications instead of inspecting
-Tasks. Stepped can also wait for a one-use admission ticket before each effect.
-See [runners and migration](docs/runners.md) for contracts and examples.
+Tasks. Serial can optionally wait for a one-use admission ticket before each effect.
+See [execution hosts](docs/runners.md) for contracts and examples.

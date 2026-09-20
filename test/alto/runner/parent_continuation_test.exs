@@ -160,33 +160,31 @@ defmodule Alto.Runner.ParentContinuationTest do
     {cell, identity}
   end
 
-  test "both schedulers run a retained parent boundary and claim its frame once", %{dir: dir} do
-    for runner <- [Alto.Runner.Serial, Alto.Runner.Stepped] do
-      suffix = if runner == Alto.Runner.Serial, do: "serial", else: "stepped"
-      ledgers = ledgers(dir, suffix)
+  test "the scheduler runs a retained parent boundary and claim its frame once", %{dir: dir} do
+    runner = Alto.Runner.Serial
+    ledgers = ledgers(dir, "serial")
 
-      agents = [
-        %{id: "first", task: "one", loop: Alto.loop(ReturnLoop)},
-        %{id: "second", task: "two", loop: Alto.loop(ReturnLoop)}
-      ]
+    agents = [
+      %{id: "first", task: "one", loop: Alto.loop(ReturnLoop)},
+      %{id: "second", task: "two", loop: Alto.loop(ReturnLoop)}
+    ]
 
-      assert {:ok, result} = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
-      assert Enum.map(result.output.results, & &1.id) == ["first", "second"]
-      assert_receive {:integrated, "joined"}, 2_000
-      refute_receive {:integrated, _}, 50
+    assert {:ok, result} = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
+    assert Enum.map(result.output.results, & &1.id) == ["first", "second"]
+    assert_receive {:integrated, "joined"}, 2_000
+    refute_receive {:integrated, _}, 50
 
-      {cell, identity} = only_cell!(ledgers.parent)
-      assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
+    {cell, identity} = only_cell!(ledgers.parent)
+    assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
 
-      assert {:error, :continuation_already_claimed} =
-               Continuation.claim(cell, elem(Continuation.read(cell), 1).revision)
+    assert {:error, :continuation_already_claimed} =
+             Continuation.claim(cell, elem(Continuation.read(cell), 1).revision)
 
-      assert {:error, :continuation_already_claimed, _} =
-               Alto.run(:ignored, opts(ledgers, dir, runner, continuation: identity))
+    assert {:error, :continuation_already_claimed, _} =
+             Alto.run(:ignored, opts(ledgers, dir, runner, continuation: identity))
 
-      assert {:ok, %{results: results}} = Continuation.join(cell)
-      assert Enum.map(results, &elem(&1, 0)) == ["first", "second"]
-    end
+    assert {:ok, %{results: results}} = Continuation.join(cell)
+    assert Enum.map(results, &elem(&1, 0)) == ["first", "second"]
   end
 
   test "settled history persists resolved native effects before parent capture", %{dir: dir} do

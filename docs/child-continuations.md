@@ -2,7 +2,7 @@
 
 A root parent configured with a continuation store, a durable
 budget account and a checkpoint version can park while individual children wait
-for approval. Serial and Stepped use the same boundaries. Child loops must
+for approval. Automatic and manual execution use the same boundaries. Child loops must
 implement the loop checkpoint callbacks; the original normalized child spawn
 profile must be portable. Inherited providers remain trusted host configuration.
 For an explicit worker provider override, include a bounded `profile_key` in the

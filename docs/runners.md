@@ -31,15 +31,14 @@ retained for 60 seconds after completion. Registry and TUI maintain their own
 result/history retention. A host may instead use external jobs or another
 process model: clients must not inspect the underlying handle.
 
-## Stepped execution
+## Manual execution
 
-`Alto.Runner.Stepped` is a separate mailbox-driven scheduler. Automatic mode
-advances an effect per mailbox turn. Manual mode lets an external controller
-admit each effect, useful for inspection and interactive orchestration:
+`Alto.Runner.Serial` executes effects immediately by default. Manual mode lets
+an external controller admit each effect for inspection and orchestration:
 
 ```elixir
 {:ok, handle} = Alto.start(task,
-  runner: Alto.Runner.Stepped,
+  runner: Alto.Runner.Serial,
   runner_options: [mode: :manual, controller: self()],
   loop: loop,
   tools: tools,
@@ -49,7 +48,7 @@ admit each effect, useful for inspection and interactive orchestration:
 receive do
   {:alto_step_ready, ticket, %{next_effect: kind}} ->
     IO.puts("Next effect: #{kind}")
-    Alto.Runner.Stepped.advance(ticket)
+    Alto.Runner.Serial.advance(ticket)
 end
 ```
 
@@ -61,7 +60,7 @@ the run. Child runs inherit the runner options and may issue their own tickets.
 
 ## Composition
 
-The two shipped schedulers use `Alto.Runner.Execution.run/3` to assemble a run
+The built-in scheduler uses `Alto.Runner.Execution.run/3` to assemble a run
 and `step/2` to execute at most one effect. A scheduler receives an opaque
 context and a frame, and chooses when to call `step/2`. It must return the
 terminal outcome so the assembly can persist the session and child result.
@@ -82,32 +81,13 @@ The lower-level components can also be used independently:
 | `Runner.Budget` | Shared execution-tree accounting |
 | `Persistence.Codec` / `Persistence.Retained` | Bounded serialization and revision-fenced storage operations |
 
-Component state/capability structs contain their required inputs. The shared
-assembly projects these from its private context; independent callers can
-construct the structs directly. Components do not call Serial.
+Execution components consume the fields required by each operation.
+`Execution.Setup.open/2` assembles the run map; independent callers can supply
+the required capabilities directly. Components do not call Serial.
 
 Shared hosts use the same versioned checkpoint continuation format. A custom
 host using a different interpreter must define its own compatible continuation
 contract or reject checkpoint input; it must never silently start over.
-
-## Migration from concrete Serial handles
-
-- Replace `Alto.Runner.Serial.Result` with `Alto.Runner.Result`.
-- Use `Alto.start/await/cancel/subscribe` (or the `Alto.Runner` dispatcher).
-  Remove reads of `handle.task`, task refs, and worker PIDs. Use completion
-  notifications instead of Task reply/DOWN handling.
-- TUI backend adapters return `Alto.Runner.Handle`; their selected host supplies
-  the common lifecycle. The registry uses the resolver's `runner:` option.
-- Workspace `prepare/2` now returns `Alto.Workspaces.Snapshot`, separating the
-  source identity from backend metadata. Integration backends implement the
-  optional `prepare_apply/4`, `verify_apply/4`, and `apply/4` callbacks. Verification
-  and application receive the retained source explicitly; approval manifests
-  also bind the immutable patch digest and workspace revision.
-- Pre-refactor approval checkpoint packets are rejected. Reconcile suspended
-  work before upgrading; ordinary completed-session transcripts remain usable.
-- Application commands run in supervised tasks, bounded by registry
-  `command_timeout:` (30 seconds by default). An interrupted command reports
-  `{:command_outcome_unknown, reason}`; reconcile before retrying.
 
 These are execution mechanisms. Task/team policy, model assignment, messaging,
 memory, and skill formation remain application responsibilities.
