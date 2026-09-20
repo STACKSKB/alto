@@ -2,17 +2,19 @@ defmodule Alto.Context.Transcript do
   @moduledoc "Pure provider-history validation and conversation-safe compaction boundaries."
 
   @doc "Validate call/reply correlation. In-progress histories may retain unanswered calls."
-  def validate(messages, opts \\ [])
-
-  def validate(messages, opts) when is_list(messages) do
-    with {:ok, pending} <- Enum.reduce_while(messages, {:ok, %{}}, &consume/2) do
+  def validate(messages, opts \\ []) do
+    with {:ok, pending} <- pending_calls(messages) do
       if pending == %{} or Keyword.get(opts, :allow_pending, false),
         do: :ok,
         else: {:error, {:unanswered_tool_calls, Map.keys(pending)}}
     end
   end
 
-  def validate(_, _), do: {:error, :invalid_messages}
+  @doc "Validate history and return counts of unanswered calls in its final batch."
+  def pending_calls(messages) when is_list(messages),
+    do: Enum.reduce_while(messages, {:ok, %{}}, &consume/2)
+
+  def pending_calls(_), do: {:error, :invalid_messages}
 
   @doc "Keep at least the requested recent messages, moving the split back to a complete boundary."
   def split(messages, keep, keep_initial \\ 0) do
@@ -63,7 +65,7 @@ defmodule Alto.Context.Transcript do
 
   @doc "Close unanswered calls from an interrupted run without replaying their effects."
   def close_interrupted(messages) do
-    with {:ok, pending} <- Enum.reduce_while(messages, {:ok, %{}}, &consume/2) do
+    with {:ok, pending} <- pending_calls(messages) do
       replies =
         for {id, count} <- Enum.sort(pending), _ <- List.duplicate(nil, count) do
           %{

@@ -452,27 +452,13 @@ defmodule Alto.Session.Conversation do
     end
   end
 
-  defp validate_messages(messages, allow_pending) when is_list(messages) do
-    if Enum.all?(messages, &is_map/1) do
-      case Transcript.validate(messages) do
-        :ok ->
-          {:ok, true}
-
-        {:error, {:unanswered_tool_calls, _}} = pending when allow_pending ->
-          case Transcript.validate(messages, allow_pending: true) do
-            :ok -> {:ok, false}
-            _ -> pending
-          end
-
-        {:error, _} = error ->
-          error
-      end
-    else
-      {:error, :invalid_messages}
+  defp validate_messages(messages, allow_pending) do
+    with {:ok, pending} <- Transcript.pending_calls(messages) do
+      if pending == %{} or allow_pending,
+        do: {:ok, pending == %{}},
+        else: {:error, {:unanswered_tool_calls, Map.keys(pending)}}
     end
   end
-
-  defp validate_messages(_, _), do: {:error, :invalid_messages}
 
   defp dispatched_calls_retained?(messages, ids) do
     retained = provider_call_ids(messages)
