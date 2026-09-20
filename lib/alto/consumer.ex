@@ -184,9 +184,9 @@ defmodule Alto.Consumer do
         {:error, reason}
 
       :no_intent ->
-        case ledger_call(state, fn ->
+        case ledger_call(fn ->
                Alto.OperationLog.record_intent(
-                 ledger(state),
+                 state.ledger,
                  op,
                  state.tool,
                  record.key,
@@ -244,8 +244,8 @@ defmodule Alto.Consumer do
         park(op, claim_id, :attempts_exhausted, %{}, state)
 
       {:ok, attempt_n} ->
-        case ledger_call(state, fn ->
-               Alto.OperationLog.record_attempt(ledger(state), op, claim_id)
+        case ledger_call(fn ->
+               Alto.OperationLog.record_attempt(state.ledger, op, claim_id)
              end) do
           :ok ->
             run_handler(op, claim_id, attempt_n + 1, payload, state)
@@ -258,10 +258,10 @@ defmodule Alto.Consumer do
   end
 
   defp attempt_count(state, op) do
-    total = Alto.OperationLog.attempts(ledger(state), op)
+    total = Alto.OperationLog.attempts(state.ledger, op)
 
     checkpointed =
-      case Alto.OperationLog.recovery(ledger(state), op) do
+      case Alto.OperationLog.recovery(state.ledger, op) do
         {:ok, %{checkpointed_attempts: attempts}} -> length(attempts)
         _ -> 0
       end
@@ -351,17 +351,12 @@ defmodule Alto.Consumer do
   end
 
   defp checkpoint(op, claim_id, data, state) do
-    with :ok <-
-           ledger_call(state, fn ->
-             Alto.OperationLog.record_checkpoint(ledger(state), op, claim_id, data)
-           end) do
-      ack_quietly(state, claim_id)
-      :checkpointed
-    else
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+    result =
+      ledger_call(fn ->
+        Alto.OperationLog.record_checkpoint(state.ledger, op, claim_id, data)
+      end)
+
+    settle_claim(result, :checkpointed, claim_id, state)
   end
 
   defp apply_run_verdict(op, claim_id, result, state) do
@@ -379,118 +374,102 @@ defmodule Alto.Consumer do
   # Terminal: outcome first, ack second. Ack failures only strand work the
   # ledger already describes, so they log and move on.
   defp decide(op, claim_id, class, evidence, state) do
-    case ledger_call(state, fn ->
-           Alto.OperationLog.record_outcome(ledger(state), op, claim_id, class, evidence)
-         end) do
-      :ok ->
-        ack_quietly(state, claim_id)
-        {:decided, class}
+    result =
+      ledger_call(fn ->
+        Alto.OperationLog.record_outcome(state.ledger, op, claim_id, class, evidence)
+      end)
 
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+    settle_claim(result, {:decided, class}, claim_id, state)
   end
 
   defp park(op, claim_id, reason, evidence, state) do
-    with :ok <-
-           ledger_call(state, fn ->
-             Alto.OperationLog.record_attempt(ledger(state), op, claim_id)
-           end),
-         :ok <-
-           ledger_call(state, fn ->
-             Alto.OperationLog.record_outcome(
-               ledger(state),
-               op,
-               claim_id,
-               :requires_operator,
-               Map.put(evidence, :park_reason, reason)
-             )
-           end) do
-      ack_quietly(state, claim_id)
-      :parked
-    else
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+    result =
+      ledger_call(fn ->
+        with :ok <- Alto.OperationLog.record_attempt(state.ledger, op, claim_id) do
+          Alto.OperationLog.record_outcome(
+            state.ledger,
+            op,
+            claim_id,
+            :requires_operator,
+            Map.put(evidence, :park_reason, reason)
+          )
+        end
+      end)
+
+    settle_claim(result, :parked, claim_id, state)
   end
 
   defp park_existing(op, claim_id, attempt_id, reason, evidence, state) do
-    case ledger_call(state, fn ->
-           Alto.OperationLog.record_outcome(
-             ledger(state),
-             op,
-             attempt_id,
-             :requires_operator,
-             Map.put(evidence, :park_reason, reason)
-           )
-         end) do
-      :ok ->
-        # The current queue claim is acknowledged only after the unresolved
-        # operation has been durably parked under its original attempt.
-        :ok = ack_quietly(state, claim_id)
-        :parked
+    # The current queue claim is acknowledged only after the unresolved
+    # operation has been durably parked under its original attempt.
+    result =
+      ledger_call(fn ->
+        Alto.OperationLog.record_outcome(
+          state.ledger,
+          op,
+          attempt_id,
+          :requires_operator,
+          Map.put(evidence, :park_reason, reason)
+        )
+      end)
 
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+    settle_claim(result, :parked, claim_id, state)
   end
 
   defp retry(op, claim_id, state) do
     with :ok <-
-           ledger_call(state, fn ->
-             Alto.OperationLog.record_release(ledger(state), op, claim_id)
+           ledger_call(fn ->
+             Alto.OperationLog.record_release(state.ledger, op, claim_id)
            end),
-         :ok <- queue_call(state, fn -> Alto.Queue.release(state.queue, claim_id) end) do
+         :ok <- queue_call(fn -> Alto.Queue.release(state.queue, claim_id) end) do
       :released
     else
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp ack_quietly(state, claim_id) do
-    case queue_call(state, fn -> Alto.Queue.ack(state.queue, claim_id) end) do
+  defp ack_quietly(state, claim_id), do: queue_quietly(state, claim_id, :ack)
+  defp release_quietly(state, claim_id), do: queue_quietly(state, claim_id, :release)
+
+  defp queue_quietly(state, claim_id, action) do
+    case queue_call(fn -> apply(Alto.Queue, action, [state.queue, claim_id]) end) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("alto consumer: ack failed: #{inspect(reason, limit: 3)}")
+        Logger.warning("alto consumer: #{action} failed: #{inspect(reason, limit: 3)}")
     end
 
     :ok
   end
 
-  defp release_quietly(state, claim_id) do
-    case queue_call(state, fn -> Alto.Queue.release(state.queue, claim_id) end) do
+  defp settle_claim(result, success, claim_id, state) do
+    case result do
       :ok ->
-        :ok
+        ack_quietly(state, claim_id)
+        success
 
       {:error, reason} ->
-        Logger.warning("alto consumer: release failed: #{inspect(reason, limit: 3)}")
+        release_quietly(state, claim_id)
+        {:error, reason}
     end
-
-    :ok
   end
 
   defp ledger_status(state, op) do
-    ledger_call(state, fn -> Alto.OperationLog.status(ledger(state), op) end)
+    ledger_call(fn -> Alto.OperationLog.status(state.ledger, op) end)
   end
 
-  defp ledger_call(_state, fun) do
+  defp ledger_call(fun) do
     fun.()
   catch
     :exit, reason -> {:error, {:ledger_unavailable, reason}}
   end
 
-  defp queue_call(_state, fun) do
+  defp queue_call(fun) do
     fun.()
   catch
     :exit, reason -> {:error, {:queue_unavailable, reason}}
   end
-
-  defp ledger(state), do: state.ledger
 
   defp operation_key(%{operation_key: op}) when is_binary(op), do: op
   defp operation_key(%{admission: :delivery, key: key}), do: key
