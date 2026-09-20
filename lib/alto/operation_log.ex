@@ -466,14 +466,14 @@ defmodule Alto.OperationLog do
   defp ensure_retry_recoverable(_entry, _resolution), do: :ok
 
   defp apply_reconciliation(entry, :retry_permitted, _evidence) do
-    %{entry | phase: :intended, revision: entry.revision + 1}
+    %{entry | phase: :intended}
   end
 
   defp apply_reconciliation(entry, resolution, evidence) do
     class = if resolution == :confirmed_committed, do: :completed, else: :failed_known
     attempt = current_attempt(entry) || "operator"
     audit = %{operator_resolution: resolution, evidence: evidence}
-    %{entry | phase: {:decided, class, audit, attempt}, revision: entry.revision + 1}
+    %{entry | phase: {:decided, class, audit, attempt}}
   end
 
   defp outcome_can_be_escalated?({:unknown, _evidence, _attempt}, :requires_operator), do: true
@@ -652,13 +652,13 @@ defmodule Alto.OperationLog do
     with :ok <- validate_key(op),
          current <- Map.get(state.ops, op),
          {:ok, record} <- log_apply(current, type, entry, state) do
-      if record == current do
-        {:ok, state, :noop}
-      else
-        order = if is_nil(current), do: state.order ++ [op], else: state.order
-        next = %{state | ops: Map.put(state.ops, op, record), order: order}
-        {:ok, next, transition_reply(type)}
-      end
+      record = Map.put(record, :revision, if(current, do: current.revision + 1, else: 1))
+      order = if is_nil(current), do: state.order ++ [op], else: state.order
+      next = %{state | ops: Map.put(state.ops, op, record), order: order}
+      {:ok, next, transition_reply(type)}
+    else
+      :noop -> {:ok, state, :noop}
+      error -> error
     end
   end
 
@@ -686,12 +686,11 @@ defmodule Alto.OperationLog do
            checkpoint: nil,
            checkpoint_decision: nil,
            checkpointed_attempts: [],
-           checkpoint_grant_revision: nil,
-           revision: 1
+           checkpoint_grant_revision: nil
          }}
       else
         if same_intent?(record, entry["tool"], entry["inbox"], recovery),
-          do: {:ok, record},
+          do: :noop,
           else: {:error, :intent_conflict}
       end
     end
@@ -710,7 +709,7 @@ defmodule Alto.OperationLog do
 
         attempt in record.attempts ->
           if attempt == current_attempt(record) and active_attempt?(record),
-            do: {:ok, record},
+            do: :noop,
             else: {:error, :stale_attempt}
 
         active_attempt?(record) ->
@@ -720,13 +719,7 @@ defmodule Alto.OperationLog do
           {:error, :attempt_history_full}
 
         true ->
-          {:ok,
-           %{
-             record
-             | attempts: record.attempts ++ [attempt],
-               phase: :dispatched,
-               revision: record.revision + 1
-           }}
+          {:ok, %{record | attempts: record.attempts ++ [attempt], phase: :dispatched}}
       end
     end
   end
@@ -740,8 +733,8 @@ defmodule Alto.OperationLog do
         match?({:decided, _, _, _}, record.phase) -> {:error, :already_decided}
         record.phase == :checkpointed -> {:error, :checkpoint_active}
         attempt != current_attempt(record) -> {:error, :stale_attempt}
-        record.phase == :intended -> {:ok, record}
-        true -> {:ok, %{record | phase: :intended, revision: record.revision + 1}}
+        record.phase == :intended -> :noop
+        true -> {:ok, %{record | phase: :intended}}
       end
     end
   end
@@ -768,12 +761,7 @@ defmodule Alto.OperationLog do
           {:error, :stale_attempt}
 
         true ->
-          {:ok,
-           %{
-             record
-             | phase: {:decided, class, entry["evidence"], attempt},
-               revision: record.revision + 1
-           }}
+          {:ok, %{record | phase: {:decided, class, entry["evidence"], attempt}}}
       end
     end
   end
@@ -791,7 +779,7 @@ defmodule Alto.OperationLog do
          :ok <- validate_checkpoint(entry["checkpoint"], state),
          :ok <- expect_revision(record, entry["expected_revision"]) do
       if record.phase == :checkpointed do
-        {:ok, %{record | checkpoint: entry["checkpoint"], revision: record.revision + 1}}
+        {:ok, %{record | checkpoint: entry["checkpoint"]}}
       else
         {:error, :not_checkpointed}
       end
@@ -808,8 +796,7 @@ defmodule Alto.OperationLog do
            record
            | checkpoint_decision: entry["decision"],
              phase: :intended,
-             checkpoint_grant_revision: record.revision + 1,
-             revision: record.revision + 1
+             checkpoint_grant_revision: record.revision + 1
          }}
       else
         {:error, :not_checkpointed}
@@ -850,8 +837,7 @@ defmodule Alto.OperationLog do
            | checkpoint: entry["checkpoint"],
              phase: :checkpointed,
              checkpoint_decision: nil,
-             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt]),
-             revision: record.revision + 1
+             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
          }}
     end
   end
@@ -881,8 +867,7 @@ defmodule Alto.OperationLog do
            %{
              record
              | attempts: record.attempts ++ [attempt],
-               phase: {:decided, :rejected_before_dispatch, entry["evidence"], attempt},
-               revision: record.revision + 1
+               phase: {:decided, :rejected_before_dispatch, entry["evidence"], attempt}
            }}
       end
     end
