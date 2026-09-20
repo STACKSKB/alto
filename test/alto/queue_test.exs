@@ -187,22 +187,6 @@ defmodule Alto.QueueTest do
       assert {:ok, [%{key: "retry", not_before_ms: 10_400}]} =
                Queue.claim_bounded(restarted, 1, "consumer", 10_000)
     end
-
-    test "scheduled transitions use a version that older readers reject", %{dir: dir, id: id} do
-      {_clock, now} = controlled_clock()
-      %{name: queue} = start_queue!(id: id, dir: dir, clock: now)
-      {:ok, _} = Queue.put(queue, "immediate", %{})
-      {:ok, _} = Queue.put(queue, "scheduled", %{}, delay_ms: 100)
-
-      [immediate, scheduled] =
-        Path.join(dir, id <> ".jsonl")
-        |> File.read!()
-        |> String.split("\n", trim: true)
-        |> Enum.map(&JSON.decode!/1)
-
-      assert immediate["v"] == 1
-      assert scheduled["v"] == 2
-    end
   end
 
   describe "key dedup semantics" do
@@ -366,35 +350,6 @@ defmodule Alto.QueueTest do
   end
 
   describe "durability" do
-    test "ambiguous pre-identity records require an explicit migration choice", %{
-      dir: dir,
-      id: id
-    } do
-      path = Path.join(dir, id <> ".jsonl")
-      File.mkdir_p!(dir)
-
-      legacy = %{
-        "v" => 1,
-        "type" => "put",
-        "id" => "rec-1",
-        "key" => "legacy-key",
-        "payload" => Alto.Session.encode_term(%{v: 1}),
-        "revision" => 1,
-        "at_ms" => 1,
-        "queue" => id
-      }
-
-      File.write!(path, JSON.encode!(legacy) <> "\n")
-
-      assert {:error, {:queue_migration_required, ^id, :legacy_admission}} =
-               Queue.start_link(id: id, dir: dir, name: nil)
-
-      %{name: name} = start_queue!(id: id, dir: dir, legacy_admission: :business)
-      [record] = Queue.records(name)
-      assert record.admission == :business
-      assert record.generation_id == "legacy-#{id}-rec-1"
-    end
-
     test "a valid final JSON record without newline is normalized before append", %{
       dir: dir,
       id: id
@@ -480,7 +435,7 @@ defmodule Alto.QueueTest do
 
       valid_put =
         JSON.encode!(%{
-          "v" => 1,
+          "v" => 4,
           "type" => "put",
           "id" => "rec-1",
           "key" => "k",
@@ -594,7 +549,7 @@ defmodule Alto.QueueTest do
 
       File.write!(
         path,
-        JSON.encode!(%{"v" => 1, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
+        JSON.encode!(%{"v" => 4, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
           "\n"
       )
 

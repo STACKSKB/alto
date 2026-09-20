@@ -152,7 +152,7 @@ defmodule Alto.QueueAdmissionTest do
 
       good =
         JSON.encode!(%{
-          "v" => 1,
+          "v" => 4,
           "type" => "put",
           "id" => "rec-1",
           "key" => "k",
@@ -200,35 +200,6 @@ defmodule Alto.QueueAdmissionTest do
       # The ack did not commit, so the claim is intact and uncompleted.
       assert %{pending: 0, claimed: 1} = Queue.count(name)
       GenServer.stop(pid)
-    end
-  end
-
-  describe "old-log import" do
-    test "pre-namespace logs load with live work intact", %{dir: dir, id: id} do
-      path = Path.join(dir, id <> ".jsonl")
-      File.mkdir_p!(dir)
-
-      put = fn rec_id, key ->
-        JSON.encode!(%{
-          "v" => 1,
-          "type" => "put",
-          "id" => rec_id,
-          "key" => key,
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "at_ms" => 1,
-          "queue" => id
-        })
-      end
-
-      File.write!(path, put.("rec-1", "del-1") <> "\n" <> put.("rec-2", "job-9") <> "\n")
-
-      assert {:error, {:queue_migration_required, ^id, :legacy_admission}} =
-               Queue.start_link(id: id, dir: dir, name: nil)
-
-      %{name: name} = start_queue!(id: id, dir: dir, legacy_admission: :business)
-      assert %{pending: 2} = Queue.count(name)
-      assert {:ok, [_, _]} = Queue.claim(name, 2)
     end
   end
 
