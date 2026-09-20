@@ -20,7 +20,6 @@ defmodule Alto.TUI.Selection do
     :region,
     :menu,
     :scroll,
-    copy_press: false,
     dragged?: false,
     active?: false,
     highlight: []
@@ -45,7 +44,7 @@ defmodule Alto.TUI.Selection do
 
     cond do
       code == "esc" and selection.menu != nil ->
-        {:handled, %{selection | menu: nil, copy_press: false}}
+        {:handled, %{selection | menu: nil, press: nil}}
 
       code == "esc" and (selection.active? or selection.press != nil) ->
         {:handled, new()}
@@ -102,7 +101,7 @@ defmodule Alto.TUI.Selection do
     do: {:handled, selection}
 
   def event(
-        %{copy_press: true} = selection,
+        %{press: :copy} = selection,
         %Mouse{kind: "up", button: "left", x: x, y: y},
         _,
         _,
@@ -110,15 +109,15 @@ defmodule Alto.TUI.Selection do
       ) do
     if Layout.contains?(selection.menu, x, y),
       do: {:copy, text(selection), new()},
-      else: {:handled, %{selection | copy_press: false, menu: nil}}
+      else: {:handled, %{selection | press: nil, menu: nil}}
   end
 
-  def event(%{copy_press: true} = selection, %Mouse{}, _, _, _), do: {:handled, selection}
+  def event(%{press: :copy} = selection, %Mouse{}, _, _, _), do: {:handled, selection}
 
   def event(selection, %Mouse{kind: "down", button: "left"} = mouse, dimensions, widgets, opts) do
     cond do
       Layout.contains?(selection.menu, mouse.x, mouse.y) ->
-        {:handled, %{selection | copy_press: true}}
+        {:handled, %{selection | press: :copy}}
 
       selection.menu != nil ->
         {:handled, %{selection | menu: nil}}
@@ -409,36 +408,24 @@ defmodule Alto.TUI.Selection do
 
   defp bounds(%{anchor: {ax, ay}, head: {hx, hy}}), do: Enum.min_max([{ay, ax}, {hy, hx}])
 
-  defp selected_rows(%{scroll: %{history: history, offset: offset}, region: region} = selection)
-       when not is_nil(history) do
-    {{fy, fx}, {ly, lx}} = bounds(selection)
-
-    for y <- fy..ly do
-      row = Map.fetch!(history, y + offset - region.y)
-
-      {y,
-       segments(
-         row,
-         if(y == fy, do: fx, else: 0),
-         if(y == ly, do: lx, else: selection.snapshot.width)
-       )}
-    end
-  end
-
   defp selected_rows(selection) do
     {{fy, fx}, {ly, lx}} = bounds(selection)
 
     for y <- fy..ly do
-      row = elem(selection.snapshot.rows, y)
-
       {y,
        segments(
-         row,
+         selected_row(selection, y),
          if(y == fy, do: fx, else: 0),
          if(y == ly, do: lx, else: selection.snapshot.width)
        )}
     end
   end
+
+  defp selected_row(%{scroll: %{history: history, offset: offset}, region: region}, y)
+       when not is_nil(history),
+       do: Map.fetch!(history, y + offset - region.y)
+
+  defp selected_row(selection, y), do: elem(selection.snapshot.rows, y)
 
   defp segments(row, low, high) do
     Enum.flat_map(indexed_runs(row), fn run ->

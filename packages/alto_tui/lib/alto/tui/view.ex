@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{State, TextForm, WorkspaceForm}
+  alias Alto.TUI.{State, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -60,29 +60,25 @@ defmodule Alto.TUI.View do
   def selection_content(%State{overlay: %{kind: :workspace_form} = form}, width, height),
     do: WorkspaceForm.selection_content(form, width, height)
 
-  def selection_content(%State{overlay: %{kind: :provider_form} = form}, width, height) do
+  def selection_content(%State{overlay: %{kind: kind} = form}, width, height)
+      when kind in [:provider_form, :model_form] do
     rect = content_rect(overlay_rect(form, width, height))
+    {prefix, row_offset} = if kind == :provider_form, do: {16, 2}, else: {12, 2}
 
     form.fields
     |> Enum.with_index()
     |> Enum.flat_map(fn {field, row} ->
-      if ExRatatui.text_input_get_value(field.input) == "" or row + 2 >= rect.height,
+      if ExRatatui.text_input_get_value(field.input) == "" or row + row_offset >= rect.height,
         do: [],
         else: [
-          %Rect{x: rect.x + 16, y: rect.y + 2 + row, width: max(rect.width - 16, 0), height: 1}
+          %Rect{
+            x: rect.x + prefix,
+            y: rect.y + row_offset + row,
+            width: max(rect.width - prefix, 0),
+            height: 1
+          }
         ]
     end)
-  end
-
-  def selection_content(%State{overlay: %{kind: :model_form} = form}, width, height) do
-    rect = content_rect(overlay_rect(form, width, height))
-    prefix = String.length("› Model ID  ")
-
-    if TextForm.value(form) == "" or rect.height <= 2,
-      do: [],
-      else: [
-        %Rect{x: rect.x + prefix, y: rect.y + 2, width: max(rect.width - prefix, 0), height: 1}
-      ]
   end
 
   def selection_content(%State{overlay: overlay}, _, _) when not is_nil(overlay), do: []
@@ -785,6 +781,9 @@ defmodule Alto.TUI.View do
   @doc "Settings labels and exact click widths."
   def settings_segments(state) do
     profile = State.selected_profile(state)
+    {width, height} = state.dimensions
+
+    settings_width = layout(state, width, height).settings.width
 
     provider =
       case Alto.TUI.Backend.ui(state, :provider_label) do
@@ -794,7 +793,7 @@ defmodule Alto.TUI.View do
 
     segments =
       cond do
-        ultra_compact_settings?(state) ->
+        settings_width < 48 ->
           [
             %{target: {:setting, :backend}, text: " B:#{String.first(backend_label(state))} "},
             %{target: {:setting, :approval}, text: " A:#{mini_approval_label(state)} "},
@@ -804,8 +803,8 @@ defmodule Alto.TUI.View do
             %{target: {:setting, :model}, text: " M:… "}
           ]
 
-        compact_settings?(state) ->
-          label_width = compact_setting_label_width(state)
+        settings_width < 112 ->
+          label_width = settings_width |> Kernel.-(39) |> div(2) |> max(1) |> min(13)
 
           [
             %{target: {:setting, :backend}, text: " B:#{backend_label(state)} "},
@@ -1004,40 +1003,6 @@ defmodule Alto.TUI.View do
     case Alto.TUI.Backend.ui(state, :quota_label) do
       :pass -> ""
       label -> label
-    end
-  end
-
-  defp compact_settings?(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} -> settings_width < 112
-      _other -> true
-    end
-  end
-
-  defp ultra_compact_settings?(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} -> settings_width < 48
-      _other -> true
-    end
-  end
-
-  defp compact_setting_label_width(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} ->
-        settings_width
-        |> Kernel.-(39)
-        |> div(2)
-        |> max(1)
-        |> min(13)
-
-      _other ->
-        1
     end
   end
 

@@ -196,9 +196,11 @@ defmodule Alto.TUI.State do
         {run_label(state), Map.get(run, :started_at_ms)}
 
       nil ->
+        activity = Alto.TUI.Backend.ui(state, :activity)
+
         cond do
-          Alto.TUI.Backend.ui(state, :activity) not in [:pass, nil] ->
-            {Alto.TUI.Backend.ui(state, :activity), state.activity_started_ms}
+          activity not in [:pass, nil] ->
+            {activity, state.activity_started_ms}
 
           MapSet.size(state.model_loading) > 0 ->
             {"loading model catalog", state.activity_started_ms}
@@ -432,14 +434,8 @@ defmodule Alto.TUI.State do
   end
 
   def put_task(%__MODULE__{} = state, task) do
-    project_id = task["project_id"]
-
-    tasks =
-      Map.update(state.tasks, project_id, [task], fn items ->
-        [task | Enum.reject(items, &(&1["id"] == task["id"]))]
-      end)
-
-    %{state | tasks: tasks, selected_project_id: project_id, selected_task_id: task["id"]}
+    state = update_task_record(state, task)
+    %{state | selected_project_id: task["project_id"], selected_task_id: task["id"]}
   end
 
   @doc "Replace a task record without changing the front end's current selection."
@@ -644,9 +640,6 @@ defmodule Alto.TUI.State do
        ) do
     case Session.decode_term(encoded) do
       {:ok, %{usage: event_usage}} when is_map(event_usage) ->
-        Usage.merge(usage, Usage.from_map(event_usage))
-
-      {:ok, %{"usage" => event_usage}} when is_map(event_usage) ->
         Usage.merge(usage, Usage.from_map(event_usage))
 
       _other ->
