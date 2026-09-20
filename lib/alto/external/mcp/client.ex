@@ -80,21 +80,7 @@ defmodule Alto.External.MCP.Client do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-
-    state = %{
-      opts: opts,
-      port: nil,
-      process: nil,
-      buffer: "",
-      phase: :starting,
-      next_id: 1,
-      pending: %{},
-      ready_waiters: [],
-      tools: nil,
-      initialize_timer: nil
-    }
-
-    {:ok, state, {:continue, :open}}
+    {:ok, JSONRPC.state(opts, %{tools: nil}), {:continue, :open}}
   end
 
   @impl true
@@ -111,14 +97,7 @@ defmodule Alto.External.MCP.Client do
 
         case send_request(state, "initialize", request, :initialize, false) do
           {:ok, state} ->
-            timer =
-              Process.send_after(
-                self(),
-                :initialize_timeout,
-                Keyword.fetch!(state.opts, :startup_timeout)
-              )
-
-            {:noreply, %{state | initialize_timer: timer}}
+            {:noreply, JSONRPC.arm_startup_timeout(state)}
 
           {:error, reason} ->
             {:stop, reason, fail_all(state, reason)}
@@ -130,14 +109,8 @@ defmodule Alto.External.MCP.Client do
   end
 
   @impl true
-  def handle_call(:await_ready, _from, %{phase: :ready} = state),
-    do: {:reply, {:ok, self()}, state}
-
-  def handle_call(:await_ready, _from, %{phase: {:failed, reason}} = state),
-    do: {:reply, {:error, reason}, state}
-
   def handle_call(:await_ready, from, state),
-    do: add_ready_waiter(from, state)
+    do: JSONRPC.await_ready(state, from, :mcp_ready_waiter_limit)
 
   def handle_call({:list_tools, _timeout}, _from, %{phase: :ready, tools: tools} = state)
       when is_list(tools),
@@ -182,16 +155,9 @@ defmodule Alto.External.MCP.Client do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    buffer = state.buffer <> data
-
-    if byte_size(buffer) > Keyword.fetch!(state.opts, :max_message_bytes) do
-      reason = {:mcp_message_limit, Keyword.fetch!(state.opts, :max_message_bytes)}
-      {:stop, reason, fail_all(state, reason)}
-    else
-      case consume_lines(%{state | buffer: buffer}) do
-        {:ok, state} -> {:noreply, state}
-        {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
-      end
+    case JSONRPC.ingest(state, data, :mcp_message_limit, &consume_lines/1) do
+      {:ok, state} -> {:noreply, state}
+      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
@@ -252,14 +218,7 @@ defmodule Alto.External.MCP.Client do
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, %{process: process}) when not is_nil(process) do
-    ExternalProcess.close(process)
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
-
-  def terminate(_reason, _state), do: :ok
+  def terminate(_reason, state), do: JSONRPC.close(state)
 
   defp await_ready(pid, timeout) do
     GenServer.call(pid, :await_ready, call_timeout(timeout))
@@ -421,16 +380,9 @@ defmodule Alto.External.MCP.Client do
     expected = Keyword.fetch!(state.opts, :protocol_version)
 
     if result["protocolVersion"] == expected do
-      if state.initialize_timer, do: cancel_timer(state.initialize_timer)
-
       case send_notification(state, "notifications/initialized") do
         {:ok, state} ->
-          Enum.each(state.ready_waiters, fn {from, monitor} ->
-            demonitor(elem(from, 0), monitor)
-            GenServer.reply(from, {:ok, self()})
-          end)
-
-          {:ok, %{state | phase: :ready, ready_waiters: [], initialize_timer: nil}}
+          {:ok, JSONRPC.ready(state)}
 
         {:error, reason} ->
           {:error, reason, fail_waiters(state, reason)}
@@ -490,17 +442,6 @@ defmodule Alto.External.MCP.Client do
       JSONRPC.fail_all(state, reason, fn reply, reason ->
         reply_error(reply, reason, classify_failure(reply))
       end)
-
-  defp add_ready_waiter(from, state) do
-    if length(state.ready_waiters) >= Keyword.fetch!(state.opts, :max_ready_waiters) do
-      {:reply,
-       {:error, {:mcp_ready_waiter_limit, Keyword.fetch!(state.opts, :max_ready_waiters)}}, state}
-    else
-      owner = elem(from, 0)
-      monitor = Process.monitor(owner)
-      {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
-    end
-  end
 
   defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
   defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)

@@ -1,6 +1,25 @@
 defmodule Alto.External.JSONRPC do
   @moduledoc false
 
+  alias Alto.External.Process, as: ExternalProcess
+
+  def state(opts, protocol_state) when is_map(protocol_state) do
+    Map.merge(
+      %{
+        opts: opts,
+        port: nil,
+        process: nil,
+        buffer: "",
+        phase: :starting,
+        next_id: 1,
+        pending: %{},
+        ready_waiters: [],
+        initialize_timer: nil
+      },
+      protocol_state
+    )
+  end
+
   def start_link(module, opts),
     do: GenServer.start_link(module, opts, name: Keyword.get(opts, :name))
 
@@ -17,6 +36,64 @@ defmodule Alto.External.JSONRPC do
       %{phase: state.phase, pending_count: map_size(state.pending)}
     end)
     |> Map.put(:message, :redacted)
+  end
+
+  def await_ready(%{phase: :ready} = state, _from, _limit_error),
+    do: {:reply, {:ok, self()}, state}
+
+  def await_ready(%{phase: {:failed, reason}} = state, _from, _limit_error),
+    do: {:reply, {:error, reason}, state}
+
+  def await_ready(state, from, limit_error) do
+    limit = Keyword.fetch!(state.opts, :max_ready_waiters)
+
+    if length(state.ready_waiters) >= limit do
+      {:reply, {:error, {limit_error, limit}}, state}
+    else
+      monitor = Process.monitor(elem(from, 0))
+      {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
+    end
+  end
+
+  def ready(state) do
+    cancel_timer(state.initialize_timer)
+
+    Enum.each(state.ready_waiters, fn {from, monitor} ->
+      demonitor(elem(from, 0), monitor)
+      GenServer.reply(from, {:ok, self()})
+    end)
+
+    %{state | phase: :ready, ready_waiters: [], initialize_timer: nil}
+  end
+
+  def arm_startup_timeout(state) do
+    timer =
+      Process.send_after(
+        self(),
+        :initialize_timeout,
+        Keyword.fetch!(state.opts, :startup_timeout)
+      )
+
+    %{state | initialize_timer: timer}
+  end
+
+  def ingest(state, data, limit_error, consume)
+      when is_binary(data) and is_function(consume, 1) do
+    buffer = state.buffer <> data
+    limit = Keyword.fetch!(state.opts, :max_message_bytes)
+
+    if byte_size(buffer) > limit,
+      do: {:error, {limit_error, limit}, state},
+      else: consume.(%{state | buffer: buffer})
+  end
+
+  def close(%{process: nil}), do: :ok
+
+  def close(%{process: process}) do
+    ExternalProcess.close(process)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   def request(state, method, params, reply, owner, timeout, limit_error) do
