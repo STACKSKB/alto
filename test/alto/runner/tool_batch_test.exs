@@ -262,4 +262,26 @@ defmodule Alto.Runner.ToolBatchTest do
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.call_id == "a"))
     assert Enum.any?(result.events, &(&1.type == :tool_completed and &1.data.call_id == "b"))
   end
+
+  test "oversize parallel results use the same uncertain classification as serial dispatch" do
+    huge = String.duplicate("x", 10_000)
+
+    assert {:ok, result} =
+             Alto.run(
+               "read",
+               options([call("big", %{value: huge})], max_tool_result_bytes: 100)
+             )
+
+    assert result.verdict == :unknown
+
+    assert Enum.any?(result.events, fn
+             %{type: :tool_failed, data: %{call_id: "big", outcome: :unknown, error: error}} ->
+               match?({:tool_result_too_large, _}, error)
+
+             _ ->
+               false
+           end)
+
+    refute inspect(result.events) =~ huge
+  end
 end

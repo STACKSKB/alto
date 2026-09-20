@@ -20,12 +20,9 @@ defmodule Alto.Runner.ToolBatch do
             # hard-death window with an unowned worker.
             Support.guard_owner(owner)
 
-            value = Tool.invoke_tool(tool, prepared, caps.context)
-
-            case Tool.check_native_result(value, caps.max_tool_result_bytes) do
-              :ok -> value
-              {:error, reason} -> {:batch_oversize, reason}
-            end
+            tool
+            |> Tool.invoke_tool(prepared, caps.context)
+            |> bound_result(caps.max_tool_result_bytes)
           end)
 
         {task,
@@ -89,6 +86,22 @@ defmodule Alto.Runner.ToolBatch do
 
   defp ordered(tasks, results, fallback),
     do: Enum.map(tasks, fn {task, _} -> Map.get(results, task.ref, fallback) end)
+
+  # Match sequential execution: a successful participant value is the bounded
+  # native result, rather than the surrounding outcome tuple.
+  defp bound_result({:ok, value} = outcome, limit) do
+    case Tool.check_native_result(value, limit) do
+      :ok -> outcome
+      {:error, reason} -> {:batch_oversize, reason}
+    end
+  end
+
+  defp bound_result(outcome, limit) do
+    case Tool.check_native_result(outcome, limit) do
+      :ok -> outcome
+      {:error, reason} -> {:batch_oversize, reason}
+    end
+  end
 
   # Cancellation is received selectively, so completed task messages can be
   # sitting earlier in the coordinator mailbox.  Preserve those decided

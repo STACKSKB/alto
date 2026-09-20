@@ -263,7 +263,7 @@ defmodule Alto.Runner.Execution do
       case prepare_batch(calls, run) do
         {:ok, jobs, run} ->
           caps = tool_capabilities(run)
-          ready = Enum.filter(jobs, &match?({:ok, _}, &1.preparation))
+          ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
 
           with {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
             Enum.each(ready, fn job ->
@@ -281,7 +281,7 @@ defmodule Alto.Runner.Execution do
 
             response =
               Alto.Runner.ToolBatch.run(
-                Enum.map(ready, &{&1.tool, elem(&1.preparation, 1)}),
+                Enum.map(ready, &{&1.tool, &1.prepared}),
                 caps
               )
 
@@ -296,10 +296,9 @@ defmodule Alto.Runner.Execution do
 
             outcomes =
               Enum.map(jobs, fn job ->
-                case job.preparation do
-                  {:ok, _} -> Map.fetch!(indexed, job.op_id)
-                  {:error, reason} -> {:rejected, reason}
-                end
+                if Map.has_key?(job, :prepared),
+                  do: Map.fetch!(indexed, job.op_id),
+                  else: {:rejected, job.error}
               end)
 
             finish_batch(jobs, outcomes, run, rest, terminal, stopped)
@@ -468,25 +467,29 @@ defmodule Alto.Runner.Execution do
 
     interpreted =
       if decision == :approve do
-        run_tool(
-          pending.request.call_id,
-          pending.request.tool,
-          pending.prepared,
-          tool,
-          run,
-          pending.request.operation_id,
-          pending.origin,
-          tool_summary(run, pending.request.tool, pending.request.arguments)
+        dispatch_tool_job(
+          %{
+            id: pending.request.call_id,
+            name: pending.request.tool,
+            arguments: pending.request.arguments,
+            prepared: pending.prepared,
+            tool: tool,
+            op_id: pending.request.operation_id,
+            origin: pending.origin,
+            summary: tool_summary(run, pending.request.tool, pending.request.arguments)
+          },
+          run
         )
       else
-        tool_failure(
-          pending.request.call_id,
-          pending.request.tool,
-          {:approval_denied, :user},
-          run,
-          pending.request.operation_id,
-          :rejected_before_dispatch,
-          pending.origin
+        finish_tool_job(
+          %{
+            id: pending.request.call_id,
+            name: pending.request.tool,
+            op_id: pending.request.operation_id,
+            origin: pending.origin
+          },
+          {:rejected, {:approval_denied, :user}},
+          run
         )
       end
 
@@ -608,57 +611,16 @@ defmodule Alto.Runner.Execution do
   # id (`call.id`) is correlation only; the runtime mints a globally unique
   # operation id per invocation for approval and event correlation.
   defp interpret(%Effect{kind: :run_tool, data: call}, run) do
-    name = Map.get(call, :name)
-    call_id = Map.get(call, :id)
     {op_id, run} = next_operation(run)
+    name = Map.get(call, :name)
 
-    origin =
-      case check_provider_correlation(run, call_id, name) do
-        :ok -> :provider
-        {:error, _reason} -> :native
-      end
-
-    case decode_arguments(Map.get(call, :arguments_json, "{}")) do
-      {:ok, arguments} ->
-        execute_tool(%{id: call_id, name: name, arguments: arguments}, run, origin, op_id)
-
-      {:error, reason} ->
-        tool_failure(
-          call_id,
-          name,
-          reason,
-          run,
-          op_id,
-          :rejected_before_dispatch,
-          origin
-        )
-    end
+    prepare_and_run_tool(call, :json, tool_origin(run, Map.get(call, :id), name), op_id, run)
   end
 
   # Native invocation from loops and hooks: arguments are already a map.
   defp interpret(%Effect{kind: :invoke_tool, data: call}, run) do
-    name = Map.get(call, :name)
-    arguments = Map.get(call, :arguments)
     {op_id, run} = next_operation(run)
-
-    if is_map(arguments) do
-      execute_tool(
-        %{id: Map.get(call, :id), name: name, arguments: arguments},
-        run,
-        :native,
-        op_id
-      )
-    else
-      tool_failure(
-        Map.get(call, :id),
-        name,
-        {:tool_arguments_not_map, arguments},
-        run,
-        op_id,
-        :rejected_before_dispatch,
-        :native
-      )
-    end
+    prepare_and_run_tool(call, :native, :native, op_id, run)
   end
 
   defp interpret(%Effect{kind: :spawn_agent, data: data}, run) do
@@ -905,7 +867,8 @@ defmodule Alto.Runner.Execution do
   defp batch_completed(results, run, journal) do
     data = Children.with_journal(%{results: results}, journal)
 
-    with :ok <- check_native_result(data, run.max_tool_result_bytes),
+    with :ok <-
+           Alto.Runner.Execution.Tool.check_native_result(data, run.max_tool_result_bytes),
          {:ok, run} <-
            append_message(run, %{
              "role" => "user",
@@ -992,46 +955,69 @@ defmodule Alto.Runner.Execution do
     Map.put(run, :pending_provider_calls, pending)
   end
 
-  # Exposure enforcement: provider-originated `run_tool` calls must
-  # name a tool in the run's effective model exposure; native `invoke_tool`
-  # calls use full runtime capabilities and normal approval. Exposure,
-  # execution authority, and human approval remain distinct: a hidden tool
-  # is still invokable natively, but a fabricated provider call for it fails
-  # closed without preparation, approval, or execution.
-  defp execute_tool(%{id: call_id, name: name, arguments: arguments}, run, origin, op_id) do
-    with {:ok, tool} <- fetch_tool(run.tools, name),
-         :ok <- check_model_exposure(name, origin, run),
-         {:ok, prepared, details} <- prepare_tool(tool, arguments, run),
-         :ok <- authorize_prepared(call_id, name, arguments, details, tool, run, op_id, prepared) do
-      run_tool(
-        call_id,
-        name,
-        prepared,
-        tool,
-        run,
-        op_id,
-        origin,
-        tool_summary(run, name, arguments)
-      )
-    else
-      {:suspend, request, prepared} ->
-        {:suspend, %{request: request, prepared: prepared, origin: origin}, run}
+  defp prepare_and_run_tool(call, encoding, origin, op_id, run) do
+    case prepare_tool_job(call, encoding, origin, op_id, run) do
+      {:ok, job, details} ->
+        case Alto.Runner.Execution.Tool.authorize(
+               job.id,
+               job.name,
+               job.arguments,
+               details,
+               job.tool,
+               tool_capabilities(run),
+               op_id
+             ) do
+          :ok ->
+            dispatch_tool_job(job, run)
+
+          {:suspend, request} ->
+            {:suspend, %{request: request, prepared: job.prepared, origin: origin}, run}
+
+          {:deny, reason} ->
+            finish_tool_job(job, {:rejected, {:approval_denied, reason}}, run)
+
+          {:error, reason} ->
+            finish_tool_job(job, {:rejected, {:approval_failed, reason}}, run)
+
+          {:cancelled, reason} ->
+            {:cancelled, reason, run}
+        end
+
+      {:error, reason, job} ->
+        finish_tool_job(job, {:rejected, reason}, run)
 
       {:cancelled, reason} ->
         {:cancelled, reason, run}
-
-      {:error, reason} ->
-        tool_failure(call_id, name, reason, run, op_id, :rejected_before_dispatch, origin)
     end
   end
 
-  defp authorize_prepared(id, name, arguments, details, tool, run, op_id, prepared) do
-    case authorize_tool(id, name, arguments, details, tool, run, op_id) do
-      :ok -> :ok
-      {:suspend, request} -> {:suspend, request, prepared}
-      {:deny, reason} -> {:error, {:approval_denied, reason}}
-      {:error, reason} -> {:error, {:approval_failed, reason}}
-      {:cancelled, _} = cancelled -> cancelled
+  defp prepare_tool_job(call, encoding, origin, op_id, run) do
+    job = %{id: Map.get(call, :id), name: Map.get(call, :name), origin: origin, op_id: op_id}
+
+    with {:ok, arguments} <- tool_arguments(call, encoding),
+         {:ok, tool} <- fetch_tool(run.tools, job.name),
+         :ok <- check_model_exposure(job.name, origin, run),
+         {:ok, prepared, details} <-
+           Alto.Runner.Execution.Tool.prepare(tool, arguments, tool_capabilities(run)) do
+      {:ok,
+       Map.merge(job, %{
+         arguments: arguments,
+         tool: tool,
+         prepared: prepared,
+         summary: tool_summary(run, job.name, arguments)
+       }), details}
+    else
+      {:cancelled, reason} -> {:cancelled, reason}
+      {:error, reason} -> {:error, reason, job}
+    end
+  end
+
+  defp tool_arguments(call, :json), do: decode_arguments(Map.get(call, :arguments_json, "{}"))
+
+  defp tool_arguments(call, :native) do
+    case Map.get(call, :arguments) do
+      arguments when is_map(arguments) -> {:ok, arguments}
+      arguments -> {:error, {:tool_arguments_not_map, arguments}}
     end
   end
 
@@ -1055,6 +1041,9 @@ defmodule Alto.Runner.Execution do
 
   defp check_model_exposure(name, :provider, _run), do: {:error, {:invalid_tool_name, name}}
 
+  defp tool_origin(run, id, name),
+    do: if(check_provider_correlation(run, id, name) == :ok, do: :provider, else: :native)
+
   defp parallel_call?(%{name: name}, run) do
     case Map.get(run.tools, name) do
       %{execution_mode: :parallel, approval: :never} -> true
@@ -1072,33 +1061,17 @@ defmodule Alto.Runner.Execution do
           name = Map.get(call, :name)
           id = Map.get(call, :id)
 
-          origin =
-            if check_provider_correlation(run, id, name) == :ok, do: :provider, else: :native
+          origin = tool_origin(run, id, name)
 
-          tool = Map.fetch!(run.tools, name)
-
-          preparation =
-            with :ok <- check_model_exposure(name, origin, run),
-                 {:ok, args} <- decode_arguments(Map.get(call, :arguments_json, "{}")),
-                 {:ok, prepared, _details} <- prepare_tool(tool, args, run),
-                 do: {:ok, prepared}
-
-          case preparation do
+          case prepare_tool_job(call, :json, origin, op_id, run) do
             {:cancelled, reason} ->
               {:halt, {:error, {:cancelled, reason}, run}}
 
-            _ ->
-              job = %{
-                id: id,
-                name: name,
-                op_id: op_id,
-                origin: origin,
-                tool: tool,
-                summary: tool_summary(run, name, Map.get(call, :arguments_json, "{}")),
-                preparation: preparation
-              }
-
+            {:ok, job, _details} ->
               {:cont, {:ok, jobs ++ [job], run}}
+
+            {:error, reason, job} ->
+              {:cont, {:ok, jobs ++ [Map.put(job, :error, reason)], run}}
           end
 
         {:error, reason} ->
@@ -1132,19 +1105,16 @@ defmodule Alto.Runner.Execution do
   end
 
   defp batch_outcome(job, {:ok, {:batch_oversize, reason}}, run),
-    do: batch_outcome(job, {:error, reason}, run)
+    do: finish_tool_job(job, {:uncertain, reason}, run)
 
-  defp batch_outcome(job, {:ok, value}, run) do
-    tool_outcome(job.id, job.name, value, run, job.op_id, job.origin)
-    |> tool_event_summary(job.summary)
-  end
+  defp batch_outcome(job, {:ok, value}, run),
+    do: finish_tool_job(job, {:participant, value}, run)
 
-  defp batch_outcome(job, {kind, reason}, run) when kind in [:rejected, :error] do
-    outcome =
-      if kind == :rejected, do: :rejected_before_dispatch, else: :unknown
+  defp batch_outcome(job, {:rejected, reason}, run),
+    do: finish_tool_job(job, {:rejected, reason}, run)
 
-    tool_failure(job.id, job.name, reason, run, job.op_id, outcome, job.origin)
-  end
+  defp batch_outcome(job, {:error, reason}, run),
+    do: finish_tool_job(job, {:uncertain, reason}, run)
 
   defp dispatch_batch([], run, effects, rest, terminal),
     do: execute(effects ++ rest, run, terminal)
@@ -1188,36 +1158,21 @@ defmodule Alto.Runner.Execution do
     struct!(Alto.Runner.Execution.Tool.Capabilities, Map.put(values, :context, run.tool_context))
   end
 
-  defp prepare_tool(tool, args, run),
-    do: Alto.Runner.Execution.Tool.prepare(tool, args, tool_capabilities(run))
-
-  defp authorize_tool(call_id, name, args, details, tool, run, op_id),
-    do:
-      Alto.Runner.Execution.Tool.authorize(
-        call_id,
-        name,
-        args,
-        details,
-        tool,
-        tool_capabilities(run),
-        op_id
-      )
-
-  defp run_tool(call_id, name, prepared, tool, run, op_id, origin, summary) do
+  defp dispatch_tool_job(job, run) do
     case cancellation(run.cancel_ref) do
       {:cancelled, reason} ->
         {:cancelled, reason, run}
 
       :continue ->
-        with {:ok, run} <- History.dispatch(run, [op_id]) do
+        with {:ok, run} <- History.dispatch(run, [job.op_id]) do
           notify(
             run.event_sink,
             Event.live(:tool_started, %{
-              call_id: call_id,
-              operation_id: op_id,
+              call_id: job.id,
+              operation_id: job.op_id,
               run_id: run.tool_context.session_id,
-              name: name,
-              summary: summary
+              name: job.name,
+              summary: job.summary
             })
           )
 
@@ -1226,27 +1181,18 @@ defmodule Alto.Runner.Execution do
           # supervised return; only a cancellation leaves it behind.
           run =
             Map.put(run, :in_flight, %{
-              call_id: call_id,
-              operation_id: op_id,
-              name: name,
-              origin: origin
+              call_id: job.id,
+              operation_id: job.op_id,
+              name: job.name,
+              origin: job.origin
             })
 
-          case Alto.Runner.Execution.Tool.invoke(tool, prepared, tool_capabilities(run)) do
+          case Alto.Runner.Execution.Tool.invoke(job.tool, job.prepared, tool_capabilities(run)) do
             {:ok, outcome} ->
-              tool_outcome(call_id, name, outcome, Map.delete(run, :in_flight), op_id, origin)
-              |> tool_event_summary(summary)
+              finish_tool_job(job, {:participant, outcome}, Map.delete(run, :in_flight))
 
             {:error, reason} ->
-              tool_failure(
-                call_id,
-                name,
-                reason,
-                Map.delete(run, :in_flight),
-                op_id,
-                :unknown,
-                origin
-              )
+              finish_tool_job(job, {:uncertain, reason}, Map.delete(run, :in_flight))
 
             {:cancelled, reason} ->
               {:cancelled, reason, run}
@@ -1255,12 +1201,23 @@ defmodule Alto.Runner.Execution do
     end
   end
 
+  defp finish_tool_job(job, {:participant, outcome}, run) do
+    tool_outcome(job, outcome, run)
+    |> tool_event_summary(job.summary)
+  end
+
+  defp finish_tool_job(job, {:rejected, reason}, run),
+    do: tool_failure(job, reason, :rejected_before_dispatch, run)
+
+  defp finish_tool_job(job, {:uncertain, reason}, run),
+    do: tool_failure(job, reason, :unknown, run)
+
   defp tool_event_summary({:event, event, run}, summary),
     do: {:event, %{event | data: Map.put(event.data, :summary, summary)}, run}
 
   defp tool_event_summary(other, _summary), do: other
 
-  defp tool_outcome(call_id, name, {:ok, value}, run, op_id, origin) do
+  defp tool_outcome(job, {:ok, value}, run) do
     # Bounded native result contract: the native `value` is measured
     # with `:erlang.external_size/1` against `max_tool_result_bytes` *before*
     # any event retention, subscriber fanout, or session persistence. An
@@ -1269,21 +1226,29 @@ defmodule Alto.Runner.Execution do
     # the raw value is never stored. `output` is a bounded legacy string;
     # typed content uses an optional host presenter and remains intact in
     # `value` and transcript content. Deterministic loops must prefer `value`.
-    with :ok <- check_native_result(value, run.max_tool_result_bytes),
+    with :ok <- Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes),
          {:ok, content, output} <- model_result_content(value, run) do
       run = merge_verdict(run, :completed)
 
-      case add_outcome_message(run, origin, call_id, name, op_id, :completed, content) do
+      case add_outcome_message(
+             run,
+             job.origin,
+             job.id,
+             job.name,
+             job.op_id,
+             :completed,
+             content
+           ) do
         {:ok, run} ->
-          run = History.resolve(run, op_id)
+          run = History.resolve(run, job.op_id)
           # `call_id` preserves tool-call correlation; `operation_id` is the
           # globally unique runtime operation.
           {:event,
            Event.durable(:tool_completed, %{
-             call_id: call_id,
-             operation_id: op_id,
+             call_id: job.id,
+             operation_id: job.op_id,
              run_id: run.tool_context.session_id,
-             name: name,
+             name: job.name,
              output: output,
              value: value,
              outcome: :completed
@@ -1294,68 +1259,49 @@ defmodule Alto.Runner.Execution do
       end
     else
       {:error, reason} ->
-        tool_failure(call_id, name, reason, run, op_id, :unknown, origin)
+        tool_failure(job, reason, :unknown, run)
     end
   end
 
-  defp tool_outcome(call_id, name, {:error, reason}, run, op_id, origin),
-    do:
-      tool_failure(
-        call_id,
-        name,
-        reason,
-        run,
-        op_id,
-        :failed_known,
-        origin
-      )
+  defp tool_outcome(job, {:error, reason}, run),
+    do: tool_failure(job, reason, :failed_known, run)
 
-  defp tool_outcome(call_id, name, {:unknown, reason}, run, op_id, origin),
-    do: tool_failure(call_id, name, reason, run, op_id, :unknown, origin)
+  defp tool_outcome(job, {:unknown, reason}, run), do: tool_failure(job, reason, :unknown, run)
 
-  defp tool_outcome(call_id, name, other, run, op_id, origin) do
-    tool_failure(
-      call_id,
-      name,
-      {:invalid_tool_return, other},
-      run,
-      op_id,
-      :unknown,
-      origin
-    )
-  end
-
-  defp check_native_result(value, limit) do
-    size = :erlang.external_size(value)
-
-    if size <= limit do
-      :ok
-    else
-      {:error, {:tool_result_too_large, %{limit: limit, size: size}}}
-    end
-  end
+  defp tool_outcome(job, other, run),
+    do: tool_failure(job, {:invalid_tool_return, other}, :unknown, run)
 
   # : every tool failure carries an outcome class alongside the reason.
   # Pre-dispatch sites pass `:rejected_before_dispatch` (non-commit proven);
   # the participant's own error passes `:failed_known`; supervision silence
   # (timeout/crash) and uninterpretable returns pass `:unknown`. Event types
   # are unchanged — loops keep matching on type.
-  defp tool_failure(call_id, name, reason, run, op_id, outcome, origin) do
+  defp tool_failure(job, reason, outcome, run) do
     run = merge_verdict(run, outcome)
     content = encode_tool_result(%{error: inspect(reason)}, run.max_tool_result_bytes)
     bounded_reason = bound_failure_reason(reason, run.max_tool_result_bytes)
 
-    case add_outcome_message(run, origin, call_id, name, op_id, :failed, content) do
+    case add_outcome_message(
+           run,
+           job.origin,
+           job.id,
+           job.name,
+           job.op_id,
+           :failed,
+           content
+         ) do
       {:ok, run} ->
         run =
-          if outcome == :rejected_before_dispatch, do: run, else: History.resolve(run, op_id)
+          if outcome == :rejected_before_dispatch,
+            do: run,
+            else: History.resolve(run, job.op_id)
 
         {:event,
          Event.durable(:tool_failed, %{
-           call_id: call_id,
-           operation_id: op_id,
+           call_id: job.id,
+           operation_id: job.op_id,
            run_id: run.tool_context.session_id,
-           name: name,
+           name: job.name,
            error: bounded_reason,
            outcome: outcome
          }), run}
@@ -1492,13 +1438,10 @@ defmodule Alto.Runner.Execution do
       case Map.get(run, :in_flight) do
         %{call_id: id, operation_id: op_id, name: name, origin: origin} ->
           case tool_failure(
-                 id,
-                 name,
+                 %{id: id, name: name, op_id: op_id, origin: origin},
                  {:cancelled, reason},
-                 Map.delete(run, :in_flight),
-                 op_id,
                  :unknown,
-                 origin
+                 Map.delete(run, :in_flight)
                ) do
             {:event, event, next} ->
               record_event(next, event) |> Map.put(:in_flight, run.in_flight)
