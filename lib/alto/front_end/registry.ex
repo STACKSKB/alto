@@ -49,8 +49,7 @@ defmodule Alto.FrontEnd.Registry do
     :start_order,
     events_rev: [],
     head_seq: 0,
-    status: :running,
-    result: nil,
+    result: :running,
     pending: %{}
   ]
 
@@ -393,7 +392,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp active_capacity(state) do
-    count = Enum.count(state.runs, fn {_id, run} -> run.status == :running end)
+    count = Enum.count(state.runs, fn {_id, run} -> run.result == :running end)
     if count < state.max_active_runs, do: :ok, else: {:error, :run_capacity}
   end
 
@@ -449,7 +448,7 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_call({:run_result, run_id}, _from, state) do
     case Map.fetch(state.runs, run_id) do
-      {:ok, %{status: :running}} -> {:reply, :running, state}
+      {:ok, %{result: :running}} -> {:reply, :running, state}
       {:ok, %{result: result}} -> {:reply, {:ok, result}, state}
       :error -> {:reply, {:error, :unknown_run}, state}
     end
@@ -514,7 +513,7 @@ defmodule Alto.FrontEnd.Registry do
   def handle_call(:run_ids, _from, state) do
     live =
       state.runs
-      |> Enum.filter(fn {_id, run} -> run.status == :running end)
+      |> Enum.filter(fn {_id, run} -> run.result == :running end)
       |> Enum.map(&elem(&1, 0))
 
     {:reply, live, state}
@@ -684,27 +683,20 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_info({:alto_runner_result, ref, outcome}, state) do
     case find_run(state, completion_ref: ref) do
-      %{status: :running} = run -> {:noreply, finish_run(state, run, outcome)}
+      %{result: :running} = run -> {:noreply, finish_run(state, run, outcome)}
       _ -> {:noreply, state}
     end
   end
 
   @impl true
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
-    {:noreply, state |> maybe_drop_subscriber(monitor) |> maybe_clear_pending(monitor)}
+    {:noreply, state |> maybe_drop_subscriber(monitor) |> clear_pending(monitor: monitor)}
   end
 
   defp maybe_drop_subscriber(state, monitor) do
     case find_subscriber(state, monitor: monitor) do
       {pid, _subscriber} -> drop_subscriber(state, pid)
       nil -> state
-    end
-  end
-
-  defp maybe_clear_pending(state, monitor) do
-    case find_pending(state, monitor: monitor) do
-      nil -> state
-      _found -> clear_pending(state, monitor: monitor)
     end
   end
 
@@ -715,17 +707,17 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp run_summary(run) do
-    {status, result} =
-      case run.status do
-        :running -> {"running", nil}
-        {:done, {:error, :approval_suspended}, _, _} -> {"suspended", run.result}
-        {:done, :ok, _, _} -> {"completed", run.result}
-        {:done, {:cancelled, _}, _, _} -> {"cancelled", run.result}
-        _ -> {"failed", run.result}
+    status =
+      case run.result do
+        :running -> "running"
+        {:error, :approval_suspended, _} -> "suspended"
+        {:ok, _} -> "completed"
+        {:error, {:cancelled, _}, _} -> "cancelled"
+        _ -> "failed"
       end
 
     usage =
-      case result do
+      case run.result do
         {:ok, value} -> value.usage
         {:error, _, value} when not is_nil(value) -> value.usage
         _ -> %{}
@@ -811,15 +803,8 @@ defmodule Alto.FrontEnd.Registry do
   # A wildcard attach subscribes to all present and future runs: replay every
   # running run's pending approvals so a reconnecting client can still answer.
   defp deliver_attach(state, subscriber, nil, _from_seq) do
-    Enum.reduce(state.runs, state, fn {run_id, run}, state ->
-      if run.status == :running do
-        Enum.reduce(run.pending, state, fn {_approval_id, entry}, state ->
-          current = Map.fetch!(state.subscribers, subscriber.pid)
-          enqueue(state, current.pid, current, {:approval_request, run_id, entry.request})
-        end)
-      else
-        state
-      end
+    Enum.reduce(state.runs, state, fn {_run_id, run}, state ->
+      replay_approvals(state, subscriber.pid, run)
     end)
   end
 
@@ -840,29 +825,25 @@ defmodule Alto.FrontEnd.Registry do
     # published but before it was decided must still be able to answer it.
     # Pending approvals are live-only, so they are replayed after the
     # durable `attached` envelope on every attach to a running run.
-    state =
-      if run.status == :running do
-        Enum.reduce(run.pending, state, fn {_approval_id, entry}, state ->
-          subscriber = Map.fetch!(state.subscribers, subscriber.pid)
-          enqueue(state, subscriber.pid, subscriber, {:approval_request, run_id, entry.request})
-        end)
-      else
-        state
-      end
+    state = replay_approvals(state, subscriber.pid, run)
 
-    case run.status do
-      {:done, outcome, output, model_requests} ->
-        enqueue(state, subscriber.pid, Map.fetch!(state.subscribers, subscriber.pid), {
-          :result,
-          run_id,
-          outcome,
-          output,
-          model_requests
-        })
-
-      :running ->
-        state
+    if run.result == :running do
+      state
+    else
+      enqueue(
+        state,
+        subscriber.pid,
+        Map.fetch!(state.subscribers, subscriber.pid),
+        result_notification(run)
+      )
     end
+  end
+
+  defp replay_approvals(state, pid, run) do
+    Enum.reduce(run.pending, state, fn {_id, entry}, state ->
+      subscriber = Map.fetch!(state.subscribers, pid)
+      enqueue(state, pid, subscriber, {:approval_request, run.id, entry.request})
+    end)
   end
 
   ## Run completion
@@ -881,8 +862,29 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp finish_run(state, run, run_result) do
+    # Cleanup: a finished run owns no pending approvals. Waiters that
+    # outlive the run (crash mid-approval) are released here; cooperative
+    # cancellation already cleared them via the waiter DOWN path.
+    Enum.each(run.pending, fn {_approval_id, entry} ->
+      Process.demonitor(entry.monitor, [:flush])
+    end)
+
+    run = %{
+      run
+      | result: run_result,
+        pending: %{}
+    }
+
+    state = %{state | runs: Map.put(state.runs, run.id, run)}
+
+    state = track_finished(state, run.id)
+
+    publish(state, run.id, result_notification(run), :result)
+  end
+
+  defp result_notification(run) do
     {outcome, output, model_requests} =
-      case run_result do
+      case run.result do
         {:ok, result} ->
           {:ok, result.output, result.model_requests}
 
@@ -896,48 +898,22 @@ defmodule Alto.FrontEnd.Registry do
           {{:error, :invalid_runner_result}, nil, 0}
       end
 
-    # Cleanup: a finished run owns no pending approvals. Waiters that
-    # outlive the run (crash mid-approval) are released here; cooperative
-    # cancellation already cleared them via the waiter DOWN path.
-    Enum.each(run.pending, fn {_approval_id, entry} ->
-      Process.demonitor(entry.monitor, [:flush])
-    end)
-
-    run = %{
-      run
-      | status: {:done, outcome, output, model_requests},
-        result: run_result,
-        pending: %{}
-    }
-
-    state = %{state | runs: Map.put(state.runs, run.id, run)}
-
-    state = track_finished(state, run.id)
-
-    publish(state, run.id, {:result, run.id, outcome, output, model_requests}, :result)
+    {:result, run.id, outcome, output, model_requests}
   end
 
   defp track_finished(state, run_id) do
-    order = (Map.get(state, :finished_order, []) ++ [run_id]) |> Enum.uniq()
-    limit = Map.get(state, :max_finished_runs, @capacity_options[:max_finished_runs][:default])
+    order = (state.finished_order ++ [run_id]) |> Enum.uniq()
+    limit = state.max_finished_runs
     overflow = max(length(order) - limit, 0)
 
     {evict, order} = Enum.split(order, overflow)
-
-    runs =
-      Enum.reduce(evict, state.runs, fn id, runs ->
-        case Map.fetch(runs, id) do
-          {:ok, %{status: {:done, _, _, _}}} -> Map.delete(runs, id)
-          _other -> runs
-        end
-      end)
 
     subscribers =
       Map.new(state.subscribers, fn {pid, sub} ->
         {pid, %{sub | last_durable_seq: Map.drop(sub.last_durable_seq, evict)}}
       end)
 
-    %{state | runs: runs, finished_order: order, subscribers: subscribers}
+    %{state | runs: Map.drop(state.runs, evict), finished_order: order, subscribers: subscribers}
   end
 
   defp model_requests_of(nil), do: 0
@@ -963,26 +939,14 @@ defmodule Alto.FrontEnd.Registry do
     end
   end
 
-  defp clear_pending(state, request_id: request_id) do
-    case find_pending(state, request_id: request_id) do
+  defp clear_pending(state, selector) do
+    case find_pending(state, selector) do
       nil ->
         state
 
-      {run_id, ^request_id, entry} ->
+      {run_id, request_id, entry} ->
         Process.demonitor(entry.monitor, [:flush])
 
-        update_run(state, run_id, fn run ->
-          %{run | pending: Map.delete(run.pending, request_id)}
-        end)
-    end
-  end
-
-  defp clear_pending(state, monitor: monitor) do
-    case find_pending(state, monitor: monitor) do
-      nil ->
-        state
-
-      {run_id, request_id, _entry} ->
         update_run(state, run_id, fn run ->
           %{run | pending: Map.delete(run.pending, request_id)}
         end)
