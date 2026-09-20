@@ -8,8 +8,8 @@ From an Alto checkout, run the working example profile with:
 
 ```sh
 cd packages/alto_tui
-ALTO_TUI_LOCAL=1 mix deps.get
-ALTO_TUI_LOCAL=1 mix alto.tui --config ../../alto.agentic.exs
+mix deps.get
+mix alto.tui --config ../../alto.agentic.exs
 ```
 
 While the TUI is open, standard console Logger handlers are muted and logs go to

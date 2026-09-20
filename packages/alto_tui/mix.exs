@@ -2,10 +2,14 @@ defmodule AltoTUI.MixProject do
   use Mix.Project
 
   def project do
+    alto_path = Path.expand("../..", __DIR__)
+
     alto_dep =
-      if System.get_env("ALTO_TUI_LOCAL"),
-        do: {:alto, path: "../.."},
-        else: {:alto, "~> 0.0.1"}
+      if File.exists?(Path.join(alto_path, "mix.exs")) do
+        {:alto, path: alto_path}
+      else
+        {:alto, "~> 0.0.1"}
+      end
 
     [
       app: :alto_tui,

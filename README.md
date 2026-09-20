@@ -116,8 +116,8 @@ working terminal client and its shared sources. From this checkout:
 
 ```sh
 cd packages/alto_tui
-ALTO_TUI_LOCAL=1 mix deps.get
-ALTO_TUI_LOCAL=1 mix alto.tui --config ../../alto.agentic.exs
+mix deps.get
+mix alto.tui --config ../../alto.agentic.exs
 ```
 
 In the workspace dialog (`Ctrl+G`, then `W`), type a new folder path and
