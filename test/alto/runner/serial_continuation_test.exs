@@ -6,15 +6,11 @@ defmodule Alto.Runner.SerialContinuationTest do
 
   defmodule Parent do
     @behaviour Alto.Loop
-    def init(%{agents: agents, single: true}, _),
-      do: Transition.continue(nil, [Effect.spawn_agent(hd(agents))])
-
     def init(%{agents: agents}, _),
       do: Transition.continue(nil, [Effect.spawn_agents(%{agents: agents})])
 
-    def handle_event(%Event{type: type, data: data}, state, _)
-        when type in [:subagents_completed, :subagent_completed, :subagent_failed],
-        do: Transition.stop(state, data)
+    def handle_event(%Event{type: :subagents_completed, data: data}, state, _),
+      do: Transition.stop(state, data)
 
     def handle_event(_, state, _), do: Transition.continue(state)
   end
@@ -60,7 +56,7 @@ defmodule Alto.Runner.SerialContinuationTest do
     )
   end
 
-  test "single and batch results are retained exactly with parent links", %{ledger: ledger} do
+  test "batch results are retained exactly with parent links", %{ledger: ledger} do
     output = %{"text" => "日本語", "nested" => {1, [true, nil]}}
 
     agents = [
@@ -68,25 +64,19 @@ defmodule Alto.Runner.SerialContinuationTest do
       %{id: "second", task: "second result", loop: Alto.loop(Return)}
     ]
 
-    for single <- [false, true] do
-      assert {:ok, result} =
-               Alto.run(%{agents: agents, single: single},
-                 loop: loop(),
-                 continuation_store: ledger
-               )
+    assert {:ok, result} =
+             Alto.run(%{agents: agents}, loop: loop(), continuation_store: ledger)
 
-      assert {:ok, batch} = Continuation.restore(ledger, result.output.journal)
-      assert {:ok, joined} = Continuation.join(batch)
-      expected_ids = if single, do: ["first"], else: ["first", "second"]
-      assert Enum.map(joined.results, &elem(&1, 0)) == expected_ids
-      assert {"first", retained} = hd(joined.results)
-      assert retained.output == output
-      assert retained.status == :ok
-      assert retained.persistence == :not_requested
-      assert joined.metadata["parent_run_id"] == result.run_id
-      assert joined.packet["join"] == nil
-      assert {:error, :child_already_admitted} = Continuation.dispatch(batch, "first")
-    end
+    assert {:ok, batch} = Continuation.restore(ledger, result.output.journal)
+    assert {:ok, joined} = Continuation.join(batch)
+    assert Enum.map(joined.results, &elem(&1, 0)) == ["first", "second"]
+    assert {"first", retained} = hd(joined.results)
+    assert retained.output == output
+    assert retained.status == :ok
+    assert retained.persistence == :not_requested
+    assert joined.metadata["parent_run_id"] == result.run_id
+    assert joined.packet["join"] == nil
+    assert {:error, :child_already_admitted} = Continuation.dispatch(batch, "first")
   end
 
   test "a child saves its result even while the parent cannot collect it", %{

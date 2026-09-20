@@ -101,16 +101,22 @@ defmodule Alto.Runner.ConformanceTest do
     @impl true
     def init(_task, _spec) do
       Transition.continue(%{}, [
-        Effect.spawn_agent(%{id: "child", task: "child", loop: Alto.chat_loop()})
+        Effect.spawn_agents(%{
+          agents: [%{id: "child", task: "child", loop: Alto.chat_loop()}]
+        })
       ])
     end
 
     @impl true
-    def handle_event(%Event{type: :subagent_completed, data: data}, state, _spec),
-      do: Transition.stop(state, {:completed, data})
+    def handle_event(
+          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          state,
+          _spec
+        ),
+        do: Transition.stop(state, {:failed, data})
 
-    def handle_event(%Event{type: :subagent_failed, data: data}, state, _spec),
-      do: Transition.stop(state, {:failed, data})
+    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _spec),
+      do: Transition.stop(state, {:completed, data})
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)
   end

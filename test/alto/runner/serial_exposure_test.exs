@@ -117,13 +117,19 @@ defmodule Alto.Runner.SerialExposureTest do
   defmodule SpawnOnceLoop do
     @behaviour Alto.Loop
     @impl true
-    def init(%{spawn: spawn}, _spec), do: Transition.continue(%{}, [Effect.spawn_agent(spawn)])
-    @impl true
-    def handle_event(%Event{type: :subagent_completed, data: data}, s, _),
-      do: Transition.stop(s, {:completed, data})
+    def init(%{spawn: spawn}, _spec),
+      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
 
-    def handle_event(%Event{type: :subagent_failed, data: data}, s, _),
-      do: Transition.stop(s, {:failed, data})
+    @impl true
+    def handle_event(
+          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          s,
+          _
+        ),
+        do: Transition.stop(s, {:failed, data})
+
+    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, s, _),
+      do: Transition.stop(s, {:completed, data})
 
     def handle_event(_e, s, _), do: Transition.continue(s)
   end

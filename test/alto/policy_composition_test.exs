@@ -43,15 +43,9 @@ defmodule Alto.PolicyCompositionTest do
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
-    def init(kind, _) do
+    def init(_task, _) do
       agent = %{id: "child", task: "work", loop: Alto.loop(Alto.PolicyCompositionTest.ChildLoop)}
-
-      effect =
-        if kind == :single,
-          do: Alto.Effect.spawn_agent(agent),
-          else: Alto.Effect.spawn_agents(%{agents: [agent]})
-
-      Alto.Transition.continue(nil, [effect])
+      Alto.Transition.continue(nil, [Alto.Effect.spawn_agents(%{agents: [agent]})])
     end
 
     def handle_event(event, state, _), do: Alto.Transition.stop(state, event.type)
@@ -71,10 +65,9 @@ defmodule Alto.PolicyCompositionTest do
     refute_receive {:limits_called, _}
   end
 
-  test "limits and both admission paths are cancellable" do
+  test "limits and admission are cancellable" do
     for {kind, phase, message} <- [
           {:batch, :limits, :limits_called},
-          {:single, :admit, :admission_called},
           {:batch, :admit, :admission_called}
         ] do
       loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: phase})

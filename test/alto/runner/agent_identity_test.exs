@@ -21,9 +21,9 @@ defmodule Alto.Runner.AgentIdentityTest do
   defmodule SpawnLoop do
     @behaviour Alto.Loop
     def init(%{spawn: request}, _spec),
-      do: Transition.continue(%{}, [Effect.spawn_agent(request)])
+      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [request]})])
 
-    def handle_event(%Event{type: :subagent_completed}, state, _spec),
+    def handle_event(%Event{type: :subagents_completed}, state, _spec),
       do: Transition.stop(state, :done)
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)

@@ -463,7 +463,6 @@ defmodule Alto.Runner.Checkpoint do
             :run_tools,
             :parallel_tools,
             :invoke_tool,
-            :spawn_agent,
             :spawn_agents
           ] and
             is_map(data)

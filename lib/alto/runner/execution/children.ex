@@ -11,7 +11,7 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
 
-  def validate_spawn(data) when is_map(data) do
+  defp validate_spawn(data) when is_map(data) do
     with {:ok, id} <- spawn_field(data, [:id, "id"], :binary),
          {:ok, task} <- spawn_task(data),
          {:ok, max_steps} <- spawn_optional(data, [:max_steps, "max_steps"], :positive),
@@ -37,7 +37,7 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  def validate_spawn(data), do: {:error, {:not_a_map, data}}
+  defp validate_spawn(data), do: {:error, {:not_a_map, data}}
 
   defp spawn_field(data, keys, :binary) do
     value = Enum.find_value(keys, fn key -> Map.get(data, key) end)
@@ -693,9 +693,9 @@ defmodule Alto.Runner.Execution.Children do
 
   def merge_child_result(run, _outcome), do: run
 
-  def validate_subagent_tools(:inherit, _run), do: :ok
+  defp validate_subagent_tools(:inherit, _run), do: :ok
 
-  def validate_subagent_tools(tools, run) do
+  defp validate_subagent_tools(tools, run) do
     inherited = Enum.map(run.tool_specs, &canonical_tool/1)
 
     if Enum.all?(tools, &(canonical_tool(&1) in inherited)),
@@ -706,7 +706,7 @@ defmodule Alto.Runner.Execution.Children do
   defp canonical_tool(module) when is_atom(module), do: {module, []}
   defp canonical_tool(spec), do: spec
 
-  def admit(run, agents) do
+  defp admit(run, agents) do
     case Alto.Runner.Execution.Call.run(
            fn -> ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}) end,
            Budget.timeout(run.budget, run.tool_timeout),
@@ -756,10 +756,6 @@ defmodule Alto.Runner.Execution.Children do
       {:ok, specs} -> {:ok, Enum.reverse(specs), concurrency}
       error -> error
     end
-  end
-
-  def subagent_failed(id, reason) do
-    Event.durable(:subagent_failed, %{id: id, error: reason})
   end
 
   defp normalize_provider(provider, opts),

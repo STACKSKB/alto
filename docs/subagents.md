@@ -1,8 +1,7 @@
 # Alto subagents
 
-Subagents are requested by a trusted loop through an effect. A single child
-uses `Alto.Effect.spawn_agent/1`; a bounded batch uses
-`Alto.Effect.spawn_agents/1`:
+Subagents are requested by a trusted loop through
+`Alto.Effect.spawn_agents/1`. A single child is a one-element batch:
 
 ```elixir
 defmodule FanoutLoop do
@@ -38,15 +37,15 @@ Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
   provider: MyProvider)
 ```
 
-`spawn_agents/1` accepts `%{agents: [...]}`. Each entry has the same spawn
-fields as `spawn_agent/1`: required `:id` and `:task`, with optional provider,
+`spawn_agents/1` accepts `%{agents: [...]}`. Each entry requires `:id` and
+`:task`, with optional provider,
 loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
 `reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.
-A child that could not start has only `id`, `status: :error`, and `error`. The single-child events are `:subagent_completed` or
-`:subagent_failed`; a batch emits one `:subagents_completed` event containing
-`%{results: results}`.
+A child that could not start has only `id`, `status: :error`, and `error`.
+A completed batch emits one `:subagents_completed` event containing
+`%{results: results}`, including one-element batches.
 
 `Alto.Subagents.bounded/1` is Alto's policy constructor. `max_children` limits
 one batch (default 16, range 1–64), while `max_concurrency` limits active children

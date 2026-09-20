@@ -1,6 +1,6 @@
 defmodule Alto.Runner.SerialSubagentTest do
   @moduledoc """
-  Owned serial sub-runs: the loop delegates through `:spawn_agent`, the host
+  Owned serial sub-runs: the loop delegates through a one-child batch, the host
   enforces depth budgets, inherits provider/tools/approval with no widening,
   forwards progress, validates results, and propagates cancellation.
   """
@@ -138,16 +138,20 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     @impl true
     def init(%{spawn: spawn}, _spec) do
-      Transition.continue(%{}, [Effect.spawn_agent(spawn)])
+      Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
     end
 
     @impl true
-    def handle_event(%Event{type: :subagent_completed, data: data}, state, _spec) do
-      Transition.stop(state, {:completed, data})
+    def handle_event(
+          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          state,
+          _spec
+        ) do
+      Transition.stop(state, {:failed, data})
     end
 
-    def handle_event(%Event{type: :subagent_failed, data: data}, state, _spec) do
-      Transition.stop(state, {:failed, data})
+    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _spec) do
+      Transition.stop(state, {:completed, data})
     end
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)
@@ -174,7 +178,7 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "delegation is disabled without a depth budget", %{dir: dir} do
-    assert {:ok, result} =
+    assert {:error, {:invalid_spawn_agents, :max_depth_exceeded}, result} =
              Alto.run(%{spawn: %{id: "sub-1", task: "child task"}},
                loop: parent_loop(0),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -182,8 +186,7 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:failed, %{id: "sub-1", error: :max_depth_exceeded}} = result.output
-    assert Enum.any?(result.events, &(&1.type == :subagent_failed))
+    assert result.output == nil
   end
 
   test "the child inherits provider, tools, and approval by default", %{dir: dir} do
@@ -289,7 +292,7 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "invalid delegation requests fail the run", %{dir: dir} do
-    assert {:error, {:invalid_spawn_agent, _}, _result} =
+    assert {:error, {:invalid_spawn_agents, _}, _result} =
              Alto.run(%{spawn: %{id: "sub-1"}},
                loop: parent_loop(1),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -311,8 +314,12 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:completed, %{id: "sub-1", status: :ok, output: {:failed, %{id: "grand"}}}} =
-             result.output
+    assert {:failed,
+            %{
+              id: "sub-1",
+              status: :error,
+              error: {:invalid_spawn_agents, :max_depth_exceeded}
+            }} = result.output
   end
 
   test "a crashing child becomes a failed event, not a parent crash", %{dir: dir} do

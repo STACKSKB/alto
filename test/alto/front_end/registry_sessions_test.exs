@@ -100,14 +100,18 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     @behaviour Alto.Loop
     @impl true
     def init(%{spawn: spawn}, _spec),
-      do: Alto.Transition.continue(%{}, [Alto.Effect.spawn_agent(spawn)])
+      do: Alto.Transition.continue(%{}, [Alto.Effect.spawn_agents(%{agents: [spawn]})])
 
     @impl true
-    def handle_event(%Alto.Event{type: :subagent_completed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:completed, data})
+    def handle_event(
+          %Alto.Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          s,
+          _spec
+        ),
+        do: Alto.Transition.stop(s, {:failed, data})
 
-    def handle_event(%Alto.Event{type: :subagent_failed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:failed, data})
+    def handle_event(%Alto.Event{type: :subagents_completed, data: %{results: [data]}}, s, _spec),
+      do: Alto.Transition.stop(s, {:completed, data})
 
     def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
   end
@@ -122,20 +126,28 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       test_pid = Keyword.fetch!(spec.driver_options, :test_pid)
 
       Alto.Transition.continue(%{}, [
-        Alto.Effect.spawn_agent(%{
-          id: "sub-1",
-          task: "child",
-          provider: {BlockingProvider, test_pid: test_pid}
+        Alto.Effect.spawn_agents(%{
+          agents: [
+            %{
+              id: "sub-1",
+              task: "child",
+              provider: {BlockingProvider, test_pid: test_pid}
+            }
+          ]
         })
       ])
     end
 
     @impl true
-    def handle_event(%Alto.Event{type: :subagent_completed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:completed, data})
+    def handle_event(
+          %Alto.Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          s,
+          _spec
+        ),
+        do: Alto.Transition.stop(s, {:failed, data})
 
-    def handle_event(%Alto.Event{type: :subagent_failed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:failed, data})
+    def handle_event(%Alto.Event{type: :subagents_completed, data: %{results: [data]}}, s, _spec),
+      do: Alto.Transition.stop(s, {:completed, data})
 
     def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
   end

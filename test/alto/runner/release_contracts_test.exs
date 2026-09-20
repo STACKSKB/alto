@@ -46,18 +46,26 @@ defmodule Alto.Runner.ReleaseContractsTest do
     def init(_, _),
       do:
         Transition.continue(nil, [
-          Effect.spawn_agent(%{
-            id: "child",
-            task: %{"value" => 42},
-            loop: Alto.rule_loop(steps: ["native"])
+          Effect.spawn_agents(%{
+            agents: [
+              %{
+                id: "child",
+                task: %{"value" => 42},
+                loop: Alto.rule_loop(steps: ["native"])
+              }
+            ]
           })
         ])
 
-    def handle_event(%Event{type: :subagent_completed, data: data}, state, _),
-      do: Transition.stop(state, data.output)
+    def handle_event(
+          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          state,
+          _
+        ),
+        do: Transition.error(state, data.error)
 
-    def handle_event(%Event{type: :subagent_failed, data: data}, state, _),
-      do: Transition.error(state, data.error)
+    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
+      do: Transition.stop(state, data.output)
   end
 
   test "deterministic cycles consume a shared effect budget" do

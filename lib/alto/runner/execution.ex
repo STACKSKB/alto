@@ -624,26 +624,6 @@ defmodule Alto.Runner.Execution do
     prepare_and_run_tool(call, :native, :native, op_id, run)
   end
 
-  defp interpret(%Effect{kind: :spawn_agent, data: data}, run) do
-    case Children.validate_spawn(data) do
-      {:error, reason} ->
-        {:error, {:invalid_spawn_agent, reason}, run}
-
-      {:ok, spec} ->
-        if run.agent_depth >= run.max_agent_depth do
-          {:event, Event.durable(:subagent_failed, %{id: spec.id, error: :max_depth_exceeded}),
-           run}
-        else
-          case with :ok <- Children.validate_subagent_tools(spec.tools, run),
-                    do: Children.admit(run, [spec]) do
-            :ok -> run_subagent(spec, run)
-            {:cancelled, reason} -> {:cancelled, reason, run}
-            {:error, reason} -> {:event, Children.subagent_failed(spec.id, reason), run}
-          end
-        end
-    end
-  end
-
   defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
     with {:ok, specs, concurrency} <- Children.validate_batch(data, run),
          {:ok, status, outcomes, journal, run} <-
@@ -830,29 +810,6 @@ defmodule Alto.Runner.Execution do
         model_capabilities(run),
         step
       )
-
-  defp run_subagent(spec, run) do
-    case Children.run_children([spec], 1, run) do
-      {:ok, :ok, [{id, outcome}], journal, run} ->
-        data = Children.subagent_data(id, outcome) |> Children.with_journal(journal)
-        type = if data.status == :error, do: :subagent_failed, else: :subagent_completed
-        {:event, Event.durable(type, data), Children.merge_child_result(run, outcome)}
-
-      {:ok, {status, reason}, outcomes, _journal, run} ->
-        run =
-          Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
-            Children.merge_child_result(acc, outcome)
-          end)
-
-        {status, reason, run}
-
-      {:error, reason, run} ->
-        {:error, reason, run}
-
-      {:error, reason} ->
-        {:event, Children.subagent_failed(spec.id, reason), run}
-    end
-  end
 
   defp run_in_workspace(task, opts, manager, snapshot, identity),
     do:

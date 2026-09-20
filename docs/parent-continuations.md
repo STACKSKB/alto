@@ -79,8 +79,8 @@ pausable active-time accounting for independent children.
 ## Limits
 
 This path covers root `spawn_agents` batches, including a one-child batch.
-It does not make standalone `spawn_agent` calls or recursive parent continuations
-recoverable. A dispatched child without a saved result or approval checkpoint remains
+It does not make recursive parent continuations recoverable. A dispatched child
+without a saved result or approval checkpoint remains
 uncertain. Joining may not invoke provider-backed transcript compaction before
 a grant: an oversized result transcript fails instead. Custom loop checkpoint
 and transition callbacks must remain pure.
