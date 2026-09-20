@@ -69,38 +69,22 @@ defmodule Alto.Runner.Budget.Account do
           }
 
           {:ok, account, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-        else
-          false -> {:error, :budget_account_mismatch}
-          {:error, _} = error -> error
         end
       end)
     end
   end
 
   @doc "Read one consistent revision, both counters, and the closure state."
-  def read(%__MODULE__{} = account), do: read(account, :infinity)
-
-  def read(%__MODULE__{} = account, deadline) do
-    safe(fn ->
-      with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
-           :ok <- valid_initial(entry),
-           true <- entry.recovery["generation"] == account.generation,
-           :ok <- valid_packet(entry.checkpoint, entry.recovery),
-           {:ok, state} <- lifecycle(entry) do
-        {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-      else
-        false -> {:error, :budget_account_mismatch}
-        {:error, _} = error -> error
-      end
-    end)
+  def read(%__MODULE__{} = account, deadline \\ :infinity) do
+    with {:ok, found, snapshot} <- lookup(account.ledger, account.key, deadline: deadline) do
+      if found.generation == account.generation,
+        do: {:ok, snapshot},
+        else: {:error, :budget_account_mismatch}
+    end
   end
 
   @doc "Lower shared caps. Already consumed counts remain consumed."
-  def tighten(%__MODULE__{} = account, effects, models) do
-    tighten(account, effects, models, :infinity)
-  end
-
-  def tighten(%__MODULE__{} = account, effects, models, deadline) do
+  def tighten(%__MODULE__{} = account, effects, models, deadline \\ :infinity) do
     if valid_cap?(effects) and valid_cap?(models) do
       update(
         account,
@@ -193,26 +177,20 @@ defmodule Alto.Runner.Budget.Account do
       else
         evidence = Map.take(snapshot.packet, @limits ++ @counters)
 
-        case Retained.record_attempt(account.ledger, account.key, @close, :infinity) do
-          :ok ->
-            case Retained.record_outcome(
-                   account.ledger,
-                   account.key,
-                   @close,
-                   :completed,
-                   evidence,
-                   :infinity
-                 ) do
-              :ok -> :ok
-              {:error, :already_decided} -> closed_after_race(account)
-              error -> error
-            end
-
-          {:error, :already_decided} ->
-            closed_after_race(account)
-
-          error ->
-            error
+        with :ok <- Retained.record_attempt(account.ledger, account.key, @close, :infinity),
+             :ok <-
+               Retained.record_outcome(
+                 account.ledger,
+                 account.key,
+                 @close,
+                 :completed,
+                 evidence,
+                 :infinity
+               ) do
+          :ok
+        else
+          {:error, :already_decided} -> closed_after_race(account)
+          error -> error
         end
       end
     end
