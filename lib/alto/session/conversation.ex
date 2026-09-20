@@ -49,21 +49,28 @@ defmodule Alto.Session.Conversation do
          {:ok, expected} <- expected_revision(Keyword.get(opts, :expected_revision, :any)),
          {:ok, parent} <- optional_parent(Keyword.get(opts, :parent)),
          {:ok, summary} <- optional_summary(Keyword.get(opts, :summary)) do
+      draft = %{
+        "v" => @version,
+        "type" => "conversation_entry",
+        "session_id" => id,
+        "messages" => messages,
+        "transcript_bytes" => transcript_bytes,
+        "summary" => summary,
+        "settled" => settled,
+        "context_observation" => Keyword.get(opts, :context_observation)
+      }
+
+      constraints = %{
+        expected: expected,
+        requested_parent: parent,
+        resolved_operations: resolved_operations,
+        max_conversation_bytes: max_conversation_bytes
+      }
+
       path = transcript_path(opts, id)
 
       Storage.with_lock(lock_path(path), fn ->
-        persist_locked(
-          id,
-          messages,
-          transcript_bytes,
-          expected,
-          parent,
-          summary,
-          settled,
-          resolved_operations,
-          max_conversation_bytes,
-          opts
-        )
+        persist_locked(draft, constraints, opts)
       end)
     end
   end
@@ -132,54 +139,41 @@ defmodule Alto.Session.Conversation do
     end
   end
 
-  defp persist_locked(
-         id,
-         messages,
-         transcript_bytes,
-         expected,
-         requested_parent,
-         summary,
-         settled,
-         resolved_operations,
-         max_conversation_bytes,
-         opts
-       ) do
+  defp persist_locked(draft, constraints, opts) do
+    id = draft["session_id"]
+
     with {:ok, current} <- current_snapshot(id, opts),
          current_revision <- if(current, do: current.revision, else: 0),
          retained_bytes <- if(current, do: current.conversation_bytes, else: 0),
-         :ok <- check_expected(id, expected, current_revision),
+         :ok <- check_expected(id, constraints.expected, current_revision),
          {:ok, fence} <- read_dispatch_fence(id, opts),
          :ok <-
            resolve_dispatch_fence(
              id,
              current_revision,
              fence,
-             messages,
-             settled,
-             resolved_operations
+             draft["messages"],
+             draft["settled"],
+             constraints.resolved_operations
            ),
          next_revision <- current_revision + 1,
          :ok <- validate_next_revision(id, next_revision),
-         {:ok, parent} <- resolve_parent(id, current, requested_parent),
+         {:ok, parent} <- resolve_parent(id, current, constraints.requested_parent),
          entry <-
-           entry(
-             id,
-             next_revision,
-             parent,
-             messages,
-             transcript_bytes,
-             summary,
-             settled,
-             retained_bytes
-           ),
-         entry <- Map.put(entry, "context_observation", Keyword.get(opts, :context_observation)),
+           Map.merge(draft, %{
+             "entry_id" => entry_id(id, next_revision),
+             "revision" => next_revision,
+             "parent" => encode_parent(parent),
+             "retained_bytes_before" => retained_bytes,
+             "at_ms" => System.system_time(:millisecond)
+           }),
          {:ok, encoded} <- encode_bounded(entry),
          conversation_bytes <- retained_bytes + byte_size(encoded),
          :ok <-
            check_conversation_bytes(
              id,
              conversation_bytes,
-             max_conversation_bytes,
+             constraints.max_conversation_bytes,
              byte_size(encoded)
            ),
          :ok <- put_entry(id, next_revision, encoded, opts),
@@ -208,32 +202,6 @@ defmodule Alto.Session.Conversation do
     if requested == own,
       do: {:ok, own},
       else: {:error, {:conversation_parent_conflict, %{current: own, requested: requested}}}
-  end
-
-  defp entry(
-         id,
-         revision,
-         parent,
-         messages,
-         transcript_bytes,
-         summary,
-         settled,
-         retained_bytes
-       ) do
-    %{
-      "v" => @version,
-      "type" => "conversation_entry",
-      "entry_id" => entry_id(id, revision),
-      "session_id" => id,
-      "revision" => revision,
-      "parent" => encode_parent(parent),
-      "summary" => summary,
-      "settled" => settled,
-      "retained_bytes_before" => retained_bytes,
-      "messages" => messages,
-      "transcript_bytes" => transcript_bytes,
-      "at_ms" => System.system_time(:millisecond)
-    }
   end
 
   defp snapshot(entry, entry_bytes) do
