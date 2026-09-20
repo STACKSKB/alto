@@ -2,9 +2,9 @@ defmodule Alto.TUI.ViewTest do
   use ExUnit.Case, async: true
 
   alias Alto.TUI.{State, View}
-  alias ExRatatui.Widgets.{Paragraph, Popup}
+  alias ExRatatui.Widgets.{Paragraph, TextInput}
 
-  test "shows a caret before the API key placeholder when the empty field is focused" do
+  test "uses a native input with the saved-key placeholder" do
     input = ExRatatui.text_input_new()
 
     state =
@@ -14,22 +14,34 @@ defmodule Alto.TUI.ViewTest do
         fields: provider_fields(api_key: input)
       })
 
-    line = provider_popup_line(View.widgets(state, frame()), 5)
-    rendered = line_text(line)
-    caret = match_index(rendered, "▏")
+    widgets = View.widgets(state, frame())
+    input = active_input(widgets)
+    assert input.state == {"", 0, 0}
+    assert input.placeholder == "(saved — leave blank to keep)"
 
-    assert rendered =~ "API key"
-    assert rendered =~ "(saved — leave blank to keep)"
-    assert caret > match_index(rendered, "API key")
-    assert caret < match_index(rendered, "(saved")
-    assert Enum.any?(line.spans, &(&1.content == "▏"))
+    terminal = ExRatatui.init_test_terminal(120, 36)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "API key"
+    assert screen =~ "(saved — leave blank to keep)"
+  end
+
+  test "shows the saved-key placeholder when another field is active" do
+    state =
+      base_state(%{
+        field_index: 1,
+        key_saved?: true,
+        fields: provider_fields(api_key: "")
+      })
 
     terminal = ExRatatui.init_test_terminal(120, 36)
     assert :ok = ExRatatui.draw(terminal, View.widgets(state, frame()))
-    assert ExRatatui.get_buffer_content(terminal) =~ "▏"
+
+    assert ExRatatui.get_buffer_content(terminal) =~
+             "API key       (saved — leave blank to keep)"
   end
 
-  test "keeps API keys masked while placing the caret at the actual text cursor" do
+  test "keeps API keys masked while retaining the actual text cursor" do
     input = ExRatatui.text_input_new()
     :ok = ExRatatui.text_input_set_value(input, "secret-key")
     :ok = ExRatatui.text_input_handle_key(input, "left")
@@ -41,14 +53,15 @@ defmodule Alto.TUI.ViewTest do
         fields: provider_fields(api_key: input)
       })
 
-    line = provider_popup_line(View.widgets(state, frame()), 5)
-    rendered = line_text(line)
+    widgets = View.widgets(state, frame())
+    assert %TextInput{state: {masked, 9, 0}} = active_input(widgets)
+    assert masked == String.duplicate("•", 10)
 
-    refute rendered =~ "secret-key"
-    assert rendered =~ "••••"
-    assert Enum.count(String.graphemes(rendered), &(&1 == "•")) == 10
-    assert rendered =~ "▏"
-    assert Enum.any?(line.spans, &(&1.content == "▏"))
+    terminal = ExRatatui.init_test_terminal(120, 36)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    refute screen =~ "secret-key"
+    assert screen =~ masked
   end
 
   test "keeps the insertion point visible for a long masked API key" do
@@ -64,13 +77,15 @@ defmodule Alto.TUI.ViewTest do
         fields: provider_fields(api_key: input)
       })
 
-    rendered = line_text(provider_popup_line(View.widgets(state, frame(80, 30)), 5))
+    widgets = View.widgets(state, frame(80, 30))
+    assert %TextInput{state: {masked, 70, 0}} = active_input(widgets)
+    assert String.length(masked) == String.length(value)
 
-    refute rendered =~ "secret-key"
-    assert rendered =~ "▏"
-    assert String.starts_with?(rendered, "› API key       …")
-    assert String.ends_with?(rendered, "…")
-    assert Enum.count(String.graphemes(rendered), &(&1 == "•")) == 36
+    terminal = ExRatatui.init_test_terminal(80, 30)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    refute screen =~ "secret-key"
+    assert screen =~ String.duplicate("•", 20)
   end
 
   test "keeps the active run stage visible in a narrow status bar" do
@@ -90,48 +105,48 @@ defmodule Alto.TUI.ViewTest do
     assert status.text =~ "Esc stop"
   end
 
-  test "keeps the caret visible at the end of a long model identifier" do
+  test "native input scrolls a long Unicode model identifier to its cursor" do
     input = ExRatatui.text_input_new()
-    value = String.duplicate("model/", 16)
+    value = String.duplicate("界", 16) <> "END"
     :ok = ExRatatui.text_input_set_value(input, value)
 
     state = base_state(model_form(input))
-    popup = popup(View.widgets(state, frame(30, 20)))
-    lines = popup.content.text.lines
-    line = Enum.at(lines, 2)
-    rendered = line_text(line)
+    widgets = View.widgets(state, frame(30, 20))
+    assert %TextInput{state: ^input} = active_input(widgets)
 
-    assert rendered =~ "…"
-    assert rendered =~ "▏"
-    assert String.ends_with?(rendered, "▏")
-    assert match_index(rendered, "▏") > match_index(rendered, "Model ID")
-
-    assert rendered |> String.split("› Model ID  ", parts: 2) |> List.last() |> String.length() <=
-             5
-
-    assert Enum.any?(line.spans, &(&1.content == "▏"))
+    terminal = ExRatatui.init_test_terminal(30, 20)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "Model ID"
+    assert screen =~ "END"
   end
 
-  test "reserves a cell for the caret when a model value exactly fills the field" do
+  test "native input reserves a cell for the cursor when the value fills the field" do
     input = ExRatatui.text_input_new()
     :ok = ExRatatui.text_input_set_value(input, "abcd")
     state = base_state(model_form(input))
 
-    rendered =
-      View.widgets(state, frame(30, 20))
-      |> popup()
-      |> Map.fetch!(:content)
-      |> Map.fetch!(:text)
-      |> Map.fetch!(:lines)
-      |> Enum.at(2)
-      |> line_text()
-
-    assert String.length(rendered) <= 16
-    assert String.ends_with?(rendered, "▏")
-
+    widgets = View.widgets(state, frame(30, 20))
     terminal = ExRatatui.init_test_terminal(30, 20)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, frame(30, 20)))
-    assert ExRatatui.get_buffer_content(terminal) =~ "▏"
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "bcd"
+    refute screen =~ "abcd"
+  end
+
+  test "model buttons retain their mouse-routing rows" do
+    state = base_state(model_form(ExRatatui.text_input_new()))
+    widgets = View.widgets(state, frame(80, 30))
+
+    rects =
+      for {%Paragraph{text: text}, rect} <- widgets,
+          text in ["  [ Use model ]", "  [ Cancel ]"],
+          into: %{},
+          do: {text, rect}
+
+    popup_y = div(30 - div(30 * 42, 100), 2)
+    assert rects["  [ Use model ]"].y == popup_y + 6
+    assert rects["  [ Cancel ]"].y == popup_y + 7
   end
 
   defp base_state(overlay) do
@@ -198,18 +213,8 @@ defmodule Alto.TUI.ViewTest do
 
   defp frame(width \\ 120, height \\ 36), do: %{width: width, height: height}
 
-  defp popup(widgets) do
-    {popup, _rect} = Enum.find(widgets, fn {widget, _rect} -> match?(%Popup{}, widget) end)
-    popup
-  end
-
-  defp provider_popup_line(widgets, index),
-    do: popup(widgets).content.text.lines |> Enum.at(index)
-
-  defp line_text(line), do: Enum.map_join(line.spans, & &1.content)
-
-  defp match_index(string, pattern) do
-    {index, _length} = :binary.match(string, pattern)
-    index
+  defp active_input(widgets) do
+    {input, _rect} = Enum.find(widgets, fn {widget, _rect} -> match?(%TextInput{}, widget) end)
+    input
   end
 end

@@ -25,6 +25,13 @@ defmodule Alto.TUI.TextForm do
 
   def values(form), do: Map.new(form.fields, &{&1.key, ExRatatui.text_input_get_value(&1.input)})
   def value(form), do: ExRatatui.text_input_get_value(active_field(form).input)
+  def field(form, key), do: Enum.find(form.fields, &(&1.key == key))
+
+  def masked_state(%{input: input}) do
+    {value, cursor, viewport_offset} = ExRatatui.Native.text_input_snapshot(input)
+    {String.duplicate("•", length(String.codepoints(value))), cursor, viewport_offset}
+  end
+
   def key(_form, %Key{code: "esc"}), do: :cancel
   def key(_form, %Key{code: "s", modifiers: ["ctrl"]}), do: :submit
   def key(form, %Key{code: code}) when code in ["tab", "down"], do: {:edit, move(form, 1)}

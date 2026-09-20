@@ -2,13 +2,12 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{State, WorkspaceForm}
+  alias Alto.TUI.{State, TextForm, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
-  alias ExRatatui.Text
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup}
+  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup, TextInput}
 
   @accent {:rgb, 105, 180, 255}
   @muted {:rgb, 116, 126, 140}
@@ -531,24 +530,32 @@ defmodule Alto.TUI.View do
   defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
     do: widgets ++ WorkspaceForm.widgets(form, root)
 
-  defp add_overlay(widgets, %{kind: :provider_form} = overlay, root),
+  defp add_overlay(widgets, %{kind: :provider_form} = form, root),
     do:
-      add_form(widgets, overlay, root, provider_form_text(overlay, root.width),
-        hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
-        size: {72, 66}
-      )
+      widgets ++
+        text_form_widgets(form, root,
+          intro: "Credentials are saved privately outside the workspace.",
+          hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
+          fields: [
+            {:id, "ID", []},
+            {:label, "Name", []},
+            {:base_url, "Base URL", []},
+            {:api_key, "API key", [secret?: true, placeholder: api_key_placeholder(form)]},
+            {:model, "Default model", []}
+          ],
+          buttons: ["[ Save provider ]", "[ Cancel ]"]
+        )
 
-  defp add_overlay(widgets, %{kind: :model_form} = overlay, root) do
-    field = hd(overlay.fields)
-    value = ExRatatui.text_input_get_value(field.input)
-    cursor = ExRatatui.text_input_cursor(field.input)
-    error = if overlay.error, do: "  ! " <> overlay.error, else: ""
-
-    add_form(widgets, overlay, root, model_form_text(value, cursor, error, root.width),
-      hint: "Enter use · Esc",
-      size: {62, 42}
-    )
-  end
+  defp add_overlay(widgets, %{kind: :model_form} = form, root),
+    do:
+      widgets ++
+        text_form_widgets(form, root,
+          intro: "Use the provider's exact model identifier.",
+          hint: "Enter use · Esc",
+          fields: [{:model, "Model ID", []}],
+          button_gap: 1,
+          buttons: ["[ Use model ]", "[ Cancel ]"]
+        )
 
   defp add_overlay(widgets, overlay, root) do
     selected = safe_selected(overlay.index, overlay.items)
@@ -596,186 +603,86 @@ defmodule Alto.TUI.View do
     widgets ++ [{popup, root}]
   end
 
-  defp add_form(widgets, form, root, text, opts) do
-    {width, height} = Keyword.fetch!(opts, :size)
-
-    popup = %Popup{
-      content: %Paragraph{text: text, wrap: false, style: style(fg: :white, bg: @panel_alt)},
-      block: %Block{
-        title: " #{form.title} │ #{Keyword.fetch!(opts, :hint)} ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
-      percent_width: width,
-      percent_height: height
-    }
-
-    widgets ++ [{popup, root}]
-  end
-
-  defp provider_form_text(overlay, root_width) do
-    values = Map.new(overlay.fields, &{&1.key, ExRatatui.text_input_get_value(&1.input)})
-    active = overlay.field_index
-    key = Map.get(values, :api_key, "")
-
-    key_display =
-      cond do
-        key != "" -> String.duplicate("•", min(length(String.codepoints(key)), 32))
-        overlay.key_saved? -> "(saved — leave blank to keep)"
-        true -> "(optional for local providers)"
-      end
-
-    lines = [
-      plain_line("  Credentials are saved privately outside the workspace."),
-      plain_line(""),
-      form_line(overlay, active, 0, :id, "ID", Map.get(values, :id, ""),
-        locked?: locked?(overlay, :id),
-        max_width: provider_value_width(root_width, locked?(overlay, :id))
-      ),
-      form_line(overlay, active, 1, :label, "Name", Map.get(values, :label, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 2, :base_url, "Base URL", Map.get(values, :base_url, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 3, :api_key, "API key", key_display,
-        placeholder?: key == "",
-        raw_value: key,
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 4, :model, "Default model", Map.get(values, :model, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      plain_line(if(overlay.error, do: "  ! " <> overlay.error, else: "")),
-      plain_line("  [ Save provider ]"),
-      plain_line("  [ Cancel ]")
-    ]
-
-    Text.new(lines)
-  end
-
-  defp model_form_text(value, cursor, error, root_width) do
-    max_width = max(div(root_width * 62, 100) - 2 - String.length("› Model ID  "), 1)
-
-    Text.new([
-      plain_line("  Use the provider's exact model identifier."),
-      plain_line(""),
-      Line.new([Span.new("› Model ID  ") | editable_value_spans(value, cursor, max_width)]),
-      plain_line(error),
-      plain_line(""),
-      plain_line("  [ Use model ]"),
-      plain_line("  [ Cancel ]")
-    ])
-  end
-
-  defp plain_line(value), do: Line.new([Span.new(value)])
-
-  defp form_line(overlay, active, index, key, label, value, opts) do
-    locked? = Keyword.get(opts, :locked?, false)
-    placeholder? = Keyword.get(opts, :placeholder?, false)
-    raw_value = Keyword.get(opts, :raw_value, value)
-    max_width = Keyword.get(opts, :max_width, 40)
-    marker = if active == index, do: "›", else: " "
-    suffix = if locked?, do: "  (fixed)", else: ""
-    prefix = marker <> " " <> String.pad_trailing(label, 14)
-
-    value_spans =
-      if active == index and not locked? do
-        field = Enum.find(overlay.fields, &(&1.key == key))
-        cursor = if field, do: ExRatatui.text_input_cursor(field.input), else: 0
-
-        if placeholder? do
-          editable_value_spans("", cursor, max_width) ++
-            [Span.new(value, style: style(fg: @muted))]
-        else
-          if key == :api_key do
-            masked_value_spans(raw_value, cursor, max_width)
-          else
-            editable_value_spans(value, cursor, max_width)
-          end
-        end
-      else
-        [Span.new(value)]
-      end
-
-    Line.new([Span.new(prefix) | value_spans ++ [Span.new(suffix)]])
-  end
-
-  defp provider_value_width(root_width, locked?) do
-    popup_content_width = max(div(root_width * 72, 100) - 2, 1)
-    suffix_width = if locked?, do: String.length("  (fixed)"), else: 0
-    max(popup_content_width - String.length("› ") - 14 - suffix_width, 1)
-  end
-
-  # Keep the insertion point visible when a URL or model identifier is longer
-  # than the popup. The displayed value is still the real value (or its mask);
-  # only the far end away from the cursor is elided.
-  defp editable_value_spans(value, cursor, max_width) do
-    editable_codepoint_spans(String.codepoints(value), cursor, max_width)
-  end
-
-  defp masked_value_spans(value, cursor, max_width) do
-    value
-    |> String.codepoints()
-    |> Enum.map(fn _grapheme -> "•" end)
-    |> editable_codepoint_spans(cursor, max_width)
-  end
-
-  defp editable_codepoint_spans(graphemes, cursor, max_width) do
-    cursor = min(max(cursor, 0), length(graphemes))
-    max_width = max(max_width, 1)
-
-    if length(graphemes) + 1 <= max_width do
-      caret_spans(graphemes, cursor)
-    else
-      bounded_caret_spans(graphemes, cursor, max_width)
-    end
-  end
-
-  defp bounded_caret_spans(_graphemes, _cursor, 1), do: caret_spans([], 0)
-
-  defp bounded_caret_spans(graphemes, cursor, max_width) do
-    edge_width = max_width - 2
-
-    cond do
-      cursor <= edge_width ->
-        visible = Enum.take(graphemes, edge_width)
-        caret_spans(visible, cursor) ++ [Span.new("…")]
-
-      cursor >= length(graphemes) - edge_width ->
-        start = max(length(graphemes) - edge_width, 0)
-        visible = Enum.slice(graphemes, start, edge_width)
-        [Span.new("…") | caret_spans(visible, cursor - start)]
-
-      max_width < 4 ->
-        caret_spans([], 0)
-
-      true ->
-        content_width = max_width - 3
-        start = max(cursor - div(content_width, 2), 1)
-        start = min(start, length(graphemes) - content_width - 1)
-        visible = Enum.slice(graphemes, start, content_width)
-        [Span.new("…") | caret_spans(visible, cursor - start)] ++ [Span.new("…")]
-    end
-  end
-
-  defp caret_spans(graphemes, column) do
-    {before, trailing} = Enum.split(graphemes, column)
+  defp text_form_widgets(form, root, opts) do
+    rect = overlay_rect(form, root.width, root.height)
+    inner = content_rect(rect)
+    bg = style(fg: :white, bg: @panel_alt)
+    fields = Keyword.fetch!(opts, :fields)
+    field_widgets = Enum.flat_map(Enum.with_index(fields), &text_form_field(form, inner, bg, &1))
+    error_row = 2 + length(fields)
+    button_row = error_row + 1 + Keyword.get(opts, :button_gap, 0)
+    buttons = Keyword.fetch!(opts, :buttons)
 
     [
-      Span.new(Enum.join(before)),
-      Span.new("▏", style: style(fg: :black, bg: @accent)),
-      Span.new(Enum.join(trailing))
+      {%Clear{}, rect},
+      {%Paragraph{
+         text: "  " <> Keyword.fetch!(opts, :intro),
+         style: bg,
+         block: %Block{
+           title: " #{form.title} │ #{Keyword.fetch!(opts, :hint)} ",
+           borders: [:all],
+           border_type: :rounded,
+           border_style: style(fg: @accent),
+           style: style(bg: @panel_alt)
+         }
+       }, rect}
+      | field_widgets ++
+          [
+            {form_paragraph(if(form.error, do: "  ! " <> form.error, else: ""), bg),
+             form_row(inner, error_row)},
+            {form_paragraph("  " <> Enum.at(buttons, 0), bg), form_row(inner, button_row)},
+            {form_paragraph("  " <> Enum.at(buttons, 1), bg), form_row(inner, button_row + 1)}
+          ]
     ]
   end
 
-  defp locked?(overlay, key) do
-    case Enum.find(overlay.fields, &(&1.key == key)) do
-      %{locked?: locked?} -> locked?
-      _other -> false
+  defp text_form_field(form, inner, bg, {{key, label, opts}, index}) do
+    field = TextForm.field(form, key)
+    active? = form.field_index == index
+    locked? = Map.get(field, :locked?, false)
+    secret? = Keyword.get(opts, :secret?, false)
+    prefix_width = if form.kind == :provider_form, do: 16, else: 12
+    prefix = if(active?, do: "› ", else: "  ") <> String.pad_trailing(label, prefix_width - 2)
+    row = form_row(inner, index + 2)
+    value = ExRatatui.text_input_get_value(field.input)
+
+    if active? and not locked? do
+      visible_prefix = min(prefix_width, row.width)
+      input_rect = %{row | x: row.x + visible_prefix, width: max(row.width - visible_prefix, 0)}
+      state = if secret?, do: TextForm.masked_state(field), else: field.input
+
+      [
+        {form_paragraph(prefix, bg), %{row | width: min(prefix_width, row.width)}},
+        {%TextInput{
+           state: state,
+           placeholder: Keyword.get(opts, :placeholder),
+           placeholder_style: style(fg: @muted, bg: @panel_alt),
+           style: bg,
+           cursor_style: style(fg: :black, bg: @accent)
+         }, input_rect}
+      ]
+    else
+      display =
+        cond do
+          secret? and value != "" -> String.duplicate("•", length(String.codepoints(value)))
+          secret? -> Keyword.get(opts, :placeholder, "")
+          true -> value
+        end
+
+      suffix = if locked?, do: "  (fixed)", else: ""
+      [{form_paragraph(prefix <> display <> suffix, bg), row}]
     end
+  end
+
+  defp form_row(inner, offset),
+    do: %{inner | y: inner.y + offset, height: min(max(inner.height - offset, 0), 1)}
+
+  defp form_paragraph(text, style), do: %Paragraph{text: text, wrap: false, style: style}
+
+  defp api_key_placeholder(form) do
+    if form.key_saved?,
+      do: "(saved — leave blank to keep)",
+      else: "(optional for local providers)"
   end
 
   @doc "Settings labels and exact click widths."
