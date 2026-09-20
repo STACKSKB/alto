@@ -332,7 +332,7 @@ defmodule Alto.TUI.Backends.Codex do
       adapter: {:ok, __MODULE__, []},
       client: client,
       task_id: task["id"],
-      thread_id: task["backend_thread_id"],
+      thread_id: task["conversation_id"],
       turn_id: nil,
       status: :starting,
       phase: "waiting for Codex connection",
@@ -341,7 +341,7 @@ defmodule Alto.TUI.Backends.Codex do
     }
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      result = CodexBackend.start_turn(client, task["backend_thread_id"], prompt, opts)
+      result = CodexBackend.start_turn(client, task["conversation_id"], prompt, opts)
       send(owner, {:codex_turn_started, local_id, result})
     end)
 
@@ -351,7 +351,7 @@ defmodule Alto.TUI.Backends.Codex do
   defp maybe_load_codex_history(state) do
     task = State.selected_task(state)
     task_id = task && task["id"]
-    thread_id = task && task["backend_thread_id"]
+    thread_id = task && task["conversation_id"]
     entries = Map.get(state.entries, task_id, [])
 
     cond do

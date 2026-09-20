@@ -26,11 +26,11 @@ defmodule Alto.Harness.CatalogTest do
     assert {:ok, updated} =
              Catalog.update_task(
                task["id"],
-               %{status: "waiting", session_id: "sess-a", next_step: "Review the diff"},
+               %{"status" => "waiting", "conversation_id" => "sess-a"},
                opts
              )
 
-    assert updated["session_id"] == "sess-a"
+    assert updated["conversation_id"] == "sess-a"
     assert {:ok, [^updated]} = Catalog.tasks(first["id"], opts)
     assert {:ok, []} = Catalog.tasks(second["id"], opts)
     assert {:ok, projects} = Catalog.projects(opts)
@@ -63,7 +63,7 @@ defmodule Alto.Harness.CatalogTest do
     assert {:error, {:unknown_task, "missing"}} = Catalog.update_task("missing", %{}, opts)
 
     assert {:error, {:invalid_task_fields, ["surprise"]}} =
-             Catalog.update_task("missing", %{surprise: true}, opts)
+             Catalog.update_task("missing", %{"surprise" => true}, opts)
   end
 
   test "persists backend ownership without treating Codex threads as Alto sessions", %{
@@ -80,14 +80,14 @@ defmodule Alto.Harness.CatalogTest do
              )
 
     assert task["backend"] == "codex"
-    assert task["session_id"] == nil
+    assert task["conversation_id"] == nil
 
     assert {:ok, updated} =
-             Catalog.update_task(task["id"], %{backend_thread_id: "thr-123"}, opts)
+             Catalog.update_task(task["id"], %{"conversation_id" => "thr-123"}, opts)
 
-    assert updated["backend_thread_id"] == "thr-123"
+    assert updated["conversation_id"] == "thr-123"
 
     assert {:error, {:invalid_task_backend, "../other"}} =
-             Catalog.update_task(task["id"], %{backend: "../other"}, opts)
+             Catalog.update_task(task["id"], %{"backend" => "../other"}, opts)
   end
 end

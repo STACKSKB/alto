@@ -12,7 +12,7 @@ defmodule Alto.Harness.Catalog do
   alias Alto.Session
   alias Alto.Tools.AtomicWrite
 
-  @version 1
+  @version 2
   @statuses ~w(active waiting completed failed archived)
   @max_projects 500
   @max_tasks 10_000
@@ -170,10 +170,7 @@ defmodule Alto.Harness.Catalog do
               "title" => bounded_string(title, @max_title_bytes),
               "status" => "active",
               "backend" => backend,
-              "session_id" => Keyword.get(opts, :session_id),
-              "backend_thread_id" => Keyword.get(opts, :backend_thread_id),
-              "next_step" => nil,
-              "handoff_directory" => nil,
+              "conversation_id" => Keyword.get(opts, :conversation_id),
               "created_at_ms" => now,
               "updated_at_ms" => now
             }
@@ -189,11 +186,9 @@ defmodule Alto.Harness.Catalog do
   end
 
   @doc "Update the navigation fields owned by the harness for one task."
-  @spec update_task(String.t(), map() | keyword(), keyword()) ::
+  @spec update_task(String.t(), map(), keyword()) ::
           {:ok, task()} | {:error, term()}
   def update_task(task_id, changes, opts \\ []) when is_binary(task_id) do
-    changes = if is_list(changes), do: Map.new(changes), else: changes
-
     with {:ok, changes} <- validate_changes(changes) do
       transact(opts, fn catalog ->
         case Enum.find(catalog["tasks"], &(&1["id"] == task_id)) do
@@ -286,38 +281,29 @@ defmodule Alto.Harness.Catalog do
       MapSet.new([
         "status",
         "backend",
-        "session_id",
-        "backend_thread_id",
-        "next_step",
-        "handoff_directory",
+        "conversation_id",
         "title"
       ])
 
-    with {:ok, normalized} <- normalize_change_keys(changes) do
-      unknown = normalized |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
+    unknown = changes |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
-      cond do
-        unknown != [] ->
-          {:error, {:invalid_task_fields, unknown}}
+    cond do
+      unknown != [] ->
+        {:error, {:invalid_task_fields, unknown}}
 
-        Map.has_key?(normalized, "status") and normalized["status"] not in @statuses ->
-          {:error, {:invalid_task_status, normalized["status"]}}
+      Map.has_key?(changes, "status") and changes["status"] not in @statuses ->
+        {:error, {:invalid_task_status, changes["status"]}}
 
-        Map.has_key?(normalized, "backend") and not valid_backend?(normalized["backend"]) ->
-          {:error, {:invalid_task_backend, normalized["backend"]}}
+      Map.has_key?(changes, "backend") and not valid_backend?(changes["backend"]) ->
+        {:error, {:invalid_task_backend, changes["backend"]}}
 
-        Enum.any?(
-          ["session_id", "backend_thread_id", "next_step", "handoff_directory", "title"],
-          fn key ->
-            Map.has_key?(normalized, key) and
-                not valid_state_field?(key, normalized[key])
-          end
-        ) ->
-          {:error, :invalid_task_field_value}
+      Enum.any?(["conversation_id", "title"], fn key ->
+        Map.has_key?(changes, key) and not valid_state_field?(key, changes[key])
+      end) ->
+        {:error, :invalid_task_field_value}
 
-        true ->
-          {:ok, normalized}
-      end
+      true ->
+        {:ok, changes}
     end
   end
 
@@ -326,23 +312,12 @@ defmodule Alto.Harness.Catalog do
   defp empty, do: %{"version" => @version, "projects" => [], "tasks" => []}
   defp now_ms, do: System.system_time(:millisecond)
 
-  defp normalize_change_keys(changes) do
-    Enum.reduce_while(changes, {:ok, %{}}, fn
-      {key, value}, {:ok, result} when is_atom(key) or is_binary(key) ->
-        {:cont, {:ok, Map.put(result, to_string(key), value)}}
-
-      {key, _value}, _result ->
-        {:halt, {:error, {:invalid_task_field, key}}}
-    end)
-  end
-
   defp valid_backend?(value) when is_binary(value),
     do: Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, value)
 
   defp valid_backend?(_), do: false
 
   defp valid_state_field?(_key, nil), do: true
-  defp valid_state_field?("backend", value), do: valid_backend?(value)
   defp valid_state_field?("title", value), do: bounded_binary?(value, @max_title_bytes)
   defp valid_state_field?(_key, value), do: bounded_binary?(value, @max_state_field_bytes)
 

@@ -102,7 +102,7 @@ defmodule Alto.TUI.RunLifecycleTest do
       refute rendered =~ "Queued message:"
       assert state(app).input_routes == %{}
 
-      session_id = State.selected_task(state(app))["session_id"]
+      session_id = State.selected_task(state(app))["conversation_id"]
 
       assert {:ok, %{messages: messages}} =
                Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
@@ -279,7 +279,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert_receive {:model_waiting, first, _}, 5_000
     send(first, {:finish, "saved response"})
     eventually(fn -> state(app).runs == %{} end)
-    session_id = State.selected_task(state(app))["session_id"]
+    session_id = State.selected_task(state(app))["conversation_id"]
     assert is_binary(session_id)
 
     submit(app, "second")
@@ -290,7 +290,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     Process.exit(Alto.Test.Runner.worker(run.handle), :kill)
     eventually(fn -> state(app).runs == %{} end)
     assert State.selected_task(state(app))["status"] == "failed"
-    assert State.selected_task(state(app))["session_id"] == session_id
+    assert State.selected_task(state(app))["conversation_id"] == session_id
     assert state(app).notice =~ "queued message paused"
     assert Process.alive?(app)
   end

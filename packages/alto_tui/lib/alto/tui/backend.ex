@@ -35,6 +35,13 @@ defmodule Alto.TUI.Backend do
     end
   end
 
+  def runner?(options, id) do
+    case lookup(options, id) do
+      {:ok, module, _opts} -> function_exported?(module, :start, 4)
+      _ -> false
+    end
+  end
+
   def items(options) do
     Enum.map(configured(options), fn {id, {_module, opts}} ->
       %{label: Keyword.get(opts, :label, Atom.to_string(id)), value: id}

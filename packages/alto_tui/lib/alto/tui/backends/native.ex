@@ -7,14 +7,14 @@ defmodule Alto.TUI.Backends.Native do
   alias Alto.Session
   @impl true
   def start(task, prompt, run_options, _options) do
-    case task["session_id"] do
-      session_id when is_binary(session_id) ->
+    case task["conversation_id"] do
+      conversation_id when is_binary(conversation_id) ->
         session_opts = Keyword.take(run_options, [:session_dir])
 
-        with {:ok, snapshot} <- Session.transcript(session_id, session_opts) do
+        with {:ok, snapshot} <- Session.transcript(conversation_id, session_opts) do
           run_options =
             run_options
-            |> Keyword.put(:session, session_id)
+            |> Keyword.put(:session, conversation_id)
             |> Keyword.put(
               :resume,
               Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])

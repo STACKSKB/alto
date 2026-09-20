@@ -456,14 +456,11 @@ defmodule Alto.TUI.State do
   def current_usage(%__MODULE__{} = state),
     do: Map.get(state.usage, state.selected_task_id, Usage.new())
 
-  @doc "Execution backend persisted with a task; legacy tasks are native Alto tasks."
   def task_backend(%{"backend" => backend}) when is_binary(backend) do
     String.to_existing_atom(backend)
   rescue
     ArgumentError -> :unavailable
   end
-
-  def task_backend(_task), do: :alto
 
   def focus_next(%__MODULE__{} = state, direction \\ :next) do
     step = if direction == :previous, do: -1, else: 1
@@ -580,8 +577,12 @@ defmodule Alto.TUI.State do
       state
     else
       case selected_task(state) do
-        %{"session_id" => session_id} when is_binary(session_id) ->
-          entries = load_session_entries(session_id, state.catalog_opts)
+        %{"conversation_id" => conversation_id} = task when is_binary(conversation_id) ->
+          entries =
+            if Alto.TUI.Backend.runner?(state.run_options, task_backend(task)),
+              do: load_session_entries(conversation_id, state.catalog_opts),
+              else: []
+
           put_entries(state, state.selected_task_id, entries)
 
         _other ->
@@ -596,12 +597,12 @@ defmodule Alto.TUI.State do
     else
       usage =
         case selected_task(state) do
-          %{"session_id" => session_id} = task when is_binary(session_id) ->
+          %{"conversation_id" => conversation_id} = task when is_binary(conversation_id) ->
             if Alto.TUI.Backend.ui(
                  %{state | selected_backend: task_backend(task)},
                  :session_usage?
                ) == true,
-               do: load_session_usage(session_id, state.catalog_opts),
+               do: load_session_usage(conversation_id, state.catalog_opts),
                else: Usage.new()
 
           _other ->

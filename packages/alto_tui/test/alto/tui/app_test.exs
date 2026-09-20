@@ -296,7 +296,15 @@ defmodule Alto.TUI.AppTest do
 
     tasks =
       Map.new(1..3, fn n ->
-        {"p#{n}", [%{"id" => "t#{n}", "title" => "Task #{n}", "status" => "completed"}]}
+        {"p#{n}",
+         [
+           %{
+             "id" => "t#{n}",
+             "title" => "Task #{n}",
+             "status" => "completed",
+             "backend" => "alto"
+           }
+         ]}
       end)
 
     state = %{
@@ -878,7 +886,7 @@ defmodule Alto.TUI.AppTest do
     assert {:ok, _task} =
              Alto.Harness.Catalog.create_task(project["id"], "durable usage",
                path: context.catalog,
-               session_id: session_id
+               conversation_id: session_id
              )
 
     state = state!(context, session_dir: session_dir)
@@ -887,6 +895,31 @@ defmodule Alto.TUI.AppTest do
     assert usage.total_tokens == 850
     assert usage.cached_input_tokens == 400
     assert Alto.Usage.cache_hit_rate(usage) == 50.0
+  end
+
+  test "a Codex thread ID collision never hydrates native session history", context do
+    session_dir = Path.join(context.root, "sessions")
+    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, id} = Alto.Session.create("native secret", %{}, session_dir: session_dir)
+    messages = [%{"role" => "assistant", "content" => "native-only history"}]
+    {:ok, _snapshot} = Alto.Session.persist_settled(id, messages, 19, session_dir: session_dir)
+
+    {:ok, task} =
+      Alto.Harness.Catalog.create_task(project["id"], "Codex task",
+        path: context.catalog,
+        backend: "codex",
+        conversation_id: id
+      )
+
+    state = state!(context, session_dir: session_dir)
+    assert state.selected_backend == :codex
+    assert State.current_entries(state) == []
+
+    {:ok, _task} =
+      Alto.Harness.Catalog.update_task(task["id"], %{"backend" => "alto"}, path: context.catalog)
+
+    native = state!(context, session_dir: session_dir)
+    assert [%{kind: :assistant, text: "native-only history"}] = State.current_entries(native)
   end
 
   test "narrow gear help keeps every command visible", context do
@@ -1382,7 +1415,7 @@ defmodule Alto.TUI.AppTest do
       usage = State.current_usage(state)
 
       task && task["status"] == "completed" && task["backend"] == "codex" &&
-        task["backend_thread_id"] == "thr-tui" && usage.total_tokens == 1_010 &&
+        task["conversation_id"] == "thr-tui" && usage.total_tokens == 1_010 &&
         usage.cached_input_tokens == 600
     end)
 

@@ -830,7 +830,7 @@ defmodule Alto.TUI.App do
 
   def finish_run(state, local_id, status, opts \\ []) do
     run = Map.fetch!(state.runs, local_id)
-    changes = %{"status" => status} |> maybe_change("session_id", opts[:session_id])
+    changes = %{"status" => status} |> maybe_change("conversation_id", opts[:session_id])
 
     state =
       case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
@@ -861,7 +861,7 @@ defmodule Alto.TUI.App do
     changes =
       %{"status" => "active"}
       |> maybe_change("backend", run[:backend_id] && Atom.to_string(run.backend_id))
-      |> maybe_change("backend_thread_id", run[:thread_id])
+      |> maybe_change("conversation_id", run[:thread_id])
 
     case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
       {:ok, task} -> State.update_task_record(state, task)
@@ -1771,7 +1771,7 @@ defmodule Alto.TUI.App do
   defp task_backend_locked?(nil), do: false
 
   defp task_backend_locked?(task),
-    do: is_binary(task["session_id"]) or is_binary(task["backend_thread_id"])
+    do: is_binary(task["conversation_id"])
 
   defp persist_task_backend(state, nil, _backend), do: state
 
