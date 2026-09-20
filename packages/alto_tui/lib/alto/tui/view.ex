@@ -24,9 +24,8 @@ defmodule Alto.TUI.View do
     |> add(transcript_widget(state), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
-    |> add_details(state, layout.details, :pane)
     |> add(status_widget(state, width), layout.status)
-    |> add_context_drawer(state, layout)
+    |> add_details(state, details_layout(state, width, height))
     |> add_overlay(state.overlay, layout.root)
   end
 
@@ -84,32 +83,10 @@ defmodule Alto.TUI.View do
 
   def selection_content(state, width, height) do
     layout = layout(state, width, height)
-    drawer = context_overlay_rect(state, width, height)
-    details = drawer || layout.details
+    details = details_layout(state, width, height)
+    details_content = if details, do: [details.content], else: []
 
-    details_content =
-      if details do
-        rect = content_rect(details)
-        # Approval actions sit below the data, outside the selectable area.
-        [
-          %{
-            rect
-            | height:
-                max(
-                  rect.height -
-                    if(state.pending_approvals == [],
-                      do: 0,
-                      else: length(approval_controls(details))
-                    ),
-                  0
-                )
-          }
-        ]
-      else
-        []
-      end
-
-    if drawer do
+    if details && details.presentation == :drawer do
       details_content
     else
       transcript =
@@ -146,13 +123,13 @@ defmodule Alto.TUI.View do
 
   def hit_target(%State{} = state, width, height, x, y) do
     layout = layout(state, width, height)
-    context_overlay = context_overlay_rect(state, width, height)
+    details = details_layout(state, width, height)
 
     cond do
-      PaneLayout.contains?(context_overlay, x, y) ->
-        details_target(state, context_overlay, x, y)
+      details && details.presentation == :drawer && PaneLayout.contains?(details.rect, x, y) ->
+        details_target(details, x, y)
 
-      context_overlay ->
+      details && details.presentation == :drawer ->
         :details_drawer_outside
 
       layout.left_seam && abs(x - layout.left_seam) <= 0 ->
@@ -189,7 +166,7 @@ defmodule Alto.TUI.View do
         :composer
 
       PaneLayout.contains?(layout.details, x, y) ->
-        details_target(state, layout.details, x, y)
+        details_target(details, x, y)
 
       PaneLayout.contains?(layout.transcript, x, y) ->
         :transcript
@@ -219,6 +196,23 @@ defmodule Alto.TUI.View do
       else
         %Rect{x: width - drawer_width, y: 0, width: drawer_width, height: main_height}
       end
+    end
+  end
+
+  defp details_layout(state, width, height) do
+    drawer = context_overlay_rect(state, width, height)
+    rect = drawer || layout(state, width, height).details
+
+    if rect do
+      controls = if state.pending_approvals == [], do: [], else: approval_controls(rect)
+      content = content_rect(rect)
+
+      %{
+        rect: rect,
+        content: %{content | height: max(content.height - length(controls), 0)},
+        controls: controls,
+        presentation: if(drawer, do: :drawer, else: :pane)
+      }
     end
   end
 
@@ -388,23 +382,21 @@ defmodule Alto.TUI.View do
   @doc "Largest useful context offset, including the approval button rows."
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
-    drawer = context_overlay_rect(state, width, height)
-    rect = drawer || layout(state, width, height).details
+    details = details_layout(state, width, height)
 
-    if rect do
-      {_, text} = details_content(state, if(drawer, do: :drawer, else: :pane))
-      controls = if state.pending_approvals == [], do: 0, else: length(approval_controls(rect))
-      Alto.TUI.Scroll.bottom(text, rect.width - 2, rect.height - 2 - controls, :details)
+    if details do
+      {_, text} = details_content(state, details.presentation)
+      Alto.TUI.Scroll.bottom(text, details.content.width, details.content.height, :details)
     else
       0
     end
   end
 
-  defp details_widget(state, presentation) do
-    {title, text} = details_content(state, presentation)
+  defp details_widget(state, details) do
+    {title, text} = details_content(state, details.presentation)
 
     title =
-      if presentation == :drawer,
+      if details.presentation == :drawer,
         do: title <> "│ click header / Esc close ",
         else: title
 
@@ -417,28 +409,24 @@ defmodule Alto.TUI.View do
     }
   end
 
-  defp add_details(widgets, _state, nil, _presentation), do: widgets
+  defp add_details(widgets, _state, nil), do: widgets
 
-  defp add_details(widgets, %{pending_approvals: []} = state, rect, presentation),
-    do: add(widgets, details_widget(state, presentation), rect)
-
-  defp add_details(widgets, state, rect, presentation) do
-    details = details_widget(state, presentation)
-    controls = approval_controls(rect)
-
-    content = %Rect{
-      x: rect.x + 1,
-      y: rect.y + 1,
-      width: max(rect.width - 2, 0),
-      height: max(rect.height - 2 - length(controls), 0)
-    }
+  defp add_details(widgets, state, layout) do
+    details = details_widget(state, layout)
 
     widgets =
-      widgets
-      |> add(%{details | text: "", scroll: {0, 0}}, rect)
-      |> add(%{details | block: nil}, content)
+      if layout.presentation == :drawer, do: add(widgets, %Clear{}, layout.rect), else: widgets
 
-    Enum.reduce(controls, widgets, fn control, acc ->
+    widgets =
+      if layout.controls == [] do
+        add(widgets, details, layout.rect)
+      else
+        widgets
+        |> add(%{details | text: "", scroll: {0, 0}}, layout.rect)
+        |> add(%{details | block: nil}, layout.content)
+      end
+
+    Enum.reduce(layout.controls, widgets, fn control, acc ->
       button = %Paragraph{
         text: control.label,
         style: style(fg: :black, bg: @accent, modifiers: [:bold])
@@ -468,13 +456,6 @@ defmodule Alto.TUI.View do
   end
 
   defp approval_controls(_rect), do: []
-
-  defp add_context_drawer(widgets, state, layout) do
-    case context_overlay_rect(state, layout.root.width, layout.root.height) do
-      nil -> widgets
-      rect -> widgets |> add(%Clear{}, rect) |> add_details(state, rect, :drawer)
-    end
-  end
 
   defp status_widget(state, width) do
     usage = State.current_usage(state)
@@ -769,16 +750,14 @@ defmodule Alto.TUI.View do
     end
   end
 
-  defp details_target(%{details_drawer_open?: true}, rect, _x, y) when y == rect.y,
+  defp details_target(%{presentation: :drawer, rect: rect}, _x, y) when y == rect.y,
     do: :details_close
 
-  defp details_target(%{pending_approvals: [_ | _]}, rect, x, y) do
-    Enum.find_value(approval_controls(rect), :details, fn control ->
+  defp details_target(details, x, y) do
+    Enum.find_value(details.controls, :details, fn control ->
       if PaneLayout.contains?(control.rect, x, y), do: {:approval, control.decision}
     end)
   end
-
-  defp details_target(_state, _rect, _x, _y), do: :details
 
   defp details_content(%{pending_approvals: [%{request: request} | _]}, _presentation) do
     {" approval required ", Alto.TUI.ApprovalView.text(request)}
