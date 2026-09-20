@@ -25,7 +25,7 @@ defmodule Alto.Runner.Execution.Workspace do
 
       {:error, reason} ->
         {:error, {:workspace_failed, reason},
-         %{empty_result() | verdict: :unknown, agent_identity: identity}}
+         %{Alto.Runner.Result.empty() | verdict: :unknown, agent_identity: identity}}
     end
   end
 
@@ -52,7 +52,7 @@ defmodule Alto.Runner.Execution.Workspace do
     do: workspace_failure(outcome, nil, reason)
 
   defp finish_resume({:error, reason}, _, _),
-    do: {:error, {:workspace_failed, reason}, %{empty_result() | verdict: :unknown}}
+    do: {:error, {:workspace_failed, reason}, %{Alto.Runner.Result.empty() | verdict: :unknown}}
 
   defp finish({:error, :approval_suspended, _} = outcome, worked, _opts, _manager),
     do: attach_workspace(outcome, worked)
@@ -81,7 +81,7 @@ defmodule Alto.Runner.Execution.Workspace do
   def call(fun, budget, timeout, cancel_ref) do
     case Budget.check(budget) do
       :ok ->
-        case supervised_call(fun, Budget.timeout(budget, timeout), cancel_ref) do
+        case Alto.Runner.Execution.Call.run(fun, Budget.timeout(budget, timeout), cancel_ref) do
           {:ok, value} -> value
           {:error, reason} -> {:error, {:workspace_process_failed, reason}}
           {:cancelled, reason} -> {:error, {:cancelled, reason}}
@@ -101,7 +101,4 @@ defmodule Alto.Runner.Execution.Workspace do
     result = elem(outcome, tuple_size(outcome) - 1)
     {:error, {:workspace_failed, reason}, %{result | verdict: :unknown, workspace: info}}
   end
-
-  defp supervised_call(fun, timeout, ref), do: Alto.Runner.Execution.Call.run(fun, timeout, ref)
-  defp empty_result, do: Alto.Runner.Result.empty()
 end

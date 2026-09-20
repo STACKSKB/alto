@@ -1411,10 +1411,8 @@ defmodule Alto.Runner.Execution do
 
   defp record_event(run, event), do: Alto.Runner.Execution.Events.record(run, event)
 
-  defp persist_session_outcome(run, outcome) do
-    state = Alto.Runner.Execution.Session.from_run(run)
-    Alto.Runner.Execution.Session.persist_outcome(state, outcome)
-  end
+  defp persist_session_outcome(run, outcome),
+    do: Alto.Runner.Execution.Session.persist_outcome(run, outcome)
 
   defp persistence_status([]), do: :ok
   defp persistence_status(errors), do: {:degraded, errors}

@@ -140,7 +140,7 @@ defmodule Alto.Runner.Execution.Transcript do
 
   defp execute_reducer(run, input, module, opts, headroom) do
     outcome =
-      supervised_call(
+      Alto.Runner.Execution.Call.run(
         fn ->
           {:ok, accounting} = Agent.start_link(fn -> {0, Usage.new()} end)
 
@@ -338,7 +338,6 @@ defmodule Alto.Runner.Execution.Transcript do
   defp add_persistence_error(run, reason), do: Events.add_persistence_error(run, reason)
 
   defp session_dir_opt(run), do: [session_dir: run.session_dir]
-  defp supervised_call(fun, timeout, ref), do: Alto.Runner.Execution.Call.run(fun, timeout, ref)
   # Internal reducer output is not an assistant answer. Keep progress observable
   # without leaking JSON artifacts (or reducer reasoning) into the conversation.
   defp compaction_sink(sink) do

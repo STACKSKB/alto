@@ -2,7 +2,7 @@ defmodule Alto.Runner.Execution.Session do
   @moduledoc """
   Session persistence for an execution host.
 
-  This module owns the append-only event, transcript and completion sidecars;
+  This module persists transcript revisions and completion records;
   the scheduler supplies only the run fields needed by those writes. Persistence
   remains best-effort and is reflected in the neutral `Alto.Runner.Result`.
   """
@@ -12,76 +12,13 @@ defmodule Alto.Runner.Execution.Session do
 
   require Logger
 
-  @enforce_keys [
-    :session,
-    :session_id,
-    :session_dir,
-    :resume_snapshot,
-    :checkpoint_resume,
-    :transcript_revision,
-    :agent_depth
-  ]
-  defstruct [
-    :session,
-    :session_id,
-    :session_dir,
-    :resume_snapshot,
-    :checkpoint_resume,
-    :transcript_revision,
-    :agent_depth,
-    max_conversation_bytes: 128_000_000
-  ]
-
-  @type t :: %__MODULE__{
-          session: DurableSession.session_id() | nil,
-          session_id: binary(),
-          session_dir: Path.t() | nil,
-          resume_snapshot: boolean(),
-          checkpoint_resume: boolean(),
-          transcript_revision: non_neg_integer() | :any,
-          agent_depth: non_neg_integer(),
-          max_conversation_bytes: pos_integer()
-        }
-
   @type outcome ::
           {:ok, Result.t()}
-          | {:error, :approval_suspended, Result.t()}
           | {:error, term(), Result.t()}
 
-  @doc "Project the persistence fields from a scheduler run state."
-  @spec from_run(map()) :: t()
-  def from_run(run) do
-    %__MODULE__{
-      session: run.session,
-      session_id: run.tool_context.session_id,
-      session_dir: run.session_dir,
-      resume_snapshot: run.resume_snapshot,
-      checkpoint_resume: Map.get(run, :checkpoint_resume, false),
-      transcript_revision: run.transcript_revision,
-      agent_depth: run.agent_depth,
-      max_conversation_bytes: Map.get(run, :max_conversation_bytes, 128_000_000)
-    }
-  end
-
-  @doc "Persist one durable event; failures are returned for host accounting."
-  @spec persist_event(t(), term()) :: :ok | {:error, term()}
-  def persist_event(%__MODULE__{session: nil}, _event), do: :ok
-
-  def persist_event(%__MODULE__{} = state, event) do
-    DurableSession.append(
-      state.session,
-      DurableSession.event_record(state.session_id, event),
-      session_dir_opt(state)
-    )
-  end
-
-  @doc "Persist the terminal or suspended outcome and attach degradation status."
-  @spec persist_outcome(t(), outcome()) :: outcome()
-  def persist_outcome(state, outcome), do: persist_session_outcome(state, outcome)
-
-  @doc "Persist the terminal or suspended outcome and attach degradation status."
-  @spec persist_session_outcome(t(), outcome()) :: outcome()
-  def persist_session_outcome(%__MODULE__{session: nil}, outcome) do
+  @doc "Persist the terminal or suspended outcome using the required run fields."
+  @spec persist_outcome(map(), outcome()) :: outcome()
+  def persist_outcome(%{session: nil}, outcome) do
     # A run without a transcript can still request durable child journals.
     # Keep their persistence failures visible instead of erasing them here.
     result = elem(outcome, tuple_size(outcome) - 1)
@@ -95,31 +32,27 @@ defmodule Alto.Runner.Execution.Session do
     put_persistence(outcome, status)
   end
 
-  def persist_session_outcome(%__MODULE__{} = state, {:ok, result}) do
-    {result, transcript_errors} = persist_transcript(state, result)
+  def persist_outcome(state, outcome) do
+    result = elem(outcome, tuple_size(outcome) - 1)
+    {status, reason, save_transcript?} = completion(outcome)
+
+    {result, transcript_errors} =
+      if save_transcript?, do: persist_transcript(state, result), else: {result, []}
 
     errors =
       existing_persistence_errors(result) ++
-        transcript_errors ++ persistence_errors([persist_completed(state, "ok", nil, result)])
+        transcript_errors ++
+        persistence_errors(persist_completed(state, status, reason, result))
 
-    put_persistence({:ok, result}, persistence_status(errors))
+    outcome = put_elem(outcome, tuple_size(outcome) - 1, result)
+    put_persistence(outcome, persistence_status(errors))
   end
 
-  def persist_session_outcome(%__MODULE__{} = state, {:error, :approval_suspended, result}) do
-    # A paused run has no completed transcript. Its exact continuation is
-    # persisted by the host ledger before acknowledging its claim.
-    errors =
-      existing_persistence_errors(result) ++
-        persistence_errors([persist_completed(state, "suspended", nil, result)])
+  defp completion({:ok, _result}), do: {"ok", nil, true}
+  defp completion({:error, :approval_suspended, _result}), do: {"suspended", nil, false}
 
-    put_persistence({:error, :approval_suspended, result}, persistence_status(errors))
-  end
-
-  def persist_session_outcome(
-        %__MODULE__{} = state,
-        {:error, reason, %{checkpoint: %{"kind" => kind}} = result}
-      )
-      when kind in ["parent", "child"] do
+  defp completion({:error, reason, %{checkpoint: %{"kind" => kind}}})
+       when kind in ["parent", "child"] do
     status =
       case reason do
         {:cancelled, _} -> "cancelled"
@@ -127,49 +60,29 @@ defmodule Alto.Runner.Execution.Session do
         _ -> "error"
       end
 
-    errors =
-      existing_persistence_errors(result) ++
-        persistence_errors([persist_completed(state, status, reason, result)])
-
-    put_persistence({:error, reason, result}, persistence_status(errors))
+    {status, reason, false}
   end
 
-  def persist_session_outcome(%__MODULE__{} = state, {:error, reason, result}) do
-    {result, transcript_errors} = persist_transcript(state, result)
+  defp completion({:error, {:cancelled, cause}, _result}), do: {"cancelled", cause, true}
+  defp completion({:error, reason, _result}), do: {"error", reason, true}
 
-    completion =
-      case reason do
-        {:cancelled, cause} -> persist_completed(state, "cancelled", cause, result)
-        _other -> persist_completed(state, "error", reason, result)
-      end
-
-    errors =
-      existing_persistence_errors(result) ++
-        transcript_errors ++ persistence_errors([completion])
-
-    put_persistence({:error, reason, result}, persistence_status(errors))
-  end
-
-  defp persist_transcript(%__MODULE__{resume_snapshot: false}, result), do: {result, []}
+  defp persist_transcript(%{resume_snapshot: false}, result), do: {result, []}
   defp persist_transcript(_state, %{transcript_persisted: true} = result), do: {result, []}
 
-  defp persist_transcript(%__MODULE__{checkpoint_resume: true}, %{loop_state: nil} = result),
+  defp persist_transcript(%{checkpoint_resume: true}, %{loop_state: nil} = result),
     do: {result, []}
 
-  defp persist_transcript(%__MODULE__{} = state, result) do
+  defp persist_transcript(%{} = state, result) do
     case DurableSession.Conversation.persist(
            state.session,
            result.messages,
            result.transcript_bytes,
-           session_dir_opt(state)
-           |> Keyword.put(
-             :expected_revision,
-             result.transcript_revision || state.transcript_revision
-           )
-           |> Keyword.put(:resolved_operations, result.resolved_operations)
-           |> Keyword.put(:context_observation, result.context_observation)
-           |> Keyword.put(:allow_pending, true)
-           |> Keyword.put(:max_conversation_bytes, state.max_conversation_bytes)
+           session_dir: state.session_dir,
+           expected_revision: result.transcript_revision || state.transcript_revision,
+           resolved_operations: result.resolved_operations,
+           context_observation: result.context_observation,
+           allow_pending: true,
+           max_conversation_bytes: state.max_conversation_bytes
          ) do
       {:ok, snapshot} ->
         {%{
@@ -188,7 +101,7 @@ defmodule Alto.Runner.Execution.Session do
   defp persist_completed(state, outcome, reason, result) do
     record =
       DurableSession.completed_record(%{
-        run_id: state.session_id,
+        run_id: state.tool_context.session_id,
         subagent: state.agent_depth > 0,
         session_owner: state.agent_depth == 0 or state.resume_snapshot,
         outcome: outcome,
@@ -212,12 +125,8 @@ defmodule Alto.Runner.Execution.Session do
   defp existing_persistence_errors(%{persistence: {:degraded, errors}}), do: errors
   defp existing_persistence_errors(_result), do: []
 
-  defp persistence_errors(results) do
-    Enum.flat_map(results, fn
-      :ok -> []
-      {:error, reason} -> [reason]
-    end)
-  end
+  defp persistence_errors(:ok), do: []
+  defp persistence_errors({:error, reason}), do: [reason]
 
   defp persistence_status([]), do: :ok
   defp persistence_status(errors), do: {:degraded, errors}
