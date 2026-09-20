@@ -108,7 +108,7 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "Read and validate an existing batch without initializing or mutating it."
   def lookup(ledger, key, opts \\ []) do
-    with {:ok, deadline} <- lookup_options(opts),
+    with {:ok, deadline} <- Retained.deadline(opts),
          :ok <- valid_key(key) do
       safe(fn ->
         with {:ok, entry} <- Retained.read(ledger, key, deadline),
@@ -131,7 +131,7 @@ defmodule Alto.Subagents.Continuation do
   @doc "List aggregate continuations whose immutable metadata contains the filter."
   def list(ledger, metadata_filter \\ %{}, opts \\ []) do
     with true <- is_map(metadata_filter) and json?(metadata_filter),
-         {:ok, deadline} <- lookup_options(opts) do
+         {:ok, deadline} <- Retained.deadline(opts) do
       safe(fn -> list_keys(ledger, metadata_filter, deadline) end)
     else
       false -> {:error, :invalid_continuation_metadata_filter}
@@ -871,19 +871,6 @@ defmodule Alto.Subagents.Continuation do
   end
 
   defp valid_key(_), do: {:error, :invalid_batch_key}
-
-  defp lookup_options(opts) do
-    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
-      deadline = Keyword.get(opts, :deadline, :infinity)
-
-      case Retained.deadline_ok(deadline) do
-        :ok -> {:ok, deadline}
-        {:error, _} = error -> error
-      end
-    else
-      {:error, :invalid_batch_options}
-    end
-  end
 
   defp valid_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
   defp valid_revision(_), do: {:error, :invalid_approval_revision}

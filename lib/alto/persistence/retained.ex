@@ -12,6 +12,16 @@ defmodule Alto.Persistence.Retained do
 
   @default_call_timeout 5_000
 
+  @doc "Validate options for a retained-record lookup and return its deadline."
+  def deadline(opts) do
+    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
+      deadline = Keyword.get(opts, :deadline, :infinity)
+      with :ok <- deadline_ok(deadline), do: {:ok, deadline}
+    else
+      {:error, :invalid_retained_options}
+    end
+  end
+
   def deadline_ok(:infinity), do: :ok
 
   def deadline_ok(deadline) when is_integer(deadline) do

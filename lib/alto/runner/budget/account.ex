@@ -56,7 +56,7 @@ defmodule Alto.Runner.Budget.Account do
 
   @doc "Look up one retained account without initializing or mutating it."
   def lookup(ledger, key, opts \\ []) do
-    with {:ok, deadline} <- deadline_option(opts) do
+    with {:ok, deadline} <- Retained.deadline(opts) do
       safe(fn ->
         with {:ok, entry} <- Retained.read(ledger, key, deadline),
              :ok <- valid_initial(entry),
@@ -359,19 +359,6 @@ defmodule Alto.Runner.Budget.Account do
           |> Keyword.take([:max_effects, :max_model_requests])
           |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)},
        else: {:error, :invalid_budget_account_limits}
-  end
-
-  defp deadline_option(opts) do
-    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
-      deadline = Keyword.get(opts, :deadline, :infinity)
-
-      case Retained.deadline_ok(deadline) do
-        :ok -> {:ok, deadline}
-        {:error, _} = error -> error
-      end
-    else
-      {:error, :invalid_budget_account_options}
-    end
   end
 
   defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max

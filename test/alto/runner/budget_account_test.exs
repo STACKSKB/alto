@@ -93,7 +93,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert Account.read(account) == {:ok, before}
 
     assert {:error, :not_found} = Account.lookup(ledger, "missing")
-    assert {:error, :invalid_budget_account_options} = Account.lookup(ledger, "lookup", typo: 1)
+    assert {:error, :invalid_retained_options} = Account.lookup(ledger, "lookup", typo: 1)
     assert :ok = OperationLog.record_intent(ledger, "foreign", "other_kind", nil, %{})
     assert {:error, :invalid_budget_account} = Account.lookup(ledger, "foreign")
     assert :ok = OperationLog.record_intent(ledger, "malformed", "alto_budget_account", nil, %{})

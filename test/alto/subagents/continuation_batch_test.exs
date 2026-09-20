@@ -67,7 +67,7 @@ defmodule Alto.Subagents.ContinuationTest do
 
     assert {:error, :not_found} = Continuation.lookup(ledger, "missing-batch")
 
-    assert {:error, :invalid_batch_options} =
+    assert {:error, :invalid_retained_options} =
              Continuation.lookup(ledger, "batch-lookup", typo: true)
 
     assert :ok = OperationLog.record_intent(ledger, "wrong-kind", "other", nil, %{})
