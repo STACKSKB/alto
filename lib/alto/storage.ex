@@ -49,6 +49,37 @@ defmodule Alto.Storage do
     end
   end
 
+  @doc "Replay under a lifetime lock, then transfer ownership to the new server."
+  def start_server(module, state, load, opts) do
+    with {:ok, lock} <-
+           acquire(state.path <> ".lock", timeout: Keyword.get(opts, :lock_timeout, 5_000)) do
+      result =
+        with {:ok, loaded} <- load.(state),
+             {:ok, pid} <-
+               GenServer.start_link(module, %{loaded | lock: lock},
+                 name: Keyword.get(opts, :name, module)
+               ) do
+          case connect(lock, pid) do
+            :ok ->
+              {:ok, pid}
+
+            {:error, _} = error ->
+              GenServer.stop(pid)
+              error
+          end
+        end
+
+      case result do
+        {:ok, _pid} ->
+          result
+
+        error ->
+          release(lock)
+          error
+      end
+    end
+  end
+
   @doc "Transfer an acquired lock to its long-lived owner process."
   @spec connect(port(), pid()) :: :ok | {:error, term()}
   def connect(port, pid) when is_pid(pid) do

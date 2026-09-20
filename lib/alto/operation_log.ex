@@ -97,39 +97,7 @@ defmodule Alto.OperationLog do
         max_attempts: max_attempts
       }
 
-      case Alto.Storage.acquire(state.path <> ".lock",
-             timeout: Keyword.get(opts, :lock_timeout, 5_000)
-           ) do
-        {:ok, lock} ->
-          case load(state) do
-            {:ok, state} ->
-              case GenServer.start_link(__MODULE__, %{state | lock: lock},
-                     name: Keyword.get(opts, :name, __MODULE__)
-                   ) do
-                {:ok, pid} = result ->
-                  case Alto.Storage.connect(lock, pid) do
-                    :ok ->
-                      result
-
-                    {:error, reason} ->
-                      GenServer.stop(pid, {:lock_connect_failed, reason})
-                      Alto.Storage.release(lock)
-                      {:error, reason}
-                  end
-
-                {:error, _reason} = result ->
-                  Alto.Storage.release(lock)
-                  result
-              end
-
-            {:error, reason} ->
-              Alto.Storage.release(lock)
-              {:error, reason}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      Alto.Storage.start_server(__MODULE__, state, &load/1, opts)
     end
   end
 
