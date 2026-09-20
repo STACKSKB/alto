@@ -178,24 +178,28 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   defmodule CustomReducer do
-    @behaviour Alto.Context.Compaction
-    def request(input, _limit, opts) do
-      send(opts[:owner], {:custom_input, input})
+    @behaviour Alto.Context.Reducer
+    def compact(input, model, opts) do
+      send(opts[:owner], {:custom_input, input.text})
 
-      {:ok,
-       %{messages: [%{"role" => "user", "content" => "Summarize this agent work: " <> input}]}}
+      with {:ok, %{message: content}} <-
+             model.(%{
+               messages: [
+                 %{"role" => "user", "content" => "Summarize this agent work: " <> input.text}
+               ]
+             }) do
+        {:ok, %{content: "Domain state: " <> content, data: %{}, events: [], records: []}}
+      end
     end
-
-    def decode(%{message: content}, _limit, _opts), do: {:ok, "Domain state: " <> content}
   end
 
   defmodule DeterministicReducer do
-    @behaviour Alto.Context.Compaction
+    @behaviour Alto.Context.Reducer
 
     @impl true
-    def reduce(input, _limit, opts) do
-      send(opts[:owner], {:deterministic_input, input})
-      {:ok, "Retained domain state."}
+    def compact(input, _model, opts) do
+      send(opts[:owner], {:deterministic_input, input.text})
+      {:ok, %{content: "Retained domain state.", data: %{}, events: [], records: []}}
     end
   end
 

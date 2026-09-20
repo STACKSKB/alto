@@ -27,9 +27,9 @@ also consume the shared model budget. Compaction never refreshes deadlines or
 execution budgets, and its count is preserved in approval checkpoints.
 
 Compaction is disabled by default. When enabled, the default allowance is one
-reduction per run. Custom reducers may use
-the existing supervised request/decode contract, or implement deterministic
-`Alto.Context.Compaction.reduce/3` without a provider. A session is required to
+reduction per run. Custom reducers implement `Alto.Context.Reducer.compact/3`;
+they can call the bounded model function or perform deterministic reduction
+without a provider. A session is required to
 retain the facts replaced by a reduction. Complete call/reply groups and recent
 messages remain intact.
 
@@ -51,8 +51,9 @@ conversation through the selected history is followed by reduction instructions.
 Tool schemas remain available for historical call/reply blocks, while
 `tool_choice: :none` disables new calls. The runner never executes tool calls
 returned by a reducer. `request_mode: :isolated` sends one standalone rendered
-transcript request for providers or workflows that prefer it. Custom reducer
-`request/3` implementations retain control of their own message construction.
+transcript request for providers or workflows that prefer it. Custom reducers
+retain control of their own message construction through the input map and
+bounded model function.
 Keeping message structure and schemas improves the opportunity for prefix reuse;
 provider caching rules and changed tool-choice settings still affect actual hits.
 Summaries remain lossy; durable history and handoff artifacts retain the original evidence.

@@ -221,8 +221,8 @@ Reducers receive structured pinned, middle and recent messages, historical tool
 schemas, limits and artifact metadata, plus a bounded model-call function. They
 return `{:ok, %{content: text, data: map, events: list, records: list}}`. Execution
 forces `tool_choice: :none`, accounts model calls, and checks replacement size,
-shrinkage and headroom before accepting it. Legacy text `reduce/3` and
-`request/3` + `decode/3` reducers still work through `Reducers.Legacy`.
+shrinkage and headroom before accepting it. Custom reducers use this same
+structured `compact/3` contract.
 `:summary` and `:handoff` remain compatibility aliases; new profiles can name the
 implementations explicitly.
 

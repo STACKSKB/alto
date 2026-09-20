@@ -13,32 +13,32 @@ defmodule Alto.Runner.ContextPressureFaultTest do
   end
 
   defmodule FailingReducer do
-    @behaviour Alto.Context.Compaction
+    @behaviour Alto.Context.Reducer
 
-    def reduce(_input, _limit, opts) do
+    def compact(_input, _model, opts) do
       send(Keyword.fetch!(opts, :owner), :reduction_attempted)
       {:error, :cannot_reduce}
     end
   end
 
   defmodule SequenceReducer do
-    @behaviour Alto.Context.Compaction
+    @behaviour Alto.Context.Reducer
 
-    def reduce(_input, _limit, opts) do
+    def compact(_input, _model, opts) do
       output =
         Agent.get_and_update(Keyword.fetch!(opts, :outputs), fn [next | rest] ->
           {next, rest}
         end)
 
       send(Keyword.fetch!(opts, :owner), {:reduced_to, byte_size(output)})
-      {:ok, output}
+      {:ok, %{content: output, data: %{}, events: [], records: []}}
     end
   end
 
   defmodule BlockingReducer do
-    @behaviour Alto.Context.Compaction
+    @behaviour Alto.Context.Reducer
 
-    def reduce(_input, _limit, opts) do
+    def compact(_input, _model, opts) do
       send(Keyword.fetch!(opts, :owner), {:reducer_started, self()})
 
       receive do
