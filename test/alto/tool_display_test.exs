@@ -24,7 +24,10 @@ defmodule Alto.ToolDisplayTest do
 
     assert {:ok, result} =
              Alto.Tools.EditFile.run(
-               %{"path" => "a.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "a.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 

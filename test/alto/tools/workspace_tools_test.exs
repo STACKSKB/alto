@@ -69,14 +69,14 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:file_too_large, 3}} =
              EditFile.run(
-               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
+               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "b"}]},
                context,
                max_file_bytes: 3
              )
 
     assert {:error, {:replacement_too_large, 1}} =
              EditFile.run(
-               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "long"},
+               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "long"}]},
                context,
                max_replacement_bytes: 1
              )
@@ -96,6 +96,15 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:invalid_edit_options, _}} =
              EditFile.run(%{}, context, max_input_bytes: 0)
+  end
+
+  test "edit schema and runtime require the canonical edits list", %{context: context} do
+    parameters = EditFile.schema().parameters
+    assert parameters.required == ["path", "edits"]
+    assert Map.keys(parameters.properties) |> Enum.sort() == [:edits, :path]
+
+    assert {:error, :edits_must_be_nonempty_list} =
+             EditFile.run(%{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"}, context)
   end
 
   test "host-configured search limits skip large files and bound line output", %{
@@ -292,7 +301,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:ambiguous_match, 2}} =
              EditFile.run(
-               %{"path" => "sample.txt", "old_text" => "one", "new_text" => "three"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "one", "new_text" => "three"}]
+               },
                context
              )
 
@@ -302,9 +314,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              EditFile.run(
                %{
                  "path" => "sample.txt",
-                 "old_text" => "one",
-                 "new_text" => "three",
-                 "replace_all" => true
+                 "edits" => [
+                   %{"old_text" => "one", "new_text" => "three", "replace_all" => true}
+                 ]
                },
                context
              )
@@ -323,7 +335,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:ok, prepared, details} =
              EditFile.prepare(
-               %{"path" => "sample.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 
@@ -357,23 +372,12 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "b c b\n"
   end
 
-  test "rejects mixed and overlapping multi-edit requests without writing", %{
+  test "rejects overlapping multi-edit requests without writing", %{
     root: root,
     context: context
   } do
     path = Path.join(root, "sample.txt")
     File.write!(path, "abcdef\n")
-
-    assert {:error, :mixed_edit_arguments} =
-             EditFile.run(
-               %{
-                 "path" => "sample.txt",
-                 "edits" => [%{"old_text" => "ab", "new_text" => "x"}],
-                 "old_text" => "cd",
-                 "new_text" => "y"
-               },
-               context
-             )
 
     assert {:error, :overlapping_edits} =
              EditFile.run(
@@ -476,8 +480,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              EditFile.prepare(
                %{
                  "path" => "sample.txt",
-                 "old_text" => "marker",
-                 "new_text" => :binary.copy("n", 256_001)
+                 "edits" => [
+                   %{"old_text" => "marker", "new_text" => :binary.copy("n", 256_001)}
+                 ]
                },
                context
              )
@@ -497,7 +502,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:ok, prepared, _details} =
              EditFile.prepare(
-               %{"path" => "sample.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 

@@ -11,8 +11,6 @@ defmodule Alto.Tools.EditFile do
 
   @max_file_bytes 1_000_000
   @max_replacement_bytes 256_000
-  # This retains every feasible legacy request: an old_text that can fill the
-  # largest accepted file plus the largest accepted replacement.
   @max_edit_input_bytes @max_file_bytes + @max_replacement_bytes
   @max_edits 100
   @preview_bytes 4_096
@@ -47,7 +45,7 @@ defmodule Alto.Tools.EditFile do
       additionalProperties: false
     }
 
-    schema = %{
+    %{
       description:
         "Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
       parameters: %{
@@ -61,27 +59,15 @@ defmodule Alto.Tools.EditFile do
             type: "array",
             minItems: 1,
             maxItems: limits.max_edits,
-            items: edit,
+            items:
+              put_in(edit, [:properties, :new_text, :maxLength], limits.max_replacement_bytes),
             description: "Exact replacements, all matched against the original file snapshot."
-          },
-          old_text: edit.properties.old_text,
-          new_text: edit.properties.new_text,
-          replace_all: edit.properties.replace_all
+          }
         },
-        required: ["path"],
-        oneOf: [
-          %{required: ["edits"]},
-          %{required: ["old_text", "new_text"]}
-        ],
+        required: ["path", "edits"],
         additionalProperties: false
       }
     }
-
-    put_in(
-      schema,
-      [:parameters, :properties, :edits, :items, :properties, :new_text, :maxLength],
-      limits.max_replacement_bytes
-    )
   end
 
   @impl true
@@ -100,7 +86,7 @@ defmodule Alto.Tools.EditFile do
          {:ok, stat, content} <-
            read_snapshot(
              resolved,
-             Map.get(prepared, :limits, %{max_file_bytes: @max_file_bytes}).max_file_bytes
+             prepared.limits.max_file_bytes
            ),
          :ok <- validate_fingerprint(prepared, stat, content),
          write_result <- AtomicWrite.write(resolved, prepared.updated, prepared.mode) do
@@ -141,7 +127,7 @@ defmodule Alto.Tools.EditFile do
   defp prepare_edit(arguments, %Context{} = context, limits) when is_map(arguments) do
     path = Map.get(arguments, "path")
 
-    with {:ok, edits} <- normalize_edits(arguments),
+    with {:ok, edits} <- edits(arguments),
          :ok <- validate_edits(edits, limits),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, stat, content} <- read_snapshot(resolved, limits.max_file_bytes),
@@ -175,33 +161,8 @@ defmodule Alto.Tools.EditFile do
 
   defp prepare_edit(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
-  defp normalize_edits(arguments) do
-    has_edits? = Map.has_key?(arguments, "edits")
-
-    has_legacy? =
-      Enum.any?(["old_text", "new_text", "replace_all"], &Map.has_key?(arguments, &1))
-
-    cond do
-      has_edits? and has_legacy? ->
-        {:error, :mixed_edit_arguments}
-
-      has_edits? ->
-        case Map.fetch!(arguments, "edits") do
-          edits when is_list(edits) and edits != [] -> {:ok, edits}
-          _ -> {:error, :edits_must_be_nonempty_list}
-        end
-
-      true ->
-        {:ok,
-         [
-           %{
-             "old_text" => Map.get(arguments, "old_text"),
-             "new_text" => Map.get(arguments, "new_text"),
-             "replace_all" => Map.get(arguments, "replace_all", false)
-           }
-         ]}
-    end
-  end
+  defp edits(%{"edits" => edits}) when is_list(edits) and edits != [], do: {:ok, edits}
+  defp edits(_arguments), do: {:error, :edits_must_be_nonempty_list}
 
   defp validate_edits(edits, limits) when length(edits) > limits.max_edits,
     do: {:error, {:too_many_edits, limits.max_edits}}
