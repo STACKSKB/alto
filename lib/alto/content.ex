@@ -93,7 +93,7 @@ defmodule Alto.Content do
   @doc "Rehydrate and validate provider-neutral content blocks from a transcript."
   @spec decode_transcript(term()) :: :not_content | {:ok, t()} | {:error, term()}
   def decode_transcript([_ | _] = blocks) do
-    with {:ok, typed} <- decode_blocks(blocks) do
+    with {:ok, typed} <- map_blocks(blocks, &decode_block/1) do
       {:ok, %__MODULE__{blocks: typed}}
     end
   end
@@ -101,20 +101,7 @@ defmodule Alto.Content do
   def decode_transcript(value) when is_list(value), do: {:error, :empty_content}
   def decode_transcript(_value), do: :not_content
 
-  defp normalize_blocks([_ | _] = blocks) do
-    blocks
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {block, index}, {:ok, normalized} ->
-      case normalize_block(block) do
-        {:ok, block} -> {:cont, {:ok, [block | normalized]}}
-        {:error, reason} -> {:halt, {:error, {:invalid_content_block, index, reason}}}
-      end
-    end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = error -> error
-    end
-  end
+  defp normalize_blocks([_ | _] = blocks), do: map_blocks(blocks, &normalize_block/1)
 
   defp normalize_blocks(_blocks), do: {:error, :empty_content}
 
@@ -139,19 +126,15 @@ defmodule Alto.Content do
 
   defp normalize_block(_block), do: {:error, :unsupported_block}
 
-  defp decode_blocks(blocks) do
+  defp map_blocks(blocks, fun) do
     blocks
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {block, index}, {:ok, decoded} ->
-      case decode_block(block) do
-        {:ok, block} -> {:cont, {:ok, [block | decoded]}}
-        {:error, reason} -> {:halt, {:error, {:invalid_content_block, index, reason}}}
+    |> Alto.Result.traverse(fn {block, index} ->
+      case fun.(block) do
+        {:ok, _} = result -> result
+        {:error, reason} -> {:error, {:invalid_content_block, index, reason}}
       end
     end)
-    |> case do
-      {:ok, decoded} -> {:ok, Enum.reverse(decoded)}
-      {:error, _} = error -> error
-    end
   end
 
   defp decode_block(%{"type" => "text", "text" => text} = block)

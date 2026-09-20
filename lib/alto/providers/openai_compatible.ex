@@ -212,26 +212,20 @@ defmodule Alto.Providers.OpenAICompatible do
     do: {:error, {:invalid_provider_message, message}}
 
   defp openai_blocks(blocks, supports_images) do
-    blocks
-    |> Enum.reduce_while({:ok, []}, fn
-      %Content.Text{text: text}, {:ok, normalized} ->
-        {:cont, {:ok, [%{"type" => "text", "text" => text} | normalized]}}
+    Alto.Result.traverse(blocks, fn
+      %Content.Text{text: text} ->
+        {:ok, %{"type" => "text", "text" => text}}
 
-      %Content.Image{}, _acc when not supports_images ->
-        {:halt, {:error, :model_does_not_support_images}}
+      %Content.Image{} when not supports_images ->
+        {:error, :model_does_not_support_images}
 
-      %Content.Image{media_type: media_type, data: data}, {:ok, normalized} ->
-        block = %{
-          "type" => "image_url",
-          "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-        }
-
-        {:cont, {:ok, [block | normalized]}}
+      %Content.Image{media_type: media_type, data: data} ->
+        {:ok,
+         %{
+           "type" => "image_url",
+           "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
+         }}
     end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = error -> error
-    end
   end
 
   defp models_request(config) do

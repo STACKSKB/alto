@@ -594,20 +594,13 @@ defmodule Alto.Session do
     contents
     |> String.split("\n", trim: true)
     |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, []}, fn
-      {_line, number}, _acc when number > @max_records ->
-        {:halt, {:error, {:session_too_many_records, id, @max_records}}}
+    |> Alto.Result.traverse(fn
+      {_line, number} when number > @max_records ->
+        {:error, {:session_too_many_records, id, @max_records}}
 
-      {line, number}, {:ok, records} ->
-        case decode_line(line, id, number) do
-          {:ok, record} -> {:cont, {:ok, [record | records]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+      {line, number} ->
+        decode_line(line, id, number)
     end)
-    |> case do
-      {:ok, records} -> {:ok, Enum.reverse(records)}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp decode_line(line, id, number) do

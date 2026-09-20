@@ -798,22 +798,9 @@ defmodule Alto.Queue do
   defp select_fitting([], _budget), do: {:ok, []}
 
   defp select_fitting([head | _] = records, budget) when is_integer(budget) do
-    case wire_sizes(records) do
+    case Alto.Result.traverse(records, &wire_size/1) do
       {:ok, sizes} -> fitting_prefix(records, sizes, budget)
       {:error, _reason} -> {:error, {:queue_unencodable, head.id}}
-    end
-  end
-
-  defp wire_sizes(records) do
-    Enum.reduce_while(records, {:ok, []}, fn record, {:ok, sizes} ->
-      case wire_size(record) do
-        {:ok, size} -> {:cont, {:ok, [size | sizes]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, sizes} -> {:ok, Enum.reverse(sizes)}
-      {:error, reason} -> {:error, reason}
     end
   end
 

@@ -303,15 +303,8 @@ defmodule Alto.Tools.GitMutate do
   defp args(_input), do: {:error, :git_action_required}
 
   defp path_args(prefix, paths) when is_list(paths) and paths != [] and length(paths) <= 200 do
-    Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
-      case Git.pathspec(path) do
-        {:ok, safe} -> {:cont, {:ok, [safe | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, safe} -> {:ok, prefix ++ ["--" | Enum.reverse(safe)]}
-      error -> error
+    with {:ok, safe} <- Alto.Result.traverse(paths, &Git.pathspec/1) do
+      {:ok, prefix ++ ["--" | safe]}
     end
   end
 

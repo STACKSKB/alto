@@ -236,24 +236,19 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   defp finalize_calls(calls) do
     calls
     |> Enum.sort_by(fn {index, _call} -> index end)
-    |> Enum.reduce_while({:ok, []}, fn {_index, call}, {:ok, acc} ->
+    |> Alto.Result.traverse(fn {_index, call} ->
       arguments_json = call.argument_chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
       cond do
         not is_binary(call.id) or call.id == "" ->
-          {:halt, {:error, :tool_call_missing_id}}
+          {:error, :tool_call_missing_id}
 
         not is_binary(call.name) or call.name == "" ->
-          {:halt, {:error, {:tool_call_missing_name, call.id}}}
+          {:error, {:tool_call_missing_name, call.id}}
 
         true ->
-          normalized = %{id: call.id, name: call.name, arguments_json: arguments_json}
-          {:cont, {:ok, [normalized | acc]}}
+          {:ok, %{id: call.id, name: call.name, arguments_json: arguments_json}}
       end
     end)
-    |> case do
-      {:ok, calls} -> {:ok, Enum.reverse(calls)}
-      error -> error
-    end
   end
 end

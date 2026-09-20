@@ -75,7 +75,7 @@ defmodule Alto.Harness.ProviderProfile do
   defp derive(other), do: {:error, {:invalid_provider, other}}
 
   defp normalize_all(profiles) do
-    with {:ok, normalized} <- map_ok(profiles, &normalize/1),
+    with {:ok, normalized} <- Alto.Result.traverse(profiles, &normalize/1),
          :ok <- unique_ids(normalized) do
       {:ok, normalized}
     end
@@ -174,19 +174,6 @@ defmodule Alto.Harness.ProviderProfile do
   defp unique_ids(profiles) do
     ids = Enum.map(profiles, & &1.id)
     if length(ids) == MapSet.size(MapSet.new(ids)), do: :ok, else: {:error, :duplicate_profile_id}
-  end
-
-  defp map_ok(items, fun) do
-    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
-      case fun.(item) do
-        {:ok, value} -> {:cont, {:ok, [value | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-      error -> error
-    end
   end
 
   defp get(map, key, default \\ nil),

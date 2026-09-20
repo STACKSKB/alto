@@ -152,16 +152,7 @@ defmodule Alto.Providers.Anthropic do
   defp anthropic_messages(messages, supports_images) do
     messages
     |> Enum.reject(&(&1["role"] == "system"))
-    |> Enum.reduce_while({:ok, []}, fn message, {:ok, normalized} ->
-      case message(message, supports_images) do
-        {:ok, message} -> {:cont, {:ok, [message | normalized]}}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = error -> error
-    end
+    |> Alto.Result.traverse(&message(&1, supports_images))
   end
 
   defp message(%{"role" => "tool"} = message, supports_images) do
@@ -237,26 +228,24 @@ defmodule Alto.Providers.Anthropic do
   end
 
   defp anthropic_blocks(blocks, supports_images) do
-    blocks
-    |> Enum.reduce_while({:ok, []}, fn
-      %Content.Text{text: text}, {:ok, normalized} ->
-        {:cont, {:ok, [%{"type" => "text", "text" => text} | normalized]}}
+    Alto.Result.traverse(blocks, fn
+      %Content.Text{text: text} ->
+        {:ok, %{"type" => "text", "text" => text}}
 
-      %Content.Image{}, _acc when not supports_images ->
-        {:halt, {:error, :model_does_not_support_images}}
+      %Content.Image{} when not supports_images ->
+        {:error, :model_does_not_support_images}
 
-      %Content.Image{media_type: media_type, data: data}, {:ok, normalized} ->
-        block = %{
-          "type" => "image",
-          "source" => %{"type" => "base64", "media_type" => media_type, "data" => data}
-        }
-
-        {:cont, {:ok, [block | normalized]}}
+      %Content.Image{media_type: media_type, data: data} ->
+        {:ok,
+         %{
+           "type" => "image",
+           "source" => %{
+             "type" => "base64",
+             "media_type" => media_type,
+             "data" => data
+           }
+         }}
     end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = error -> error
-    end
   end
 
   defp send_request(body, config, sink) do

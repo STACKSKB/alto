@@ -403,19 +403,12 @@ defmodule Alto.CLI do
   end
 
   defp start_serve_listeners(specs, registry) do
-    Enum.reduce_while(specs, {:ok, []}, fn {module, opts}, {:ok, descriptions} ->
+    Alto.Result.traverse(specs, fn {module, opts} ->
       case module.start_link(Keyword.put(opts, :registry, registry)) do
-        {:ok, listener} ->
-          {:cont, {:ok, [describe_listener(module, opts, listener) | descriptions]}}
-
-        {:error, reason} ->
-          {:halt, {:error, format_reason(reason)}}
+        {:ok, listener} -> {:ok, describe_listener(module, opts, listener)}
+        {:error, reason} -> {:error, format_reason(reason)}
       end
     end)
-    |> case do
-      {:ok, descriptions} -> {:ok, Enum.reverse(descriptions)}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp describe_listener(UnixSocket, opts, _listener),

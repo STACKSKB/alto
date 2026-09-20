@@ -109,22 +109,16 @@ defmodule Alto.Listeners.Connection do
     do: {:error, :unsupported}
 
   defp session_events_payload(records) do
-    Enum.reduce_while(records, {:ok, []}, fn record, {:ok, acc} ->
+    Alto.Result.traverse(records, fn record ->
       case session_event_data(record) do
         {:ok, data} ->
-          event =
-            record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()
-
-          {:cont, {:ok, [event | acc]}}
+          {:ok,
+           record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()}
 
         {:error, reason} ->
-          {:halt, {:error, {:session_event_payload, reason}}}
+          {:error, {:session_event_payload, reason}}
       end
     end)
-    |> case do
-      {:ok, events} -> {:ok, Enum.reverse(events)}
-      error -> error
-    end
   end
 
   defp session_event_data(%{"wire_data" => data}), do: {:ok, data}

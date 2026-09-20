@@ -330,16 +330,7 @@ defmodule Alto.Providers.Anthropic.Stream do
     do: {:error, {:incomplete_model_response, reason}}
 
   defp finalize_blocks(state) do
-    Enum.reduce_while(state.block_order, {:ok, []}, fn index, {:ok, acc} ->
-      case finalize_block(Map.fetch!(state.blocks, index)) do
-        {:ok, block} -> {:cont, {:ok, [block | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, blocks} -> {:ok, Enum.reverse(blocks)}
-      error -> error
-    end
+    Alto.Result.traverse(state.block_order, &finalize_block(Map.fetch!(state.blocks, &1)))
   end
 
   defp finalize_block(%{type: "text", text: text}), do: {:ok, %{"type" => "text", "text" => text}}
