@@ -151,27 +151,30 @@ a user message and validates it under the transcript limit.
 
 ## Durable child dispatch and retained joins
 
-A trusted host can enable an `Alto.OperationLog` journal on its subagent policy:
+A trusted host can retain child batches in an `Alto.OperationLog` through the
+run's `continuation_store`:
 
 ```elixir
 {:ok, ledger} = Alto.OperationLog.start_link(
-  id: "children", name: MyChildJournal, dir: "/private/alto-state/operations")
+  id: "children", name: MyContinuations, dir: "/private/alto-state/operations")
 policy = Alto.Subagents.bounded(
-  max_depth: 1, max_children: 4, max_concurrency: 2, journal: MyChildJournal)
+  max_depth: 1, max_children: 4, max_concurrency: 2)
+
+Alto.run(task, loop: loop, continuation_store: MyContinuations)
 ```
 
 The policy covers single-child and batch effects. Descendants inherit the
-journal along with their shared budgets and owned lifetime. A run-scoped
+continuation store along with their shared budgets and owned lifetime. A run-scoped
 operation key identifies each batch. Its immutable metadata contains the
 parent run/session and execution-tree identity; child IDs retain input order.
-The parent emits `subagents_started` with a portable `journal` binding. Normal
+The parent emits `subagents_started` with a portable continuation binding. Normal
 single-child and batch completion data also includes that binding.
 
 Alto persists a unique dispatch ticket before starting each child. The child
 itself records its bounded result after session persistence and workspace
 capture, before returning to its parent. This retains the exact native child
 summary (including output, verdict, usage, session/workspace links and
-persistence status), even when the parent cannot collect its reply. The journal
+persistence status), even when the parent cannot collect its reply. The aggregate
 does not store the child's full transcript or arbitrary loop state. Failure to
 retain a result keeps the dispatch uncertain and prevents a successful join.
 Queued cancellation records known non-dispatch separately; it cannot overwrite
@@ -182,14 +185,14 @@ cannot evict them before a parent acknowledges consumption and explicitly
 retires the batch. A host can use the generic API directly:
 
 ```elixir
-alias Alto.Subagents.Journal
-{:ok, batch} = Journal.restore(MyChildJournal, saved_binding)
-{:ok, joined} = Journal.join(batch)
+alias Alto.Subagents.Continuation
+{:ok, batch} = Continuation.restore(MyContinuationStore, saved_binding)
+{:ok, joined} = Continuation.join(batch)
 # joined.results is an ordered list of {child_id, exact_result} pairs.
 # First durably save the consumer's continuation with this binding/results.
-{:ok, acknowledged} = Journal.acknowledge(batch, joined.revision,
+{:ok, acknowledged} = Continuation.acknowledge(batch, joined.revision,
   %{"parent_checkpoint" => durable_checkpoint_id})
-:ok = Journal.retire(batch, acknowledged.revision)
+:ok = Continuation.retire(batch, acknowledged.revision)
 ```
 
 `acknowledge/3` fences the viewed revision and accepts a nonempty JSON receipt;

@@ -316,7 +316,8 @@ defmodule Alto.Runner.Execution do
 
   defp do_execute(
          [%Effect{kind: :spawn_agents, data: data} | rest],
-         %{continuation_store: store} = run,
+         %{continuation_store: store, budget: %{account: %Budget.Account{}}, agent_depth: 0} =
+           run,
          terminal
        )
        when not is_nil(store) do
@@ -512,7 +513,7 @@ defmodule Alto.Runner.Execution do
   defp claim_child_checkpoint(run, decision) do
     case checkpoint_call(
            fn ->
-             Alto.Subagents.Journal.claim_child(
+             Alto.Subagents.Continuation.claim_child(
                run.subagent_ticket,
                run.child_resume,
                decision

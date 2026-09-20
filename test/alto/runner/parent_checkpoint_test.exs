@@ -4,7 +4,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
   alias Alto.{Effect, OperationLog, Usage}
   alias Alto.Runner.{Budget, Checkpoint}
   alias Alto.Runner.Budget.Account
-  alias Alto.Subagents.Journal
 
   defmodule Loop do
     @behaviour Alto.Loop
@@ -31,7 +30,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, account} = Account.open(ledger, "tree", max_effects: 50, max_model_requests: 20)
     opts = [budget_account: account, max_effects: 50, max_model_requests: 20, run_timeout: 10_000]
     {:ok, budget} = Budget.new(opts)
-    {:ok, journal} = Journal.open(ledger, "children:root:op-1", ["worker"])
     messages = [%{"role" => "user", "content" => "original task"}]
 
     run = %{
@@ -71,7 +69,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
       approval_timeout: 1_000
     }
 
-    pending = %{kind: :children, journal: Journal.identity(journal), ids: ["worker"]}
+    pending = %{kind: :children, ids: ["worker"]}
     %{run: run, pending: pending, opts: opts, dir: dir}
   end
 
@@ -165,22 +163,21 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
   test "unavailable durable policy resources fail capture and restore", context do
     %{run: run, pending: pending, opts: opts} = context
-    missing = Alto.Subagents.bounded(journal: :missing_checkpoint_journal)
-    unavailable = %{run | spec: %{run.spec | subagents: missing}}
+    unavailable = %{run | continuation_store: :missing_checkpoint_store}
 
-    assert {:error, {:durable_identity_unavailable, _}} =
+    assert {:error, :parent_checkpoint_store_unavailable} =
              Checkpoint.capture_parent(unavailable, pending, [], :continue)
 
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
-    assert {:error, {:durable_identity_unavailable, _}} =
+    assert {:error, :parent_checkpoint_store_unavailable} =
              Checkpoint.restore_parent(unavailable, packet, opts)
 
     dead = spawn(fn -> :ok end)
     ref = Process.monitor(dead)
     assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
 
-    for nested <- [Alto.Subagents.bounded(journal: dead), {HostChildPolicy, journal: dead}] do
+    for nested <- [{HostChildPolicy, journal: dead}] do
       nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
 
       assert {:error, {:durable_identity_unavailable, _}} =

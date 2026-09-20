@@ -4,7 +4,7 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
   alias Alto.{Event, OperationLog, Session, Transition}
   alias Alto.Runner.{Checkpoint, Execution}
   alias Alto.Runner.Budget.Account
-  alias Alto.Subagents.{Continuation, Journal}
+  alias Alto.Subagents.Continuation
 
   defmodule JoinLoop do
     @behaviour Alto.Loop
@@ -50,8 +50,7 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
             Alto.Subagents.bounded(
               max_depth: 1,
               max_children: 1,
-              max_concurrency: 1,
-              journal: ledger
+              max_concurrency: 1
             )
         ),
       tools: [],
@@ -70,19 +69,20 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     {:ok, run} = Execution.Setup.open("original task", opts)
     run = %{run | loop_state: %{phase: :children}}
 
-    {:ok, journal} =
-      Journal.open(ledger, "children", ["worker"], %{
-        "agent_identity" => Alto.Protocol.encode_term(run.agent_identity)
-      })
-
-    {:ok, _} =
-      Journal.skip(journal, "worker", %{id: "worker", status: :error, error: :not_started})
-
-    pending = %{kind: :children, journal: Journal.identity(journal), ids: ["worker"]}
+    pending = %{kind: :children, ids: ["worker"]}
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
     {:ok, cell} =
-      Continuation.open(ledger, "parent", packet, %{"journal" => Journal.identity(journal)})
+      Continuation.open_parent(
+        ledger,
+        "parent",
+        ["worker"],
+        %{"agent_identity" => Alto.Protocol.encode_term(run.agent_identity)},
+        packet
+      )
+
+    {:ok, _} =
+      Continuation.skip(cell, "worker", %{id: "worker", status: :error, error: :not_started})
 
     opts = Keyword.put(opts, :continuation, Continuation.identity(cell))
     %{opts: opts, session: session, dir: dir, cell: cell}

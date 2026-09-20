@@ -157,9 +157,6 @@ defmodule Alto.Runner.Execution.Setup do
       workspaces:
         Keyword.get(opts, :parent_workspaces) ||
           settings.child_limits.workspaces,
-      subagent_journal:
-        Keyword.get(opts, :parent_subagent_journal) ||
-          settings.child_limits.journal,
       tool_specs: Keyword.get(opts, :tools, []),
       prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
     }

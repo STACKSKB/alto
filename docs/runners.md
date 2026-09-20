@@ -76,7 +76,7 @@ The lower-level components can also be used independently:
 | `Execution.Transcript` | Bounded history and optional compaction |
 | `Execution.Events` | Event retention, persistence, and outcome accounting |
 | `Execution.Session` | Transcript revision checks and final session records |
-| `Execution.Children` / `SubagentBatch` | Inherited authority, child journals, bounded concurrency, joining |
+| `Execution.Children` / `SubagentBatch` | Inherited authority, retained child continuations, bounded concurrency, joining |
 | `Execution.Workspace` | Optional resource setup/capture around a worker callback |
 | `Execution.Call` | Supervised invocation with deadline and cancellation |
 | `Runner.Budget` | Shared execution-tree accounting |
@@ -114,16 +114,16 @@ memory, and skill formation remain application responsibilities.
 
 ## Retained resources in application hosts
 
-`Subagents.Continuation.lookup/3`, `Subagents.Journal.lookup/3`, and
+`Subagents.Continuation.lookup/3` and
 `Runner.Budget.Account.lookup/3` return `{:ok, handle, snapshot}` from one
 validated ledger entry. They never initialize missing records or issue grants.
 `Continuation.list/3` discovers cells by a literal metadata subset and returns
 their identities and snapshots. Each API accepts an optional absolute monotonic
 `deadline:`; account handles do not retain that per-operation deadline.
 
-For approval displays, `Journal.inspect_approval(batch, revision, child_id)`
+For approval displays, `Continuation.inspect_approval(batch, revision, child_id)`
 returns the selected approval and its revision from one snapshot. Another
-operator may change the journal afterwards: a decision must still carry that
+operator may change the continuation afterwards: a decision must still carry that
 viewed revision and the returned child identity.
 
 Applications choose which resources belong to a task, whether a budget account

@@ -6,7 +6,7 @@ separate from an approval checkpoint and from the enclosing Consumer claim.
 
 Configure the trusted parent with `continuation_store: parent_ledger`, a
 `checkpoint_version`, and a durable `budget_account: account`. Its bounded
-subagent policy must have a child `journal`. The parent loop must implement
+subagent policy controls child count, concurrency, and authority. The parent loop must implement
 `dump_checkpoint/2` and `load_checkpoint/2` for both its waiting-for-children
 state and the state reached after receiving `subagents_completed`. All stores
 must be supervised and private. The continuation ledger needs sufficient
@@ -20,23 +20,25 @@ socket `start_run` commands cannot inject these options.
 
 ## Boundaries and grants
 
-1. Validate the batch and prepare its resources and journal. The spawn effect
-   has already consumed its budget reservation.
-2. Save the pending loop state, exact conversation, remaining effects, terminal
-   disposition, journal generation/child order, usage, authority limits and
-   original execution expiry. No child starts if this write fails.
+1. Validate the batch, prepare its resources, and reserve its operation identity.
+   The spawn effect has already consumed its budget reservation.
+2. Open one aggregate containing the immutable pending parent frame and ordered
+   child plan. The frame saves the loop state, exact conversation, remaining
+   effects, terminal disposition, usage, authority limits and original execution
+   expiry. No child starts if this write fails.
 3. Execute the children normally. Each worker retains its own exact outcome.
-4. Read the ordered retained results, merge usage and verdict once, and compute
-   the parent transition. Save its exact ready frame before acknowledging the
-   journal with the continuation identity and ready revision.
+4. Join the ordered retained results, merge usage and verdict once, and compute
+   the parent transition. A compare-and-swap moves the aggregate from
+   `children` to `ready` with the exact parent frame only when the joined child
+   revision still matches.
 5. Claim the ready cell with a one-use compare-and-swap before the scheduler
    executes its next effect. A claimed cell never reissues that grant.
 
-The reusable `Alto.Subagents.Continuation` cell supplies `open/5`, `identity/1`,
-`restore/3`, `read/1`, `ready/3` and `claim/2`. Its pending, ready and claimed
-states survive store restart. Generation and revision checks prevent replacement
-or competing consumers from issuing a second grant. Claimed cells remain
-retained; automatic retirement is not part of this contract.
+`Alto.Subagents.Continuation.open_parent/6` creates this aggregate. `identity/1`,
+`restore/3`, `read/1`, `ready/3`, and `claim/2` address its later lifecycle.
+The `children`, `ready`, and `claimed` phases survive store restart. Generation
+and revision checks prevent replacement or competing consumers from issuing a
+second grant. Claimed cells remain retained; retirement is explicit.
 
 ## Explicit recovery
 
@@ -54,20 +56,20 @@ work.
 Start a fresh run with the original trusted configuration and
 `continuation: identity`. Alto resolves the saved session and restores the
 parent without calling loop initialization, preparing workspaces, or
-issuing new child dispatches. A pending cell restores its journal and resumes
+issuing new child dispatches. A `children` cell restores the aggregate and resumes
 only children with explicitly retained approval decisions before joining. All
 children must have retained outcomes before the parent consumes its frame. A
 ready cell already holds the exact consuming frame. Recovery never invents an
 approval decision; see [independent child approvals](child-continuations.md).
 
-An incomplete journal returns `{:error, {:children_pending, reason}, result}`.
+An incomplete aggregate returns `{:error, {:children_pending, reason}, result}`.
 The result's checkpoint identifies the parent cell. Other ungranted parent
 errors also carry a parent checkpoint marker; their partial conversations are
 not written over the stored transcript. A losing concurrent recovery cannot
 overwrite the successful consumer's conversation. Hosts should retain the
 parent for review rather than resubmit its original prompt.
 
-Configuration, loop/tool code, store identity, journal generation, transcript
+Configuration, loop/tool code, store identity, aggregate generation, transcript
 revision and budget account must match. Authority ceilings cannot be widened
 by restore. The durable account includes charges made after capture, while
 the original absolute expiry conservatively charges child execution and host
@@ -86,16 +88,8 @@ and transition callbacks must remain pure.
 A crash after the ready grant requires reconciliation; it does not authorize
 replaying later model requests or integration effects. Ordinary tool approvals
 may still suspend later integration using their existing checkpoint contract.
-Journal acknowledgement records durable consumption, but journal retirement,
-parent-cell retirement and budget-account closure remain explicit host lifecycle
-work. Retention exhaustion fails closed.
-
-## Qualification
-
-On 2026-09-12, all 853 Alto tests pass at bounded concurrency, including the
-new retained-cell, parent checkpoint, live/restarted runner, independent child
-approval, cancellation, provider resolution and concurrent transcript preservation
-tests. Production compilation with warnings as errors
-and formatting pass. Downstream Zekkyou checks additionally recover through its
-resident CLI across three independent service VMs with Serial and Stepped,
-observing exactly one planner call, one child effect and one integration effect.
+Standalone child aggregates use `Continuation.acknowledge/3` to record that a
+host consumed a completed batch. Parent-backed aggregates do not use that
+receipt: their durable consumption boundary is the `ready` to `claimed`
+compare-and-swap. Aggregate retirement and budget-account closure remain
+explicit host lifecycle work. Retention exhaustion fails closed.

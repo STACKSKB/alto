@@ -1,274 +1,574 @@
 defmodule Alto.Subagents.Continuation do
   @moduledoc """
-  A retained, single-use parent continuation in an `Alto.OperationLog`.
+  Durable child dispatch and retained join results on an `Alto.OperationLog`.
 
-  The caller stores the pending parent frame before admitting children, then
-  replaces it with the exact post-join frame before acknowledging their journal.
-  Claiming that frame is a durable, single-use grant to continue parent work.
-  An uncertain claim never grants permission to repeat downstream effects.
+  A standalone batch remains a nonterminal checkpoint after every child has
+  finished; explicit join acknowledgement and retirement make it eligible for
+  ledger eviction. A parent-backed aggregate instead advances atomically from
+  `children` to `ready` and then grants its frame once by moving to `claimed`.
+  Dispatch and parent grants are single-use: uncertainty never grants permission
+  to repeat work. The host still owns execution, authority, budgets and recovery.
   """
-
+  alias Alto.Persistence.Codec
   alias Alto.Persistence.Retained
 
   @enforce_keys [:ledger, :key, :generation]
   defstruct [:ledger, :key, :generation, deadline: :infinity]
 
-  @kind "alto_subagent_parent_continuation"
-  @initialize "initialize-parent-continuation"
-  @retire "retire-parent-continuation"
-  @max_packet_bytes 2_000_000
-  @max_metadata_bytes 64_000
-  @identity_keys ~w(key generation)
-  @initial_keys ~w(kind version generation pending_digest metadata_digest)
-  @checkpoint_keys ~w(kind version generation phase packet metadata)
+  defmodule Ticket do
+    @moduledoc "A dispatch identity returned only after durable admission."
+    @enforce_keys [:batch, :id, :attempt]
+    defstruct [:batch, :id, :attempt, :suspension, :grant]
+  end
 
-  @doc "Open a new pending cell, or reconnect only if its immutable opening data matches."
-  def open(ledger, key, pending_packet, metadata \\ %{}, opts \\ []) do
-    with :ok <- valid_key(key),
-         :ok <- valid_packet_input(pending_packet),
-         :ok <- valid_metadata(metadata),
-         {:ok, deadline} <- deadline_option(opts) do
+  @kind "alto_subagent_continuation"
+  @initialize "initialize-continuation"
+  @retire "retire-continuation"
+  @max_result_bytes 64_000
+  @max_checkpoint_bytes 2_000_000
+
+  @doc "Create or reconnect an ordered batch with immutable JSON metadata."
+  def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
+    open_with_parent(ledger, key, ids, metadata, nil, opts)
+  end
+
+  @doc "Create a child batch bound to an immutable pending parent checkpoint."
+  def open_parent(ledger, key, ids, metadata, parent, opts \\ []) do
+    open_with_parent(ledger, key, ids, metadata, parent, opts)
+  end
+
+  @doc "Retain a parent frame with no child dependencies."
+  def open_frame(ledger, key, parent, metadata \\ %{}, opts \\ []) do
+    open_with_parent(ledger, key, [], metadata, parent, opts)
+  end
+
+  defp open_with_parent(ledger, key, ids, metadata, parent, opts) do
+    with :ok <- valid_key(key), :ok <- valid_plan(ids, metadata, parent) do
       initial = %{
         "kind" => @kind,
         "version" => 1,
         "generation" => nonce(),
-        "pending_digest" => digest(pending_packet),
-        "metadata_digest" => digest(metadata)
+        "ids" => ids,
+        "metadata" => metadata,
+        "parent" => parent
       }
 
       safe(fn ->
-        with :ok <- Retained.deadline_ok(deadline),
+        with :ok <- Retained.deadline_ok(Keyword.get(opts, :deadline, :infinity)),
              {:ok, entry} <-
-               Retained.ensure_intent(ledger, key, @kind, nil, initial, deadline),
+               Retained.ensure_intent(
+                 ledger,
+                 key,
+                 @kind,
+                 nil,
+                 initial,
+                 Keyword.get(opts, :deadline, :infinity)
+               ),
              :ok <- valid_initial(entry),
-             :ok <- same_opening(entry.recovery, initial),
-             cell = %__MODULE__{
+             true <-
+               entry.recovery["ids"] == ids and entry.recovery["metadata"] == metadata and
+                 entry.recovery["parent"] == parent,
+             batch = %__MODULE__{
+               ledger: ledger,
+               key: key,
+               generation: entry.recovery["generation"],
+               deadline: Keyword.get(opts, :deadline, :infinity)
+             },
+             :ok <- initialize(batch, entry),
+             {:ok, _} <- read(batch) do
+          {:ok, batch}
+        else
+          false -> {:error, :batch_plan_conflict}
+          {:error, _} = error -> error
+        end
+      end)
+    end
+  end
+
+  @doc "Portable binding. Keep its generation when reconnecting a saved parent."
+  def identity(%__MODULE__{key: key, generation: generation}),
+    do: %{"key" => key, "generation" => generation}
+
+  @doc "Reconnect by saved identity without creating a missing or replaced batch."
+  def restore(ledger, identity, opts \\ [])
+
+  def restore(ledger, %{"key" => key, "generation" => generation} = identity, opts)
+      when map_size(identity) == 2 and is_binary(key) and is_binary(generation) do
+    batch = %__MODULE__{
+      ledger: ledger,
+      key: key,
+      generation: generation,
+      deadline: Keyword.get(opts, :deadline, :infinity)
+    }
+
+    with {:ok, _} <- read(batch), do: {:ok, batch}
+  end
+
+  def restore(_, _, _), do: {:error, :invalid_batch_identity}
+
+  @doc "Read and validate an existing batch without initializing or mutating it."
+  def lookup(ledger, key, opts \\ []) do
+    with {:ok, deadline} <- lookup_options(opts),
+         :ok <- valid_key(key) do
+      safe(fn ->
+        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+             :ok <- valid_initial(entry),
+             batch = %__MODULE__{
                ledger: ledger,
                key: key,
                generation: entry.recovery["generation"],
                deadline: deadline
              },
-             :ok <- initialize(cell, entry, pending_packet, metadata),
-             {:ok, _} <- read(cell) do
-          {:ok, cell}
+             {:ok, snapshot} <- snapshot(entry, batch.generation) do
+          {:ok, batch, snapshot}
         end
       end)
+    else
+      {:error, _} = error -> error
     end
   end
 
-  @doc "Portable key and generation binding for a saved parent run."
-  def identity(%__MODULE__{key: key, generation: generation}),
-    do: %{"key" => key, "generation" => generation}
-
-  @doc "Reconnect only to an existing, checkpointed generation."
-  def restore(ledger, identity, opts \\ []) do
-    with :ok <- valid_identity(identity),
-         {:ok, deadline} <- deadline_option(opts) do
-      cell = %__MODULE__{
-        ledger: ledger,
-        key: identity["key"],
-        generation: identity["generation"],
-        deadline: deadline
-      }
-
-      with {:ok, _} <- read(cell), do: {:ok, cell}
-    end
-  end
-
-  @doc "Look up one retained continuation without initializing or mutating it."
-  def lookup(ledger, key, opts \\ []) do
-    with :ok <- valid_key(key),
-         {:ok, deadline} <- deadline_option(opts) do
-      safe(fn ->
-        with {:ok, entry} <- Retained.read(ledger, key, deadline),
-             :ok <- valid_initial(entry),
-             :ok <- valid_checkpoint_entry(entry),
-             {:ok, state} <- lifecycle(entry) do
-          cell = %__MODULE__{
-            ledger: ledger,
-            key: key,
-            generation: entry.recovery["generation"],
-            deadline: deadline
-          }
-
-          {:ok, cell, snapshot(entry, state)}
-        end
-      end)
-    end
-  end
-
-  @doc "List valid retained continuations matching a literal metadata subset."
+  @doc "List aggregate continuations whose immutable metadata contains the filter."
   def list(ledger, metadata_filter \\ %{}, opts \\ []) do
-    with :ok <- valid_metadata_filter(metadata_filter),
-         {:ok, deadline} <- deadline_option(opts) do
-      safe(fn ->
-        case Retained.keys(ledger, deadline) do
-          keys when is_list(keys) ->
-            scan(keys |> Enum.sort(), ledger, metadata_filter, deadline, [])
-
-          {:error, _} = error ->
-            error
-        end
-      end)
+    with true <- is_map(metadata_filter) and json?(metadata_filter),
+         {:ok, deadline} <- lookup_options(opts) do
+      safe(fn -> list_keys(ledger, metadata_filter, deadline) end)
+    else
+      false -> {:error, :invalid_continuation_metadata_filter}
+      {:error, _} = error -> error
     end
   end
 
-  @doc "Read the exact retained frame, revision, and retirement state."
-  def read(%__MODULE__{} = cell) do
-    safe(fn ->
-      with {:ok, entry} <- Retained.read(cell.ledger, cell.key, cell.deadline),
-           :ok <- valid_initial(entry),
-           true <- entry.recovery["generation"] == cell.generation,
-           :ok <- valid_checkpoint_entry(entry),
-           {:ok, state} <- lifecycle(entry) do
-        {:ok, snapshot(entry, state)}
-      else
-        false -> {:error, :continuation_generation_mismatch}
-        {:error, _} = error -> error
-      end
-    end)
-  end
+  defp list_keys(ledger, metadata_filter, deadline) do
+    with keys when is_list(keys) <- Retained.keys(ledger, deadline) do
+      Enum.reduce_while(Enum.sort(keys), {:ok, []}, fn key, {:ok, acc} ->
+        case Retained.read(ledger, key, deadline) do
+          {:ok, %{tool: @kind, recovery: %{"generation" => generation}}} ->
+            cell = %__MODULE__{
+              ledger: ledger,
+              key: key,
+              generation: generation,
+              deadline: deadline
+            }
 
-  @doc "Replace a pending frame with the exact post-join frame at a viewed revision."
-  def ready(%__MODULE__{} = cell, expected_revision, ready_packet) do
-    with :ok <- valid_revision(expected_revision),
-         :ok <- valid_packet_input(ready_packet),
-         {:ok, current} <- read(cell),
-         :ok <- expected(current, expected_revision, :pending),
-         replacement <-
-           checkpoint(cell.generation, :ready, ready_packet, current.metadata) do
-      replace(cell, expected_revision, replacement)
-    end
-  end
+            case read(cell) do
+              {:ok, snapshot} ->
+                if Enum.all?(metadata_filter, fn {k, v} ->
+                     Map.fetch(snapshot.metadata, k) == {:ok, v}
+                   end),
+                   do: {:cont, {:ok, [%{identity: identity(cell), snapshot: snapshot} | acc]}},
+                   else: {:cont, {:ok, acc}}
 
-  @doc "Claim a ready frame once. The retained claimed state never grants a retry."
-  def claim(%__MODULE__{} = cell, expected_revision) do
-    with :ok <- valid_revision(expected_revision),
-         {:ok, current} <- read(cell),
-         :ok <- expected(current, expected_revision, :ready),
-         replacement <-
-           checkpoint(cell.generation, :claimed, current.packet, current.metadata) do
-      replace(cell, expected_revision, replacement)
-    end
-  end
-
-  @doc "Retire a claimed frame at its viewed revision. An interrupted retirement can be finished at its new revision."
-  def retire(%__MODULE__{} = cell, expected_revision) do
-    with :ok <- valid_revision(expected_revision) do
-      safe(fn ->
-        with {:ok, current} <- read(cell),
-             :ok <- expected_retirement(current, expected_revision),
-             :ok <- begin_retirement(cell, current),
-             :ok <- finish_retirement(cell) do
-          :ok
-        end
-      end)
-    end
-  end
-
-  defp replace(cell, revision, replacement) do
-    safe(fn ->
-      with {:ok, entry} <-
-             Retained.cas(cell.ledger, cell.key, revision, replacement, cell.deadline),
-           :ok <- valid_initial(entry),
-           true <- entry.recovery["generation"] == cell.generation,
-           :ok <- valid_checkpoint_entry(entry),
-           {:ok, state} <- lifecycle(entry) do
-        {:ok, snapshot(entry, state)}
-      else
-        false -> {:error, :continuation_generation_mismatch}
-        {:error, _} = error -> error
-      end
-    end)
-  end
-
-  defp expected(%{revision: revision}, expected_revision, _phase)
-       when revision != expected_revision,
-       do: {:error, :stale_revision}
-
-  defp expected(%{phase: phase}, _revision, phase), do: :ok
-
-  defp expected(%{phase: :claimed}, _revision, :ready),
-    do: {:error, :continuation_already_claimed}
-
-  defp expected(%{phase: :ready}, _revision, :pending), do: {:error, :continuation_already_ready}
-  defp expected(_, _, _), do: {:error, :invalid_continuation_phase}
-
-  defp expected_retirement(%{revision: revision}, expected_revision)
-       when revision != expected_revision,
-       do: {:error, :stale_revision}
-
-  defp expected_retirement(%{phase: :claimed}, _revision), do: :ok
-  defp expected_retirement(_, _revision), do: {:error, :invalid_continuation_phase}
-
-  defp begin_retirement(cell, %{state: :active} = snapshot) do
-    with {:ok, _} <-
-           Retained.resume(
-             cell.ledger,
-             cell.key,
-             snapshot.revision,
-             %{"action" => @retire, "generation" => cell.generation},
-             cell.deadline
-           ),
-         do: :ok
-  end
-
-  defp begin_retirement(_, %{state: state}) when state in [:retiring, :retired], do: :ok
-
-  # Retirement only writes deterministic ledger records; no parent grant is reissued.
-  defp finish_retirement(cell) do
-    with {:ok, snapshot} <- read(cell) do
-      if snapshot.state == :retired do
-        :ok
-      else
-        case Retained.record_attempt(cell.ledger, cell.key, @retire, cell.deadline) do
-          :ok ->
-            case Retained.record_outcome(
-                   cell.ledger,
-                   cell.key,
-                   @retire,
-                   :completed,
-                   %{"generation" => cell.generation, "claimed" => true},
-                   cell.deadline
-                 ) do
-              :ok -> :ok
-              {:error, :already_decided} -> retired_after_race(cell)
-              error -> error
+              {:error, _} = error ->
+                {:halt, error}
             end
 
-          {:error, :already_decided} ->
-            retired_after_race(cell)
+          {:ok, %{tool: @kind}} ->
+            {:halt, {:error, :invalid_batch}}
 
-          error ->
-            error
+          {:ok, _foreign} ->
+            {:cont, {:ok, acc}}
+
+          {:error, :not_found} ->
+            {:cont, {:ok, acc}}
+
+          {:error, _} = error ->
+            {:halt, error}
         end
+      end)
+      |> case do
+        {:ok, items} -> {:ok, Enum.reverse(items)}
+        error -> error
+      end
+    else
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Read an exact retained packet and its revision, including retirement state."
+  def read(%__MODULE__{} = batch) do
+    safe(fn -> snapshot_read(batch) end)
+  end
+
+  @doc "Inspect one approval from a single validated batch snapshot."
+  def inspect_approval(%__MODULE__{} = batch, expected_revision, child_id) do
+    with :ok <- valid_revision(expected_revision),
+         :ok <- valid_approval_child_id(child_id),
+         {:ok, snapshot} <- read(batch),
+         true <- snapshot.revision == expected_revision,
+         child when not is_nil(child) <-
+           Enum.find(snapshot.packet["children"], &(&1["id"] == child_id)),
+         true <- child["state"] in ["suspended", "decided"],
+         {:ok, entry} <- decode_approval(batch, child) do
+      {:ok, Map.put(entry, :revision, snapshot.revision)}
+    else
+      false -> {:error, :stale_child_approval}
+      nil -> {:error, :unknown_child}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Persist a single dispatch grant. A repeated call never reissues permission."
+  def dispatch(%__MODULE__{} = batch, id) do
+    attempt = nonce()
+
+    with {:ok, _} <-
+           change_child(batch, id, fn
+             %{"state" => "planned"} = child ->
+               {:ok, %{child | "state" => "dispatched", "attempt" => attempt}}
+
+             _ ->
+               {:error, :child_already_admitted}
+           end) do
+      {:ok, %Ticket{batch: batch, id: id, attempt: attempt}}
+    end
+  end
+
+  @doc "Retain an exact portable result before the worker reports completion."
+  def complete(%Ticket{} = ticket, result) do
+    with {:ok, encoded} <- encode_result(result) do
+      change_child(ticket.batch, ticket.id, fn child ->
+        cond do
+          owns_dispatch?(child, ticket) ->
+            {:ok,
+             child
+             |> Map.drop(["suspension"])
+             |> Map.merge(%{"state" => "completed", "result" => encoded})}
+
+          child["state"] == "completed" and child["attempt"] == ticket.attempt and
+              child["result"] == encoded ->
+            {:ok, child}
+
+          true ->
+            {:error, :child_result_conflict}
+        end
+      end)
+    end
+  end
+
+  @doc "Retain an exact approval checkpoint before a child reports suspension."
+  def suspend(%Ticket{} = ticket, checkpoint, workspace \\ nil) do
+    with {:ok, encoded} <-
+           Codec.encode(%{"checkpoint" => checkpoint, "workspace" => workspace},
+             max_bytes: @max_checkpoint_bytes
+           ) do
+      change_child(ticket.batch, ticket.id, fn child ->
+        if owns_dispatch?(child, ticket) do
+          {:ok,
+           Map.merge(child, %{
+             "state" => "suspended",
+             "suspension" => %{
+               "token" => nonce(),
+               "checkpoint" => encoded,
+               "decision" => nil,
+               "grant" => nil
+             }
+           })}
+        else
+          {:error, :child_result_conflict}
+        end
+      end)
+    end
+  end
+
+  @doc "Inspect retained approvals and explicit decisions without granting execution."
+  def suspended(%__MODULE__{} = batch) do
+    with {:ok, snapshot} <- read(batch) do
+      Enum.reduce_while(snapshot.packet["children"], {:ok, []}, fn child, {:ok, acc} ->
+        if child["state"] in ["suspended", "decided"] do
+          case decode_approval(batch, child) do
+            {:ok, entry} ->
+              {:cont, {:ok, [entry | acc]}}
+
+            error ->
+              {:halt, error}
+          end
+        else
+          {:cont, {:ok, acc}}
+        end
+      end)
+      |> case do
+        {:ok, entries} -> {:ok, Enum.reverse(entries)}
+        error -> error
       end
     end
   end
 
-  defp retired_after_race(cell) do
-    case read(cell) do
-      {:ok, %{state: :retired}} -> :ok
-      {:ok, _} -> {:error, :continuation_not_retired}
+  @doc "Persist an explicit approval decision at the exact viewed batch revision."
+  def decide(%__MODULE__{} = batch, revision, identity, decision)
+      when decision in [:approve, :deny] do
+    with {:ok, snapshot} <- read(batch),
+         :ok <- active(snapshot),
+         true <- snapshot.revision == revision,
+         child when not is_nil(child) <-
+           Enum.find(snapshot.packet["children"], &(child_identity(batch, &1) == identity)),
+         true <- child["state"] == "suspended" and is_nil(snapshot.packet["join"]) do
+      children =
+        Enum.map(snapshot.packet["children"], fn current ->
+          if current == child,
+            do:
+              current
+              |> Map.put("state", "decided")
+              |> put_in(["suspension", "decision"], Atom.to_string(decision)),
+            else: current
+        end)
+
+      replace(batch, snapshot, Map.put(snapshot.packet, "children", children))
+    else
+      false -> {:error, :stale_child_decision}
+      nil -> {:error, :stale_child_decision}
+      {:error, _} = error -> error
+    end
+  end
+
+  def decide(_, _, _, _), do: {:error, :invalid_child_decision}
+
+  @doc "Grant one decided checkpoint after the runner validates its complete restore."
+  def claim_child(%__MODULE__{} = batch, identity, decision) when decision in [:approve, :deny] do
+    ticket = resume_ticket(batch, identity)
+    with {:ok, _} <- claim_child(ticket, identity, decision), do: {:ok, ticket}
+  end
+
+  def claim_child(%Ticket{batch: batch, grant: grant} = ticket, identity, decision)
+      when decision in [:approve, :deny] do
+    change_child(batch, ticket.id, fn child ->
+      if child_identity(batch, child) == identity and child["state"] == "decided" and
+           child["suspension"]["decision"] == Atom.to_string(decision) and nonce?(grant) do
+        {:ok, child |> Map.put("state", "resuming") |> put_in(["suspension", "grant"], grant)}
+      else
+        {:error, :child_resume_not_granted}
+      end
+    end)
+  end
+
+  @doc false
+  def resume_ticket(batch, identity) do
+    %Ticket{
+      batch: batch,
+      id: identity["id"],
+      attempt: identity["attempt"],
+      suspension: identity["suspension"],
+      grant: nonce()
+    }
+  end
+
+  defp child_identity(batch, child) do
+    %{
+      "journal" => identity(batch),
+      "id" => child["id"],
+      "attempt" => child["attempt"],
+      "suspension" => get_in(child, ["suspension", "token"])
+    }
+  end
+
+  defp owns_dispatch?(%{"state" => "dispatched", "attempt" => attempt}, %Ticket{
+         attempt: attempt,
+         suspension: nil
+       }),
+       do: true
+
+  defp owns_dispatch?(
+         %{
+           "state" => "resuming",
+           "attempt" => attempt,
+           "suspension" => %{"token" => token, "grant" => grant}
+         },
+         %Ticket{attempt: attempt, suspension: token, grant: grant}
+       ),
+       do: true
+
+  defp owns_dispatch?(_, _), do: false
+
+  @doc "Record known non-dispatch (for example cancellation of a queued child)."
+  def skip(%__MODULE__{} = batch, id, result) do
+    with {:ok, encoded} <- encode_result(result) do
+      change_child(batch, id, fn
+        %{"state" => "planned"} = child ->
+          {:ok, %{child | "state" => "completed", "result" => encoded}}
+
+        %{"state" => "completed", "attempt" => nil, "result" => ^encoded} = child ->
+          {:ok, child}
+
+        _ ->
+          {:error, :child_already_admitted}
+      end)
+    end
+  end
+
+  @doc "Read ordered results when every child has a retained outcome. Never dispatches."
+  def join(%__MODULE__{} = batch) do
+    with {:ok, snapshot} <- read(batch),
+         {:ok, results} <- decode_results(snapshot.packet["children"]) do
+      {:ok, Map.put(snapshot, :results, results)}
+    end
+  end
+
+  @doc "Atomically replace a completed child batch with its exact parent continuation."
+  def ready(%__MODULE__{} = cell, expected_revision, packet) do
+    with :ok <- valid_revision(expected_revision),
+         :ok <- valid_parent(packet),
+         {:ok, %{phase: :children} = snapshot} <- read(cell),
+         :ok <- active(snapshot),
+         {:ok, results} <- decode_results(snapshot.packet["children"]),
+         snapshot <- Map.put(snapshot, :results, results),
+         true <- not is_nil(snapshot.parent) and snapshot.revision == expected_revision,
+         replacement <- %{
+           "phase" => "ready",
+           "generation" => cell.generation,
+           "packet" => packet,
+           "children" => snapshot.packet["children"]
+         } do
+      replace(cell, snapshot, replacement)
+    else
+      false -> {:error, :stale_revision}
+      {:ok, _} -> {:error, :invalid_continuation_phase}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Claim a ready parent continuation exactly once."
+  def claim(%__MODULE__{} = cell, expected_revision) do
+    with :ok <- valid_revision(expected_revision),
+         {:ok, %{phase: :ready} = snapshot} <- read(cell),
+         true <- snapshot.revision == expected_revision do
+      replace(cell, snapshot, %{snapshot.packet | "phase" => "claimed"})
+    else
+      false -> {:error, :stale_revision}
+      {:ok, %{phase: :claimed}} -> {:error, :continuation_already_claimed}
+      {:ok, _} -> {:error, :invalid_continuation_phase}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Acknowledge a join only after its consumer has durably saved the continuation."
+  def acknowledge(%__MODULE__{} = batch, expected_revision, receipt) do
+    with true <- is_map(receipt) and map_size(receipt) > 0 and json?(receipt),
+         {:ok, snapshot} <- join(batch),
+         true <- is_nil(snapshot.parent),
+         :ok <- active(snapshot),
+         true <- snapshot.revision == expected_revision,
+         true <- is_nil(snapshot.packet["join"]) do
+      replace(batch, snapshot, Map.put(snapshot.packet, "join", receipt))
+    else
+      false -> {:error, :invalid_or_stale_join}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Retire an acknowledged batch at its viewed revision. Never discards unjoined work."
+  def retire(%__MODULE__{} = batch, expected_revision) do
+    safe(fn ->
+      with {:ok, snapshot} <- read(batch),
+           true <- snapshot.revision == expected_revision,
+           true <- retireable?(snapshot),
+           :ok <- begin_retirement(batch, snapshot),
+           :ok <- finish_retirement(batch) do
+        :ok
+      else
+        false -> {:error, :invalid_or_stale_join}
+        {:error, _} = error -> error
+      end
+    end)
+  end
+
+  defp change_child(batch, id, fun) do
+    update(batch, fn packet ->
+      with true <- is_nil(packet["join"]),
+           index when is_integer(index) <- Enum.find_index(packet["children"], &(&1["id"] == id)),
+           {:ok, child} <- fun.(Enum.at(packet["children"], index)) do
+        {:ok, Map.update!(packet, "children", &List.replace_at(&1, index, child))}
+      else
+        false -> {:error, :batch_already_joined}
+        nil -> {:error, :unknown_child}
+        {:error, _} = error -> error
+      end
+    end)
+  end
+
+  defp update(batch, fun) do
+    with {:ok, snapshot} <- read(batch),
+         :ok <- active(snapshot),
+         true <- snapshot.phase == :children,
+         {:ok, packet} <- fun.(snapshot.packet) do
+      if packet == snapshot.packet do
+        {:ok, snapshot}
+      else
+        case replace(batch, snapshot, packet) do
+          {:error, :stale_revision} -> update(batch, fun)
+          other -> other
+        end
+      end
+    else
+      false -> {:error, :continuation_children_closed}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp replace(batch, snapshot, packet) do
+    safe(fn ->
+      with :ok <- validate_candidate(snapshot, packet),
+           {:ok, entry} <-
+             Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline),
+           {:ok, snapshot} <- snapshot(entry, batch.generation) do
+        {:ok, snapshot}
+      end
+    end)
+  end
+
+  defp validate_candidate(snapshot, packet) do
+    valid_packet(packet, %{
+      "kind" => @kind,
+      "version" => 1,
+      "generation" => snapshot.packet["generation"],
+      "ids" => snapshot.ids,
+      "metadata" => snapshot.metadata,
+      "parent" => snapshot.parent
+    })
+  end
+
+  defp active(%{state: :active}), do: :ok
+  defp active(_), do: {:error, :batch_not_active}
+
+  defp decode_results(children) do
+    Enum.reduce_while(children, {:ok, []}, fn child, {:ok, results} ->
+      case child do
+        %{"state" => "completed", "id" => id, "result" => encoded} ->
+          case Codec.decode(encoded, max_bytes: @max_result_bytes) do
+            {:ok, value} -> {:cont, {:ok, [{id, value} | results]}}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        %{"state" => state, "id" => id} ->
+          {:halt, {:error, {:child_pending, id, state}}}
+      end
+    end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
       error -> error
     end
   end
 
-  defp same_opening(recovery, opening) do
-    if recovery["pending_digest"] == opening["pending_digest"] and
-         recovery["metadata_digest"] == opening["metadata_digest"],
-       do: :ok,
-       else: {:error, :continuation_plan_conflict}
+  defp encode_result(result) do
+    case Codec.encode(result, max_bytes: @max_result_bytes) do
+      {:ok, encoded} ->
+        {:ok, encoded}
+
+      {:error, :not_portable_or_too_large} ->
+        if portable_size?(result),
+          do: {:error, :checkpoint_not_portable_or_too_large},
+          else: {:error, {:child_result_too_large, @max_result_bytes}}
+    end
+  rescue
+    _ -> {:error, :checkpoint_not_portable_or_too_large}
   end
 
-  defp initialize(_cell, %{checkpoint: packet}, _pending, _metadata) when is_map(packet),
-    do: :ok
+  defp initialize(_batch, %{checkpoint: packet}) when is_map(packet), do: :ok
 
-  defp initialize(cell, %{status: {:intended}}, pending, metadata) do
-    case Retained.record_attempt(cell.ledger, cell.key, @initialize, cell.deadline) do
+  defp initialize(batch, %{status: {:intended}}) do
+    case Retained.record_attempt(batch.ledger, batch.key, @initialize, batch.deadline) do
       :ok ->
-        with {:ok, entry} <- Retained.read(cell.ledger, cell.key, cell.deadline),
-             do: initialize(cell, entry, pending, metadata)
+        with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
+             do: initialize(batch, entry)
 
       {:error, :checkpoint_active} ->
         :ok
@@ -278,183 +578,301 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  defp initialize(cell, %{status: {:dispatched, @initialize}}, pending, metadata) do
-    packet = checkpoint(cell.generation, :pending, pending, metadata)
+  defp initialize(batch, %{status: {:dispatched, @initialize}, recovery: initial}) do
+    children =
+      Enum.map(
+        initial["ids"],
+        &%{"id" => &1, "state" => "planned", "attempt" => nil, "result" => nil}
+      )
 
-    case Retained.record_checkpoint(cell.ledger, cell.key, @initialize, packet, cell.deadline) do
+    packet = %{
+      "phase" => "children",
+      "generation" => initial["generation"],
+      "children" => children,
+      "join" => nil
+    }
+
+    case Retained.record_checkpoint(
+           batch.ledger,
+           batch.key,
+           @initialize,
+           packet,
+           batch.deadline
+         ) do
       :ok -> :ok
       {:error, :checkpoint_active} -> :ok
       error -> error
     end
   end
 
-  defp initialize(_, _, _, _), do: {:error, :invalid_continuation}
+  defp initialize(_, _), do: {:error, :invalid_batch_state}
 
-  defp checkpoint(generation, phase, packet, metadata) do
-    %{
-      "kind" => @kind,
-      "version" => 1,
-      "generation" => generation,
-      "phase" => Atom.to_string(phase),
-      "packet" => packet,
-      "metadata" => metadata
-    }
+  defp begin_retirement(batch, %{state: :active} = snapshot) do
+    with {:ok, _} <-
+           Retained.resume(
+             batch.ledger,
+             batch.key,
+             snapshot.revision,
+             %{
+               "action" => @retire,
+               "generation" => batch.generation
+             },
+             batch.deadline
+           ),
+         do: :ok
   end
 
-  defp snapshot(entry, state) do
-    %{
-      revision: entry.revision,
-      state: state,
-      phase: String.to_existing_atom(entry.checkpoint["phase"]),
-      packet: entry.checkpoint["packet"],
-      metadata: entry.checkpoint["metadata"]
-    }
-  end
+  defp begin_retirement(_, %{state: state}) when state in [:retiring, :retired], do: :ok
 
-  defp scan([], _ledger, _metadata_filter, _deadline, acc), do: {:ok, Enum.reverse(acc)}
+  # No external work occurs during retirement. A crash can finish these same
+  # deterministic ledger records without replaying or releasing a child.
+  defp finish_retirement(batch) do
+    with {:ok, snapshot} <- read(batch) do
+      if snapshot.state == :retired do
+        :ok
+      else
+        case Retained.record_attempt(batch.ledger, batch.key, @retire, batch.deadline) do
+          :ok ->
+            case Retained.record_outcome(
+                   batch.ledger,
+                   batch.key,
+                   @retire,
+                   :completed,
+                   %{
+                     "generation" => batch.generation,
+                     "joined" => true
+                   },
+                   batch.deadline
+                 ) do
+              :ok -> :ok
+              {:error, :already_decided} -> retired_after_race(batch)
+              error -> error
+            end
 
-  defp scan([key | rest], ledger, metadata_filter, deadline, acc) do
-    with :ok <- Retained.deadline_ok(deadline) do
-      case Retained.read(ledger, key, deadline) do
-        {:ok, %{tool: @kind} = entry} ->
-          with {:ok, item} <- list_item(ledger, key, entry, deadline),
-               true <- metadata_matches?(item.snapshot.metadata, metadata_filter) do
-            scan(rest, ledger, metadata_filter, deadline, [item | acc])
-          else
-            false -> scan(rest, ledger, metadata_filter, deadline, acc)
-            {:error, _} = error -> error
-          end
+          {:error, :already_decided} ->
+            retired_after_race(batch)
 
-        {:ok, _unrelated} ->
-          scan(rest, ledger, metadata_filter, deadline, acc)
-
-        {:error, :not_found} ->
-          scan(rest, ledger, metadata_filter, deadline, acc)
-
-        {:error, _} = error ->
-          error
+          error ->
+            error
+        end
       end
     end
   end
 
-  defp list_item(ledger, key, entry, deadline) do
-    with :ok <- valid_initial(entry),
-         :ok <- valid_checkpoint_entry(entry),
-         {:ok, state} <- lifecycle(entry) do
-      cell = %__MODULE__{
-        ledger: ledger,
-        key: key,
-        generation: entry.recovery["generation"],
-        deadline: deadline
-      }
-
-      {:ok, %{identity: identity(cell), snapshot: snapshot(entry, state)}}
+  defp retired_after_race(batch) do
+    case read(batch) do
+      {:ok, %{state: :retired}} -> :ok
+      {:ok, _} -> {:error, :batch_not_retired}
+      error -> error
     end
   end
 
-  defp metadata_matches?(metadata, filter), do: Map.take(metadata, Map.keys(filter)) == filter
-
-  defp valid_checkpoint_entry(%{checkpoint: packet, recovery: initial} = entry)
-       when is_integer(entry.revision) and entry.revision >= 1 do
-    if is_map(packet) and Enum.sort(Map.keys(packet)) == Enum.sort(@checkpoint_keys) and
-         packet["kind"] == @kind and packet["version"] == 1 and
-         packet["generation"] == initial["generation"] and
-         packet["phase"] in ~w(pending ready claimed) and
-         valid_packet_input(packet["packet"]) == :ok and
-         valid_metadata(packet["metadata"]) == :ok and
-         digest(packet["metadata"]) == initial["metadata_digest"] and
-         (packet["phase"] != "pending" or
-            digest(packet["packet"]) == initial["pending_digest"]),
-       do: :ok,
-       else: {:error, :invalid_continuation}
+  defp snapshot_read(batch) do
+    with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
+         :ok <- valid_initial(entry),
+         {:ok, snapshot} <- snapshot(entry, batch.generation) do
+      {:ok, snapshot}
+    else
+      {:error, _} = error -> error
+    end
   end
 
-  defp valid_checkpoint_entry(_), do: {:error, :invalid_continuation}
+  defp snapshot(entry, generation) do
+    with true <- entry.recovery["generation"] == generation,
+         :ok <- valid_packet(entry.checkpoint, entry.recovery),
+         {:ok, state} <- lifecycle(entry) do
+      {:ok,
+       %{
+         revision: entry.revision,
+         packet: entry.checkpoint,
+         phase: String.to_existing_atom(entry.checkpoint["phase"]),
+         metadata: entry.recovery["metadata"],
+         parent: entry.recovery["parent"],
+         ids: entry.recovery["ids"],
+         state: state
+       }}
+    else
+      false -> {:error, :batch_generation_mismatch}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp decode_approval(batch, child) do
+    with {:ok, saved} <-
+           Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes),
+         true <-
+           is_map(saved) and
+             Enum.sort(Map.keys(saved)) == Enum.sort(["checkpoint", "workspace"]) do
+      {:ok,
+       %{
+         checkpoint: saved["checkpoint"],
+         workspace: saved["workspace"],
+         id: child["id"],
+         state: if(child["state"] == "suspended", do: :suspended, else: :decided),
+         identity: child_identity(batch, child),
+         decision: child["suspension"]["decision"]
+       }}
+    else
+      false -> {:error, :invalid_batch}
+      {:error, _} = error -> error
+    end
+  end
 
   defp lifecycle(%{status: {:checkpointed, _, @initialize}}), do: {:ok, :active}
 
   defp lifecycle(
          %{
            checkpoint_decision: %{"action" => @retire, "generation" => generation},
-           recovery: %{"generation" => generation},
-           checkpoint: %{"phase" => "claimed"}
+           recovery: %{"generation" => generation}
          } = entry
        ) do
-    case entry.status do
-      {:intended} ->
-        {:ok, :retiring}
+    if (entry.checkpoint["phase"] == "children" and is_map(entry.checkpoint["join"])) or
+         entry.checkpoint["phase"] == "claimed" do
+      case entry.status do
+        {:intended} ->
+          {:ok, :retiring}
 
-      {:dispatched, @retire} ->
-        {:ok, :retiring}
+        {:dispatched, @retire} ->
+          {:ok, :retiring}
 
-      {:decided, :completed, %{"generation" => ^generation, "claimed" => true}} ->
-        {:ok, :retired}
+        {:decided, :completed, %{"generation" => ^generation, "joined" => true}} ->
+          {:ok, :retired}
 
-      _ ->
-        {:error, :invalid_continuation}
+        _ ->
+          {:error, :invalid_batch_state}
+      end
+    else
+      {:error, :invalid_batch_state}
     end
   end
 
-  defp lifecycle(_), do: {:error, :invalid_continuation}
+  defp lifecycle(_), do: {:error, :invalid_batch_state}
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
-    if Enum.sort(Map.keys(initial)) == Enum.sort(@initial_keys) and initial["kind"] == @kind and
-         initial["version"] == 1 and nonce?(initial["generation"]) and
-         digest?(initial["pending_digest"]) and digest?(initial["metadata_digest"]),
+    if Enum.sort(Map.keys(initial)) == Enum.sort(~w(kind version generation ids metadata parent)) and
+         initial["kind"] == @kind and initial["version"] == 1 and nonce?(initial["generation"]) do
+      valid_plan(initial["ids"], initial["metadata"], initial["parent"])
+    else
+      {:error, :invalid_batch}
+    end
+  end
+
+  defp valid_initial(_), do: {:error, :invalid_batch}
+
+  defp valid_packet(packet, initial) when is_map(packet) do
+    case packet do
+      %{
+        "phase" => "children",
+        "generation" => generation,
+        "children" => children,
+        "join" => join
+      }
+      when map_size(packet) == 4 and is_list(children) ->
+        if generation == initial["generation"] and Enum.all?(children, &valid_child?/1) and
+             Enum.map(children, & &1["id"]) == initial["ids"] and
+             (is_nil(join) or
+                (is_nil(initial["parent"]) and is_map(join) and map_size(join) > 0 and
+                   Enum.all?(children, &(&1["state"] == "completed")))) do
+          :ok
+        else
+          {:error, :invalid_batch}
+        end
+
+      %{
+        "phase" => phase,
+        "generation" => generation,
+        "packet" => parent,
+        "children" => children
+      }
+      when map_size(packet) == 4 and phase in ["ready", "claimed"] and is_list(children) ->
+        if generation == initial["generation"] and not is_nil(initial["parent"]) and
+             Enum.all?(children, &valid_child?/1) and
+             Enum.map(children, & &1["id"]) == initial["ids"] and
+             Enum.all?(children, &(&1["state"] == "completed")),
+           do: valid_parent(parent),
+           else: {:error, :invalid_batch}
+
+      _ ->
+        {:error, :invalid_batch}
+    end
+  end
+
+  defp valid_packet(_, _), do: {:error, :invalid_batch}
+
+  defp valid_child?(
+         %{"id" => id, "state" => state, "attempt" => attempt, "result" => result} = child
+       )
+       when map_size(child) == 4 do
+    valid_id?(id) and
+      case state do
+        "planned" ->
+          is_nil(attempt) and is_nil(result)
+
+        "dispatched" ->
+          nonce?(attempt) and is_nil(result)
+
+        "completed" ->
+          (is_nil(attempt) or nonce?(attempt)) and is_binary(result) and
+            byte_size(result) <= div(@max_result_bytes * 4, 3) + 8
+
+        _ ->
+          false
+      end
+  end
+
+  defp valid_child?(
+         %{
+           "id" => id,
+           "state" => state,
+           "attempt" => attempt,
+           "result" => nil,
+           "suspension" => suspension
+         } = child
+       )
+       when map_size(child) == 5 and state in ["suspended", "decided", "resuming"] do
+    valid_id?(id) and nonce?(attempt) and is_map(suspension) and
+      Enum.sort(Map.keys(suspension)) == Enum.sort(~w(token checkpoint decision grant)) and
+      nonce?(suspension["token"]) and
+      if(state == "resuming", do: nonce?(suspension["grant"]), else: is_nil(suspension["grant"])) and
+      is_binary(suspension["checkpoint"]) and
+      byte_size(suspension["checkpoint"]) <= div(@max_checkpoint_bytes * 4, 3) + 8 and
+      if(state == "suspended",
+        do: is_nil(suspension["decision"]),
+        else: suspension["decision"] in ["approve", "deny"]
+      )
+  end
+
+  defp valid_child?(_), do: false
+
+  defp valid_plan(ids, metadata, parent) do
+    if is_list(ids) and length(ids) <= 64 and (ids != [] or not is_nil(parent)) and
+         Enum.all?(ids, &valid_id?/1) and
+         Enum.uniq(ids) == ids and is_map(metadata) and json?(metadata) and
+         (is_nil(parent) or valid_parent(parent) == :ok),
        do: :ok,
-       else: {:error, :invalid_continuation}
+       else: {:error, :invalid_batch_plan}
   end
 
-  defp valid_initial(_), do: {:error, :invalid_continuation}
-
-  defp valid_identity(identity) when is_map(identity) do
-    if Enum.sort(Map.keys(identity)) == Enum.sort(@identity_keys) and
-         valid_key(identity["key"]) == :ok and nonce?(identity["generation"]),
-       do: :ok,
-       else: {:error, :invalid_continuation_identity}
+  defp valid_parent(parent) when is_map(parent) do
+    case Codec.encode(parent, max_bytes: @max_checkpoint_bytes) do
+      {:ok, _} -> :ok
+      _ -> {:error, :checkpoint_not_portable_or_too_large}
+    end
   end
 
-  defp valid_identity(_), do: {:error, :invalid_continuation_identity}
+  defp valid_parent(_), do: {:error, :checkpoint_not_portable_or_too_large}
 
-  defp valid_key(key) when is_binary(key) do
-    if byte_size(key) in 1..256 and String.valid?(key),
-      do: :ok,
-      else: {:error, :invalid_continuation_key}
+  defp retireable?(%{phase: :claimed}), do: true
+  defp retireable?(%{phase: :children, packet: %{"join" => join}}), do: is_map(join)
+  defp retireable?(_), do: false
+
+  defp valid_key(key) when is_binary(key) and byte_size(key) in 1..256 do
+    if String.valid?(key), do: :ok, else: {:error, :invalid_batch_key}
   end
 
-  defp valid_key(_), do: {:error, :invalid_continuation_key}
+  defp valid_key(_), do: {:error, :invalid_batch_key}
 
-  defp valid_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
-  defp valid_revision(_), do: {:error, :invalid_continuation_revision}
-
-  defp valid_packet_input(packet) when is_map(packet) do
-    if portable_json?(packet, @max_packet_bytes),
-      do: :ok,
-      else: {:error, :continuation_packet_not_portable_or_too_large}
-  end
-
-  defp valid_packet_input(_), do: {:error, :continuation_packet_not_portable_or_too_large}
-
-  defp valid_metadata(metadata) when is_map(metadata) do
-    journal = metadata["journal"]
-
-    if portable_json?(metadata, @max_metadata_bytes) and
-         valid_identity(journal) == :ok,
-       do: :ok,
-       else: {:error, :invalid_continuation_metadata}
-  end
-
-  defp valid_metadata(_), do: {:error, :invalid_continuation_metadata}
-
-  defp valid_metadata_filter(filter) when is_map(filter) do
-    if portable_json?(filter, @max_metadata_bytes),
-      do: :ok,
-      else: {:error, :invalid_continuation_metadata_filter}
-  end
-
-  defp valid_metadata_filter(_), do: {:error, :invalid_continuation_metadata_filter}
-
-  defp deadline_option(opts) do
+  defp lookup_options(opts) do
     if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
       deadline = Keyword.get(opts, :deadline, :infinity)
 
@@ -463,40 +881,39 @@ defmodule Alto.Subagents.Continuation do
         {:error, _} = error -> error
       end
     else
-      {:error, :invalid_continuation_options}
+      {:error, :invalid_batch_options}
     end
   end
 
-  defp portable_json?(term, max_bytes) do
-    if :erlang.external_size(term) <= max_bytes do
-      json = JSON.encode!(term)
-      byte_size(json) <= max_bytes and JSON.decode(json) == {:ok, term}
-    else
-      false
-    end
+  defp valid_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
+  defp valid_revision(_), do: {:error, :invalid_approval_revision}
+
+  defp valid_approval_child_id(child_id) do
+    if valid_id?(child_id), do: :ok, else: {:error, :unknown_child}
+  end
+
+  defp valid_id?(id), do: is_binary(id) and byte_size(id) in 1..256 and String.valid?(id)
+  defp nonce, do: Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+  defp nonce?(value),
+    do: is_binary(value) and byte_size(value) == 32 and String.match?(value, ~r/\A[0-9a-f]+\z/)
+
+  defp json?(value) do
+    :erlang.external_size(value) <= 64_000 and JSON.decode(JSON.encode!(value)) == {:ok, value}
   rescue
     _ -> false
   end
 
-  defp nonce, do: Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  defp nonce?(value),
-    do:
-      is_binary(value) and byte_size(value) == 32 and
-        String.match?(value, ~r/\A[0-9a-f]{32}\z/)
-
-  defp digest?(value),
-    do:
-      is_binary(value) and byte_size(value) == 64 and
-        String.match?(value, ~r/\A[0-9a-f]{64}\z/)
-
-  defp digest(value),
-    do: :crypto.hash(:sha256, JSON.encode!(value)) |> Base.encode16(case: :lower)
+  defp portable_size?(term) do
+    :erlang.external_size(term) <= @max_result_bytes
+  rescue
+    _ -> false
+  end
 
   defp safe(fun) do
     fun.()
   catch
     :exit, {:timeout, _reason} -> {:error, :run_timeout}
-    :exit, reason -> {:error, {:parent_continuation_unavailable, reason}}
+    :exit, reason -> {:error, {:subagent_journal_unavailable, reason}}
   end
 end

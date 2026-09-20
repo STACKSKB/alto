@@ -13,16 +13,14 @@ defmodule Alto.Subagents do
               max_children: 16,
               max_concurrency: 1,
               workspaces: nil,
-              sessions: :shared,
-              journal: nil
+              sessions: :shared
 
     @type t :: %__MODULE__{
             max_depth: non_neg_integer(),
             max_children: pos_integer(),
             max_concurrency: pos_integer(),
             workspaces: Alto.Workspaces.t() | nil,
-            sessions: :shared | :separate,
-            journal: GenServer.server() | nil
+            sessions: :shared | :separate
           }
   end
 
@@ -34,8 +32,7 @@ defmodule Alto.Subagents do
         max_children: 16,
         max_concurrency: 1,
         workspaces: nil,
-        sessions: :shared,
-        journal: nil
+        sessions: :shared
       )
 
     max_depth = Keyword.fetch!(opts, :max_depth)
@@ -62,20 +59,12 @@ defmodule Alto.Subagents do
     unless sessions in [:shared, :separate],
       do: raise(ArgumentError, "sessions must be :shared or :separate")
 
-    journal = Keyword.fetch!(opts, :journal)
-
-    unless is_nil(journal) or is_pid(journal) or is_atom(journal) or
-             match?({:global, _}, journal) or
-             match?({:via, module, _} when is_atom(module), journal),
-           do: raise(ArgumentError, "journal must be an OperationLog server")
-
     %Bounded{
       max_depth: max_depth,
       max_children: max_children,
       max_concurrency: max_concurrency,
       workspaces: workspaces,
-      sessions: sessions,
-      journal: journal
+      sessions: sessions
     }
   end
 end

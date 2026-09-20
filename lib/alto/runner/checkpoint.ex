@@ -201,7 +201,7 @@ defmodule Alto.Runner.Checkpoint do
 
   @doc "Capture an independently suspended child with immutable inherited authority."
   def capture_child(run, pending, remaining, terminal) do
-    with %Alto.Subagents.Journal.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
+    with %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
          true <- run.agent_depth > 0,
          true <- is_map(run.child_profile) and is_nil(run.child_profile.provider),
          true <- is_struct(run.budget.account, Budget.Account),
@@ -212,7 +212,7 @@ defmodule Alto.Runner.Checkpoint do
          expiry <- parent_expiry(run),
          :ok <- unexpired(expiry),
          binding <- %{
-           journal: Alto.Subagents.Journal.identity(ticket.batch),
+           journal: Alto.Subagents.Continuation.identity(ticket.batch),
            store: store,
            id: ticket.id,
            attempt: ticket.attempt,
@@ -244,9 +244,9 @@ defmodule Alto.Runner.Checkpoint do
   @doc "Validate the exact child checkpoint before consuming its explicit decision."
   def restore_child(run, packet, decision, opts) do
     with {:ok, binding} <- child_binding(packet),
-         %Alto.Subagents.Journal.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
+         %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
          {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
-         true <- binding.journal == Alto.Subagents.Journal.identity(ticket.batch),
+         true <- binding.journal == Alto.Subagents.Continuation.identity(ticket.batch),
          true <-
            binding.store == store and binding.id == ticket.id and
              binding.attempt == ticket.attempt,
@@ -443,21 +443,13 @@ defmodule Alto.Runner.Checkpoint do
 
   defp valid_parent_pending?(%{kind: :frame} = pending), do: map_size(pending) == 1
 
-  defp valid_parent_pending?(%{kind: :children, journal: journal, ids: ids} = pending) do
-    map_size(pending) == 3 and valid_journal_identity?(journal) and
-      is_list(ids) and length(ids) in 1..64 and length(Enum.uniq(ids)) == length(ids) and
+  defp valid_parent_pending?(%{kind: :children, ids: ids} = pending) do
+    map_size(pending) == 2 and is_list(ids) and length(ids) in 1..64 and
+      length(Enum.uniq(ids)) == length(ids) and
       Enum.all?(ids, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1)))
   end
 
   defp valid_parent_pending?(_), do: false
-
-  defp valid_journal_identity?(%{"key" => key, "generation" => generation} = identity) do
-    map_size(identity) == 2 and is_binary(key) and byte_size(key) in 1..256 and
-      String.valid?(key) and is_binary(generation) and
-      String.match?(generation, ~r/\A[0-9a-f]{32}\z/)
-  end
-
-  defp valid_journal_identity?(_), do: false
 
   defp valid_frame?(remaining, terminal) do
     is_list(remaining) and

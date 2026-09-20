@@ -7,7 +7,7 @@ defmodule Alto.Runner.Execution.Children do
   """
   alias Alto.{Event, Usage}
   alias Alto.Runner.Budget
-  alias Alto.Subagents.Journal
+  alias Alto.Subagents.Continuation
   alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
 
@@ -140,10 +140,12 @@ defmodule Alto.Runner.Execution.Children do
 
   @doc "Prepare resources and journal without granting any child dispatch."
   def prepare_children(specs, run) do
-    with {:ok, specs} <- prepare_subagent_workspaces(specs, run),
-         {:ok, journal, run} <- open_child_journal(specs, run),
+    with {:ok, specs} <- prepare_resources(specs, run),
+         {:ok, journal, run} <- open_continuation(specs, run),
          do: {:ok, specs, journal, run}
   end
+
+  def prepare_resources(specs, run), do: prepare_subagent_workspaces(specs, run)
 
   @doc "Execute an already prepared batch; callers may persist its parent first."
   def run_prepared_children(specs, concurrency, journal, run) do
@@ -250,11 +252,18 @@ defmodule Alto.Runner.Execution.Children do
   defp valid_persistence?({:degraded, errors}) when is_list(errors), do: true
   defp valid_persistence?(_), do: false
 
-  defp open_child_journal(_specs, %{subagent_journal: nil} = run), do: {:ok, nil, run}
+  def open_continuation(specs, run, parent \\ nil)
 
-  defp open_child_journal(specs, run) do
+  def open_continuation(_specs, %{continuation_store: nil} = run, nil), do: {:ok, nil, run}
+
+  def open_continuation(specs, run, parent) do
     {key, run} = next_operation(run)
+    open_reserved_continuation(specs, run, parent, key)
+  end
 
+  def reserve_continuation(run), do: next_operation(run)
+
+  def open_reserved_continuation(specs, run, parent, key) do
     metadata = %{
       "parent_run_id" => run.tool_context.session_id,
       "parent_session_id" => run.session,
@@ -264,20 +273,33 @@ defmodule Alto.Runner.Execution.Children do
     with {:ok, journal} <-
            durable_call(
              fn ->
-               Journal.open(
-                 run.subagent_journal,
-                 "children:" <> key,
-                 Enum.map(specs, & &1.id),
-                 metadata,
-                 deadline: run.budget.deadline
-               )
+               args = [deadline: run.budget.deadline]
+
+               if is_nil(parent),
+                 do:
+                   Continuation.open(
+                     run.continuation_store,
+                     "children:" <> key,
+                     Enum.map(specs, & &1.id),
+                     metadata,
+                     args
+                   ),
+                 else:
+                   Continuation.open_parent(
+                     run.continuation_store,
+                     "children:" <> key,
+                     Enum.map(specs, & &1.id),
+                     metadata,
+                     parent,
+                     args
+                   )
              end,
              run
            ) do
       event =
         Event.durable(:subagents_started, %{
           ids: Enum.map(specs, & &1.id),
-          journal: Journal.identity(journal)
+          journal: Continuation.identity(journal)
         })
 
       {:ok, journal, record_event(run, event)}
@@ -287,13 +309,13 @@ defmodule Alto.Runner.Execution.Children do
   defp dispatch_subagent(spec, run, nil), do: start_subagent(spec, run)
 
   defp dispatch_subagent(spec, run, journal) do
-    with {:ok, ticket} <- durable_call(fn -> Journal.dispatch(journal, spec.id) end, run) do
+    with {:ok, ticket} <- durable_call(fn -> Continuation.dispatch(journal, spec.id) end, run) do
       case start_subagent(Map.put(spec, :subagent_ticket, ticket), run) do
         {:ok, _} = started ->
           started
 
         {:error, reason} = error ->
-          case Journal.complete(ticket, subagent_data(spec.id, error)) do
+          case Continuation.complete(ticket, subagent_data(spec.id, error)) do
             {:ok, _} ->
               error
 
@@ -312,7 +334,7 @@ defmodule Alto.Runner.Execution.Children do
       ),
       do: outcome
 
-  def retain_child_outcome(%Journal.Ticket{} = ticket, outcome) do
+  def retain_child_outcome(%Continuation.Ticket{} = ticket, outcome) do
     data = subagent_data(ticket.id, outcome)
     result = elem(outcome, tuple_size(outcome) - 1)
     retained = Map.put(data, :persistence, result.persistence)
@@ -320,10 +342,10 @@ defmodule Alto.Runner.Execution.Children do
     stored =
       case outcome do
         {:error, :approval_suspended, %{checkpoint: %{"kind" => "child"} = checkpoint}} ->
-          Journal.suspend(ticket, checkpoint, result.workspace)
+          Continuation.suspend(ticket, checkpoint, result.workspace)
 
         _ ->
-          Journal.complete(ticket, retained)
+          Continuation.complete(ticket, retained)
       end
 
     case stored do
@@ -344,7 +366,7 @@ defmodule Alto.Runner.Execution.Children do
     skipped =
       Enum.reduce_while(outcomes, :ok, fn
         {id, {:error, {:not_started, _}} = outcome}, :ok ->
-          case Journal.skip(journal, id, subagent_data(id, outcome)) do
+          case Continuation.skip(journal, id, subagent_data(id, outcome)) do
             {:ok, _} -> {:cont, :ok}
             error -> {:halt, error}
           end
@@ -353,11 +375,11 @@ defmodule Alto.Runner.Execution.Children do
           {:cont, :ok}
       end)
 
-    with :ok <- skipped, {:ok, _} <- Journal.join(journal), do: :ok
+    with :ok <- skipped, {:ok, _} <- Continuation.join(journal), do: :ok
   end
 
   def with_journal(data, nil), do: data
-  def with_journal(data, journal), do: Map.put(data, :journal, Journal.identity(journal))
+  def with_journal(data, journal), do: Map.put(data, :journal, Continuation.identity(journal))
 
   defp prepare_subagent_workspaces(specs, %{workspaces: nil}), do: {:ok, specs}
 
@@ -438,7 +460,7 @@ defmodule Alto.Runner.Execution.Children do
           cwd: run.tool_context.cwd,
           workspace_assignment: Map.get(spec, :workspace_assignment),
           parent_workspaces: run.workspaces,
-          parent_subagent_journal: run.subagent_journal,
+          continuation_store: run.continuation_store,
           subagent_ticket: Map.get(spec, :subagent_ticket),
           tool_context_metadata: run.tool_context.metadata,
           budget: run.budget,
@@ -532,7 +554,7 @@ defmodule Alto.Runner.Execution.Children do
 
   @doc "Resume only explicitly decided retained children using current inherited parent capabilities."
   def resume_decided(journal, run) do
-    with {:ok, entries} <- durable_call(fn -> Journal.suspended(journal) end, run) do
+    with {:ok, entries} <- durable_call(fn -> Continuation.suspended(journal) end, run) do
       decided = Enum.filter(entries, &(&1.state == :decided))
 
       {status, _outcomes} =
@@ -577,7 +599,7 @@ defmodule Alto.Runner.Execution.Children do
   defp resumed_options(opts, nil, _run), do: {:ok, opts}
 
   defp resumed_options(opts, {journal, entry, binding}, run) do
-    ticket = Journal.resume_ticket(journal, entry.identity)
+    ticket = Continuation.resume_ticket(journal, entry.identity)
     decision = if entry.decision == "approve", do: :approve, else: :deny
 
     opts =
