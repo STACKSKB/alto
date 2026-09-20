@@ -122,38 +122,11 @@ defmodule Alto.Runner.Execution.Tool do
         {:cancelled, reason}
 
       :continue ->
-        outcome =
-          Call.run(
-            fn -> invoke_tool(tool, prepared, caps.context) end,
-            Budget.timeout(caps.budget, caps.tool_timeout),
-            caps.cancel_ref
-          )
-
-        case outcome do
-          {:ok, value} -> {:ok, value}
-          {:error, reason} -> {:error, reason}
-          {:cancelled, reason} -> {:cancelled, reason}
-        end
-    end
-  end
-
-  @doc "Compose prepare, approval and invocation for hosts that use one call."
-  def execute(call_id, name, arguments, tool, %Capabilities{} = caps, operation_id) do
-    case prepare(tool, arguments, caps) do
-      {:ok, prepared, details} ->
-        case authorize(call_id, name, arguments, details, tool, caps, operation_id) do
-          :ok -> invoke(tool, prepared, caps)
-          {:suspend, request} -> {:suspend, %{request: request, prepared: prepared}}
-          {:deny, reason} -> {:error, {:approval_denied, reason}}
-          {:error, reason} -> {:error, {:approval_failed, reason}}
-          {:cancelled, reason} -> {:cancelled, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-
-      {:cancelled, reason} ->
-        {:cancelled, reason}
+        Call.run(
+          fn -> invoke_tool(tool, prepared, caps.context) end,
+          Budget.timeout(caps.budget, caps.tool_timeout),
+          caps.cancel_ref
+        )
     end
   end
 

@@ -30,7 +30,6 @@ defmodule Alto.Runner.Execution do
 
   alias Alto.Runner.Execution.Children
   alias Alto.Effect
-  alias Alto.Effect.Outcome
   alias Alto.Event
   alias Alto.Runner.Result
   alias Alto.Runner.Execution.History
@@ -486,7 +485,7 @@ defmodule Alto.Runner.Execution do
           {:approval_denied, :user},
           run,
           pending.request.operation_id,
-          Outcome.pre_dispatch(:user),
+          :rejected_before_dispatch,
           pending.origin
         )
       end
@@ -630,7 +629,7 @@ defmodule Alto.Runner.Execution do
           reason,
           run,
           op_id,
-          Outcome.pre_dispatch(reason),
+          :rejected_before_dispatch,
           origin
         )
     end
@@ -656,7 +655,7 @@ defmodule Alto.Runner.Execution do
         {:tool_arguments_not_map, arguments},
         run,
         op_id,
-        Outcome.pre_dispatch(arguments),
+        :rejected_before_dispatch,
         :native
       )
     end
@@ -1049,7 +1048,7 @@ defmodule Alto.Runner.Execution do
         {:cancelled, reason, run}
 
       {:error, reason} ->
-        tool_failure(call_id, name, reason, run, op_id, Outcome.pre_dispatch(reason), origin)
+        tool_failure(call_id, name, reason, run, op_id, :rejected_before_dispatch, origin)
     end
   end
 
@@ -1169,7 +1168,7 @@ defmodule Alto.Runner.Execution do
 
   defp batch_outcome(job, {kind, reason}, run) when kind in [:rejected, :error] do
     outcome =
-      if kind == :rejected, do: Outcome.pre_dispatch(reason), else: Outcome.unknown(reason)
+      if kind == :rejected, do: :rejected_before_dispatch, else: :unknown
 
     tool_failure(job.id, job.name, reason, run, job.op_id, outcome, job.origin)
   end
@@ -1272,7 +1271,7 @@ defmodule Alto.Runner.Execution do
                 reason,
                 Map.delete(run, :in_flight),
                 op_id,
-                Outcome.unknown(reason),
+                :unknown,
                 origin
               )
 
@@ -1314,7 +1313,7 @@ defmodule Alto.Runner.Execution do
              name: name,
              output: output,
              value: value,
-             outcome: Outcome.completed()
+             outcome: :completed
            }), run}
 
         {:error, reason, run} ->
@@ -1322,7 +1321,7 @@ defmodule Alto.Runner.Execution do
       end
     else
       {:error, reason} ->
-        tool_failure(call_id, name, reason, run, op_id, Outcome.unknown(reason), origin)
+        tool_failure(call_id, name, reason, run, op_id, :unknown, origin)
     end
   end
 
@@ -1334,12 +1333,12 @@ defmodule Alto.Runner.Execution do
         reason,
         run,
         op_id,
-        Outcome.participant_failed(reason),
+        :failed_known,
         origin
       )
 
   defp tool_outcome(call_id, name, {:unknown, reason}, run, op_id, origin),
-    do: tool_failure(call_id, name, reason, run, op_id, Outcome.unknown(reason), origin)
+    do: tool_failure(call_id, name, reason, run, op_id, :unknown, origin)
 
   defp tool_outcome(call_id, name, other, run, op_id, origin) do
     tool_failure(
@@ -1348,7 +1347,7 @@ defmodule Alto.Runner.Execution do
       {:invalid_tool_return, other},
       run,
       op_id,
-      Outcome.unknown(other),
+      :unknown,
       origin
     )
   end
@@ -1548,7 +1547,7 @@ defmodule Alto.Runner.Execution do
           nil
 
         %{call_id: call_id, operation_id: op_id, name: name} ->
-          %{call_id: call_id, operation_id: op_id, name: name, outcome: Outcome.unknown(reason)}
+          %{call_id: call_id, operation_id: op_id, name: name, outcome: :unknown}
       end
 
     run =

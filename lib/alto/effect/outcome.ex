@@ -39,11 +39,8 @@ defmodule Alto.Effect.Outcome do
     * **compensation** — undoing a committed effect is an ordinary
       domain-specific operation, never an automatic harness behavior.
 
-  Compatibility: this module is a wrapper/adapter contract. Existing
-  `Alto.Tool` return values (`{:ok, term()} | {:error, term()}`) are
-  unchanged; the runner tags `tool_completed`/`tool_failed` events with an
-  additive `outcome:` key derived here, preserving every documented event
-  type and loop behavior.
+  Existing `Alto.Tool` return values remain unchanged; the runner tags tool
+  events with an additive `outcome:` key derived here.
   """
 
   @type class ::
@@ -62,29 +59,4 @@ defmodule Alto.Effect.Outcome do
   @spec decided?(class()) :: boolean()
   def decided?(:unknown), do: false
   def decided?(_class), do: true
-
-  @doc """
-  Classify a pre-dispatch failure reason. Every reason produced before the
-  prepared value is dispatched proves non-commit.
-  """
-  @spec pre_dispatch(term()) :: :rejected_before_dispatch
-  def pre_dispatch(_reason), do: :rejected_before_dispatch
-
-  @doc "A returned value that passed all bounds completed."
-  @spec completed() :: :completed
-  def completed, do: :completed
-
-  @doc """
-  The participant's explicit error signal: it ran and says it failed.
-  Trusts the participant (see module docs).
-  """
-  @spec participant_failed(term()) :: :failed_known
-  def participant_failed(_reason), do: :failed_known
-
-  @doc """
-  No signal from the participant after dispatch started (timeout, crash,
-  malformed return, dropped result, post-dispatch cancellation).
-  """
-  @spec unknown(term()) :: :unknown
-  def unknown(_reason), do: :unknown
 end
