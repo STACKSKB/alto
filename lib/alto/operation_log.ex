@@ -311,15 +311,11 @@ defmodule Alto.OperationLog do
       )
 
   # Derive the transition, durably append it, then publish it.
-  defp commit(state, %{"t" => "intent", "op" => op} = event) do
-    room = if Map.has_key?(state.ops, op), do: {:ok, state}, else: ensure_room(state)
-
-    with {:ok, planned} <- room,
+  defp commit(state, event) do
+    with {:ok, planned} <- plan(state, event),
          do: persist(state, planned, event),
          else: ({:error, reason} -> {:reply, {:error, reason}, state})
   end
-
-  defp commit(state, event), do: persist(state, state, event)
 
   defp persist(original, planned, event) do
     case transition(planned, event) do
@@ -328,7 +324,7 @@ defmodule Alto.OperationLog do
 
       {:ok, next, response} ->
         case append(original, event) do
-          :ok -> {:reply, response(response, event, next), evict_after(next, event)}
+          :ok -> {:reply, response(response, event, next), next}
           {:error, reason} -> {:reply, {:error, reason}, original}
         end
 
@@ -341,11 +337,6 @@ defmodule Alto.OperationLog do
 
   defp response(:view, %{"op" => op}, state),
     do: {:ok, recovery_view(op, Map.fetch!(state.ops, op))}
-
-  defp evict_after(state, %{"t" => type}) when type in ["outcome", "reject", "reconcile"],
-    do: evict_decided(state)
-
-  defp evict_after(state, _), do: state
 
   defp read({:status, op}, state), do: {:reply, read_status(state, op), state}
 
@@ -426,27 +417,6 @@ defmodule Alto.OperationLog do
     case Map.fetch(state.ops, op_key) do
       {:ok, entry} -> {:ok, entry}
       :error -> {:error, :no_intent}
-    end
-  end
-
-  # Only terminal operations may leave the index; unknown and parked work are
-  # still recovery obligations and are never forgotten while memory is bounded.
-  defp evict_decided(state) do
-    if map_size(state.ops) <= state.max_ops do
-      state
-    else
-      victim =
-        Enum.find(state.order, fn key ->
-          evictable?(Map.fetch!(state.ops, key))
-        end)
-
-      case victim do
-        nil ->
-          state
-
-        key ->
-          %{state | ops: Map.delete(state.ops, key), order: List.delete(state.order, key)}
-      end
     end
   end
 
@@ -673,31 +643,8 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp replay_lines(state, []), do: {:ok, state}
-
   defp replay_lines(state, lines) do
-    with {:ok, state} <- Alto.JSONLines.fold(state, lines, &apply_logged/3),
-         do: trim_to_bound(state)
-  end
-
-  # Restart resurrects evicted decided entries from the audit log; trim back
-  # to the bound here so memory stays bounded across restarts too.
-  defp trim_to_bound(state) do
-    if map_size(state.ops) <= state.max_ops do
-      {:ok, state}
-    else
-      case Enum.find(state.order, &evictable?(Map.fetch!(state.ops, &1))) do
-        nil ->
-          {:error, {:ledger_capacity_exceeded, map_size(state.ops), state.max_ops}}
-
-        key ->
-          trim_to_bound(%{
-            state
-            | ops: Map.delete(state.ops, key),
-              order: List.delete(state.order, key)
-          })
-      end
-    end
+    Alto.JSONLines.fold(state, lines, &apply_logged/3)
   end
 
   defp apply_logged(state, line, number) do
@@ -705,7 +652,8 @@ defmodule Alto.OperationLog do
       case JSON.decode(line) do
         {:ok, %{"v" => @version, "t" => type, "op" => op} = entry}
         when is_binary(type) and is_binary(op) ->
-          with {:ok, state, _reply} <- transition(state, entry),
+          with {:ok, planned} <- replay_plan(state, entry),
+               {:ok, state, _reply} <- transition(planned, entry),
                do: {:ok, state}
 
         _other ->
@@ -713,6 +661,22 @@ defmodule Alto.OperationLog do
       end
     end
   end
+
+  defp replay_plan(state, event) do
+    case plan(state, event) do
+      {:error, :ledger_full} ->
+        {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
+
+      result ->
+        result
+    end
+  end
+
+  defp plan(state, %{"t" => "intent", "op" => op}) do
+    if Map.has_key?(state.ops, op), do: {:ok, state}, else: ensure_room(state)
+  end
+
+  defp plan(state, _event), do: {:ok, state}
 
   # The same pure state transition serves live commands and durable replay.
   defp transition(state, %{"t" => type, "op" => op} = entry) do

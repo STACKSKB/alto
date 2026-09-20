@@ -261,6 +261,29 @@ defmodule Alto.OperationLogTest do
       assert map_size(:sys.get_state(restarted_pid).ops) == 1
     end
 
+    test "reusing an evicted key replays the same state after restart", %{dir: dir, id: id} do
+      %{name: name, pid: pid} = start_ledger!(id: id, dir: dir, max_ops: 1)
+
+      for {key, attempt} <- [{"a", "a-1"}, {"b", "b-1"}] do
+        :ok = OperationLog.record_intent(name, key, "t", nil)
+        :ok = OperationLog.record_attempt(name, key, attempt)
+        :ok = OperationLog.record_outcome(name, key, attempt, :completed)
+      end
+
+      assert :no_intent = OperationLog.status(name, "a")
+      reuse = %{generation_id: "reuse-a", key: "a", payload: %{version: 2}}
+      :ok = OperationLog.record_intent(name, "a", "t-reuse", "a", reuse)
+      :ok = OperationLog.record_attempt(name, "a", "a-2")
+      :ok = OperationLog.record_outcome(name, "a", "a-2", :failed_known)
+      assert {:ok, live} = OperationLog.recovery(name, "a")
+
+      GenServer.stop(pid)
+      %{name: restarted} = start_ledger!(id: id, dir: dir, max_ops: 1)
+      assert {:error, :not_found} = OperationLog.recovery(restarted, "b")
+
+      assert {:ok, ^live} = OperationLog.recovery(restarted, "a")
+    end
+
     test "restart refuses unresolved state above the configured capacity", %{dir: dir, id: id} do
       %{name: name, pid: pid} = start_ledger!(id: id, dir: dir, max_ops: 2)
       :ok = OperationLog.record_intent(name, "open-a", "t", nil)
