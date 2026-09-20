@@ -66,8 +66,7 @@ defmodule Alto.Listeners.Webhook do
   def handle_call(:bound_port, _from, state), do: {:reply, state.port, state}
 
   def handle_call({:claim_delivery, path, delivery_id}, _from, state) do
-    index = Enum.find_index(state.endpoints, &(&1.path == path))
-    endpoint = Enum.fetch!(state.endpoints, index)
+    endpoint = Map.fetch!(state.endpoints, path)
 
     if delivery_id in endpoint.delivery_ids do
       {:reply, :duplicate, state}
@@ -78,15 +77,14 @@ defmodule Alto.Listeners.Webhook do
             Enum.take([delivery_id | endpoint.delivery_ids], @default_max_delivery_ids)
       }
 
-      {:reply, :new, %{state | endpoints: List.replace_at(state.endpoints, index, endpoint)}}
+      {:reply, :new, put_in(state.endpoints[path], endpoint)}
     end
   end
 
   def handle_call({:release_delivery, path, delivery_id}, _from, state) do
-    index = Enum.find_index(state.endpoints, &(&1.path == path))
-    endpoint = Enum.fetch!(state.endpoints, index)
+    endpoint = Map.fetch!(state.endpoints, path)
     endpoint = %{endpoint | delivery_ids: List.delete(endpoint.delivery_ids, delivery_id)}
-    {:reply, :ok, %{state | endpoints: List.replace_at(state.endpoints, index, endpoint)}}
+    {:reply, :ok, put_in(state.endpoints[path], endpoint)}
   end
 
   @impl true
@@ -219,32 +217,21 @@ defmodule Alto.Listeners.Webhook do
     case Plug.Conn.get_req_header(conn, "content-length") do
       [value] ->
         case Integer.parse(value, 10) do
-          {length, ""} when length >= 0 and length <= max -> read_bounded_body(conn, max)
+          {length, ""} when length >= 0 and length <= max -> read_body_chunks(conn, max)
           {length, ""} when length > max -> {:error, :too_large, conn}
           _other -> {:error, :bad_length, conn}
         end
 
       [] ->
-        read_chunked_body(conn, max, [], 0)
+        read_body_chunks(conn, max)
 
       _other ->
         {:error, :bad_length, conn}
     end
   end
 
-  defp read_bounded_body(conn, max) do
-    read_body_chunks(conn, max, [], 0, System.monotonic_time(:millisecond) + @recv_timeout)
-  end
-
-  defp read_chunked_body(conn, max, chunks, total),
-    do:
-      read_body_chunks(
-        conn,
-        max,
-        chunks,
-        total,
-        System.monotonic_time(:millisecond) + @recv_timeout
-      )
+  defp read_body_chunks(conn, max),
+    do: read_body_chunks(conn, max, [], 0, System.monotonic_time(:millisecond) + @recv_timeout)
 
   defp read_body_chunks(conn, max, chunks, total, deadline) do
     case Plug.Conn.read_body(conn,
@@ -272,11 +259,16 @@ defmodule Alto.Listeners.Webhook do
   end
 
   defp verify(%Endpoint{verify: verifier}, conn, body) do
-    normalize_verifier_result(verifier.(body, conn.req_headers))
+    normalize_verifier_result(invoke_callback(verifier, :verify, [body, conn.req_headers]))
   end
 
   defp identity(%Endpoint{identity: extractor}, conn),
-    do: normalize_identity_result(extractor.(conn.req_headers))
+    do: normalize_identity_result(invoke_callback(extractor, :extract, [conn.req_headers]))
+
+  defp invoke_callback({module, opts}, callback, args) when is_atom(module),
+    do: apply(module, callback, args ++ [opts])
+
+  defp invoke_callback({fun, opts}, _callback, args), do: apply(fun, args ++ [opts])
 
   defp normalize_verifier_result(:ok), do: :ok
   defp normalize_verifier_result({:error, reason}), do: {:error, reason}
@@ -298,44 +290,28 @@ defmodule Alto.Listeners.Webhook do
   end
 
   defp route(endpoints, "POST", path) do
-    case Enum.find(endpoints, &(&1.path == path)) do
-      nil -> {:error, :not_found}
-      endpoint -> {:ok, endpoint}
+    case Map.fetch(endpoints, path) do
+      {:ok, endpoint} -> {:ok, endpoint}
+      :error -> {:error, :not_found}
     end
   end
 
   defp route(endpoints, _method, path) do
-    if Enum.any?(endpoints, &(&1.path == path)), do: {:error, :method}, else: {:error, :not_found}
+    if Map.has_key?(endpoints, path), do: {:error, :method}, else: {:error, :not_found}
   end
 
   defp build_endpoints(specs) when is_list(specs) and specs != [] do
-    Enum.reduce_while(specs, {:ok, []}, fn
-      spec, {:ok, acc} when is_map(spec) ->
-        case build_endpoint(spec) do
-          {:ok, endpoint} -> {:cont, {:ok, [endpoint | acc]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-
-      _spec, _acc ->
-        {:halt, {:error, :invalid_endpoints}}
-    end)
-    |> case do
-      {:ok, endpoints} ->
-        endpoints = Enum.reverse(endpoints)
-
-        case endpoints |> Enum.map(& &1.path) |> duplicate_value() do
-          nil -> {:ok, endpoints}
-          path -> {:error, {:duplicate_endpoint_path, path}}
-        end
-
-      error ->
-        error
+    with {:ok, endpoints} <- Alto.Result.traverse(specs, &build_endpoint/1) do
+      case endpoints |> Enum.map(& &1.path) |> duplicate_value() do
+        nil -> {:ok, Map.new(endpoints, &{&1.path, &1})}
+        path -> {:error, {:duplicate_endpoint_path, path}}
+      end
     end
   end
 
   defp build_endpoints(_specs), do: {:error, :invalid_endpoints}
 
-  defp build_endpoint(spec) do
+  defp build_endpoint(spec) when is_map(spec) do
     with {:ok, path} <- endpoint_path(spec),
          {:ok, verify} <- endpoint_verify(Map.get(spec, :verify)),
          {:ok, identity} <- endpoint_identity(Map.get(spec, :identity)),
@@ -355,6 +331,8 @@ defmodule Alto.Listeners.Webhook do
     end
   end
 
+  defp build_endpoint(_spec), do: {:error, :invalid_endpoints}
+
   defp endpoint_path(%{path: path}) when is_binary(path) and byte_size(path) > 1 do
     if String.starts_with?(path, "/") and not String.contains?(path, [<<0>>, "\n", "\r"]),
       do: {:ok, path},
@@ -363,31 +341,21 @@ defmodule Alto.Listeners.Webhook do
 
   defp endpoint_path(_spec), do: {:error, :invalid_path}
 
-  defp endpoint_verify({module, opts}) when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and
-         function_exported?(module, :verify, 3),
-       do: {:ok, fn body, headers -> module.verify(body, headers, opts) end},
-       else: {:error, :invalid_verify}
+  defp endpoint_verify(value), do: endpoint_callback(value, :verify, 3, :invalid_verify)
+  defp endpoint_identity(value), do: endpoint_callback(value, :extract, 2, :invalid_identity)
+
+  defp endpoint_callback({module, opts} = value, callback, arity, error)
+       when is_atom(module) and is_list(opts) do
+    if Code.ensure_loaded?(module) and function_exported?(module, callback, arity),
+      do: {:ok, value},
+      else: {:error, error}
   end
 
-  defp endpoint_verify({fun, opts})
-       when is_function(fun, 3) and is_list(opts),
-       do: {:ok, fn body, headers -> fun.(body, headers, opts) end}
+  defp endpoint_callback({fun, opts} = value, _callback, arity, _error)
+       when is_function(fun, arity) and is_list(opts),
+       do: {:ok, value}
 
-  defp endpoint_verify(_other), do: {:error, :invalid_verify}
-
-  defp endpoint_identity({module, opts}) when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and
-         function_exported?(module, :extract, 2),
-       do: {:ok, fn headers -> module.extract(headers, opts) end},
-       else: {:error, :invalid_identity}
-  end
-
-  defp endpoint_identity({fun, opts})
-       when is_function(fun, 2) and is_list(opts),
-       do: {:ok, fn headers -> fun.(headers, opts) end}
-
-  defp endpoint_identity(_other), do: {:error, :invalid_identity}
+  defp endpoint_callback(_value, _callback, _arity, error), do: {:error, error}
 
   defp endpoint_source(source)
        when is_binary(source) and source != "" and byte_size(source) <= 256,

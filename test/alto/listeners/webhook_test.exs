@@ -150,6 +150,25 @@ defmodule Alto.Listeners.WebhookTest do
     assert {:ok, "gh-1"} = IdentityHeader.extract(headers, header: "x-github-delivery")
   end
 
+  test "function verifier and identity callbacks dispatch a delivery", %{
+    listener: listener,
+    registry: registry
+  } do
+    verify = fn body, headers, opts -> HMAC.verify(body, headers, opts) end
+    identity = fn headers, opts -> IdentityHeader.extract(headers, opts) end
+
+    endpoint = %{
+      path: "/hooks/events",
+      verify: {verify, secret: @secret, header: "x-signature", encoding: :base64},
+      identity: {identity, header: "x-delivery-id"},
+      on_event: {:start_run, "job"}
+    }
+
+    port = start_listener(listener, registry, [endpoint])
+    assert post_event(port, delivery_id: "function-callbacks") =~ "200 OK"
+    assert_receive {:rule_ran, _}, 2_000
+  end
+
   test "identity extraction rejects duplicate delivery headers" do
     assert {:error, :duplicate_delivery_id} =
              IdentityHeader.extract(
@@ -369,6 +388,22 @@ defmodule Alto.Listeners.WebhookTest do
     for bad <- [
           [%{path: "/x", on_event: {:start_run, "job"}}],
           [%{path: "/x", verify: :none, on_event: {:start_run, "job"}}],
+          [
+            %{
+              path: "/x",
+              verify: {fn _body, _headers -> :ok end, []},
+              identity: {IdentityHeader, header: "x-delivery-id"},
+              on_event: {:start_run, "job"}
+            }
+          ],
+          [
+            %{
+              path: "/x",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {fn _headers, _opts, _extra -> {:ok, "id"} end, []},
+              on_event: {:start_run, "job"}
+            }
+          ],
           [
             %{
               path: "no-slash",
