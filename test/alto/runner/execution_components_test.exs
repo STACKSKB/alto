@@ -21,11 +21,16 @@ defmodule Alto.Runner.ExecutionComponentsTest do
   defp budget, do: elem(Budget.new(max_model_requests: 20, run_timeout: 30_000), 1)
 
   defp tool_caps(opts \\ []) do
-    %Tool.Capabilities{
+    %{
       tools: %{},
       approval: {Alto.Approvals.DenyAll, []},
-      context: %Context{session_id: "run-test", cwd: File.cwd!(), metadata: %{}},
+      tool_context: %Context{session_id: "run-test", cwd: File.cwd!(), metadata: %{}},
       budget: budget(),
+      cancel_ref: nil,
+      tool_timeout: 125_000,
+      approval_timeout: 300_000,
+      max_approval_details_bytes: 64_000,
+      max_tool_result_bytes: 64_000,
       event_sink: Keyword.get(opts, :event_sink)
     }
   end
@@ -86,12 +91,13 @@ defmodule Alto.Runner.ExecutionComponentsTest do
       1 -> {:ok, %{message: "done", tool_calls: []}}
     end
 
-    caps = %Model.Capabilities{
+    caps = %{
       budget: budget(),
       cancel_ref: nil,
       provider_timeout: 2_000,
       provider_retries: 2,
-      event_sink: fn event -> send(parent, {:event, event}) end
+      event_sink: fn event -> send(parent, {:event, event}) end,
+      retry_policy: nil
     }
 
     assert {:ok, {:ok, %{message: "done"}}} =
@@ -112,12 +118,13 @@ defmodule Alto.Runner.ExecutionComponentsTest do
     {:ok, agent} = Agent.start_link(fn -> 0 end)
     parent = self()
 
-    caps = %Model.Capabilities{
+    caps = %{
       budget: budget(),
       cancel_ref: nil,
       provider_timeout: 2_000,
       provider_retries: 4,
-      event_sink: fn event -> send(parent, {:event, event}) end
+      event_sink: fn event -> send(parent, {:event, event}) end,
+      retry_policy: nil
     }
 
     assert {:ok, {:error, {:http_error, 400, _}}} =

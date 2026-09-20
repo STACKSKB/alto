@@ -47,11 +47,16 @@ defmodule Alto.Tools.TransformTest do
   defp caps(opts) do
     {:ok, budget} = Budget.new(max_model_requests: 10, run_timeout: 30_000)
 
-    %ExecutionTool.Capabilities{
+    %{
       tools: %{},
       approval: Keyword.get(opts, :approval, {Alto.Approvals.DenyAll, []}),
-      context: context(),
+      tool_context: context(),
       budget: budget,
+      cancel_ref: nil,
+      tool_timeout: 125_000,
+      approval_timeout: 300_000,
+      max_approval_details_bytes: 64_000,
+      max_tool_result_bytes: 64_000,
       event_sink: Keyword.get(opts, :event_sink)
     }
   end

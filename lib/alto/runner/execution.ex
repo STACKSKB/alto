@@ -262,7 +262,6 @@ defmodule Alto.Runner.Execution do
     if Enum.all?(calls, &parallel_call?(&1, run)) do
       case prepare_batch(calls, run) do
         {:ok, jobs, run} ->
-          caps = tool_capabilities(run)
           ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
 
           with {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
@@ -282,7 +281,7 @@ defmodule Alto.Runner.Execution do
             response =
               Alto.Runner.ToolBatch.run(
                 Enum.map(ready, &{&1.tool, &1.prepared}),
-                caps
+                run
               )
 
             {outcomes, stopped} =
@@ -772,20 +771,6 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp model_capabilities(run) do
-    struct!(
-      Alto.Runner.Execution.Model.Capabilities,
-      Map.take(run, [
-        :budget,
-        :cancel_ref,
-        :provider_timeout,
-        :provider_retries,
-        :event_sink,
-        :retry_policy
-      ])
-    )
-  end
-
   defp check_context(request, %{spec: %{context: nil}}), do: {:ok, request}
 
   defp check_context(request, %{spec: %{context: policy}} = run) do
@@ -796,7 +781,7 @@ defmodule Alto.Runner.Execution do
       policy,
       provider,
       opts,
-      model_capabilities(run)
+      run
     )
   end
 
@@ -807,7 +792,7 @@ defmodule Alto.Runner.Execution do
         request,
         sink,
         opts,
-        model_capabilities(run),
+        run,
         step
       )
 
@@ -922,7 +907,7 @@ defmodule Alto.Runner.Execution do
                job.arguments,
                details,
                job.tool,
-               tool_capabilities(run),
+               run,
                op_id
              ) do
           :ok ->
@@ -956,7 +941,7 @@ defmodule Alto.Runner.Execution do
          {:ok, tool} <- fetch_tool(run.tools, job.name),
          :ok <- check_model_exposure(job.name, origin, run),
          {:ok, prepared, details} <-
-           Alto.Runner.Execution.Tool.prepare(tool, arguments, tool_capabilities(run)) do
+           Alto.Runner.Execution.Tool.prepare(tool, arguments, run) do
       {:ok,
        Map.merge(job, %{
          arguments: arguments,
@@ -1096,23 +1081,6 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp tool_capabilities(run) do
-    values =
-      Map.take(run, [
-        :tools,
-        :approval,
-        :budget,
-        :cancel_ref,
-        :tool_timeout,
-        :approval_timeout,
-        :max_approval_details_bytes,
-        :max_tool_result_bytes,
-        :event_sink
-      ])
-
-    struct!(Alto.Runner.Execution.Tool.Capabilities, Map.put(values, :context, run.tool_context))
-  end
-
   defp dispatch_tool_job(job, run) do
     case cancellation(run.cancel_ref) do
       {:cancelled, reason} ->
@@ -1142,7 +1110,7 @@ defmodule Alto.Runner.Execution do
               origin: job.origin
             })
 
-          case Alto.Runner.Execution.Tool.invoke(job.tool, job.prepared, tool_capabilities(run)) do
+          case Alto.Runner.Execution.Tool.invoke(job.tool, job.prepared, run) do
             {:ok, outcome} ->
               finish_tool_job(job, {:participant, outcome}, Map.delete(run, :in_flight))
 

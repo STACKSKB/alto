@@ -126,12 +126,13 @@ defmodule Alto.Runner.SSERetryTest do
     {:ok, budget} = Budget.new(max_model_requests: 4, run_timeout: 10_000)
     sink = fn event -> send(parent, {:event, event}) end
 
-    caps = %Model.Capabilities{
+    caps = %{
       budget: budget,
       cancel_ref: nil,
       provider_timeout: 2_000,
       provider_retries: retries,
-      event_sink: sink
+      event_sink: sink,
+      retry_policy: nil
     }
 
     request = %{

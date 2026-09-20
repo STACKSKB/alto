@@ -2,7 +2,6 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   use ExUnit.Case, async: true
 
   alias Alto.Runner.Budget
-  alias Alto.Runner.Execution.Tool.Capabilities
   alias Alto.Runner.ToolBatch
 
   defmodule ControlledTool do
@@ -74,13 +73,17 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   end
 
   defp capabilities(budget, cancel_ref) do
-    %Capabilities{
+    %{
       tools: %{},
       approval: {Alto.Approvals.DenyAll, []},
-      context: nil,
+      tool_context: nil,
       budget: budget,
       cancel_ref: cancel_ref,
-      tool_timeout: 5_000
+      tool_timeout: 5_000,
+      approval_timeout: 300_000,
+      max_approval_details_bytes: 64_000,
+      max_tool_result_bytes: 64_000,
+      event_sink: nil
     }
   end
 

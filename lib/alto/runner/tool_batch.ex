@@ -10,6 +10,8 @@ defmodule Alto.Runner.ToolBatch do
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
     owner = self()
+    context = caps.tool_context
+    limit = caps.max_tool_result_bytes
 
     tasks =
       Enum.map(jobs, fn {tool, prepared} ->
@@ -21,8 +23,8 @@ defmodule Alto.Runner.ToolBatch do
             Call.guard_owner(owner)
 
             tool
-            |> Tool.invoke_tool(prepared, caps.context)
-            |> bound_result(caps.max_tool_result_bytes)
+            |> Tool.invoke_tool(prepared, context)
+            |> bound_result(limit)
           end)
 
         {task,

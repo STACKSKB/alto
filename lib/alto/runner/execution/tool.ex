@@ -1,46 +1,26 @@
 defmodule Alto.Runner.Execution.Tool do
-  @moduledoc "The bounded preparation, approval, and invocation boundary for tools."
+  @moduledoc """
+  Bounded tool preparation, approval, and invocation over a capability map.
+
+  Operations consume `tool_context`, `budget`, cancellation, timeout, approval,
+  and event-sink fields using the same names as the execution run. Tool and
+  policy callbacks receive only their explicit context and arguments.
+  """
 
   alias Alto.Approval.Request
   alias Alto.Event
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
 
-  defmodule Capabilities do
-    @moduledoc "Tool authority and bounds needed by the execution boundary."
-    @enforce_keys [:tools, :approval, :context, :budget]
-    defstruct tools: %{},
-              approval: {Alto.Approvals.DenyAll, []},
-              context: nil,
-              budget: nil,
-              cancel_ref: nil,
-              tool_timeout: 125_000,
-              approval_timeout: 300_000,
-              max_approval_details_bytes: 64_000,
-              max_tool_result_bytes: 64_000,
-              event_sink: nil
-
-    @type t :: %__MODULE__{
-            tools: %{optional(binary()) => map()},
-            approval: {module(), keyword()},
-            context: Alto.Tool.Context.t(),
-            budget: Budget.t(),
-            cancel_ref: reference() | nil,
-            tool_timeout: pos_integer(),
-            approval_timeout: pos_integer(),
-            max_approval_details_bytes: pos_integer(),
-            max_tool_result_bytes: pos_integer(),
-            event_sink: (Event.t() -> term()) | nil
-          }
-  end
-
   @doc "Prepare one invocation and return the opaque value and display-safe details."
   def prepare(%{preparation: :none}, arguments, _caps), do: {:ok, arguments, %{}}
 
-  def prepare(tool, arguments, %Capabilities{} = caps) do
+  def prepare(tool, arguments, caps) do
+    context = caps.tool_context
+
     outcome =
       Call.run(
-        fn -> invoke_prepare(tool, arguments, caps.context) end,
+        fn -> invoke_prepare(tool, arguments, context) end,
         Budget.timeout(caps.budget, caps.tool_timeout),
         caps.cancel_ref
       )
@@ -70,12 +50,13 @@ defmodule Alto.Runner.Execution.Tool do
   def authorize(_call_id, _name, _arguments, _details, %{approval: :never}, _caps, _operation_id),
     do: :ok
 
-  def authorize(call_id, name, arguments, details, tool, %Capabilities{} = caps, operation_id) do
+  def authorize(call_id, name, arguments, details, tool, caps, operation_id) do
     {policy, policy_opts} = caps.approval
+    context = caps.tool_context
 
     request = %Request{
       id: operation_id,
-      run_id: caps.context.session_id,
+      run_id: context.session_id,
       call_id: call_id,
       operation_id: operation_id,
       tool: name,
@@ -88,7 +69,7 @@ defmodule Alto.Runner.Execution.Tool do
 
     outcome =
       Call.run(
-        fn -> policy.decide(request, caps.context, policy_opts) end,
+        fn -> policy.decide(request, context, policy_opts) end,
         Budget.timeout(caps.budget, caps.approval_timeout),
         caps.cancel_ref
       )
@@ -116,14 +97,16 @@ defmodule Alto.Runner.Execution.Tool do
   The supervision envelope is retained so hosts can distinguish a
   participant-reported failure from a crashed or timed out participant.
   "
-  def invoke(tool, prepared, %Capabilities{} = caps) do
+  def invoke(tool, prepared, caps) do
+    context = caps.tool_context
+
     case Call.cancellation(caps.cancel_ref) do
       {:cancelled, reason} ->
         {:cancelled, reason}
 
       :continue ->
         Call.run(
-          fn -> invoke_tool(tool, prepared, caps.context) end,
+          fn -> invoke_tool(tool, prepared, context) end,
           Budget.timeout(caps.budget, caps.tool_timeout),
           caps.cancel_ref
         )
