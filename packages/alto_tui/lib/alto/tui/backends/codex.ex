@@ -3,7 +3,6 @@ defmodule Alto.TUI.Backends.Codex do
   @behaviour Alto.TUI.Backend
   alias Alto.Codex.AppServer.Client, as: CodexClient
   alias Alto.Codex.Backend, as: CodexBackend
-  alias Alto.Harness.Catalog
   alias Alto.TUI.State
   alias Alto.TUI.App, as: Host
 
@@ -251,30 +250,17 @@ defmodule Alto.TUI.Backends.Codex do
       {nil, _result} ->
         {:noreply, state, render?: false}
 
-      {run, {:ok, %{thread_id: thread_id, turn_id: turn_id}}} ->
-        run = %{
-          run
-          | thread_id: thread_id,
+      {_run, {:ok, %{thread_id: thread_id, turn_id: turn_id}}} ->
+        state =
+          Host.update_run(state, local_id,
+            thread_id: thread_id,
             turn_id: turn_id,
             status: :running,
             phase: "waiting for model"
-        }
+          )
 
-        state = put_in(state.runs[local_id], run)
-
-        state =
-          case Catalog.update_task(
-                 run.task_id,
-                 %{
-                   "status" => "active",
-                   "backend" => Atom.to_string(run.backend_id),
-                   "backend_thread_id" => thread_id
-                 },
-                 state.catalog_opts
-               ) do
-            {:ok, task} -> State.update_task_record(state, task)
-            {:error, _reason} -> state
-          end
+        run = state.runs[local_id]
+        state = Host.sync_run_task(state, run)
 
         codex = %{
           data(state)
@@ -368,24 +354,7 @@ defmodule Alto.TUI.Backends.Codex do
       send(owner, {:codex_turn_started, local_id, result})
     end)
 
-    ExRatatui.textarea_set_value(state.textarea, "")
-
-    state =
-      case Catalog.update_task(
-             task["id"],
-             %{"status" => "active", "backend" => Atom.to_string(run.backend_id)},
-             state.catalog_opts
-           ) do
-        {:ok, updated} -> State.update_task_record(state, updated)
-        {:error, _reason} -> state
-      end
-
-    state
-    |> State.append_entry(task["id"], %{kind: :user, text: prompt})
-    |> Map.update!(:runs, &Map.put(&1, local_id, run))
-    |> Map.put(:notice, "starting Codex…")
-    |> Map.put(:transcript_scroll, 0)
-    |> Map.put(:transcript_follow?, true)
+    Host.attach_run(state, local_id, run, prompt, "starting Codex…")
   end
 
   defp maybe_load_codex_history(state) do
@@ -813,16 +782,9 @@ defmodule Alto.TUI.Backends.Codex do
   defp apply_codex_run_event(state, _run, _method, _params), do: state
 
   defp codex_phase(state, run, phase) do
-    runs =
-      Map.new(state.runs, fn {id, candidate} ->
-        {id,
-         if(candidate == run and Map.get(candidate, :phase) != "cancelling",
-           do: Map.put(candidate, :phase, phase),
-           else: candidate
-         )}
-      end)
-
-    %{state | runs: runs}
+    if Map.get(run, :phase) == "cancelling",
+      do: state,
+      else: Host.update_run(state, run, phase: phase)
   end
 
   defp codex_item_summary(%{"type" => "commandExecution", "command" => command}),
@@ -840,27 +802,17 @@ defmodule Alto.TUI.Backends.Codex do
     local_id =
       Enum.find_value(state.runs, fn {id, candidate} -> if candidate == run, do: id end)
 
-    state =
-      case Catalog.update_task(run.task_id, %{"status" => catalog_status}, state.catalog_opts) do
-        {:ok, task} -> State.update_task_record(state, task)
-        {:error, _reason} -> state
-      end
-
-    state =
-      if completed? do
-        state
-      else
-        State.append_entry(state, run.task_id, %{
-          kind: :error,
-          text: error || "Codex turn #{status || "failed"}"
-        })
-      end
-
     state
-    |> Host.drop_run(local_id)
-    |> Map.put(:notice, if(completed?, do: "Codex run completed", else: "Codex run failed"))
+    |> Host.finish_run(local_id, catalog_status,
+      entry:
+        if(completed?,
+          do: nil,
+          else: %{kind: :error, text: error || "Codex turn #{status || "failed"}"}
+        ),
+      notice: if(completed?, do: "Codex run completed", else: "Codex run failed"),
+      continue?: completed?
+    )
     |> refresh_limits_after_turn()
-    |> Host.finish_queued(run.task_id, completed?)
   end
 
   defp refresh_limits_after_turn(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
@@ -876,20 +828,12 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_limits_after_turn(state), do: state
 
-  defp fail_codex_start(state, local_id, run, reason) do
-    state =
-      case Catalog.update_task(run.task_id, %{"status" => "failed"}, state.catalog_opts) do
-        {:ok, task} -> State.update_task_record(state, task)
-        {:error, _reason} -> state
-      end
-
-    state
-    |> State.append_entry(run.task_id, %{
-      kind: :error,
-      text: "Codex could not start: #{Host.human_error(reason)}"
-    })
-    |> Host.drop_run(local_id)
-    |> Map.put(:notice, "Codex run failed to start")
+  defp fail_codex_start(state, local_id, _run, reason) do
+    Host.finish_run(state, local_id, "failed",
+      entry: %{kind: :error, text: "Codex could not start: #{Host.human_error(reason)}"},
+      notice: "Codex run failed to start",
+      continue?: false
+    )
   end
 
   defp handle_codex_request(state, id, method, params)

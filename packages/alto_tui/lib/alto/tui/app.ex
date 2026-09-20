@@ -343,7 +343,7 @@ defmodule Alto.TUI.App do
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
     case find_run(state, ref: ref) do
       nil -> {:noreply, state, render?: false}
-      {local_id, run} -> {:noreply, finish_run(state, local_id, run, result)}
+      {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
     end
   end
 
@@ -353,7 +353,7 @@ defmodule Alto.TUI.App do
         {:noreply, state, render?: false}
 
       {local_id, run} ->
-        {:noreply, finish_run(state, local_id, run, {:error, {:run_exited, reason}})}
+        {:noreply, finish_runner_result(state, local_id, run, {:error, {:run_exited, reason}})}
     end
   end
 
@@ -637,7 +637,22 @@ defmodule Alto.TUI.App do
              {:ok, state} <- ensure_input_for_task(state, task),
              {:ok, run_options} <- run_options(state, profile),
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
-          attach_started_run(state, task, prompt, handle, completion_ref, local_id)
+          attach_run(
+            state,
+            local_id,
+            %{
+              kind: :alto,
+              adapter: Backend.lookup(state.run_options, state.selected_backend),
+              handle: handle,
+              task_id: task["id"],
+              ref: completion_ref,
+              phase: "starting",
+              approval_ids: MapSet.new(),
+              started_at_ms: System.system_time(:millisecond)
+            },
+            prompt,
+            "run started"
+          )
         else
           {:error, reason} -> %{state | notice: "cannot start: #{human_error(reason)}"}
         end
@@ -681,30 +696,15 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp attach_started_run(state, task, prompt, handle, completion_ref, local_id) do
-    run = %{
-      kind: :alto,
-      adapter: Backend.lookup(state.run_options, state.selected_backend),
-      handle: handle,
-      task_id: task["id"],
-      ref: completion_ref,
-      phase: "starting",
-      approval_ids: MapSet.new(),
-      started_at_ms: System.system_time(:millisecond)
-    }
-
+  def attach_run(state, local_id, run, prompt, notice) do
     ExRatatui.textarea_set_value(state.textarea, "")
 
-    state =
-      case Catalog.update_task(task["id"], %{"status" => "active"}, state.catalog_opts) do
-        {:ok, updated} -> State.update_task_record(state, updated)
-        {:error, _reason} -> state
-      end
+    state = sync_run_task(state, run)
 
     state
-    |> State.append_entry(task["id"], %{kind: :user, text: prompt})
+    |> State.append_entry(run.task_id, %{kind: :user, text: prompt})
     |> Map.update!(:runs, &Map.put(&1, local_id, run))
-    |> Map.put(:notice, "run started")
+    |> Map.put(:notice, notice)
     |> Map.put(:transcript_scroll, 0)
     |> Map.put(:transcript_follow?, true)
   end
@@ -834,7 +834,7 @@ defmodule Alto.TUI.App do
 
   defp maybe_context_window(options, _metadata), do: options
 
-  defp finish_run(state, local_id, run, result) do
+  defp finish_runner_result(state, local_id, _run, result) do
     {status, session_id, entry, notice, persistence} =
       case result do
         {:ok, completed} ->
@@ -850,8 +850,17 @@ defmodule Alto.TUI.App do
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
 
-    changes = %{"status" => status}
-    changes = if session_id, do: Map.put(changes, "session_id", session_id), else: changes
+    finish_run(state, local_id, status,
+      session_id: session_id,
+      entry: entry,
+      notice: notice,
+      continue?: status == "completed" and not match?({:degraded, _}, persistence)
+    )
+  end
+
+  def finish_run(state, local_id, status, opts \\ []) do
+    run = Map.fetch!(state.runs, local_id)
+    changes = %{"status" => status} |> maybe_change("session_id", opts[:session_id])
 
     state =
       case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
@@ -859,16 +868,39 @@ defmodule Alto.TUI.App do
         {:error, _reason} -> state
       end
 
-    state = if entry, do: State.append_entry(state, run.task_id, entry), else: state
+    state = if opts[:entry], do: State.append_entry(state, run.task_id, opts[:entry]), else: state
 
     state
     |> drop_run(local_id)
-    |> Map.put(:notice, notice)
-    |> finish_queued(
-      run.task_id,
-      status == "completed" and not match?({:degraded, _}, persistence)
-    )
+    |> Map.put(:notice, opts[:notice])
+    |> finish_queued(run.task_id, Keyword.get(opts, :continue?, status == "completed"))
   end
+
+  def update_run(state, local_id, changes) when is_binary(local_id) do
+    update_in(state.runs[local_id], &Map.merge(&1, Map.new(changes)))
+  end
+
+  def update_run(state, run, changes) do
+    case Enum.find(state.runs, fn {_id, candidate} -> candidate == run end) do
+      {local_id, _run} -> update_run(state, local_id, changes)
+      nil -> state
+    end
+  end
+
+  def sync_run_task(state, run) do
+    changes =
+      %{"status" => "active"}
+      |> maybe_change("backend", run[:backend_id] && Atom.to_string(run.backend_id))
+      |> maybe_change("backend_thread_id", run[:thread_id])
+
+    case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
+      {:ok, task} -> State.update_task_record(state, task)
+      {:error, _reason} -> state
+    end
+  end
+
+  defp maybe_change(map, _key, nil), do: map
+  defp maybe_change(map, key, value), do: Map.put(map, key, value)
 
   defp persistence_feedback(entry, notice, {:degraded, errors}) do
     warning = %{kind: :error, text: "persistence degraded", detail: human_error(errors)}
