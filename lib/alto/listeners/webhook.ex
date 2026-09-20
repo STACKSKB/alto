@@ -272,75 +272,15 @@ defmodule Alto.Listeners.Webhook do
   end
 
   defp verify(%Endpoint{verify: verifier}, conn, body) do
-    call_verifier(verifier, body, conn.req_headers)
+    normalize_verifier_result(verifier.(body, conn.req_headers))
   end
 
   defp identity(%Endpoint{identity: extractor}, conn),
-    do: call_identity(extractor, conn.req_headers)
-
-  defp call_verifier({module, opts}, body, headers) when is_atom(module) and is_list(opts) do
-    result =
-      cond do
-        not Code.ensure_loaded?(module) -> {:error, :invalid_verify}
-        function_exported?(module, :verify, 3) -> module.verify(body, headers, opts)
-        function_exported?(module, :verify, 2) -> module.verify(body, headers)
-        true -> {:error, :invalid_verify}
-      end
-
-    normalize_verifier_result(result)
-  rescue
-    UndefinedFunctionError -> {:error, :invalid_verify}
-  end
-
-  defp call_verifier({fun, opts}, body, headers)
-       when is_function(fun, 3) and is_list(opts),
-       do: normalize_verifier_result(fun.(body, headers, opts))
-
-  defp call_verifier({fun, _opts}, body, headers)
-       when is_function(fun, 2),
-       do: normalize_verifier_result(fun.(body, headers))
-
-  defp call_verifier(fun, body, headers) when is_function(fun, 2),
-    do: normalize_verifier_result(fun.(body, headers))
-
-  defp call_verifier(fun, body, headers) when is_function(fun, 3),
-    do: normalize_verifier_result(fun.(body, headers, []))
-
-  defp call_verifier(_verifier, _body, _headers), do: {:error, :invalid_verify}
+    do: normalize_identity_result(extractor.(conn.req_headers))
 
   defp normalize_verifier_result(:ok), do: :ok
   defp normalize_verifier_result({:error, reason}), do: {:error, reason}
   defp normalize_verifier_result(_other), do: {:error, :invalid_verify}
-
-  defp call_identity({module, opts}, headers) when is_atom(module) and is_list(opts) do
-    result =
-      cond do
-        not Code.ensure_loaded?(module) -> {:error, :invalid_identity}
-        function_exported?(module, :extract, 2) -> module.extract(headers, opts)
-        function_exported?(module, :extract, 1) -> module.extract(headers)
-        true -> {:error, :invalid_identity}
-      end
-
-    normalize_identity_result(result)
-  rescue
-    UndefinedFunctionError -> {:error, :invalid_identity}
-  end
-
-  defp call_identity({fun, opts}, headers)
-       when is_function(fun, 2) and is_list(opts),
-       do: normalize_identity_result(fun.(headers, opts))
-
-  defp call_identity({fun, _opts}, headers)
-       when is_function(fun, 1),
-       do: normalize_identity_result(fun.(headers))
-
-  defp call_identity(fun, headers) when is_function(fun, 1),
-    do: normalize_identity_result(fun.(headers))
-
-  defp call_identity(fun, headers) when is_function(fun, 2),
-    do: normalize_identity_result(fun.(headers, []))
-
-  defp call_identity(_extractor, _headers), do: {:error, :invalid_identity}
 
   defp normalize_identity_result({:ok, id})
        when is_binary(id) and id != "" and byte_size(id) <= @max_delivery_id_bytes,
@@ -425,33 +365,27 @@ defmodule Alto.Listeners.Webhook do
 
   defp endpoint_verify({module, opts}) when is_atom(module) and is_list(opts) do
     if Code.ensure_loaded?(module) and
-         (function_exported?(module, :verify, 3) or function_exported?(module, :verify, 2)),
-       do: {:ok, {module, opts}},
+         function_exported?(module, :verify, 3),
+       do: {:ok, fn body, headers -> module.verify(body, headers, opts) end},
        else: {:error, :invalid_verify}
   end
 
   defp endpoint_verify({fun, opts})
-       when (is_function(fun, 2) or is_function(fun, 3)) and is_list(opts),
-       do: {:ok, {fun, opts}}
-
-  defp endpoint_verify(fun) when is_function(fun, 2) or is_function(fun, 3),
-    do: {:ok, fun}
+       when is_function(fun, 3) and is_list(opts),
+       do: {:ok, fn body, headers -> fun.(body, headers, opts) end}
 
   defp endpoint_verify(_other), do: {:error, :invalid_verify}
 
   defp endpoint_identity({module, opts}) when is_atom(module) and is_list(opts) do
     if Code.ensure_loaded?(module) and
-         (function_exported?(module, :extract, 2) or function_exported?(module, :extract, 1)),
-       do: {:ok, {module, opts}},
+         function_exported?(module, :extract, 2),
+       do: {:ok, fn headers -> module.extract(headers, opts) end},
        else: {:error, :invalid_identity}
   end
 
   defp endpoint_identity({fun, opts})
-       when (is_function(fun, 1) or is_function(fun, 2)) and is_list(opts),
-       do: {:ok, {fun, opts}}
-
-  defp endpoint_identity(fun) when is_function(fun, 1) or is_function(fun, 2),
-    do: {:ok, fun}
+       when is_function(fun, 2) and is_list(opts),
+       do: {:ok, fn headers -> fun.(headers, opts) end}
 
   defp endpoint_identity(_other), do: {:error, :invalid_identity}
 
