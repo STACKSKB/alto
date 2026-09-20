@@ -272,27 +272,17 @@ defmodule Alto.Tools.EditFile do
   end
 
   defp collect_replacements(content, edits) do
-    edits
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {edit, index}, {:ok, replacements} ->
-      old_text = Map.fetch!(edit, "old_text")
-      new_text = Map.fetch!(edit, "new_text")
-      replace_all? = Map.get(edit, "replace_all", false)
-      matches = :binary.matches(content, old_text)
+    with {:ok, groups} <-
+           Alto.Result.traverse(edits, fn edit ->
+             matches = :binary.matches(content, edit["old_text"])
 
-      case select_matches(matches, replace_all?) do
-        {:ok, selected} ->
-          ranges =
-            Enum.map(selected, fn {start, length} ->
-              %{start: start, length: length, replacement: new_text, edit: index}
-            end)
-
-          {:cont, {:ok, ranges ++ replacements}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
+             with {:ok, selected} <- select_matches(matches, Map.get(edit, "replace_all", false)),
+                  do:
+                    {:ok,
+                     Enum.map(selected, fn {start, size} -> {start, size, edit["new_text"]} end)}
+           end) do
+      {:ok, groups |> List.flatten() |> Enum.sort_by(&elem(&1, 0))}
+    end
   end
 
   defp select_matches([], _replace_all?), do: {:error, :text_not_found}
@@ -304,25 +294,21 @@ defmodule Alto.Tools.EditFile do
   defp select_matches(matches, true), do: {:ok, matches}
 
   defp reject_overlaps(replacements) do
-    replacements
-    |> Enum.sort_by(&{&1.start, &1.length, &1.edit})
-    |> Enum.reduce_while(nil, fn replacement, previous ->
-      if previous != nil and replacement.start < previous.start + previous.length do
-        {:halt, {:error, :overlapping_edits}}
-      else
-        {:cont, replacement}
-      end
+    Enum.reduce_while(replacements, 0, fn {start, size, _text}, previous_end ->
+      if start < previous_end,
+        do: {:halt, {:error, :overlapping_edits}},
+        else: {:cont, start + size}
     end)
     |> case do
-      {:error, reason} -> {:error, reason}
-      _last -> :ok
+      {:error, _} = error -> error
+      _end -> :ok
     end
   end
 
   defp validate_updated_size(content, replacements, max_file_bytes) do
     size =
-      Enum.reduce(replacements, byte_size(content), fn replacement, total ->
-        total - replacement.length + byte_size(replacement.replacement)
+      Enum.reduce(replacements, byte_size(content), fn {_start, size, text}, total ->
+        total - size + byte_size(text)
       end)
 
     validate_size(size, max_file_bytes)
@@ -330,11 +316,9 @@ defmodule Alto.Tools.EditFile do
 
   defp replace_ranges(content, replacements) do
     {chunks, offset} =
-      replacements
-      |> Enum.sort_by(& &1.start)
-      |> Enum.reduce({[], 0}, fn replacement, {chunks, offset} ->
-        unchanged = binary_part(content, offset, replacement.start - offset)
-        {[replacement.replacement, unchanged | chunks], replacement.start + replacement.length}
+      Enum.reduce(replacements, {[], 0}, fn {start, size, text}, {chunks, offset} ->
+        unchanged = binary_part(content, offset, start - offset)
+        {[text, unchanged | chunks], start + size}
       end)
 
     tail = binary_part(content, offset, byte_size(content) - offset)

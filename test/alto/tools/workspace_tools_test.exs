@@ -527,6 +527,55 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "created by another writer\n"
   end
 
+  test "writes fingerprint large originals without retaining a diff", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "large.txt")
+    original = "0123456789abcdef"
+    File.write!(path, original)
+
+    assert {:ok, prepared, details} =
+             WriteFile.prepare(%{"path" => "large.txt", "content" => "small"}, context,
+               max_bytes: 8
+             )
+
+    assert details.bytes_before == byte_size(original)
+    assert details.patch == nil
+    refute Map.has_key?(prepared.original, :content)
+
+    File.write!(path, "0123456789abcdeg")
+    assert {:error, {:stale_file, ^path}} = WriteFile.run_prepared(prepared, context)
+    File.write!(path, original)
+    assert {:ok, %{bytes_written: 5, patch: nil}} = WriteFile.run_prepared(prepared, context)
+    assert File.read!(path) == "small"
+  end
+
+  test "write and edit approval diffs can be disabled", %{root: root, context: context} do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "before")
+
+    assert {:ok, write, %{patch: nil}} =
+             WriteFile.prepare(%{"path" => "sample.txt", "content" => "after"}, context,
+               diff_bytes: 0
+             )
+
+    assert {:ok, %{patch: nil}} = WriteFile.run_prepared(write, context)
+
+    assert {:ok, edit, %{patch: nil}} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "after", "new_text" => "done"}]
+               },
+               context,
+               patch_bytes: 0
+             )
+
+    assert {:ok, %{patch: nil}} = EditFile.run_prepared(edit, context)
+    assert File.read!(path) == "done"
+  end
+
   test "write_file writes atomically and leaves no temp litter", %{
     root: root,
     context: context
