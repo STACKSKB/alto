@@ -27,11 +27,6 @@ defmodule Alto.Tools.Transform do
   def wrap(tool, transform) when is_function(transform, 2),
     do: {__MODULE__, [tool: tool, transform: transform]}
 
-  def wrap(tool, opts) when is_list(opts) do
-    transform = Keyword.fetch!(opts, :transform)
-    wrap(tool, transform)
-  end
-
   @impl true
   def name(opts), do: callback(opts, :name)
 
@@ -42,7 +37,10 @@ defmodule Alto.Tools.Transform do
   def execution_mode(opts), do: callback(opts, :execution_mode)
 
   @impl true
-  def approval(opts), do: Alto.Tool.requirement(module(opts), inner_opts(opts))
+  def approval(opts) do
+    {module, inner_opts} = inner_tool(opts)
+    Alto.Tool.requirement(module, inner_opts)
+  end
 
   @impl true
   def prepare(arguments, context, opts) when is_map(arguments) do
@@ -53,16 +51,25 @@ defmodule Alto.Tools.Transform do
   end
 
   @impl true
-  def run_prepared({__MODULE__, :prepared, prepared}, context, opts),
-    do: run_inner_prepared(prepared, context, opts)
+  def run_prepared({__MODULE__, :prepared, prepared}, context, opts) do
+    {module, inner_opts} = inner_tool(opts)
 
-  def run_prepared({__MODULE__, :raw, arguments}, context, opts),
-    do: run_inner_raw(arguments, context, opts)
+    if prepared?(module),
+      do: module.run_prepared(prepared, context, inner_opts),
+      else: {:error, :invalid_transformed_prepared}
+  end
+
+  def run_prepared({__MODULE__, :raw, arguments}, context, opts) do
+    {module, inner_opts} = inner_tool(opts)
+    module.run(arguments, context, inner_opts)
+  end
 
   def run_prepared(_other, _context, _opts), do: {:error, :invalid_transformed_prepared}
 
-  defp callback(opts, callback),
-    do: Alto.Tool.callback(module(opts), callback, inner_opts(opts))
+  defp callback(opts, callback) do
+    {module, inner_opts} = inner_tool(opts)
+    Alto.Tool.callback(module, callback, inner_opts)
+  end
 
   defp transform(arguments, context, opts) do
     transform = Keyword.fetch!(opts, :transform)
@@ -81,8 +88,7 @@ defmodule Alto.Tools.Transform do
   defp approval_details(details, _transformed), do: details
 
   defp prepare_inner(arguments, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
+    {module, inner_opts} = inner_tool(opts)
 
     case prepared?(module) do
       true ->
@@ -111,31 +117,7 @@ defmodule Alto.Tools.Transform do
       else: raise(ArgumentError, "wrapped tool has incomplete preparation callbacks")
   end
 
-  defp run_inner_prepared(prepared, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
-
-    if prepared?(module),
-      do: module.run_prepared(prepared, context, inner_opts),
-      else: {:error, :invalid_transformed_prepared}
-  end
-
-  defp run_inner_raw(arguments, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
-
-    module.run(arguments, context, inner_opts)
-  end
-
-  defp module(opts) do
-    {module, _opts} = normalize(Keyword.fetch!(opts, :tool))
-    module
-  end
-
-  defp inner_opts(opts) do
-    {_module, inner_opts} = normalize(Keyword.fetch!(opts, :tool))
-    inner_opts
-  end
+  defp inner_tool(opts), do: normalize(Keyword.fetch!(opts, :tool))
 
   defp normalize({module, opts}) when is_atom(module) and is_list(opts), do: {module, opts}
   defp normalize(module) when is_atom(module), do: {module, []}
