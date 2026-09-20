@@ -1,9 +1,9 @@
 defmodule Alto.Runner.SerialNativeBoundsTest do
   @moduledoc """
-  : bounded native result contract.
+  Bounded native tool results and provider-facing encodings.
 
-  `output` is the legacy provider-facing encoding (bounded string, truncated
-  with a marker for compatibility). `value` is the native term, bounded by
+  `output` is the provider-facing encoding (bounded string, truncated
+  with a marker). `value` is the native term, bounded by
   `max_tool_result_bytes` via `:erlang.external_size/1` before event
   retention, fanout, or session persistence. Oversize natives become a bounded
   `tool_failed` (`{:tool_result_too_large, %{limit:, size:}}`); the tool ran
@@ -15,20 +15,6 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   alias Alto.Event
   alias Alto.Protocol
   alias Alto.Session
-
-  defmodule EchoTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :echo
-    @impl true
-    def schema(_opts), do: %{description: "Echo.", parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
-    @impl true
-    def run(%{"value" => v}, _ctx, _opts), do: {:ok, %{echo: v}}
-  end
 
   defmodule BigTool do
     @behaviour Alto.Tool
@@ -111,12 +97,15 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     end
   end
 
-  defmodule SingleBigLoop do
+  defmodule SingleToolLoop do
     @behaviour Alto.Loop
     @impl true
-    def init(_task, _spec) do
+    def init(_task, spec) do
+      id = Keyword.fetch!(spec.driver_options, :call_id)
+      name = Keyword.fetch!(spec.driver_options, :tool)
+
       Alto.Transition.continue(%{}, [
-        Alto.Effect.invoke_tool(%{id: "big-1", name: "big", arguments: %{}})
+        Alto.Effect.invoke_tool(%{id: id, name: name, arguments: %{}})
       ])
     end
 
@@ -127,59 +116,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     def handle_event(%Event{type: :tool_failed, data: data}, s, _),
       do: Alto.Transition.stop(s, {:failed, data})
 
-    def handle_event(_e, s, _), do: Alto.Transition.continue(s)
-  end
-
-  defmodule SingleNestedLoop do
-    @behaviour Alto.Loop
-    @impl true
-    def init(_task, _spec) do
-      Alto.Transition.continue(%{}, [
-        Alto.Effect.invoke_tool(%{id: "n-1", name: "nested", arguments: %{}})
-      ])
-    end
-
-    @impl true
-    def handle_event(%Event{type: :tool_completed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:completed, data})
-
-    def handle_event(%Event{type: :tool_failed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:failed, data})
-
-    def handle_event(_e, s, _), do: Alto.Transition.continue(s)
-  end
-
-  defmodule SingleTupleLoop do
-    @behaviour Alto.Loop
-    @impl true
-    def init(_task, _spec) do
-      Alto.Transition.continue(%{}, [
-        Alto.Effect.invoke_tool(%{id: "t-1", name: "tup", arguments: %{}})
-      ])
-    end
-
-    @impl true
-    def handle_event(%Event{type: :tool_completed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:completed, data})
-
-    def handle_event(%Event{type: :tool_failed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:failed, data})
-
-    def handle_event(_e, s, _), do: Alto.Transition.continue(s)
-  end
-
-  defmodule SingleMalformedLoop do
-    @behaviour Alto.Loop
-    @impl true
-    def init(_task, _spec) do
-      Alto.Transition.continue(%{}, [
-        Alto.Effect.invoke_tool(%{id: "malformed-1", name: "malformed", arguments: %{}})
-      ])
-    end
-
-    @impl true
-    def handle_event(%Event{type: :tool_failed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:failed, data})
+    def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
   end
 
   defmodule ToolThenBigProvider do
@@ -199,7 +136,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "100-byte limit cannot retain a 100KB raw result (provider-less)" do
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleBigLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
                max_tool_result_bytes: 100
              )
@@ -222,7 +159,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "nested terms are measured, not just top-level bytes" do
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleNestedLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "n-1", tool: "nested"),
                tools: [NestedBigTool],
                max_tool_result_bytes: 100
              )
@@ -234,7 +171,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "malformed post-dispatch returns are bounded and remain uncertain" do
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleMalformedLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "malformed-1", tool: "malformed"),
                tools: [MalformedTool],
                max_tool_result_bytes: 100
              )
@@ -246,9 +183,12 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     refute inspect(failed.data) =~ String.duplicate("m", 1_000)
   end
 
-  test "small non-JSON values still succeed with legacy output" do
+  test "small non-JSON values remain available through provider encoding" do
     assert {:ok, result} =
-             Alto.run("go", loop: Alto.loop(SingleTupleLoop), tools: [TupleTool])
+             Alto.run("go",
+               loop: Alto.loop(SingleToolLoop, call_id: "t-1", tool: "tup"),
+               tools: [TupleTool]
+             )
 
     assert {:completed, %{value: {:tuple_ok, 1, 2}, output: output}} = result.output
     assert is_binary(output)
@@ -285,7 +225,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
 
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleBigLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
                max_tool_result_bytes: 100,
                session: :new,
@@ -312,7 +252,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "frontend encoding of the failure stays within the line bound" do
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleBigLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
                max_tool_result_bytes: 100
              )
@@ -348,7 +288,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
 
     assert {:ok, result} =
              Alto.run("go",
-               loop: Alto.loop(SingleBigLoop),
+               loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [{GuardedBigTool, test_pid: test_pid}],
                approval: Alto.Approvals.AllowAll,
                max_tool_result_bytes: 100
