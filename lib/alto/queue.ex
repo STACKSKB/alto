@@ -88,8 +88,7 @@ defmodule Alto.Queue do
     :lease_ms,
     :clock,
     auto_compact: false,
-    records: %{},
-    fifo: [],
+    records: :gb_trees.empty(),
     next_id: 1,
     completed: [],
     completed_set: MapSet.new()
@@ -421,17 +420,14 @@ defmodule Alto.Queue do
   # Replay applies logged transitions only; live ops only log transitions
   # they performed, so replaying reproduces the same state.
   defp log_apply(state, "put", entry) do
-    with {:ok, record} <- decode_record(entry) do
-      "rec-" <> digits = record.id
-
-      {:ok,
-       %{put_record(state, record) | next_id: max(state.next_id, String.to_integer(digits) + 1)}}
+    with {:ok, record, sequence} <- decode_record(entry) do
+      {:ok, %{put_record(state, record) | next_id: max(state.next_id, sequence + 1)}}
     end
   end
 
   defp log_apply(state, "claim", entry) do
     with {:ok, owner} <- SessionStore.decode_term(entry["by"]) do
-      case Map.fetch(state.records, entry["id"]) do
+      case fetch_record(state.records, entry["id"]) do
         {:ok, record} ->
           record = %Record{
             record
@@ -451,7 +447,7 @@ defmodule Alto.Queue do
 
   defp log_apply(state, "release", entry) do
     with :ok <- validate_due(entry["not_before_ms"]) do
-      case Map.fetch(state.records, entry["id"]) do
+      case fetch_record(state.records, entry["id"]) do
         {:ok, record} ->
           {:ok,
            put_record(state, %Record{unclaim(record) | not_before_ms: entry["not_before_ms"]})}
@@ -463,7 +459,7 @@ defmodule Alto.Queue do
   end
 
   defp log_apply(state, "blank", entry) do
-    case Map.fetch(state.records, entry["id"]) do
+    case fetch_record(state.records, entry["id"]) do
       {:ok, record} ->
         {:ok, state |> drop_record(entry["id"]) |> track_completed(record.key)}
 
@@ -487,7 +483,7 @@ defmodule Alto.Queue do
        )
        when is_binary(id) and is_binary(key) and is_integer(revision) and revision >= 1 and
               mode in ["business", "delivery", "recovery"] and is_integer(at) do
-    with true <- Regex.match?(~r/\Arec-[1-9][0-9]*\z/, id) or {:error, :bad_entry},
+    with {:ok, sequence} <- record_sequence(id),
          :ok <- validate_generation(generation),
          :ok <- validate_due(entry["not_before_ms"]),
          {:ok, payload} <- SessionStore.decode_term(encoded) do
@@ -502,7 +498,10 @@ defmodule Alto.Queue do
          generation_id: generation,
          operation_key: entry["operation_key"],
          not_before_ms: entry["not_before_ms"]
-       }}
+       }, sequence}
+    else
+      :error -> {:error, :bad_entry}
+      error -> error
     end
   end
 
@@ -583,8 +582,7 @@ defmodule Alto.Queue do
 
   def handle_call({:cancel, key}, _from, state) do
     victims =
-      state.records
-      |> Map.values()
+      ordered_records(state)
       |> Enum.filter(&(&1.key == key))
 
     cancel_records(state, key, victims)
@@ -592,8 +590,7 @@ defmodule Alto.Queue do
 
   def handle_call({:cancel_pending, key}, _from, state) do
     victims =
-      state.records
-      |> Map.values()
+      ordered_records(state)
       |> Enum.filter(&(&1.key == key))
 
     cond do
@@ -614,8 +611,7 @@ defmodule Alto.Queue do
 
   def handle_call(:count, _from, state) do
     counts =
-      state.records
-      |> Map.values()
+      ordered_records(state)
       |> Enum.frequencies_by(& &1.status)
 
     {:reply, %{pending: Map.get(counts, :pending, 0), claimed: Map.get(counts, :claimed, 0)},
@@ -626,9 +622,8 @@ defmodule Alto.Queue do
     state = reclaim_expired(state)
 
     views =
-      state.fifo
+      ordered_records(state)
       |> Enum.take(max)
-      |> Enum.map(&Map.fetch!(state.records, &1))
       |> Enum.map(&view/1)
 
     {:reply, views, state}
@@ -636,9 +631,8 @@ defmodule Alto.Queue do
 
   def handle_call({:snapshot, max}, _from, state) do
     views =
-      state.fifo
+      ordered_records(state)
       |> Enum.take(max)
-      |> Enum.map(&Map.fetch!(state.records, &1))
       |> Enum.map(&view/1)
 
     {:reply, views, state}
@@ -646,13 +640,12 @@ defmodule Alto.Queue do
 
   def handle_call({:snapshot_page, cursor, limit}, _from, state) do
     records =
-      state.fifo
+      ordered_records(state)
       |> Enum.slice(cursor, limit)
-      |> Enum.map(&Map.fetch!(state.records, &1))
       |> Enum.map(&view/1)
 
     next_cursor =
-      if cursor + length(records) < length(state.fifo),
+      if cursor + length(records) < :gb_trees.size(state.records),
         do: cursor + length(records),
         else: nil
 
@@ -661,8 +654,7 @@ defmodule Alto.Queue do
 
   def handle_call({:lookup, key}, _from, state) do
     result =
-      Enum.find_value(state.fifo, fn id ->
-        record = Map.fetch!(state.records, id)
+      Enum.find_value(ordered_records(state), fn record ->
         if record.key == key, do: view(record)
       end)
 
@@ -710,8 +702,7 @@ defmodule Alto.Queue do
     now = now(state)
 
     pending =
-      state.fifo
-      |> Enum.map(&Map.fetch!(state.records, &1))
+      ordered_records(state)
       |> Enum.filter(
         &(&1.status == :pending and due?(&1, now) and matches_selector?(&1, selector))
       )
@@ -828,12 +819,12 @@ defmodule Alto.Queue do
   defp reclaim_expired(state) do
     now = now(state)
 
-    Enum.reduce(state.records, state, fn
-      {_id, %Record{status: :claimed, lease_until_ms: until} = record}, state
+    Enum.reduce(ordered_records(state), state, fn
+      %Record{status: :claimed, lease_until_ms: until} = record, state
       when is_integer(until) and until <= now ->
         put_record(state, unclaim(record))
 
-      {_id, _record}, state ->
+      _record, state ->
         state
     end)
   end
@@ -884,12 +875,14 @@ defmodule Alto.Queue do
   defp validate_payload(payload, _state), do: {:error, {:invalid_payload, payload}}
 
   defp validate_room(state) do
-    if map_size(state.records) < state.max_records, do: :ok, else: {:error, :queue_full}
+    if :gb_trees.size(state.records) < state.max_records,
+      do: :ok,
+      else: {:error, :queue_full}
   end
 
   defp build_record(state, key, payload, mode, fields) do
     existing =
-      Enum.find_value(state.records, fn {_id, record} ->
+      Enum.find_value(ordered_records(state), fn record ->
         if record.key == key, do: record
       end)
 
@@ -975,7 +968,7 @@ defmodule Alto.Queue do
   end
 
   defp find_by_claim(state, claim_id) do
-    Enum.find_value(state.records, fn {_id, record} ->
+    Enum.find_value(ordered_records(state), fn record ->
       if record.claim_id == claim_id, do: {:ok, record}
     end)
     |> case do
@@ -1037,25 +1030,35 @@ defmodule Alto.Queue do
   end
 
   defp put_record(state, %Record{} = record) do
-    fifo =
-      if Map.has_key?(state.records, record.id) do
-        state.fifo
-      else
-        state.fifo ++ [record.id]
-      end
-
-    %{state | records: Map.put(state.records, record.id, record), fifo: fifo}
+    {:ok, sequence} = record_sequence(record.id)
+    %{state | records: :gb_trees.enter(sequence, record, state.records)}
   end
+
+  defp ordered_records(state), do: :gb_trees.values(state.records)
 
   defp drop_record(state, id) do
-    case Map.fetch(state.records, id) do
-      {:ok, _record} ->
-        %{state | records: Map.delete(state.records, id), fifo: List.delete(state.fifo, id)}
-
-      :error ->
-        state
+    case record_sequence(id) do
+      {:ok, sequence} -> %{state | records: :gb_trees.delete_any(sequence, state.records)}
+      :error -> state
     end
   end
+
+  defp fetch_record(records, id) do
+    with {:ok, sequence} <- record_sequence(id),
+         {:value, record} <- :gb_trees.lookup(sequence, records) do
+      {:ok, record}
+    else
+      _ -> :error
+    end
+  end
+
+  defp record_sequence("rec-" <> digits) do
+    if Regex.match?(~r/\A[1-9][0-9]*\z/, digits),
+      do: {:ok, String.to_integer(digits)},
+      else: :error
+  end
+
+  defp record_sequence(_id), do: :error
 
   # One append per mutation, file-synced before acknowledgement. A failed
   # write leaves state untouched: memory and disk stay in agreement.
@@ -1104,7 +1107,7 @@ defmodule Alto.Queue do
   # appended afterwards through the existing sync path; a replacement failure
   # cannot commit an operation that its caller was told had failed.
   defp compact_log(state, reserved_bytes) do
-    retained = Enum.flat_map(state.fifo, &retained_record(state, &1))
+    retained = Enum.flat_map(ordered_records(state), &retained_record/1)
     record_lines = Enum.map(retained, &JSON.encode!/1)
 
     header = %{
@@ -1129,7 +1132,7 @@ defmodule Alto.Queue do
        %{
          before_bytes: before,
          after_bytes: bytes,
-         live_records: map_size(state.records),
+         live_records: :gb_trees.size(state.records),
          completed_keys: length(state.completed)
        }}
     else
@@ -1139,9 +1142,7 @@ defmodule Alto.Queue do
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}
   end
 
-  defp retained_record(state, id) do
-    record = Map.fetch!(state.records, id)
-
+  defp retained_record(record) do
     if record.status == :claimed,
       do: [put_log(record), claim_log(record)],
       else: [put_log(record)]
