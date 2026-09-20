@@ -43,6 +43,14 @@ defmodule Alto.Providers.StreamEnvelope do
     end
   end
 
+  def decode_error_body(body) do
+    case JSON.decode(body) do
+      {:ok, %{"error" => error}} -> error
+      {:ok, decoded} -> decoded
+      {:error, _} -> body
+    end
+  end
+
   defp consume(%{error: error} = state, _, _, _, _, _) when not is_nil(error), do: state
 
   defp consume(state, status, data, config, decoder, sink) do
@@ -90,14 +98,7 @@ defmodule Alto.Providers.StreamEnvelope do
   defp result(state, status, _, _) do
     body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
 
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
+    {:error, {:http_error, status, decode_error_body(body)}}
   end
 
   defp finish(state, decoder, sink) do

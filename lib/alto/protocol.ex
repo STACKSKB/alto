@@ -308,7 +308,7 @@ defmodule Alto.Protocol do
 
   defp decode_object("attach", id, object) do
     with {:ok, run_id} <- optional_binary(object, "run_id"),
-         {:ok, from_seq} <- optional_positive_integer(object, "from_seq"),
+         {:ok, from_seq} <- optional_integer(object, "from_seq", 1, 1),
          {:ok, domains} <- optional_domains(object, "domains") do
       {:ok, {:attach, id, run_id, from_seq, domains}}
     end
@@ -345,8 +345,8 @@ defmodule Alto.Protocol do
 
   defp decode_object("session_events", id, object) do
     with {:ok, session_id} <- required_binary(object, "session_id"),
-         {:ok, limit} <- optional_ops_limit(object, "limit"),
-         {:ok, cursor} <- optional_non_negative_integer(object, "cursor"),
+         {:ok, limit} <- optional_integer(object, "limit", 20, 1),
+         {:ok, cursor} <- optional_integer(object, "cursor", 0, 0),
          {:ok, run_id} <- optional_binary(object, "run_id") do
       {:ok, {:session_events, id, session_id, limit, cursor, run_id}}
     end
@@ -367,7 +367,7 @@ defmodule Alto.Protocol do
   end
 
   defp decode_object("queue_claim", id, object) do
-    with {:ok, count} <- optional_positive_integer(object, "count"),
+    with {:ok, count} <- optional_integer(object, "count", 1, 1),
          {:ok, by} <- optional_binary(object, "by") do
       {:ok, {:queue_claim, id, count, by}}
     end
@@ -386,8 +386,8 @@ defmodule Alto.Protocol do
   end
 
   defp decode_object("ops_list", id, object) do
-    with {:ok, limit} <- optional_ops_limit(object, "limit"),
-         {:ok, cursor} <- optional_non_negative_integer(object, "cursor"),
+    with {:ok, limit} <- optional_integer(object, "limit", 20, 1),
+         {:ok, cursor} <- optional_integer(object, "cursor", 0, 0),
          {:ok, filter} <- optional_filter(object, "filter") do
       {:ok, {:ops_list, id, limit, cursor, filter}}
     end
@@ -429,26 +429,10 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp optional_positive_integer(object, key) do
+  defp optional_integer(object, key, default, minimum) do
     case Map.get(object, key) do
-      nil -> {:ok, 1}
-      value when is_integer(value) and value >= 1 -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_non_negative_integer(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, 0}
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_ops_limit(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, 20}
-      value when is_integer(value) and value >= 1 -> {:ok, value}
+      nil -> {:ok, default}
+      value when is_integer(value) and value >= minimum -> {:ok, value}
       _other -> {:error, :invalid}
     end
   end

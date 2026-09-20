@@ -256,14 +256,7 @@ defmodule Alto.Providers.OpenAICompatible do
     state = models_state(response)
     body = state.chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _error} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
+    {:error, {:http_error, status, StreamEnvelope.decode_error_body(body)}}
   end
 
   defp models_state(response) do

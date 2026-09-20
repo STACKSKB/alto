@@ -136,15 +136,12 @@ defmodule Alto.Providers.Anthropic do
   defp system_content(messages) do
     messages
     |> Enum.filter(&(&1["role"] == "system"))
-    |> Enum.reduce_while({:ok, []}, fn
-      %{"content" => content}, {:ok, contents} when is_binary(content) ->
-        {:cont, {:ok, [content | contents]}}
-
-      _message, _acc ->
-        {:halt, {:error, :anthropic_system_content_must_be_text}}
+    |> Alto.Result.traverse(fn
+      %{"content" => content} when is_binary(content) -> {:ok, content}
+      _message -> {:error, :anthropic_system_content_must_be_text}
     end)
     |> case do
-      {:ok, contents} -> {:ok, contents |> Enum.reverse() |> Enum.join("\n\n")}
+      {:ok, contents} -> {:ok, Enum.join(contents, "\n\n")}
       {:error, _} = error -> error
     end
   end
