@@ -1,39 +1,25 @@
 defmodule Alto.Runner.Result do
   @moduledoc "The inspectable result of one Alto run."
 
-  @enforce_keys [
-    :output,
-    :loop_state,
-    :messages,
-    :events,
-    :events_dropped,
-    :verdict,
-    :model_requests,
-    :transcript_bytes,
-    :session_id,
-    :run_id
-  ]
-  defstruct [
-    :output,
-    :loop_state,
-    :messages,
-    :events,
-    :events_dropped,
-    :verdict,
-    :model_requests,
-    :transcript_bytes,
-    :session_id,
-    :run_id,
-    :agent_identity,
-    :transcript_revision,
-    :context_observation,
-    resolved_operations: [],
-    transcript_persisted: false,
-    workspace: nil,
-    checkpoint: nil,
-    usage: %{},
-    persistence: :not_requested
-  ]
+  defstruct output: nil,
+            loop_state: nil,
+            messages: [],
+            events: [],
+            events_dropped: 0,
+            verdict: :rejected_before_dispatch,
+            model_requests: 0,
+            transcript_bytes: 0,
+            session_id: nil,
+            run_id: nil,
+            agent_identity: nil,
+            transcript_revision: nil,
+            context_observation: nil,
+            resolved_operations: [],
+            transcript_persisted: false,
+            workspace: nil,
+            checkpoint: nil,
+            usage: Alto.Usage.to_map(Alto.Usage.new()),
+            persistence: :not_requested
 
   @type t :: %__MODULE__{
           output: term(),
@@ -58,18 +44,5 @@ defmodule Alto.Runner.Result do
         }
 
   @doc "An empty outcome for failures before execution starts."
-  def empty(session_id \\ nil) do
-    %__MODULE__{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
-      events_dropped: 0,
-      verdict: :rejected_before_dispatch,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: session_id,
-      run_id: nil
-    }
-  end
+  def empty(session_id \\ nil), do: %__MODULE__{session_id: session_id}
 end

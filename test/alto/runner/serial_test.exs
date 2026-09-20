@@ -885,8 +885,13 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "the event log bound must be positive" do
-    assert {:error, {:invalid_option, :max_events, 0}, _result} =
+    assert {:error, {:invalid_option, :max_events, 0}, result} =
              Alto.run("no run", provider: AnswerProvider, max_events: 0)
+
+    assert result.verdict == :rejected_before_dispatch
+    assert result.usage.total_tokens == 0
+    assert result.model_requests == 0
+    assert result.events == []
   end
 
   defp enum_has_tool_failure?(result, needle) do

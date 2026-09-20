@@ -95,7 +95,7 @@ defmodule Alto.Runner.Execution do
   defp run_without_workspace(task, opts) do
     case Alto.Runner.Execution.Parent.options(opts) do
       {:ok, opts} -> run_with_options(task, opts)
-      {:error, reason} -> {:error, reason, empty_result(nil)}
+      {:error, reason} -> {:error, reason, Result.empty(nil)}
     end
   end
 
@@ -144,11 +144,11 @@ defmodule Alto.Runner.Execution do
             persist_session_outcome(run, outcome)
 
           {:error, reason} ->
-            {:error, reason, empty_result(session)}
+            {:error, reason, Result.empty(session)}
         end
 
       {:error, reason} ->
-        {:error, reason, empty_result(nil)}
+        {:error, reason, Result.empty(nil)}
     end
   end
 
@@ -1559,23 +1559,6 @@ defmodule Alto.Runner.Execution do
           Map.get(run, :resolved_operations, []) == [],
       usage: Usage.to_map(run.usage),
       persistence: persistence_status(Enum.reverse(run.persistence_errors))
-    }
-  end
-
-  defp empty_result(session_id) do
-    %Result{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
-      events_dropped: 0,
-      verdict: :empty,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: session_id,
-      run_id: nil,
-      usage: Usage.to_map(Usage.new()),
-      persistence: :not_requested
     }
   end
 

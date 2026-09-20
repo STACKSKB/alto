@@ -404,15 +404,8 @@ defmodule Alto.ConsumerTest do
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do
     result = %Alto.Runner.Result{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
       events_dropped: 50,
       verdict: :unknown,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: nil,
       run_id: "run-unknown"
     }
 
