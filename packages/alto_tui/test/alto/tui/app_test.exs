@@ -52,7 +52,7 @@ defmodule Alto.TUI.AppTest do
       Alto.start(prompt, Keyword.put(options, :loop, Alto.loop(StopLoop)))
     end
 
-    def cancel(handle, reason, _opts), do: Alto.cancel(handle, reason)
+    def cancel(%{handle: handle}, reason, _opts), do: Alto.cancel(handle, reason)
   end
 
   setup do
@@ -1492,7 +1492,7 @@ defmodule Alto.TUI.AppTest do
     Runtime.inject_event(app, %Key{code: "down", kind: "press"})
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
 
-    eventually(fn -> user_state(app).overlay.kind == :codex_account end)
+    eventually(fn -> match?(%{kind: :codex_account}, user_state(app).overlay) end)
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
 
     assert_receive {:opened_oauth, "https://chatgpt.test/oauth"}, 2_000

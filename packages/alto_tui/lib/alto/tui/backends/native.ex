@@ -29,5 +29,5 @@ defmodule Alto.TUI.Backends.Native do
   end
 
   @impl true
-  def cancel(handle, reason, _options), do: Alto.cancel(handle, reason)
+  def cancel(%{handle: handle}, reason, _options), do: Alto.cancel(handle, reason)
 end

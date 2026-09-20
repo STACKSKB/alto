@@ -22,7 +22,7 @@ defmodule Alto.TUI.Backend do
   """
   @callback start(map(), String.t(), keyword(), keyword()) ::
               {:ok, Alto.Runner.Handle.t()} | {:error, term()}
-  @callback cancel(term(), term(), keyword()) :: term()
+  @callback cancel(map(), term(), keyword()) :: term()
   @callback ui(term(), map(), keyword()) :: term()
   @optional_callbacks start: 4, ui: 3
 

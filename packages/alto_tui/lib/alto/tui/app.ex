@@ -304,7 +304,11 @@ defmodule Alto.TUI.App do
         if MapSet.member?(Map.get(run, :approval_ids, MapSet.new()), request.id), do: id
       end)
 
-    pending = %{local_id: local_id, request: request, waiter: waiter}
+    pending = %{
+      local_id: local_id,
+      request: request,
+      respond: &send(waiter, {:alto_approval_decision, request.id, &1})
+    }
 
     {:noreply, show_pending_approval(state, pending, "approval required · F8 approve / F9 deny")}
   end
@@ -1436,13 +1440,7 @@ defmodule Alto.TUI.App do
     do: %{state | notice: "no pending approval"}
 
   defp decide_approval(%{pending_approvals: [pending | rest]} = state, decision) do
-    case pending do
-      %{respond: respond} when is_function(respond, 1) ->
-        respond.(decision)
-
-      %{waiter: waiter, request: request} ->
-        send(waiter, {:alto_approval_decision, request.id, decision})
-    end
+    pending.respond.(decision)
 
     next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
@@ -1507,11 +1505,7 @@ defmodule Alto.TUI.App do
   defp active_run(state),
     do: Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end)
 
-  defp cancel_run(%{adapter: {:ok, module, opts}, cancellation: :run} = run),
-    do: module.cancel(run, :user, opts)
-
-  defp cancel_run(%{adapter: {:ok, module, opts}, handle: handle}),
-    do: module.cancel(handle, :user, opts)
+  defp cancel_run(%{adapter: {:ok, module, opts}} = run), do: module.cancel(run, :user, opts)
 
   defp cancel_run(_run), do: :ok
 

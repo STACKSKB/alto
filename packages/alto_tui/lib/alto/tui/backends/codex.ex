@@ -29,7 +29,6 @@ defmodule Alto.TUI.Backends.Codex do
       rate_limits: nil,
       context_window: nil,
       login: nil,
-      loaded_threads: MapSet.new(),
       history_loading: MapSet.new(),
       pending_messages: []
     }
@@ -261,12 +260,7 @@ defmodule Alto.TUI.Backends.Codex do
         run = state.runs[local_id]
         state = Host.sync_run_task(state, run)
 
-        codex = %{
-          data(state)
-          | loaded_threads: MapSet.put(data(state).loaded_threads, thread_id)
-        }
-
-        state = %{put_data(state, codex) | notice: "Codex working…"}
+        state = %{state | notice: "Codex working…"}
         {:noreply, replay_codex_messages(state, run)}
 
       {run, {:error, reason}} ->
@@ -336,7 +330,6 @@ defmodule Alto.TUI.Backends.Codex do
       kind: :codex,
       backend_id: state.selected_backend,
       adapter: {:ok, __MODULE__, []},
-      cancellation: :run,
       client: client,
       task_id: task["id"],
       thread_id: task["backend_thread_id"],
@@ -863,12 +856,7 @@ defmodule Alto.TUI.Backends.Codex do
                   codex_approval_response(method, decision, params)
                 )
               end,
-              backend: :codex,
               local_id: local_id,
-              client: data(state).client,
-              request_id: id,
-              method: method,
-              params: params,
               request: request
             }
 
