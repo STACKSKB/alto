@@ -26,7 +26,7 @@ defmodule Alto.Runner.ContractTest do
     assert {:ok, ^result} = Alto.terminate(handle)
     assert {:ok, ref} = Alto.subscribe(handle)
     assert_receive {:alto_runner_result, ^ref, {:ok, ^result}}
-    assert :completed = Alto.Consumer.worst_outcome(result)
+    assert result.verdict == :completed
   end
 
   test "registry completion does not assume a Task handle or a worker process" do

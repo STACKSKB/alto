@@ -147,9 +147,9 @@ defmodule Alto.ConsumerTest do
           tool_timeout: 50
         )
 
-      case Consumer.worst_outcome(result) do
+      case result.verdict do
         :unknown -> {:park, :unknown_tool_outcome}
-        :failed -> {:failed, :known}
+        class when class in [:failed_known, :rejected_before_dispatch] -> {:failed, :known}
         :completed -> :done
         :empty -> {:failed, :no_tools_ran}
       end
@@ -400,23 +400,6 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
     assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
-  end
-
-  test "authoritative run verdict survives bounded event eviction" do
-    result = %Alto.Runner.Result{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
-      events_dropped: 20,
-      verdict: :unknown,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: nil,
-      run_id: "run-authoritative"
-    }
-
-    assert :unknown = Consumer.worst_outcome(result)
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do

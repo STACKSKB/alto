@@ -50,9 +50,8 @@ defmodule Alto.Consumer do
         {:outcome, outcome_class, evidence}
 
   `evidence` must be a map (scrubbed of credentials by the ledger).
-  `Alto.Consumer.worst_outcome/1` folds a short run's tool events into
-  `:unknown | :failed | :completed | :empty` for handlers built on
-  `Alto.run/2`.
+  Handlers built on `Alto.run/2` can return `{:run, result}` to persist its
+  authoritative verdict, which remains valid after retained events are evicted.
   """
 
   use GenServer
@@ -94,18 +93,6 @@ defmodule Alto.Consumer do
   def poll(server \\ __MODULE__) do
     GenServer.call(server, :poll, :infinity)
   end
-
-  @doc "Read the authoritative runner verdict."
-  @spec worst_outcome(Alto.Runner.Result.t()) ::
-          :unknown | :failed | :completed | :empty
-  def worst_outcome(%Alto.Runner.Result{verdict: :unknown}), do: :unknown
-
-  def worst_outcome(%Alto.Runner.Result{verdict: class})
-      when class in [:failed_known, :rejected_before_dispatch],
-      do: :failed
-
-  def worst_outcome(%Alto.Runner.Result{verdict: :completed}), do: :completed
-  def worst_outcome(%Alto.Runner.Result{verdict: :empty}), do: :empty
 
   ## Server implementation
 

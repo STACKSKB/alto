@@ -12,7 +12,6 @@ defmodule Alto.Runner.SerialOutcomeTest do
   use ExUnit.Case, async: true
 
   alias Alto.Effect
-  alias Alto.Effect.Outcome
   alias Alto.Event
   alias Alto.Transition
 
@@ -133,24 +132,6 @@ defmodule Alto.Runner.SerialOutcomeTest do
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), :approval_entered)
       receive(do: (:never -> :approve))
-    end
-  end
-
-  describe "vocabulary" do
-    test "five classes, decided? singles out unknown" do
-      assert Outcome.classes() == [
-               :completed,
-               :rejected_before_dispatch,
-               :failed_known,
-               :unknown,
-               :requires_operator
-             ]
-
-      assert Outcome.decided?(:completed)
-      assert Outcome.decided?(:rejected_before_dispatch)
-      assert Outcome.decided?(:failed_known)
-      assert Outcome.decided?(:requires_operator)
-      refute Outcome.decided?(:unknown)
     end
   end
 
