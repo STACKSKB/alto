@@ -353,7 +353,7 @@ defmodule Alto.OperationLog do
       {:reply,
        Enum.filter(
          state.order,
-         &match?(%{outcome: {:requires_operator, _, _}}, Map.fetch!(state.ops, &1))
+         &match?(%{phase: {:decided, :requires_operator, _, _}}, Map.fetch!(state.ops, &1))
        ), state}
 
   defp read(:list_decided, state),
@@ -376,14 +376,14 @@ defmodule Alto.OperationLog do
         %{"kind" => "alto_operation_log", "id" => state.id, "dir" => Path.expand(state.dir)}},
        state}
 
-  defp open?(%{outcome: nil, attempts: []}), do: true
-  defp open?(%{outcome: nil} = entry), do: active_attempt?(entry)
+  defp open?(%{phase: :intended, attempts: []}), do: true
+  defp open?(%{phase: phase}) when phase in [:dispatched, :checkpointed], do: true
   defp open?(_), do: false
 
   defp decided(key, ops) do
-    case Map.fetch!(ops, key).outcome do
-      {class, _, _} -> [{key, class}]
-      nil -> []
+    case Map.fetch!(ops, key).phase do
+      {:decided, class, _, _} -> [{key, class}]
+      _ -> []
     end
   end
 
@@ -400,25 +400,16 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp entry_status(%{attempts: [], outcome: nil}), do: {:intended}
-
-  defp entry_status(%{checkpoint_active: true, checkpoint: checkpoint, attempts: attempts}),
+  defp entry_status(%{phase: :checkpointed, checkpoint: checkpoint, attempts: attempts}),
     do: {:checkpointed, checkpoint, List.last(attempts)}
 
-  defp entry_status(%{attempts: attempts, released: released, outcome: nil}) do
-    if List.last(attempts) in released,
-      do: {:intended},
-      else: {:dispatched, List.last(attempts)}
-  end
+  defp entry_status(%{phase: :intended}), do: {:intended}
 
-  defp entry_status(%{outcome: {class, evidence, _attempt}}), do: {:decided, class, evidence}
+  defp entry_status(%{phase: :dispatched, attempts: attempts}),
+    do: {:dispatched, List.last(attempts)}
 
-  defp fetch_op(state, op_key) do
-    case Map.fetch(state.ops, op_key) do
-      {:ok, entry} -> {:ok, entry}
-      :error -> {:error, :no_intent}
-    end
-  end
+  defp entry_status(%{phase: {:decided, class, evidence, _attempt}}),
+    do: {:decided, class, evidence}
 
   defp ensure_room(state) do
     cond do
@@ -437,9 +428,7 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp active_attempt?(%{outcome: nil, attempts: attempts, released: released}) do
-    attempts != [] and List.last(attempts) not in released
-  end
+  defp active_attempt?(%{phase: phase}) when phase in [:dispatched, :checkpointed], do: true
 
   defp active_attempt?(_entry), do: false
 
@@ -457,8 +446,8 @@ defmodule Alto.OperationLog do
       tool: entry.tool,
       inbox_key: entry.inbox,
       recovery: entry.recovery,
-      current_attempt: current_attempt_or_nil(entry),
-      outcome: entry.outcome,
+      current_attempt: current_attempt(entry),
+      outcome: phase_outcome(entry.phase),
       checkpoint: entry.checkpoint,
       checkpoint_decision: entry.checkpoint_decision,
       checkpoint_grant_revision: entry.checkpoint_grant_revision,
@@ -466,16 +455,19 @@ defmodule Alto.OperationLog do
     }
   end
 
-  defp current_attempt_or_nil(%{attempts: []}), do: nil
-  defp current_attempt_or_nil(entry), do: current_attempt(entry)
+  defp phase_outcome({:decided, class, evidence, attempt}), do: {class, evidence, attempt}
+  defp phase_outcome(_phase), do: nil
 
   defp expect_revision(%{revision: revision}, revision), do: :ok
   defp expect_revision(_entry, _expected), do: {:error, :stale_revision}
 
-  defp ensure_reconcilable(%{checkpoint_active: true}), do: {:error, :checkpoint_active}
-  defp ensure_reconcilable(%{outcome: nil, attempts: [_ | _]}), do: :ok
+  defp ensure_reconcilable(%{phase: :checkpointed}), do: {:error, :checkpoint_active}
 
-  defp ensure_reconcilable(%{outcome: {class, _evidence, _attempt}})
+  defp ensure_reconcilable(%{phase: phase, attempts: [_ | _]})
+       when phase in [:intended, :dispatched],
+       do: :ok
+
+  defp ensure_reconcilable(%{phase: {:decided, class, _evidence, _attempt}})
        when class in [:unknown, :requires_operator],
        do: :ok
 
@@ -488,26 +480,20 @@ defmodule Alto.OperationLog do
   defp ensure_retry_recoverable(_entry, _resolution), do: :ok
 
   defp apply_reconciliation(entry, :retry_permitted, _evidence) do
-    released =
-      case current_attempt_or_nil(entry) do
-        nil -> entry.released
-        attempt -> Enum.uniq(entry.released ++ [attempt])
-      end
-
-    %{entry | released: released, outcome: nil, revision: entry.revision + 1}
+    %{entry | phase: :intended, revision: entry.revision + 1}
   end
 
   defp apply_reconciliation(entry, resolution, evidence) do
     class = if resolution == :confirmed_committed, do: :completed, else: :failed_known
-    attempt = current_attempt_or_nil(entry) || "operator"
+    attempt = current_attempt(entry) || "operator"
     audit = %{operator_resolution: resolution, evidence: evidence}
-    %{entry | outcome: {class, audit, attempt}, revision: entry.revision + 1}
+    %{entry | phase: {:decided, class, audit, attempt}, revision: entry.revision + 1}
   end
 
   defp outcome_can_be_escalated?({:unknown, _evidence, _attempt}, :requires_operator), do: true
   defp outcome_can_be_escalated?(_outcome, _class), do: false
 
-  defp evictable?(%{outcome: {class, _evidence, _attempt}})
+  defp evictable?(%{phase: {:decided, class, _evidence, _attempt}})
        when class in [:completed, :failed_known, :rejected_before_dispatch],
        do: true
 
@@ -680,11 +666,15 @@ defmodule Alto.OperationLog do
 
   # The same pure state transition serves live commands and durable replay.
   defp transition(state, %{"t" => type, "op" => op} = entry) do
-    with :ok <- validate_key(op) do
-      case log_apply(state, type, op, entry) do
-        {:ok, ^state} -> {:ok, state, :noop}
-        {:ok, next} -> {:ok, next, transition_reply(type)}
-        error -> error
+    with :ok <- validate_key(op),
+         current <- Map.get(state.ops, op),
+         {:ok, record} <- log_apply(current, type, entry, state) do
+      if record == current do
+        {:ok, state, :noop}
+      else
+        order = if is_nil(current), do: state.order ++ [op], else: state.order
+        next = %{state | ops: Map.put(state.ops, op, record), order: order}
+        {:ok, next, transition_reply(type)}
       end
     end
   end
@@ -695,251 +685,203 @@ defmodule Alto.OperationLog do
 
   defp transition_reply(_type), do: :ok
 
-  defp log_apply(state, "intent", op, entry) do
+  defp log_apply(nil, type, _entry, _state) when type != "intent", do: {:error, :no_intent}
+
+  defp log_apply(record, "intent", entry, state) do
     with {:ok, recovery} <- decode_recovery(entry["recovery"]),
          :ok <- validate_tool(entry["tool"], state),
          :ok <- validate_inbox(entry["inbox"], state),
          :ok <- validate_recovery(recovery, state) do
-      case Map.fetch(state.ops, op) do
-        {:ok, record} ->
-          if same_intent?(record, entry["tool"], entry["inbox"], recovery),
-            do: {:ok, state},
-            else: {:error, :intent_conflict}
-
-        :error ->
-          record = %{
-            tool: entry["tool"],
-            inbox: entry["inbox"],
-            recovery: recovery,
-            attempts: [],
-            released: [],
-            outcome: nil,
-            checkpoint: nil,
-            checkpoint_decision: nil,
-            checkpoint_active: false,
-            checkpointed_attempts: [],
-            checkpoint_grant_revision: nil,
-            revision: 1
-          }
-
-          {:ok, %{state | ops: Map.put(state.ops, op, record), order: state.order ++ [op]}}
+      if is_nil(record) do
+        {:ok,
+         %{
+           tool: entry["tool"],
+           inbox: entry["inbox"],
+           recovery: recovery,
+           attempts: [],
+           phase: :intended,
+           checkpoint: nil,
+           checkpoint_decision: nil,
+           checkpointed_attempts: [],
+           checkpoint_grant_revision: nil,
+           revision: 1
+         }}
+      else
+        if same_intent?(record, entry["tool"], entry["inbox"], recovery),
+          do: {:ok, record},
+          else: {:error, :intent_conflict}
       end
     end
   end
 
-  defp log_apply(state, "attempt", op, entry) do
+  defp log_apply(record, "attempt", entry, state) do
     with :ok <- validate_attempt(entry["attempt"], state) do
-      case Map.fetch(state.ops, op) do
-        {:ok, record} ->
-          attempt = entry["attempt"]
+      attempt = entry["attempt"]
 
-          cond do
-            record.outcome != nil ->
-              {:error, :already_decided}
+      cond do
+        match?({:decided, _, _, _}, record.phase) ->
+          {:error, :already_decided}
 
-            record.checkpoint_active ->
-              {:error, :checkpoint_active}
+        record.phase == :checkpointed ->
+          {:error, :checkpoint_active}
 
-            attempt in record.attempts ->
-              if attempt == current_attempt(record) and active_attempt?(record) do
-                {:ok, state}
-              else
-                {:error, :stale_attempt}
-              end
+        attempt in record.attempts ->
+          if attempt == current_attempt(record) and active_attempt?(record),
+            do: {:ok, record},
+            else: {:error, :stale_attempt}
 
-            active_attempt?(record) ->
-              {:error, :attempt_in_flight}
+        active_attempt?(record) ->
+          {:error, :attempt_in_flight}
 
-            length(record.attempts) >= state.max_attempts ->
-              {:error, :attempt_history_full}
+        length(record.attempts) >= state.max_attempts ->
+          {:error, :attempt_history_full}
 
-            true ->
-              record = %{
-                record
-                | attempts: record.attempts ++ [attempt],
-                  revision: record.revision + 1
-              }
-
-              {:ok, %{state | ops: Map.put(state.ops, op, record)}}
-          end
-
-        :error ->
-          {:error, :no_intent}
+        true ->
+          {:ok,
+           %{
+             record
+             | attempts: record.attempts ++ [attempt],
+               phase: :dispatched,
+               revision: record.revision + 1
+           }}
       end
     end
   end
 
-  defp log_apply(state, "release", op, entry) do
+  defp log_apply(record, "release", entry, state) do
     with :ok <- validate_attempt(entry["attempt"], state) do
-      case Map.fetch(state.ops, op) do
-        {:ok, record} ->
-          attempt = entry["attempt"]
+      attempt = entry["attempt"]
 
-          cond do
-            attempt not in record.attempts ->
-              {:error, :no_attempt}
-
-            record.outcome != nil ->
-              {:error, :already_decided}
-
-            record.checkpoint_active ->
-              {:error, :checkpoint_active}
-
-            attempt != current_attempt(record) ->
-              {:error, :stale_attempt}
-
-            attempt in record.released ->
-              {:ok, state}
-
-            true ->
-              record = %{
-                record
-                | released: record.released ++ [attempt],
-                  revision: record.revision + 1
-              }
-
-              {:ok, %{state | ops: Map.put(state.ops, op, record)}}
-          end
-
-        :error ->
-          {:error, :no_intent}
+      cond do
+        attempt not in record.attempts -> {:error, :no_attempt}
+        match?({:decided, _, _, _}, record.phase) -> {:error, :already_decided}
+        record.phase == :checkpointed -> {:error, :checkpoint_active}
+        attempt != current_attempt(record) -> {:error, :stale_attempt}
+        record.phase == :intended -> {:ok, record}
+        true -> {:ok, %{record | phase: :intended, revision: record.revision + 1}}
       end
     end
   end
 
-  defp log_apply(state, "outcome", op, entry) do
+  defp log_apply(record, "outcome", entry, state) do
     with :ok <- validate_attempt(entry["attempt"], state),
          :ok <- validate_evidence(entry["evidence"], state),
          {:ok, class} <- outcome_class(entry["class"]) do
-      case Map.fetch(state.ops, op) do
-        {:ok, record} ->
-          attempt = entry["attempt"]
+      attempt = entry["attempt"]
 
-          cond do
-            record.attempts == [] ->
-              {:error, :no_attempt}
+      cond do
+        record.attempts == [] ->
+          {:error, :no_attempt}
 
-            record.outcome != nil and
-                not outcome_can_be_escalated?(record.outcome, class) ->
-              {:error, :already_decided}
+        match?({:decided, _, _, _}, record.phase) and
+            not outcome_can_be_escalated?(phase_outcome(record.phase), class) ->
+          {:error, :already_decided}
 
-            record.checkpoint_active ->
-              {:error, :checkpoint_active}
+        record.phase == :checkpointed ->
+          {:error, :checkpoint_active}
 
-            attempt != current_attempt(record) or attempt in record.released ->
-              {:error, :stale_attempt}
+        attempt != current_attempt(record) or
+            (record.phase != :dispatched and not match?({:decided, :unknown, _, _}, record.phase)) ->
+          {:error, :stale_attempt}
 
-            true ->
-              outcome = {class, entry["evidence"], attempt}
-              record = %{record | outcome: outcome, revision: record.revision + 1}
-              {:ok, %{state | ops: Map.put(state.ops, op, record)}}
-          end
-
-        :error ->
-          {:error, :no_intent}
+        true ->
+          {:ok,
+           %{
+             record
+             | phase: {:decided, class, entry["evidence"], attempt},
+               revision: record.revision + 1
+           }}
       end
     end
   end
 
-  defp log_apply(state, "reject", op, entry) do
-    apply_rejection(state, op, entry)
-  end
+  defp log_apply(record, "reject", entry, state), do: apply_rejection(record, entry, state)
 
-  defp log_apply(state, "checkpoint", op, entry) do
+  defp log_apply(record, "checkpoint", entry, state) do
     with :ok <- validate_attempt(entry["attempt"], state),
          :ok <- validate_checkpoint(entry["checkpoint"], state),
-         {:ok, record} <- fetch_op(state, op),
-         do: checkpoint_transition(state, op, record, entry)
+         do: checkpoint_transition(record, entry)
   end
 
-  defp log_apply(state, "checkpoint_update", op, entry) do
+  defp log_apply(record, "checkpoint_update", entry, state) do
     with :ok <- validate_revision(entry["expected_revision"]),
          :ok <- validate_checkpoint(entry["checkpoint"], state),
-         {:ok, record} <- fetch_op(state, op),
          :ok <- expect_revision(record, entry["expected_revision"]) do
-      if record.outcome == nil and record.checkpoint_active do
-        record = %{record | checkpoint: entry["checkpoint"], revision: record.revision + 1}
-        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      if record.phase == :checkpointed do
+        {:ok, %{record | checkpoint: entry["checkpoint"], revision: record.revision + 1}}
       else
         {:error, :not_checkpointed}
       end
     end
   end
 
-  defp log_apply(state, "checkpoint_resume", op, entry) do
+  defp log_apply(record, "checkpoint_resume", entry, state) do
     with :ok <- validate_revision(entry["expected_revision"]),
          :ok <- validate_checkpoint(entry["decision"], state),
-         {:ok, record} <- fetch_op(state, op),
          :ok <- expect_revision(record, entry["expected_revision"]) do
-      if record.checkpoint_active do
-        record = %{
-          record
-          | checkpoint_decision: entry["decision"],
-            checkpoint_active: false,
-            checkpoint_grant_revision: record.revision + 1,
-            released: Enum.uniq(record.released ++ [current_attempt(record)]),
-            revision: record.revision + 1
-        }
-
-        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      if record.phase == :checkpointed do
+        {:ok,
+         %{
+           record
+           | checkpoint_decision: entry["decision"],
+             phase: :intended,
+             checkpoint_grant_revision: record.revision + 1,
+             revision: record.revision + 1
+         }}
       else
         {:error, :not_checkpointed}
       end
     end
   end
 
-  defp log_apply(state, "reconcile", op, entry) do
+  defp log_apply(record, "reconcile", entry, state) do
     with :ok <- validate_revision(entry["expected_revision"]),
          {:ok, resolution} <- reconciliation_resolution(entry["resolution"]),
          :ok <- validate_evidence(entry["evidence"] || %{}, state),
-         {:ok, record} <- fetch_op(state, op),
          :ok <- expect_revision(record, entry["expected_revision"]),
          :ok <- ensure_reconcilable(record),
          :ok <- ensure_retry_recoverable(record, resolution) do
-      record = apply_reconciliation(record, resolution, entry["evidence"] || %{})
-      {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+      {:ok, apply_reconciliation(record, resolution, entry["evidence"] || %{})}
     end
   end
 
-  defp log_apply(_state, _type, _op, _entry), do: {:error, :bad_entry}
+  defp log_apply(_record, _type, _entry, _state), do: {:error, :bad_entry}
 
-  defp checkpoint_transition(state, op, record, entry) do
+  defp checkpoint_transition(record, entry) do
     attempt = entry["attempt"]
 
     cond do
-      record.outcome != nil ->
+      match?({:decided, _, _, _}, record.phase) ->
         {:error, :already_decided}
 
-      record.checkpoint_active ->
+      record.phase == :checkpointed ->
         {:error, :checkpoint_active}
 
-      attempt != current_attempt(record) or attempt in record.released ->
+      attempt != current_attempt(record) or record.phase != :dispatched ->
         {:error, :stale_attempt}
 
       true ->
-        record = %{
-          record
-          | checkpoint: entry["checkpoint"],
-            checkpoint_active: true,
-            checkpoint_decision: nil,
-            checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt]),
-            revision: record.revision + 1
-        }
-
-        {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+        {:ok,
+         %{
+           record
+           | checkpoint: entry["checkpoint"],
+             phase: :checkpointed,
+             checkpoint_decision: nil,
+             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt]),
+             revision: record.revision + 1
+         }}
     end
   end
 
-  defp apply_rejection(state, op, entry) do
-    attempt = entry["attempt"] || rejection_attempt(op)
+  defp apply_rejection(record, entry, state) do
+    attempt = entry["attempt"] || rejection_attempt(entry["op"])
 
     with :ok <- validate_revision(entry["expected_revision"]),
          :ok <- validate_attempt(attempt, state),
          :ok <- validate_evidence(entry["evidence"] || %{}, state),
-         {:ok, record} <- fetch_op(state, op),
          :ok <- expect_revision(record, entry["expected_revision"]) do
       cond do
-        record.outcome != nil ->
+        match?({:decided, _, _, _}, record.phase) ->
           {:error, :already_decided}
 
         active_attempt?(record) ->
@@ -952,16 +894,13 @@ defmodule Alto.OperationLog do
           {:error, :duplicate_attempt}
 
         true ->
-          outcome = {:rejected_before_dispatch, entry["evidence"], attempt}
-
-          record = %{
-            record
-            | attempts: record.attempts ++ [attempt],
-              outcome: outcome,
-              revision: record.revision + 1
-          }
-
-          {:ok, %{state | ops: Map.put(state.ops, op, record)}}
+          {:ok,
+           %{
+             record
+             | attempts: record.attempts ++ [attempt],
+               phase: {:decided, :rejected_before_dispatch, entry["evidence"], attempt},
+               revision: record.revision + 1
+           }}
       end
     end
   end
