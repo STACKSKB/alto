@@ -14,6 +14,8 @@ defmodule Alto.ConsumerTest do
   alias Alto.OperationLog
   alias Alto.Queue
 
+  defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
+
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-consumer-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -94,7 +96,7 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:released]} = Consumer.poll(c)
     assert {:handled, [:parked]} = Consumer.poll(c)
 
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
     assert %{pending: 0, claimed: 0} = Queue.count(q)
     assert {:decided, :requires_operator, _} = OperationLog.status(l, "src:del-1")
   end
@@ -157,7 +159,7 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
 
     # Parked on first sight: the effect ran once, never twice.
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
     assert %{pending: 0, claimed: 0} = Queue.count(q)
   end
 
@@ -229,7 +231,7 @@ defmodule Alto.ConsumerTest do
     assert_received {:ran, claim_b}
     assert claim_a != claim_b
     assert %{pending: 0, claimed: 0} = Queue.count(q)
-    assert [] = OperationLog.list_open(l)
+    assert [] = entry_keys(OperationLog.entries(l, :open))
   end
 
   test "duplicate deliveries reach the consumer once", %{queue: q, ledger: l} do
@@ -385,7 +387,7 @@ defmodule Alto.ConsumerTest do
     c2 = start_consumer!(queue: qname, ledger: l, handler: done_handler(self()), by: "heir")
     assert {:handled, [:parked]} = Consumer.poll(c2)
 
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
     refute_received :handled
   end
 
@@ -397,7 +399,7 @@ defmodule Alto.ConsumerTest do
 
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
   end
 
   test "authoritative run verdict survives bounded event eviction" do

@@ -194,19 +194,11 @@ defmodule Alto.OperationLog do
   @spec keys(GenServer.server(), timeout()) :: [op_key()]
   def keys(server, timeout), do: call(server, :keys, timeout)
 
-  @spec list_open(GenServer.server()) :: [op_key()]
-  def list_open(server \\ __MODULE__) do
-    call(server, :list_open)
-  end
-
-  @spec list_parked(GenServer.server()) :: [op_key()]
-  def list_parked(server \\ __MODULE__) do
-    call(server, :list_parked)
-  end
-
-  @spec list_decided(GenServer.server()) :: [{op_key(), Alto.Effect.Outcome.class()}]
-  def list_decided(server \\ __MODULE__) do
-    call(server, :list_decided)
+  @doc "Bounded canonical operation views, oldest first."
+  @spec entries(GenServer.server(), :all | :open | :parked, timeout()) :: [map()]
+  def entries(server \\ __MODULE__, filter \\ :all, timeout \\ 5_000)
+      when filter in [:all, :open, :parked] do
+    call(server, {:entries, filter}, timeout)
   end
 
   @spec recovery(GenServer.server(), op_key()) :: {:ok, map()} | {:error, :not_found}
@@ -345,19 +337,14 @@ defmodule Alto.OperationLog do
 
   defp read(:keys, state), do: {:reply, state.order, state}
 
-  defp read(:list_open, state),
-    do: {:reply, Enum.filter(state.order, &open?(Map.fetch!(state.ops, &1))), state}
+  defp read({:entries, filter}, state) do
+    entries =
+      state.order
+      |> Enum.map(&recovery_view(&1, Map.fetch!(state.ops, &1)))
+      |> Enum.filter(&entry_matches?(&1, filter))
 
-  defp read(:list_parked, state),
-    do:
-      {:reply,
-       Enum.filter(
-         state.order,
-         &match?(%{phase: {:decided, :requires_operator, _, _}}, Map.fetch!(state.ops, &1))
-       ), state}
-
-  defp read(:list_decided, state),
-    do: {:reply, Enum.flat_map(state.order, &decided(&1, state.ops)), state}
+    {:reply, entries, state}
+  end
 
   defp read({:recovery, op}, state) do
     result =
@@ -375,17 +362,6 @@ defmodule Alto.OperationLog do
        {:ok,
         %{"kind" => "alto_operation_log", "id" => state.id, "dir" => Path.expand(state.dir)}},
        state}
-
-  defp open?(%{phase: :intended, attempts: []}), do: true
-  defp open?(%{phase: phase}) when phase in [:dispatched, :checkpointed], do: true
-  defp open?(_), do: false
-
-  defp decided(key, ops) do
-    case Map.fetch!(ops, key).phase do
-      {:decided, class, _, _} -> [{key, class}]
-      _ -> []
-    end
-  end
 
   ## Internals
 
@@ -451,12 +427,22 @@ defmodule Alto.OperationLog do
       checkpoint: entry.checkpoint,
       checkpoint_decision: entry.checkpoint_decision,
       checkpoint_grant_revision: entry.checkpoint_grant_revision,
-      checkpointed_attempts: entry.checkpointed_attempts
+      checkpointed_attempts: entry.checkpointed_attempts,
+      attempts: length(entry.attempts)
     }
   end
 
   defp phase_outcome({:decided, class, evidence, attempt}), do: {class, evidence, attempt}
   defp phase_outcome(_phase), do: nil
+
+  defp entry_matches?(_entry, :all), do: true
+  defp entry_matches?(%{status: {:intended}, attempts: 0}, :open), do: true
+
+  defp entry_matches?(%{status: {:dispatched, _}}, :open), do: true
+  defp entry_matches?(%{status: {:checkpointed, _, _}}, :open), do: true
+
+  defp entry_matches?(%{status: {:decided, :requires_operator, _}}, :parked), do: true
+  defp entry_matches?(_entry, _filter), do: false
 
   defp expect_revision(%{revision: revision}, revision), do: :ok
   defp expect_revision(_entry, _expected), do: {:error, :stale_revision}

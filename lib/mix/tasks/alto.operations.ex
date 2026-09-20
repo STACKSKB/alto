@@ -52,15 +52,10 @@ defmodule Mix.Tasks.Alto.Operations do
   end
 
   defp execute(ledger, ["list"], _opts) do
-    keys = Enum.uniq(Alto.OperationLog.list_open(ledger) ++ Alto.OperationLog.list_parked(ledger))
-
-    Enum.map(keys, fn key ->
-      %{
-        key: key,
-        status: Alto.OperationLog.status(ledger, key),
-        recovery: Alto.OperationLog.recovery(ledger, key)
-      }
-    end)
+    ledger
+    |> Alto.OperationLog.entries()
+    |> Enum.filter(&listed?/1)
+    |> Enum.sort_by(&list_rank/1)
   end
 
   defp execute(ledger, ["show", key], _opts), do: Alto.OperationLog.recovery(ledger, key)
@@ -81,4 +76,13 @@ defmodule Mix.Tasks.Alto.Operations do
 
   defp execute(_, _, _),
     do: Mix.raise("Expected list, show KEY, or reconcile KEY; see mix help alto.operations")
+
+  defp listed?(%{status: {:intended}, attempts: 0}), do: true
+  defp listed?(%{status: {:dispatched, _}}), do: true
+  defp listed?(%{status: {:checkpointed, _, _}}), do: true
+  defp listed?(%{status: {:decided, :requires_operator, _}}), do: true
+  defp listed?(_entry), do: false
+
+  defp list_rank(%{status: {:decided, :requires_operator, _}}), do: 1
+  defp list_rank(_entry), do: 0
 end

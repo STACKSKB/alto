@@ -18,6 +18,8 @@ defmodule Alto.ConformanceTest do
   alias Alto.Conformance.FakeSource
   alias Alto.Conformance.FakeTool
   alias Alto.Conformance.Sequence
+
+  defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
   alias Alto.Consumer
   alias Alto.Effect
   alias Alto.Event
@@ -199,7 +201,7 @@ defmodule Alto.ConformanceTest do
       start_consumer!(queue: qname, ledger: l, handler: fn _, _ -> {:park, :heir} end, by: "heir")
 
     assert {:handled, [:parked]} = Consumer.poll(c2)
-    assert ["src:stalled"] = OperationLog.list_parked(l)
+    assert ["src:stalled"] = entry_keys(OperationLog.entries(l, :parked))
   end
 
   test "seeded sequences run deterministically and minimize on failure" do
@@ -241,7 +243,7 @@ defmodule Alto.ConformanceTest do
     :ok = OperationLog.record_attempt(l, "src:del-unknown", claimed.claim_id)
 
     refute match?({:decided, _, _}, OperationLog.status(l, "src:del-unknown"))
-    assert ["src:del-unknown"] = OperationLog.list_open(l)
+    assert ["src:del-unknown"] = entry_keys(OperationLog.entries(l, :open))
 
     # Recovery parks; it never reports completed.
     :ok =

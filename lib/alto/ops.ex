@@ -218,42 +218,33 @@ defmodule Alto.Ops do
 
   defp ledger_items_complete(ledger, live_by_key) do
     with :ok <- ensure_server(ledger, :ledger) do
-      with {:ok, parked} <- ledger_call(fn -> Alto.OperationLog.list_parked(ledger) end),
-           {:ok, decided} <- ledger_call(fn -> Alto.OperationLog.list_decided(ledger) end),
-           {:ok, open} <- ledger_call(fn -> Alto.OperationLog.list_open(ledger) end) do
-        ledger_keys = (parked ++ open ++ Enum.map(decided, &elem(&1, 0))) |> Enum.uniq()
+      with {:ok, entries} <- ledger_call(fn -> Alto.OperationLog.entries(ledger) end) do
+        {:ok,
+         entries
+         |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
+         |> Enum.sort_by(&inspection_rank/1)
+         |> Enum.flat_map(fn entry ->
+           live = Map.get(live_by_key, entry.operation_key)
 
-        with {:ok, rows} <-
-               Alto.Result.traverse(ledger_keys, fn key ->
-                 with {:ok, status} <-
-                        ledger_call(fn -> Alto.OperationLog.status(ledger, key) end),
-                      {:ok, attempts} <-
-                        ledger_call(fn -> Alto.OperationLog.attempts(ledger, key) end),
-                      {:ok, recovery} <- recovery_call(ledger, key) do
-                   live = Map.get(live_by_key, key)
-                   {:ok, ledger_rows(status, key, attempts, recovery, live)}
-                 end
-               end) do
-          {:ok, List.flatten(rows)}
-        end
+           ledger_rows(entry.status, entry.operation_key, entry.attempts, entry, live)
+         end)}
       end
     end
   end
+
+  defp inspection_rank(%{status: {:decided, :requires_operator, _}}), do: 0
+
+  defp inspection_rank(%{status: status})
+       when elem(status, 0) in [:intended, :dispatched, :checkpointed],
+       do: 1
+
+  defp inspection_rank(_entry), do: 2
 
   defp ledger_call(fun) do
     try do
       {:ok, fun.()}
     catch
       :exit, reason -> {:error, {:ledger_unavailable, reason}}
-    end
-  end
-
-  defp recovery_call(ledger, key) do
-    case ledger_call(fn -> Alto.OperationLog.recovery(ledger, key) end) do
-      {:ok, {:ok, recovery}} -> {:ok, recovery}
-      {:ok, {:error, :not_found}} -> {:ok, nil}
-      {:ok, {:error, reason}} -> {:error, {:ledger_unavailable, reason}}
-      {:error, reason} -> {:error, reason}
     end
   end
 

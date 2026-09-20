@@ -258,15 +258,13 @@ defmodule Alto.Consumer do
   end
 
   defp attempt_count(state, op) do
-    total = Alto.OperationLog.attempts(state.ledger, op)
+    case Alto.OperationLog.recovery(state.ledger, op) do
+      {:ok, %{attempts: total, checkpointed_attempts: checkpointed}} ->
+        {:ok, max(total - length(checkpointed), 0)}
 
-    checkpointed =
-      case Alto.OperationLog.recovery(state.ledger, op) do
-        {:ok, %{checkpointed_attempts: attempts}} -> length(attempts)
-        _ -> 0
-      end
-
-    {:ok, max(total - checkpointed, 0)}
+      {:error, reason} ->
+        {:error, reason}
+    end
   catch
     :exit, reason -> {:error, {:ledger_unavailable, reason}}
   end

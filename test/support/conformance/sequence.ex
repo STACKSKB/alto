@@ -1,4 +1,6 @@
 defmodule Alto.Conformance.Sequence do
+  defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
+
   @moduledoc """
   Seeded state-machine sequences for failure conformance.
 
@@ -258,8 +260,8 @@ defmodule Alto.Conformance.Sequence do
     # Apply the shipped recovery table only: dispatched-without-outcome
     # parks (never re-dispatches blindly), decided outcomes ack without
     # re-running, intended work is left for the next dispatch.
-    open = OperationLog.list_open(ctx.ledger)
-    parked = OperationLog.list_parked(ctx.ledger)
+    open = entry_keys(OperationLog.entries(ctx.ledger, :open))
+    parked = entry_keys(OperationLog.entries(ctx.ledger, :parked))
 
     {{:reconcile, %{open: open, parked: parked}}, ctx}
   end

@@ -13,6 +13,8 @@ defmodule Alto.OperationLogTest do
   alias Alto.OperationLog
   alias Alto.Queue
 
+  defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
+
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-ledger-#{System.unique_integer([:positive])}")
 
@@ -185,8 +187,12 @@ defmodule Alto.OperationLogTest do
       assert {:error, {:invalid_attempt, ""}} = OperationLog.record_attempt(name, "op-1", "")
     end
 
-    test "list_open shows undecided work oldest first", %{dir: dir, id: id} do
-      %{name: name} = start_ledger!(id: id, dir: Path.join(dir, "l"))
+    test "canonical entries preserve order, filters, and fields across restart", %{
+      dir: dir,
+      id: id
+    } do
+      ledger_dir = Path.join(dir, "l")
+      %{name: name, pid: pid} = start_ledger!(id: id, dir: ledger_dir)
 
       :ok = OperationLog.record_intent(name, "op-a", "t", nil)
       :ok = OperationLog.record_intent(name, "op-b", "t", nil)
@@ -195,8 +201,21 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.record_attempt(name, "op-c", "clm-2")
       :ok = OperationLog.record_outcome(name, "op-c", "clm-2", :completed, %{})
 
-      assert ["op-a", "op-b"] = OperationLog.list_open(name)
-      assert [] = OperationLog.list_parked(name)
+      assert ["op-a", "op-b"] = entry_keys(OperationLog.entries(name, :open))
+      assert [] = entry_keys(OperationLog.entries(name, :parked))
+
+      assert [first, second, third] = OperationLog.entries(name)
+      assert {first.operation_key, first.status, first.attempts} == {"op-a", {:intended}, 0}
+
+      assert {second.operation_key, second.status, second.attempts} ==
+               {"op-b", {:dispatched, "clm-1"}, 1}
+
+      assert {third.operation_key, third.status, third.attempts} ==
+               {"op-c", {:decided, :completed, %{}}, 1}
+
+      GenServer.stop(pid)
+      %{name: restarted} = start_ledger!(id: id, dir: ledger_dir)
+      assert OperationLog.entries(restarted) == [first, second, third]
     end
 
     test "a released attempt returns to intended; parked work lists for operators", %{
@@ -215,15 +234,15 @@ defmodule Alto.OperationLogTest do
       assert 1 = OperationLog.attempts(name, "op-1")
 
       # Healthy retry-in-flight is not operator work.
-      assert [] = OperationLog.list_open(name)
+      assert [] = entry_keys(OperationLog.entries(name, :open))
 
       :ok = OperationLog.record_attempt(name, "op-1", "clm-b")
       assert {:dispatched, "clm-b"} = OperationLog.status(name, "op-1")
-      assert ["op-1"] = OperationLog.list_open(name)
+      assert ["op-1"] = entry_keys(OperationLog.entries(name, :open))
 
       :ok = OperationLog.record_outcome(name, "op-1", "clm-b", :requires_operator, %{why: "x"})
-      assert ["op-1"] = OperationLog.list_parked(name)
-      assert [] = OperationLog.list_open(name)
+      assert ["op-1"] = entry_keys(OperationLog.entries(name, :parked))
+      assert [] = entry_keys(OperationLog.entries(name, :open))
     end
 
     test "closed and historical owners cannot release or reserve again", %{dir: dir, id: id} do
@@ -361,7 +380,7 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.record_intent(name, "done", "t", nil)
       :ok = OperationLog.record_attempt(name, "done", "b")
       :ok = OperationLog.record_outcome(name, "done", "b", :completed)
-      assert ["parked"] = OperationLog.list_parked(name)
+      assert ["parked"] = entry_keys(OperationLog.entries(name, :parked))
     end
 
     test "credential-shaped evidence never reaches disk", %{dir: dir, id: id} do
@@ -486,7 +505,7 @@ defmodule Alto.OperationLogTest do
 
       # Whatever the recovery reads, it is not a decision.
       refute match?({:decided, :completed, _}, OperationLog.status(log, "src:del-1"))
-      assert ["src:del-1"] = OperationLog.list_open(log)
+      assert ["src:del-1"] = entry_keys(OperationLog.entries(log, :open))
     end
   end
 
