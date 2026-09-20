@@ -749,29 +749,17 @@ defmodule Alto.Queue do
   end
 
   defp validate_selector(selector) when is_map(selector) and map_size(selector) in 1..8 do
-    with :ok <- validate_selector_bytes(selector),
-         :ok <- validate_selector_keys(selector),
-         :ok <- validate_selector_values(selector) do
-      :ok
-    end
+    valid? =
+      byte_size(:erlang.term_to_binary(selector)) <= 4_096 and
+        Enum.all?(selector, fn {key, value} ->
+          is_binary(key) and byte_size(key) in 1..100 and String.valid?(key) and
+            selector_value?(value)
+        end)
+
+    if valid?, do: :ok, else: {:error, :invalid_selector}
   end
 
   defp validate_selector(_), do: {:error, :invalid_selector}
-
-  defp validate_selector_keys(selector) do
-    if Enum.all?(
-         Map.keys(selector),
-         &(is_binary(&1) and String.valid?(&1) and byte_size(&1) in 1..100)
-       ),
-       do: :ok,
-       else: {:error, :invalid_selector}
-  end
-
-  defp validate_selector_values(selector) do
-    if Enum.all?(Map.values(selector), &selector_value?/1),
-      do: :ok,
-      else: {:error, :invalid_selector}
-  end
 
   defp selector_value?(nil), do: true
   defp selector_value?(value) when is_boolean(value), do: true
@@ -782,14 +770,6 @@ defmodule Alto.Queue do
   defp selector_value?(_), do: false
 
   defp selector_scalar?(value), do: not is_list(value) and selector_value?(value)
-
-  defp validate_selector_bytes(selector) do
-    if byte_size(:erlang.term_to_binary(selector)) <= 4_096,
-      do: :ok,
-      else: {:error, :invalid_selector}
-  rescue
-    _ -> {:error, :invalid_selector}
-  end
 
   # Oldest-first fitting prefix over the encoded wire form, so every leased
   # record is deliverable and an encoding failure never strands a lease.
