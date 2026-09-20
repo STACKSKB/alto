@@ -23,7 +23,6 @@ defmodule Alto.Conformance.Sequence do
   ledger releases — never blind re-dispatch.
   """
 
-  alias Alto.Consumer
   alias Alto.OperationLog
   alias Alto.Queue
 
@@ -48,8 +47,7 @@ defmodule Alto.Conformance.Sequence do
           ledger_id: String.t(),
           queue_opts: keyword(),
           ledger_opts: keyword(),
-          claimed: [map()],
-          restarted: non_neg_integer()
+          claimed: [map()]
         }
 
   @doc "Deterministically generate `length` ops from `seed`."
@@ -148,8 +146,7 @@ defmodule Alto.Conformance.Sequence do
       ledger_id: "cl#{tag}",
       queue_opts: [id: "cq#{tag}", dir: Path.join(dir, "q"), name: qname],
       ledger_opts: [id: "cl#{tag}", dir: Path.join(dir, "l"), name: lname],
-      claimed: [],
-      restarted: 0
+      claimed: []
     }
 
     try do
@@ -264,42 +261,5 @@ defmodule Alto.Conformance.Sequence do
     parked = entry_keys(OperationLog.entries(ctx.ledger, :parked))
 
     {{:reconcile, %{open: open, parked: parked}}, ctx}
-  end
-
-  @doc false
-  def consumer_handler(payload, %{key: key, claim_id: claim_id, attempt: _n}, ledger) do
-    :ok = OperationLog.record_intent(ledger, key, "conformance-handler", key)
-    :ok = OperationLog.record_attempt(ledger, key, claim_id)
-
-    case payload do
-      %{"fail" => true} ->
-        :ok =
-          OperationLog.record_outcome(ledger, key, claim_id, :failed_known, %{reason: :scripted})
-
-        {:decided, :failed_known}
-
-      _other ->
-        :ok = OperationLog.record_outcome(ledger, key, claim_id, :completed, %{})
-        {:decided, :completed}
-    end
-  end
-
-  @doc false
-  def drive_consumer(queue, ledger, handler) do
-    {:ok, c} =
-      Consumer.start_link(
-        queue: queue,
-        ledger: ledger,
-        handler: handler,
-        by: "conformance-#{System.unique_integer([:positive])}",
-        autostart: false,
-        name: :"conformance_c_#{System.unique_integer([:positive])}"
-      )
-
-    try do
-      Consumer.poll(c)
-    after
-      GenServer.stop(c)
-    end
   end
 end
