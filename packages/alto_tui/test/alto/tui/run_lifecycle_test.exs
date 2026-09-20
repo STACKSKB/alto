@@ -100,7 +100,7 @@ defmodule Alto.TUI.RunLifecycleTest do
       assert rendered =~ "you › next"
       assert length(Regex.scan(~r/alto ›/, rendered)) == 2
       refute rendered =~ "Queued message:"
-      assert state(app).queued_messages == %{}
+      assert state(app).input_routes == %{}
 
       session_id = State.selected_task(state(app))["session_id"]
 
@@ -121,7 +121,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     original_task = state(app).selected_task_id
 
     submit(app, "next")
-    assert state(app).queued_messages[original_task].prompt == "next"
+    assert [%{text: "next"}] = Alto.Input.list(state(app).inputs[original_task])
     assert map_size(state(app).runs) == 1
     refute_receive {:model_waiting, _, _}, 50
 
@@ -136,7 +136,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert Enum.any?(messages, &(&1["content"] == "first done"))
     assert state(app).selected_task_id == nil
     assert ExRatatui.textarea_get_value(state(app).textarea) == "another task's draft"
-    assert state(app).queued_messages == %{}
+    assert state(app).input_routes == %{}
 
     assert state(app).entries[original_task] == [
              %{kind: :user, text: "first"},
@@ -155,6 +155,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     app = start_app(root)
     submit(app, "first")
     assert_receive {:model_waiting, first, _}, 5_000
+    task_id = state(app).selected_task_id
     submit(app, "next")
     ExRatatui.textarea_set_value(state(app).textarea, "draft kept")
     monitor = Process.monitor(first)
@@ -162,7 +163,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert_receive {:DOWN, ^monitor, :process, ^first, _}, 5_000
     eventually(fn -> state(app).runs == %{} end)
     assert ExRatatui.textarea_get_value(state(app).textarea) == "draft kept"
-    assert map_size(state(app).queued_messages) == 1
+    assert length(Alto.Input.list(state(app).inputs[task_id])) == 1
     refute_receive {:model_waiting, _, _}, 50
     assert state(app).notice =~ "queued message paused"
 
@@ -200,7 +201,8 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert_receive {:model_waiting, first, _}, 5_000
     submit(app, "next")
     submit(app, "later")
-    assert state(app).queued_messages[state(app).selected_task_id].prompt == "next"
+    task_id = state(app).selected_task_id
+    assert [%{text: "next"}] = Alto.Input.list(state(app).inputs[task_id])
     assert ExRatatui.textarea_get_value(state(app).textarea) == "later"
     assert state(app).notice =~ "one message already queued"
     send(first, {:finish, "done"})
@@ -226,7 +228,7 @@ defmodule Alto.TUI.RunLifecycleTest do
 
     assert_receive {:model_waiting, second, messages}, 5_000
     assert List.last(messages) == %{"role" => "user", "content" => "change direction"}
-    eventually(fn -> state(app).queued_messages == %{} end)
+    eventually(fn -> state(app).input_routes == %{} end)
 
     assert List.last(State.current_entries(state(app))) == %{
              kind: :user,
@@ -235,6 +237,37 @@ defmodule Alto.TUI.RunLifecycleTest do
 
     refute screen(app) =~ "Steering message:"
     send(second, {:finish, "second done"})
+    eventually(fn -> state(app).runs == %{} end)
+  end
+
+  test "draining one retained input keeps the route for later entries", %{root: root} do
+    app = start_app(root)
+    submit(app, "first")
+    assert_receive {:model_waiting, _first, _}, 5_000
+    task_id = state(app).selected_task_id
+
+    ExRatatui.textarea_set_value(state(app).textarea, "steer next")
+    key(app, "enter", ["ctrl"])
+    submit(app, "follow later")
+    assert length(Alto.Input.list(state(app).inputs[task_id])) == 2
+
+    key(app, "esc")
+    eventually(fn -> state(app).runs == %{} end)
+    key(app, "g", ["ctrl"])
+    key(app, "n")
+    assert state(app).selected_task_id == nil
+
+    send(app, {:alto_tui_send_input, task_id})
+    assert_receive {:model_waiting, second, messages}, 5_000
+    assert List.last(messages)["content"] == "steer next"
+    assert state(app).selected_task_id == nil
+    assert Map.has_key?(state(app).input_routes, task_id)
+    assert [%{text: "follow later"}] = Alto.Input.list(state(app).inputs[task_id])
+
+    send(second, {:finish, "done"})
+    assert_receive {:model_waiting, third, messages}, 5_000
+    assert List.last(messages)["content"] == "follow later"
+    send(third, {:finish, "done"})
     eventually(fn -> state(app).runs == %{} end)
   end
 

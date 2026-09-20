@@ -61,7 +61,7 @@ defmodule Alto.TUI.State do
     pending_approvals: [],
     backend_state: %{},
     runs: %{},
-    queued_messages: %{},
+    input_routes: %{},
     inputs: %{},
     usage: %{},
     catalog_opts: []
@@ -140,9 +140,7 @@ defmodule Alto.TUI.State do
 
   @doc "Visible execution stage and recovery controls for the selected task."
   def run_label(state) do
-    queued? =
-      Map.has_key?(state.queued_messages, state.selected_task_id) or
-        input_pending?(state, state.selected_task_id)
+    queued? = input_pending?(state, state.selected_task_id)
 
     case Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end) do
       nil ->
@@ -374,14 +372,8 @@ defmodule Alto.TUI.State do
   defp pending_entries(state) do
     pending =
       case Map.get(state.inputs, state.selected_task_id) do
-        nil ->
-          case Map.get(state.queued_messages, state.selected_task_id) do
-            nil -> []
-            queued -> [%{text: queued.prompt, mode: :follow_up}]
-          end
-
-        input ->
-          Alto.Input.list(input)
+        nil -> []
+        input -> Alto.Input.list(input)
       end
 
     Enum.map(pending, fn entry ->
@@ -607,7 +599,7 @@ defmodule Alto.TUI.State do
           %{"session_id" => session_id} = task when is_binary(session_id) ->
             if Alto.TUI.Backend.ui(
                  %{state | selected_backend: task_backend(task)},
-                 :durable_input?
+                 :session_usage?
                ) == true,
                do: load_session_usage(session_id, state.catalog_opts),
                else: Usage.new()

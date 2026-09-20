@@ -2,7 +2,7 @@ defmodule Alto.TUI.Backends.Native do
   @moduledoc "Native Alto runner with catalog-session resume."
   @behaviour Alto.TUI.Backend
   @impl true
-  def ui(:durable_input?, _state, _options), do: true
+  def ui(event, _state, _options) when event in [:steering?, :session_usage?], do: true
   def ui(_event, _state, _options), do: :pass
   alias Alto.Session
   @impl true

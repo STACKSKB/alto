@@ -48,7 +48,7 @@ defmodule Alto.TUI.BackendTest do
     }
 
     assert Backend.valid?(state.run_options[:tui_backends])
-    assert Backend.ui(state, :durable_input?)
-    refute Backend.ui(%{state | selected_backend: :alto}, :durable_input?) == true
+    assert Backend.ui(state, :steering?)
+    refute Backend.ui(%{state | selected_backend: :alto}, :steering?) == true
   end
 end
