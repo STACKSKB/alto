@@ -280,26 +280,15 @@ defmodule Alto.SessionConversationTest do
              )
   end
 
-  test "legacy snapshots remain resumable and forkable", %{dir: dir} do
-    {:ok, id} = Session.create("legacy", %{}, session_dir: dir)
-    messages = [user("legacy")]
+  test "a missing immutable head fails resume instead of returning a stale transcript", %{
+    dir: dir
+  } do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("hello")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    File.rm!(Path.join([dir, "conversations", id, "revision-1.json"]))
 
-    File.write!(
-      Path.join(dir, id <> ".transcript.json"),
-      JSON.encode!(%{"v" => 1, "messages" => messages, "transcript_bytes" => bytes(messages)}) <>
-        "\n"
-    )
-
-    assert {:ok, %{messages: ^messages, revision: 1}} =
+    assert {:error, {:conversation_revision_not_found, ^id, 1}} =
              Session.transcript(id, session_dir: dir)
-
-    assert {:ok, fork} =
-             Session.fork(id,
-               session_id: "sess-legacy-branch",
-               session_dir: dir
-             )
-
-    assert fork.transcript.messages == messages
-    assert fork.source == %{session_id: id, revision: 1}
   end
 end

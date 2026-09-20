@@ -3,8 +3,8 @@ defmodule Alto.Session.Conversation do
   Immutable conversation revisions behind `Alto.Session` transcript snapshots.
 
   Each settled revision stores a complete, bounded transcript in its own file
-  and links to its parent revision. The mutable transcript sidecar remains the
-  fast branch head. Tool dispatches use a separate revision-bound fence so a
+  and links to its parent revision. The mutable transcript sidecar contains only the current revision
+  pointer; the immutable entry owns the transcript. Tool dispatches use a separate revision-bound fence so a
   crash cannot make ordinary resume replay effects whose outcome is unknown.
   """
 
@@ -286,61 +286,21 @@ defmodule Alto.Session.Conversation do
   end
 
   defp put_snapshot(id, snapshot, opts) do
-    record = %{
-      "v" => @version,
-      "revision" => snapshot.revision,
-      "entry_id" => snapshot.entry_id,
-      "parent" => encode_parent(snapshot.parent),
-      "summary" => snapshot.summary,
-      "settled" => snapshot.settled,
-      "conversation_bytes" => snapshot.conversation_bytes,
-      "messages" => snapshot.messages,
-      "context_observation" => Map.get(snapshot, :context_observation),
-      "transcript_bytes" => snapshot.transcript_bytes
-    }
-
-    with {:ok, encoded} <- encode_bounded(record),
-         :ok <- Storage.ensure_private_dir(Session.dir(opts), owned: true),
-         :ok <- Alto.Tools.AtomicWrite.write(transcript_path(opts, id), encoded <> "\n", 0o600) do
-      :ok
-    else
-      {:error, reason} -> {:error, {:session_write_failed, reason}}
-    end
+    write_sidecar(
+      transcript_path(opts, id),
+      %{"v" => @version, "revision" => snapshot.revision},
+      :session_write_failed
+    )
   end
 
   defp read_snapshot(id, opts) do
-    case bounded_read(transcript_path(opts, id), @max_entry_bytes) do
-      {:ok, contents} -> decode_snapshot(String.trim(contents), id)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp decode_snapshot(contents, id) do
-    with {:ok, record} when is_map(record) <- JSON.decode(contents),
-         %{"messages" => messages, "transcript_bytes" => bytes} <- record,
-         true <- is_list(messages) and is_integer(bytes) and bytes >= 0,
-         revision when is_integer(revision) and revision >= 1 <- Map.get(record, "revision", 1),
-         {:ok, settled} <- validate_messages(messages, true),
-         true <- Map.get(record, "settled", settled) == settled,
-         conversation_bytes when is_integer(conversation_bytes) and conversation_bytes >= 0 <-
-           Map.get(record, "conversation_bytes", 0),
-         {:ok, parent} <- optional_parent(Map.get(record, "parent")),
-         {:ok, summary} <- optional_summary(Map.get(record, "summary")) do
-      {:ok,
-       %{
-         messages: messages,
-         context_observation: Map.get(record, "context_observation"),
-         transcript_bytes: bytes,
-         revision: revision,
-         entry_id: Map.get(record, "entry_id", entry_id(id, revision)),
-         entry_session_id: id,
-         parent: parent,
-         summary: summary,
-         settled: settled,
-         conversation_bytes: conversation_bytes
-       }}
-    else
-      _ -> {:error, {:session_corrupt, id, :transcript}}
+    with {:ok, contents} <- bounded_read(transcript_path(opts, id), 256) do
+      with {:ok, %{"v" => @version, "revision" => revision}} <- JSON.decode(contents),
+           {:ok, revision} when is_integer(revision) <- requested_revision(revision) do
+        select_revision(id, revision, nil, opts)
+      else
+        _ -> {:error, {:session_corrupt, id, :transcript}}
+      end
     end
   end
 
@@ -357,7 +317,7 @@ defmodule Alto.Session.Conversation do
 
   defp decode_entry(contents, id, revision) do
     with {:ok, entry} when is_map(entry) <- JSON.decode(contents),
-         true <- entry["type"] == "conversation_entry",
+         true <- entry["v"] == @version and entry["type"] == "conversation_entry",
          true <- entry["session_id"] == id and entry["revision"] == revision,
          true <- entry["entry_id"] == entry_id(id, revision),
          true <- is_list(entry["messages"]),
@@ -418,12 +378,16 @@ defmodule Alto.Session.Conversation do
       "at_ms" => fence.at_ms
     }
 
+    write_sidecar(dispatch_path(opts, id), record, :conversation_write_failed)
+  end
+
+  defp write_sidecar(path, record, error_tag) do
     with {:ok, encoded} <- encode_bounded(record),
-         :ok <- Storage.ensure_private_dir(Session.dir(opts), owned: true),
-         :ok <- Alto.Tools.AtomicWrite.write(dispatch_path(opts, id), encoded <> "\n", 0o600) do
+         :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
+         :ok <- Alto.Tools.AtomicWrite.write(path, encoded <> "\n", 0o600) do
       :ok
     else
-      {:error, reason} -> {:error, {:conversation_write_failed, reason}}
+      {:error, reason} -> {:error, {error_tag, reason}}
     end
   end
 

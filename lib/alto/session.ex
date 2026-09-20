@@ -86,6 +86,8 @@ defmodule Alto.Session do
       "at_ms" => System.system_time(:millisecond),
       "run_id" => Map.get(meta, :run_id),
       "parent_run_id" => Map.get(meta, :parent_run_id),
+      "subagent" => false,
+      "session_owner" => true,
       "task" => preview_task(task),
       "provider" => Map.get(meta, :provider),
       "model" => Map.get(meta, :model),
@@ -652,11 +654,7 @@ defmodule Alto.Session do
 
   defp summarize(id, opts) do
     with {:ok, records} <- read(id, opts) do
-      # Legacy/shared child records do not own this session. Separate children
-      # own their own transcript and listing while retaining their ancestry.
-      root? = fn record ->
-        Map.get(record, "session_owner", record["subagent"] != true) == true
-      end
+      root? = fn record -> record["session_owner"] == true end
 
       started = Enum.find(records, &(&1["type"] == "started" and root?.(&1)))
       completed = Enum.filter(records, &(&1["type"] == "completed" and root?.(&1)))
