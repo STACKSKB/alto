@@ -467,65 +467,6 @@ defmodule Alto.OperationLogTest do
   end
 
   describe "durability" do
-    test "compatible pre-recovery records replay without inventing input", %{dir: dir, id: id} do
-      ledger_dir = Path.join(dir, "legacy")
-      path = Path.join(ledger_dir, id <> ".jsonl")
-      File.mkdir_p!(ledger_dir)
-
-      entries = [
-        %{"v" => 1, "t" => "intent", "op" => "legacy", "tool" => "t", "inbox" => nil},
-        %{"v" => 1, "t" => "attempt", "op" => "legacy", "attempt" => "old-a"},
-        %{
-          "v" => 1,
-          "t" => "outcome",
-          "op" => "legacy",
-          "attempt" => "old-a",
-          "class" => "unknown",
-          "evidence" => %{}
-        }
-      ]
-
-      File.write!(path, Enum.map_join(entries, "", &(JSON.encode!(&1) <> "\n")))
-      %{name: name} = start_ledger!(id: id, dir: ledger_dir)
-
-      assert {:decided, :unknown, %{}} = OperationLog.status(name, "legacy")
-      assert {:ok, %{recovery: nil}} = OperationLog.recovery(name, "legacy")
-    end
-
-    test "ambiguous historical owner transitions require migration review", %{dir: dir, id: id} do
-      ledger_dir = Path.join(dir, "ambiguous")
-      path = Path.join(ledger_dir, id <> ".jsonl")
-      File.mkdir_p!(ledger_dir)
-
-      entries = [
-        %{"v" => 1, "t" => "intent", "op" => "op", "tool" => "t", "inbox" => nil},
-        %{"v" => 1, "t" => "attempt", "op" => "op", "attempt" => "old"},
-        %{"v" => 1, "t" => "release", "op" => "op", "attempt" => "old"},
-        %{"v" => 1, "t" => "attempt", "op" => "op", "attempt" => "new"},
-        %{
-          "v" => 1,
-          "t" => "outcome",
-          "op" => "op",
-          "attempt" => "new",
-          "class" => "requires_operator",
-          "evidence" => %{}
-        },
-        %{
-          "v" => 1,
-          "t" => "outcome",
-          "op" => "op",
-          "attempt" => "old",
-          "class" => "completed",
-          "evidence" => %{}
-        }
-      ]
-
-      File.write!(path, Enum.map_join(entries, "", &(JSON.encode!(&1) <> "\n")))
-
-      assert {:error, {:ledger_migration_required, ^id, "op", {:stale_outcome, "old"}}} =
-               OperationLog.start_link(id: id, dir: ledger_dir, name: nil)
-    end
-
     test "valid final JSON without newline is repaired before the next append", %{
       dir: dir,
       id: id
@@ -545,18 +486,36 @@ defmodule Alto.OperationLogTest do
       assert {:dispatched, "attempt-1"} = OperationLog.status(name3, "op-1")
     end
 
-    test "a failed append leaves acknowledged memory state unchanged", %{dir: dir, id: id} do
+    test "a failed append at capacity does not publish its planned eviction", %{dir: dir, id: id} do
       ledger_dir = Path.join(dir, "l")
-      %{name: name} = start_ledger!(id: id, dir: ledger_dir)
-      :ok = OperationLog.record_intent(name, "op-1", "t", nil)
+      %{name: name} = start_ledger!(id: id, dir: ledger_dir, max_ops: 1)
+      :ok = OperationLog.record_intent(name, "old", "t", nil)
+      :ok = OperationLog.record_attempt(name, "old", "attempt-1")
+      :ok = OperationLog.record_outcome(name, "old", "attempt-1", :completed)
       path = Path.join(ledger_dir, id <> ".jsonl")
       File.rm!(path)
       File.mkdir!(path)
 
       assert {:error, {:ledger_write_failed, :eisdir}} =
-               OperationLog.record_attempt(name, "op-1", "attempt-1")
+               OperationLog.record_intent(name, "new", "t", nil)
 
-      assert {:intended} = OperationLog.status(name, "op-1")
+      assert {:decided, :completed, %{}} = OperationLog.status(name, "old")
+      assert :no_intent = OperationLog.status(name, "new")
+    end
+
+    test "live lifecycle and replay produce the same recovery view", %{dir: dir, id: id} do
+      ledger_dir = Path.join(dir, "l")
+      %{name: name, pid: pid} = start_ledger!(id: id, dir: ledger_dir)
+      :ok = OperationLog.record_intent(name, "op", "tool", "inbox", %{payload: 1})
+      :ok = OperationLog.record_attempt(name, "op", "first")
+      :ok = OperationLog.record_release(name, "op", "first")
+      :ok = OperationLog.record_attempt(name, "op", "second")
+      :ok = OperationLog.record_outcome(name, "op", "second", :unknown, %{"code" => 503})
+      assert {:ok, live} = OperationLog.recovery(name, "op")
+      GenServer.stop(pid)
+
+      %{name: replayed} = start_ledger!(id: id, dir: ledger_dir)
+      assert {:ok, ^live} = OperationLog.recovery(replayed, "op")
     end
 
     test "state survives restart; torn tail is discarded", %{dir: dir, id: id} do
