@@ -239,8 +239,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, session_dir: root)
     {:ok, session_id} = Session.create("first prompt", %{}, session_dir: root)
 
-    :ok =
-      Session.write_transcript(
+    {:ok, _snapshot} =
+      Session.persist_settled(
         session_id,
         [
           %{"role" => "user", "content" => "first"},
@@ -266,7 +266,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, session_dir: root)
     {:ok, session_id} = Session.create("prompt", %{}, session_dir: root)
     messages = Enum.map(1..101, &%{"role" => "user", "content" => Integer.to_string(&1)})
-    :ok = Session.write_transcript(session_id, messages, 0, session_dir: root)
+    {:ok, _snapshot} = Session.persist_settled(session_id, messages, 0, session_dir: root)
 
     assert {:ok, %{messages: page, truncated: true}} =
              Registry.session_transcript(registry, session_id)

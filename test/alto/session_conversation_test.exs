@@ -94,13 +94,14 @@ defmodule Alto.SessionConversationTest do
              %{revision: 1, tool_call_ids: ["call-1"], run_id: "run-crashed"}}} =
              Session.transcript(id, session_dir: dir)
 
-    # Terminal compatibility keeps the assistant call. Setup.close_interrupted/1
-    # will turn its missing reply into an explicit unknown result on resume.
+    # Retaining pending history keeps the assistant call. Resume turns its
+    # missing reply into an explicit unknown result.
     recovery = safe ++ [call("call-1")]
 
-    assert :ok =
-             Session.write_transcript(id, recovery, bytes(recovery),
+    assert {:ok, _snapshot} =
+             Session.persist_settled(id, recovery, bytes(recovery),
                session_dir: dir,
+               allow_pending: true,
                expected_revision: 1
              )
 

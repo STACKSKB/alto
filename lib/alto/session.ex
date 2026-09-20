@@ -1,15 +1,15 @@
 defmodule Alto.Session do
   @moduledoc """
   Append-only JSONL session records for the execution host, plus a revisioned
-  transcript sidecar for fast resume and immutable conversation revisions for
+  transcript head for fast resume and immutable conversation revisions for
   settled-turn recovery and branching.
 
   One directory per state home, one `<id>.jsonl` log per session. Records are
   small JSON envelopes; arbitrary Elixir terms (event data, outcomes, outputs)
   travel as base64 `term_to_binary` payloads so the durable log is exact —
   exactness is recovered from here, never from the lossy front-end wire. The
-  transcript snapshot (the only large record) lives in `<id>.transcript.json`
-  instead of inline, so listing and reading sessions stays cheap.
+  `<id>.transcript.json` head selects an immutable conversation revision; the
+  transcript stays outside the event log so listing and reading sessions stays cheap.
 
   Session identity is random (`sess-…`) and validated on every entry point,
   so a hostile or mistyped id cannot escape the sessions directory. Credential
@@ -116,22 +116,6 @@ defmodule Alto.Session do
           {:error, reason} -> {:error, {:session_write_failed, reason}}
         end
       end)
-    end
-  end
-
-  @doc "Write the transcript sidecar, optionally checking its current revision."
-  @spec write_transcript(session_id(), [map()], non_neg_integer(), keyword()) ::
-          :ok | {:error, term()}
-  def write_transcript(id, messages, transcript_bytes, opts \\ [])
-      when is_list(messages) and is_integer(transcript_bytes) do
-    case Conversation.persist(
-           id,
-           messages,
-           transcript_bytes,
-           Keyword.put(opts, :allow_pending, true)
-         ) do
-      {:ok, _snapshot} -> :ok
-      {:error, _} = error -> error
     end
   end
 

@@ -156,7 +156,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
     on_exit(fn -> File.rm_rf!(dir) end)
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     message = %{"role" => "user", "content" => String.duplicate("x", 4_000)}
-    :ok = Session.write_transcript(id, [message], 4_000, session_dir: dir)
+    {:ok, _snapshot} = Session.persist_settled(id, [message], 4_000, session_dir: dir)
 
     pid =
       start_supervised!(

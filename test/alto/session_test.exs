@@ -146,7 +146,7 @@ defmodule Alto.SessionTest do
       %{"role" => "assistant", "content" => "yo"}
     ]
 
-    assert :ok = Session.write_transcript(id, messages, 42, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, messages, 42, session_dir: dir)
 
     assert {:ok, %{messages: ^messages, transcript_bytes: 42, revision: 1}} =
              Session.transcript(id, session_dir: dir)
@@ -159,10 +159,10 @@ defmodule Alto.SessionTest do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 
     first = [%{"role" => "user", "content" => "hi"}]
-    assert :ok = Session.write_transcript(id, first, 20, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, first, 20, session_dir: dir)
 
     second = first ++ [%{"role" => "assistant", "content" => "done"}]
-    assert :ok = Session.write_transcript(id, second, 55, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, second, 55, session_dir: dir)
 
     assert {:ok, %{messages: ^second, transcript_bytes: 55, revision: 2}} =
              Session.transcript(id, session_dir: dir)
@@ -178,15 +178,15 @@ defmodule Alto.SessionTest do
     first = [%{"role" => "user", "content" => "first"}]
     second = [%{"role" => "user", "content" => "second"}]
 
-    assert :ok =
-             Session.write_transcript(id, first, 20,
+    assert {:ok, _snapshot} =
+             Session.persist_settled(id, first, 20,
                session_dir: dir,
                expected_revision: 0
              )
 
     assert {:error,
             {:session_conflict, %{session_id: ^id, expected_revision: 0, current_revision: 1}}} =
-             Session.write_transcript(id, second, 21,
+             Session.persist_settled(id, second, 21,
                session_dir: dir,
                expected_revision: 0
              )

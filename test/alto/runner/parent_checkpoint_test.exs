@@ -247,9 +247,10 @@ defmodule Alto.Runner.ParentCheckpointTest do
     for intent <- [pending, %{kind: :frame}] do
       assert {:ok, packet} = Checkpoint.capture_parent(run, intent, [], :continue)
 
-      assert :ok =
-               Alto.Session.write_transcript(run.session, run.messages_rev, run.transcript_bytes,
-                 session_dir: run.session_dir
+      assert {:ok, _snapshot} =
+               Alto.Session.persist_settled(run.session, run.messages_rev, run.transcript_bytes,
+                 session_dir: run.session_dir,
+                 allow_pending: true
                )
 
       assert {:error, :checkpoint_mismatch} = Checkpoint.restore_parent(run, packet, opts)
