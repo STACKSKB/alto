@@ -95,7 +95,7 @@ defmodule Alto.TUI.ViewTest do
     value = String.duplicate("model/", 16)
     :ok = ExRatatui.text_input_set_value(input, value)
 
-    state = base_state(%{kind: :model_form, title: "exact model ID", input: input, error: nil})
+    state = base_state(model_form(input))
     popup = popup(View.widgets(state, frame(30, 20)))
     lines = popup.content.text.lines
     line = Enum.at(lines, 2)
@@ -115,7 +115,7 @@ defmodule Alto.TUI.ViewTest do
   test "reserves a cell for the caret when a model value exactly fills the field" do
     input = ExRatatui.text_input_new()
     :ok = ExRatatui.text_input_set_value(input, "abcd")
-    state = base_state(%{kind: :model_form, title: "exact model ID", input: input, error: nil})
+    state = base_state(model_form(input))
 
     rendered =
       View.widgets(state, frame(30, 20))
@@ -186,6 +186,15 @@ defmodule Alto.TUI.ViewTest do
       |> then(&%{key: key, input: &1, locked?: false})
     end)
   end
+
+  defp model_form(input),
+    do: %{
+      kind: :model_form,
+      title: "exact model ID",
+      fields: [%{key: :model, input: input}],
+      field_index: 0,
+      error: nil
+    }
 
   defp frame(width \\ 120, height \\ 36), do: %{width: width, height: height}
 

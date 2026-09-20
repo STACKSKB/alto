@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{State, WorkspaceForm}
+  alias Alto.TUI.{State, TextForm, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -78,7 +78,7 @@ defmodule Alto.TUI.View do
     rect = content_rect(overlay_rect(form, width, height))
     prefix = String.length("› Model ID  ")
 
-    if ExRatatui.text_input_get_value(form.input) == "" or rect.height <= 2,
+    if TextForm.value(form) == "" or rect.height <= 2,
       do: [],
       else: [
         %Rect{x: rect.x + prefix, y: rect.y + 2, width: max(rect.width - prefix, 0), height: 1}
@@ -535,50 +535,23 @@ defmodule Alto.TUI.View do
   defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
     do: widgets ++ WorkspaceForm.widgets(form, root)
 
-  defp add_overlay(widgets, %{kind: :provider_form} = overlay, root) do
-    popup = %Popup{
-      content: %Paragraph{
-        text: provider_form_text(overlay, root.width),
-        wrap: false,
-        style: style(fg: :white, bg: @panel_alt)
-      },
-      block: %Block{
-        title: " #{overlay.title} │ Tab/↑↓ fields · Enter next/save · ^S save · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
-      percent_width: 72,
-      percent_height: 66
-    }
-
-    widgets ++ [{popup, root}]
-  end
+  defp add_overlay(widgets, %{kind: :provider_form} = overlay, root),
+    do:
+      add_form(widgets, overlay, root, provider_form_text(overlay, root.width),
+        hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
+        size: {72, 66}
+      )
 
   defp add_overlay(widgets, %{kind: :model_form} = overlay, root) do
-    value = ExRatatui.text_input_get_value(overlay.input)
-    cursor = ExRatatui.text_input_cursor(overlay.input)
+    field = hd(overlay.fields)
+    value = ExRatatui.text_input_get_value(field.input)
+    cursor = ExRatatui.text_input_cursor(field.input)
     error = if overlay.error, do: "  ! " <> overlay.error, else: ""
 
-    popup = %Popup{
-      content: %Paragraph{
-        text: model_form_text(value, cursor, error, root.width),
-        wrap: false,
-        style: style(fg: :white, bg: @panel_alt)
-      },
-      block: %Block{
-        title: " #{overlay.title} │ Enter use · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
-      percent_width: 62,
-      percent_height: 42
-    }
-
-    widgets ++ [{popup, root}]
+    add_form(widgets, overlay, root, model_form_text(value, cursor, error, root.width),
+      hint: "Enter use · Esc",
+      size: {62, 42}
+    )
   end
 
   defp add_overlay(widgets, overlay, root) do
@@ -622,6 +595,25 @@ defmodule Alto.TUI.View do
       },
       percent_width: 62,
       percent_height: 62
+    }
+
+    widgets ++ [{popup, root}]
+  end
+
+  defp add_form(widgets, form, root, text, opts) do
+    {width, height} = Keyword.fetch!(opts, :size)
+
+    popup = %Popup{
+      content: %Paragraph{text: text, wrap: false, style: style(fg: :white, bg: @panel_alt)},
+      block: %Block{
+        title: " #{form.title} │ #{Keyword.fetch!(opts, :hint)} ",
+        borders: [:all],
+        border_type: :rounded,
+        border_style: style(fg: @accent),
+        style: style(bg: @panel_alt)
+      },
+      percent_width: width,
+      percent_height: height
     }
 
     widgets ++ [{popup, root}]

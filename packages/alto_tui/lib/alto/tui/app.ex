@@ -6,7 +6,7 @@ defmodule Alto.TUI.App do
   alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Backend, Selection, State, View, WorkspaceForm}
+  alias Alto.TUI.{Backend, Selection, State, TextForm, View, WorkspaceForm}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -153,7 +153,7 @@ defmodule Alto.TUI.App do
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
     if overlay.kind in [:provider_form, :model_form] do
-      {:noreply, insert_form_text(state, content)}
+      {:noreply, text_form_result(state, TextForm.paste(overlay, content))}
     else
       {:noreply, filter_overlay(state, overlay.filter <> content)}
     end
@@ -1128,10 +1128,10 @@ defmodule Alto.TUI.App do
     do: workspace_form_result(state, WorkspaceForm.key(form, key))
 
   defp overlay_key(%{overlay: %{kind: :provider_form}} = state, key),
-    do: provider_form_key(state, key)
+    do: text_form_result(state, TextForm.key(state.overlay, key))
 
   defp overlay_key(%{overlay: %{kind: :model_form}} = state, key),
-    do: model_form_key(state, key)
+    do: text_form_result(state, TextForm.key(state.overlay, key))
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
 
@@ -1609,28 +1609,26 @@ defmodule Alto.TUI.App do
       model: (profile && profile.default_model) || ""
     }
 
+    stored? = profile && ProviderStore.api_key_saved?(profile, credentials_opts(state))
+
     fields =
       Enum.map([:id, :label, :base_url, :api_key, :model], fn key ->
-        input = ExRatatui.text_input_new()
-        ExRatatui.text_input_set_value(input, Map.fetch!(defaults, key))
-        %{key: key, input: input, locked?: key == :id and not new?}
+        {key, Map.fetch!(defaults, key), key == :id and not new?}
       end)
-
-    stored? = profile && ProviderStore.api_key_saved?(profile, credentials_opts(state))
 
     %{
       state
-      | overlay: %{
-          kind: :provider_form,
-          title: if(new?, do: "add provider", else: "configure #{profile.label}"),
-          fields: fields,
-          field_index: if(new?, do: 0, else: 3),
-          existing_id: profile_id,
-          key_saved?: stored? == true,
-          error: nil,
-          after_save:
-            if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
-        },
+      | overlay:
+          TextForm.new(
+            :provider_form,
+            if(new?, do: "add provider", else: "configure #{profile.label}"),
+            fields,
+            field_index: if(new?, do: 0, else: 3),
+            existing_id: profile_id,
+            key_saved?: stored? == true,
+            after_save:
+              if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
+          ),
         notice: nil
     }
   end
@@ -1673,101 +1671,32 @@ defmodule Alto.TUI.App do
   end
 
   defp open_model_form(state, profile_id) do
-    input = ExRatatui.text_input_new()
-
     %{
       state
       | selected_provider_id: profile_id,
-        overlay: %{
-          kind: :model_form,
-          title: "exact model ID",
-          input: input,
-          profile_id: profile_id,
-          error: nil
-        }
+        overlay:
+          TextForm.new(:model_form, "exact model ID", [{:model, "", false}],
+            profile_id: profile_id
+          )
     }
   end
 
-  defp provider_form_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
+  defp text_form_result(state, :cancel), do: %{state | overlay: nil}
+  defp text_form_result(state, {:edit, form}), do: %{state | overlay: form}
 
-  defp provider_form_key(state, %Key{code: "s", modifiers: modifiers}) do
-    if "ctrl" in modifiers, do: save_provider_form(state), else: edit_provider_field(state, "s")
-  end
+  defp text_form_result(%{overlay: %{kind: :provider_form}} = state, :submit),
+    do: save_provider_form(state)
 
-  defp provider_form_key(state, %Key{code: code}) when code in ["tab", "down"] do
-    move_form_field(state, 1)
-  end
+  defp text_form_result(%{overlay: %{kind: :model_form} = form} = state, :submit) do
+    model = form |> TextForm.value() |> String.trim()
 
-  defp provider_form_key(state, %Key{code: code}) when code in ["back_tab", "up"] do
-    move_form_field(state, -1)
-  end
-
-  defp provider_form_key(state, %Key{code: "enter"}) do
-    if state.overlay.field_index == length(state.overlay.fields) - 1,
-      do: save_provider_form(state),
-      else: move_form_field(state, 1)
-  end
-
-  defp provider_form_key(state, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] or code in ["backspace", "delete", "left", "right", "home", "end"] do
-      edit_provider_field(state, code)
-    else
-      state
-    end
-  end
-
-  defp model_form_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
-
-  defp model_form_key(state, %Key{code: "enter"}) do
-    model = state.overlay.input |> ExRatatui.text_input_get_value() |> String.trim()
-
-    if model == "" do
-      put_in(state.overlay.error, "model ID is required")
-    else
-      %{state | selected_model: model, overlay: nil, notice: "model: #{model}"}
-    end
-  end
-
-  defp model_form_key(state, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] or code in ["backspace", "delete", "left", "right", "home", "end"] do
-      ExRatatui.text_input_handle_key(state.overlay.input, code)
-    end
-
-    state
-  end
-
-  defp move_form_field(state, delta) do
-    count = length(state.overlay.fields)
-    index = rem(state.overlay.field_index + delta + count, count)
-    put_in(state.overlay.field_index, index)
-  end
-
-  defp edit_provider_field(state, code) do
-    field = Enum.at(state.overlay.fields, state.overlay.field_index)
-
-    unless field.locked? do
-      ExRatatui.text_input_handle_key(field.input, code)
-    end
-
-    put_in(state.overlay.error, nil)
-  end
-
-  defp insert_form_text(%{overlay: %{kind: :provider_form}} = state, content) do
-    field = Enum.at(state.overlay.fields, state.overlay.field_index)
-    unless field.locked?, do: ExRatatui.text_input_insert_str(field.input, content)
-    put_in(state.overlay.error, nil)
-  end
-
-  defp insert_form_text(%{overlay: %{kind: :model_form}} = state, content) do
-    ExRatatui.text_input_insert_str(state.overlay.input, content)
-    put_in(state.overlay.error, nil)
+    if model == "",
+      do: put_in(state.overlay.error, "model ID is required"),
+      else: %{state | selected_model: model, overlay: nil, notice: "model: #{model}"}
   end
 
   defp save_provider_form(state) do
-    attrs =
-      Map.new(state.overlay.fields, fn field ->
-        {field.key, ExRatatui.text_input_get_value(field.input)}
-      end)
+    attrs = TextForm.values(state.overlay)
 
     api_key_field = Enum.find(state.overlay.fields, &(&1.key == :api_key))
 
@@ -1802,7 +1731,7 @@ defmodule Alto.TUI.App do
 
   defp handle_overlay_click(%{overlay: %{kind: :provider_form}} = state, row) do
     cond do
-      row in 2..6 -> put_in(state.overlay.field_index, row - 2)
+      row in 2..6 -> %{state | overlay: TextForm.select(state.overlay, row - 2)}
       row == 8 -> save_provider_form(state)
       row == 9 -> %{state | overlay: nil}
       true -> state
@@ -1811,7 +1740,7 @@ defmodule Alto.TUI.App do
 
   defp handle_overlay_click(%{overlay: %{kind: :model_form}} = state, row) do
     cond do
-      row == 5 -> model_form_key(state, %Key{code: "enter"})
+      row == 5 -> text_form_result(state, :submit)
       row == 6 -> %{state | overlay: nil}
       true -> state
     end
