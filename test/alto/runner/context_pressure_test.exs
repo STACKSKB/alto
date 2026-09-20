@@ -5,7 +5,7 @@ defmodule Alto.Runner.ContextPressureTest do
     @behaviour Alto.Context.Reducer
     def compact(_, _, opts) do
       send(opts[:owner], :reduced)
-      {:ok, %{content: "Earlier work summarized.", data: %{}, events: [], records: []}}
+      {:ok, %{content: "Earlier work summarized.", data: %{}}}
     end
   end
 

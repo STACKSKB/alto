@@ -54,8 +54,6 @@ defmodule Alto.Test.ResumeContextFixture do
   defmodule Reducer do
     @behaviour Alto.Context.Reducer
     def compact(_, _, _),
-      do:
-        {:ok,
-         %{content: "Earlier authored test work summarized.", data: %{}, events: [], records: []}}
+      do: {:ok, %{content: "Earlier authored test work summarized.", data: %{}}}
   end
 end

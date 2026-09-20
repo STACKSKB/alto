@@ -18,7 +18,7 @@ defmodule Alto.Context.ReducerTest do
       with {:ok, completion} <-
              Task.async(fn -> model.(%{messages: input.middle, tools: input.tools}) end)
              |> Task.await() do
-        {:ok, %{content: completion.message, data: %{strategy: :custom}, events: [], records: []}}
+        {:ok, %{content: completion.message, data: %{strategy: :custom}}}
       end
     end
   end

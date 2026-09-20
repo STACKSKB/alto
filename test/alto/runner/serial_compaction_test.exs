@@ -188,7 +188,7 @@ defmodule Alto.Runner.SerialCompactionTest do
                  %{"role" => "user", "content" => "Summarize this agent work: " <> input.text}
                ]
              }) do
-        {:ok, %{content: "Domain state: " <> content, data: %{}, events: [], records: []}}
+        {:ok, %{content: "Domain state: " <> content, data: %{}}}
       end
     end
   end
@@ -199,7 +199,7 @@ defmodule Alto.Runner.SerialCompactionTest do
     @impl true
     def compact(input, _model, opts) do
       send(opts[:owner], {:deterministic_input, input.text})
-      {:ok, %{content: "Retained domain state.", data: %{}, events: [], records: []}}
+      {:ok, %{content: "Retained domain state.", data: %{}}}
     end
   end
 
@@ -244,8 +244,11 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
 
-    assert %{"type" => "compaction", "summary" => "squib summary"} =
-             Enum.find(records, &(&1["type"] == "compaction"))
+    compacted_records =
+      Enum.filter(records, &(&1["type"] == "event" and &1["event"] == "context_compacted"))
+
+    assert [%{"data" => encoded}] = compacted_records
+    assert {:ok, %{strategy: :summary, summary: "squib summary"}} = Session.decode_term(encoded)
   end
 
   test "a caller composes a domain-specific context reducer", %{dir: dir} do
@@ -326,7 +329,11 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert :ok = Alto.Context.Transcript.validate(result.messages)
 
     assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
-    assert Enum.count(records, &(&1["type"] == "compaction")) == 2
+
+    assert Enum.count(
+             records,
+             &(&1["type"] == "event" and &1["event"] == "context_compacted")
+           ) == 2
   end
 
   test "a deterministic reducer works without a provider through the public reduction API", %{
@@ -446,12 +453,13 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert result.output == String.duplicate("f", 50)
     assert :ok = Alto.Context.Transcript.validate(result.messages)
 
-    assert %Event{data: data} =
-             Enum.find(result.events, &(&1.type == :context_handoff_created))
+    assert %Event{type: :context_compacted, data: data} =
+             Enum.find(result.events, &(&1.type == :context_compacted))
 
     assert_received {:handoff_event, %Event{type: :context_compaction_progress}}
     refute_received {:handoff_event, %Event{type: :model_delta}}
     refute_received {:handoff_event, %Event{type: :model_reasoning_delta}}
+    assert data.strategy == :handoff
     assert data.next_step == "Return the final answer."
     assert File.read!(data.files.design) == "Keep the runtime bounded.\n"
     assert File.read!(data.files.pointers) == "lib/alto/runner/serial.ex\n"
@@ -459,8 +467,11 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
 
-    assert %{"type" => "handoff", "next_step" => "Return the final answer."} =
-             Enum.find(records, &(&1["type"] == "handoff"))
+    compacted_records =
+      Enum.filter(records, &(&1["type"] == "event" and &1["event"] == "context_compacted"))
+
+    assert [%{"data" => encoded}] = compacted_records
+    assert {:ok, ^data} = Session.decode_term(encoded)
   end
 
   test "compaction stays off unless enabled", %{dir: dir} do

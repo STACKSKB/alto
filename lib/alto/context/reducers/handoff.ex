@@ -4,10 +4,6 @@ defmodule Alto.Context.Reducers.Handoff do
 
   @impl true
   def compact(input, model, _opts) do
-    input.notify.(
-      Alto.Event.live(:context_handoff_started, %{dropped_messages: length(input.middle)})
-    )
-
     request =
       Reducer.request(
         input,
@@ -29,13 +25,8 @@ defmodule Alto.Context.Reducers.Handoff do
 
       data = %{
         strategy: :handoff,
-        reason: input.reason,
-        compaction_count: input.count,
-        dropped_messages: length(input.middle),
-        dropped_bytes: input.middle_bytes,
         source_bytes: byte_size(input.text),
         handoff_bytes: byte_size(rendered),
-        kept_messages: length(input.recent),
         directory: published.directory,
         files: published.files,
         next_step: artifact.next_step
@@ -44,9 +35,7 @@ defmodule Alto.Context.Reducers.Handoff do
       {:ok,
        %{
          content: "[alto handoff: artifacts at #{published.directory}]\n\n" <> rendered,
-         data: data,
-         events: [:context_handoff_created],
-         records: [Alto.Session.handoff_record(Map.put(data, :run_id, input.run_id))]
+         data: data
        }}
     else
       {:error, _} = error -> error

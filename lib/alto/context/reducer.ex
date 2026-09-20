@@ -3,7 +3,8 @@ defmodule Alto.Context.Reducer do
   Structured context reduction. `compact/3` receives pinned/middle/recent
   messages, historical tool schemas, limits and artifact location metadata.
   Its model function is supervised and budgeted by execution; it cannot dispatch
-  tool calls. Return replacement content, event metadata and session records.
+  tool calls. Return `%{content: binary, data: map}`. The host records one
+  durable `context_compacted` event with this metadata after applying the result.
   Built-in reducers use this same contract.
   """
   @callback compact(map(), (map() -> {:ok, map()} | {:error, term()}), keyword()) ::

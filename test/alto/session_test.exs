@@ -102,7 +102,7 @@ defmodule Alto.SessionTest do
              Session.events(id, session_dir: dir, cursor: 9)
   end
 
-  test "completed and compaction records persist outcomes", %{dir: dir} do
+  test "completed records persist outcomes", %{dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 
     assert :ok =
@@ -118,24 +118,9 @@ defmodule Alto.SessionTest do
                session_dir: dir
              )
 
-    assert :ok =
-             Session.append(
-               id,
-               Session.compaction_record(%{
-                 run_id: "run-1",
-                 dropped_messages: 12,
-                 dropped_bytes: 9000,
-                 summary_bytes: 400,
-                 summary: "did things"
-               }),
-               session_dir: dir
-             )
-
-    assert {:ok, [_started, completed, compaction]} = Session.read(id, session_dir: dir)
+    assert {:ok, [_started, completed]} = Session.read(id, session_dir: dir)
     assert completed["outcome"] == "error"
     assert {:ok, {:model_request_failed, :boom}} = Session.decode_term(completed["reason"])
-    assert compaction["summary"] == "did things"
-    assert compaction["dropped_messages"] == 12
   end
 
   test "transcript sidecar round-trips; missing sidecar is explicit", %{dir: dir} do

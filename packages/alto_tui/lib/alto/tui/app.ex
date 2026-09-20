@@ -955,7 +955,10 @@ defmodule Alto.TUI.App do
     State.upsert_entry(state, task_id, key, entry)
   end
 
-  defp do_ingest_event(state, task_id, %Event{type: :context_handoff_created, data: data}) do
+  defp do_ingest_event(state, task_id, %Event{
+         type: :context_compacted,
+         data: %{strategy: :handoff} = data
+       }) do
     files = data |> Map.get(:files, %{}) |> Map.values() |> Enum.join(" · ")
     next = Map.get(data, :next_step, "")
 

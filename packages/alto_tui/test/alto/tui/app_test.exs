@@ -603,6 +603,34 @@ defmodule Alto.TUI.AppTest do
              State.current_entries(state)
   end
 
+  test "canonical handoff compaction event marks context ready and shows artifacts", context do
+    state = state!(context)
+
+    state = %{
+      state
+      | selected_task_id: "task",
+        runs: %{"run" => %{task_id: "task", phase: "compacting context"}}
+    }
+
+    event =
+      Alto.Event.durable(:context_compacted, %{
+        strategy: :handoff,
+        files: %{design: "/tmp/DESIGN.md", pointers: "/tmp/POINTERS.md"},
+        directory: "/tmp/handoff",
+        next_step: "Continue from the saved design."
+      })
+
+    {:noreply, state} = App.handle_info({:alto_tui_event, "run", event}, state)
+
+    assert state.runs["run"].phase == "context ready"
+
+    assert [%{kind: :system, text: text}] = State.current_entries(state)
+    assert text =~ "handoff created"
+    assert text =~ "/tmp/DESIGN.md"
+    assert text =~ "/tmp/POINTERS.md"
+    assert text =~ "Continue from the saved design."
+  end
+
   test "Codex reasoning summaries replace raw deltas and the completed item is authoritative",
        context do
     state = state!(context)

@@ -26,13 +26,12 @@ defmodule Alto.TUI.Activity do
     case to_string(event || "") do
       event
       when event in [
-             "context_handoff_started",
              "context_compacting",
              "context_compaction_progress"
            ] ->
         "compacting context"
 
-      "context_handoff_created" ->
+      "context_compacted" ->
         "context ready"
 
       "model_started" ->

@@ -413,38 +413,6 @@ defmodule Alto.Session do
   end
 
   @doc false
-  @spec compaction_record(map()) :: record()
-  def compaction_record(fields) do
-    %{
-      "v" => @version,
-      "type" => "compaction",
-      "run_id" => Map.get(fields, :run_id),
-      "at_ms" => System.system_time(:millisecond),
-      "dropped_messages" => Map.get(fields, :dropped_messages),
-      "dropped_bytes" => Map.get(fields, :dropped_bytes),
-      "summary_bytes" => Map.get(fields, :summary_bytes),
-      "summary" => Map.get(fields, :summary)
-    }
-  end
-
-  @doc false
-  @spec handoff_record(map()) :: record()
-  def handoff_record(fields) do
-    %{
-      "v" => @version,
-      "type" => "handoff",
-      "run_id" => Map.get(fields, :run_id),
-      "at_ms" => System.system_time(:millisecond),
-      "dropped_messages" => Map.get(fields, :dropped_messages),
-      "dropped_bytes" => Map.get(fields, :dropped_bytes),
-      "handoff_bytes" => Map.get(fields, :handoff_bytes),
-      "directory" => Map.get(fields, :directory),
-      "files" => Map.get(fields, :files),
-      "next_step" => Map.get(fields, :next_step)
-    }
-  end
-
-  @doc false
   @spec forked_record(session_id(), pos_integer(), String.t() | nil) :: record()
   def forked_record(parent_session_id, parent_revision, summary) do
     %{

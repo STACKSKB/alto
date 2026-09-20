@@ -5,7 +5,7 @@ defmodule Alto.Runner.Execution.Transcript do
   Functions update the supplied map directly, so standalone callers may pass
   any map containing the fields needed by the selected operation.
   """
-  alias Alto.{Event, Session, Usage}
+  alias Alto.{Event, Usage}
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Events
@@ -133,12 +133,16 @@ defmodule Alto.Runner.Execution.Transcript do
           if(run.compaction[:artifact_dir],
             do: [artifact_dir: run.compaction[:artifact_dir]],
             else: []
-          ),
-      notify: fn event -> notify(run.event_sink, event) end
+          )
     }
   end
 
   defp execute_reducer(run, input, module, opts, headroom) do
+    notify(
+      run.event_sink,
+      Event.live(:context_compacting, %{dropped_messages: length(input.middle)})
+    )
+
     outcome =
       Alto.Runner.Execution.Call.run(
         fn ->
@@ -214,16 +218,13 @@ defmodule Alto.Runner.Execution.Transcript do
   defp apply_product(
          run,
          input,
-         %{content: content, data: data, events: events, records: records} = product,
+         %{content: content, data: data} = product,
          headroom
        )
-       when is_binary(content) and content != "" and is_map(data) and is_list(events) and
-              is_list(records) do
+       when is_binary(content) and content != "" and is_map(data) do
     replacement = input.pinned ++ [%{"role" => "user", "content" => content}] ++ input.recent
 
-    with true <-
-           String.valid?(content) and Enum.all?(events, &is_atom/1) and
-             Enum.all?(records, &is_map/1),
+    with true <- String.valid?(content),
          true <- valid_product_size?(product, run.compaction[:max_input_bytes]),
          {:ok, run, count} <-
            apply_replacement(
@@ -241,20 +242,7 @@ defmodule Alto.Runner.Execution.Transcript do
           kept_messages: length(input.recent)
         })
 
-      run =
-        Enum.reduce(events ++ [:context_compacted], run, fn type, run ->
-          record_event(run, Event.durable(type, data))
-        end)
-
-      run =
-        Enum.reduce(records, run, fn record, run ->
-          case Session.append(run.session, record, session_dir_opt(run)) do
-            :ok -> run
-            {:error, reason} -> add_persistence_error(run, reason)
-          end
-        end)
-
-      {:ok, run}
+      {:ok, Events.record(run, Event.durable(:context_compacted, data))}
     else
       false -> record_compact_failed(run, :invalid_compaction_result)
       {:error, reason} -> record_compact_failed(run, reason)
@@ -335,9 +323,7 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   defp record_event(run, event), do: Events.record(run, event)
-  defp add_persistence_error(run, reason), do: Events.add_persistence_error(run, reason)
 
-  defp session_dir_opt(run), do: [session_dir: run.session_dir]
   # Internal reducer output is not an assistant answer. Keep progress observable
   # without leaking JSON artifacts (or reducer reasoning) into the conversation.
   defp compaction_sink(sink) do

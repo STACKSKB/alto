@@ -31,7 +31,7 @@ defmodule Alto.Runner.ContextPressureFaultTest do
         end)
 
       send(Keyword.fetch!(opts, :owner), {:reduced_to, byte_size(output)})
-      {:ok, %{content: output, data: %{}, events: [], records: []}}
+      {:ok, %{content: output, data: %{}}}
     end
   end
 
