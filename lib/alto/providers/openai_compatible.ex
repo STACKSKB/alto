@@ -89,59 +89,37 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_messages(messages, supports_images),
-    do: provider_messages(messages, supports_images, [])
-
-  defp provider_messages([], _supports_images, normalized),
-    do: {:ok, Enum.reverse(normalized)}
-
-  defp provider_messages([%{"role" => "tool"} | _] = messages, supports_images, normalized) do
-    {tool_group, rest} = Enum.split_while(messages, &(&1["role"] == "tool"))
-
-    with {:ok, tool_messages, attachments} <-
-           openai_tool_group(tool_group, supports_images) do
-      group =
-        case attachments do
-          [] -> tool_messages
-          attachments -> tool_messages ++ [openai_attachment_message(attachments)]
-        end
-
-      provider_messages(rest, supports_images, Enum.reverse(group, normalized))
-    end
-  end
-
-  defp provider_messages([message | rest], supports_images, normalized) do
-    with {:ok, message} <- provider_message(message, supports_images) do
-      provider_messages(rest, supports_images, [message | normalized])
-    end
-  end
-
-  defp openai_tool_group(messages, supports_images) do
+  defp provider_messages(messages, supports_images) do
     messages
-    |> Enum.reduce_while({:ok, [], []}, fn message, {:ok, normalized, attachments} ->
-      case openai_tool_message(message, supports_images) do
-        {:ok, tool_message, images} ->
-          {:cont, {:ok, [tool_message | normalized], attachments ++ images}}
-
-        {:error, _} = error ->
-          {:halt, error}
-      end
-    end)
+    |> Enum.chunk_by(&match?(%{"role" => "tool"}, &1))
+    |> Alto.Result.traverse(&provider_group(&1, supports_images))
     |> case do
-      {:ok, normalized, attachments} ->
-        {:ok, Enum.reverse(normalized), attachments}
-
-      {:error, _} = error ->
-        error
+      {:ok, groups} -> {:ok, List.flatten(groups)}
+      error -> error
     end
   end
+
+  defp provider_group([%{"role" => "tool"} | _] = messages, supports_images) do
+    with {:ok, results} <-
+           Alto.Result.traverse(messages, &openai_tool_message(&1, supports_images)) do
+      {tools, images} = Enum.unzip(results)
+
+      case List.flatten(images) do
+        [] -> {:ok, tools}
+        attachments -> {:ok, tools ++ [openai_attachment_message(attachments)]}
+      end
+    end
+  end
+
+  defp provider_group(messages, supports_images),
+    do: Alto.Result.traverse(messages, &provider_message(&1, supports_images))
 
   defp openai_tool_message(message, supports_images) do
     message = Map.delete(message, "alto_anthropic_content")
 
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
-        {:ok, message, []}
+        {:ok, {message, []}}
 
       {:ok, content} ->
         images = Enum.filter(content.blocks, &match?(%Content.Image{}, &1))
@@ -161,7 +139,7 @@ defmodule Alto.Providers.OpenAICompatible do
               |> append_attachment_marker(message["tool_call_id"], images)
 
             attachments = Enum.map(images, &{message["tool_call_id"], &1})
-            {:ok, Map.put(message, "content", text), attachments}
+            {:ok, {Map.put(message, "content", text), attachments}}
         end
 
       {:error, reason} ->

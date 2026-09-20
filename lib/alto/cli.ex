@@ -46,17 +46,16 @@ defmodule Alto.CLI do
           true -> execute(options, task)
         end
 
-      case result do
-        :ok -> :ok
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, format_reason(reason)}
-      end
+      format_result(result)
     else
       :help -> :ok
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:error, reason} -> format_result({:error, reason})
     end
   end
+
+  defp format_result(:ok), do: :ok
+  defp format_result({:error, reason}) when is_binary(reason), do: {:error, reason}
+  defp format_result({:error, reason}), do: {:error, format_reason(reason)}
 
   defp execute(options, task_words) do
     with {:ok, task} <- task_text(task_words),
@@ -284,31 +283,21 @@ defmodule Alto.CLI do
   end
 
   defp serve_run_options(options, config, command_mode) do
-    configured = config |> Config.run_options() |> Keyword.drop([:tui])
-
-    with {:ok, provider, provider_timeout} <- provider(options, configured) do
-      run_options =
-        configured
-        |> Keyword.put(:provider, provider)
-        |> configure_provider_timeout(provider_timeout)
-        |> configure_tools(options, command_mode)
-        |> configure_serve_approval(options)
-        |> configure_max_steps(options)
-        |> configure_prompt(options)
-        |> configure_project_instructions(options)
-        |> Keyword.drop([
-          :listeners,
-          :queue,
-          :runs,
-          :sessions,
-          :session_dir,
-          :cwd,
-          :event_sink,
-          :session_id,
-          :tool_context_metadata
-        ])
-
-      {:ok, run_options}
+    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
+      {:ok,
+       run_options
+       |> configure_serve_approval(options)
+       |> Keyword.drop([
+         :listeners,
+         :queue,
+         :runs,
+         :sessions,
+         :session_dir,
+         :cwd,
+         :event_sink,
+         :session_id,
+         :tool_context_metadata
+       ])}
     end
   end
 
@@ -479,25 +468,32 @@ defmodule Alto.CLI do
   end
 
   defp run_options(options, config, command_mode) do
-    configured = config |> Config.run_options() |> Keyword.drop([:tui])
-
-    with {:ok, provider, provider_timeout} <- provider(options, configured) do
+    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
       renderer = Renderer.start(Onboarding.terminal?())
 
       run_options =
-        configured
-        |> Keyword.put(:provider, provider)
-        |> configure_provider_timeout(provider_timeout)
-        |> configure_tools(options, command_mode)
+        run_options
         |> configure_approval(options)
-        |> configure_max_steps(options)
-        |> configure_prompt(options)
-        |> configure_project_instructions(options)
         |> configure_session(options)
         |> Keyword.put(:cwd, File.cwd!())
         |> Alto.Events.attach(&send(renderer, {:event, &1}))
 
       {:ok, run_options, renderer}
+    end
+  end
+
+  defp common_run_options(options, config, command_mode) do
+    configured = config |> Config.run_options() |> Keyword.drop([:tui])
+
+    with {:ok, provider, provider_timeout} <- provider(options, configured) do
+      {:ok,
+       configured
+       |> Keyword.put(:provider, provider)
+       |> configure_provider_timeout(provider_timeout)
+       |> configure_tools(options, command_mode)
+       |> configure_max_steps(options)
+       |> configure_prompt(options)
+       |> configure_project_instructions(options)}
     end
   end
 
