@@ -608,11 +608,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
   end
 
   defp wire(registry, envelope) do
-    Connection.run_command(JSON.encode!(envelope), registry, fn out ->
-      send(self(), {:line, out})
-    end)
-
-    assert_receive {:line, out}, @receive_timeout
+    [out] = Connection.command_lines(JSON.encode!(envelope), registry)
     JSON.decode!(IO.iodata_to_binary(out))
   end
 end
