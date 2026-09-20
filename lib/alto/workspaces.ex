@@ -464,19 +464,6 @@ defmodule Alto.Workspaces do
     end
   end
 
-  # Keep accepting persisted/raw provider snapshots while callers migrate to
-  # the explicit source/metadata wrapper. New providers should omit `source`
-  # from their metadata so the manager does not depend on provider fields.
-  defp normalize_snapshot(snapshot) when is_map(snapshot) do
-    with source when is_binary(source) <- snapshot["source"],
-         :ok <- json_map(snapshot),
-         :ok <- separate_root_for_snapshot(source) do
-      {:ok, %Snapshot{source: Path.expand(source), metadata: snapshot}}
-    else
-      _ -> {:error, :invalid_workspace_snapshot}
-    end
-  end
-
   defp normalize_snapshot(_), do: {:error, :invalid_workspace_snapshot}
 
   defp separate_root_for_snapshot(source) do

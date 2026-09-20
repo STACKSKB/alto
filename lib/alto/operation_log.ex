@@ -594,10 +594,7 @@ defmodule Alto.OperationLog do
   defp encode_recovery(recovery), do: SessionStore.encode_term(recovery)
 
   defp decode_recovery(nil), do: {:ok, nil}
-  defp decode_recovery(%{"$term" => _encoded} = recovery), do: SessionStore.decode_term(recovery)
-  defp decode_recovery(recovery) when is_map(recovery), do: {:ok, recovery}
-  defp decode_recovery(recovery) when is_binary(recovery), do: SessionStore.decode_term(recovery)
-  defp decode_recovery(_recovery), do: {:error, :bad_recovery}
+  defp decode_recovery(recovery), do: SessionStore.decode_term(recovery)
 
   defp validate_max_ops(n) when is_integer(n) and n >= 0, do: :ok
   defp validate_max_ops(n), do: {:error, {:invalid_max_ops, n}}

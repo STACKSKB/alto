@@ -561,17 +561,24 @@ defmodule Alto.OperationLogTest do
       assert :no_intent = OperationLog.status(name3, "op-torn")
     end
 
-    test "middle corruption fails the start loudly", %{dir: dir, id: id} do
+    test "malformed records and untagged recovery payloads fail startup", %{dir: dir, id: id} do
       path = Path.join([dir, "l", id <> ".jsonl"])
       File.mkdir_p!(Path.dirname(path))
-      File.write!(path, "not json\n")
+      untagged = %{"v" => 1, "t" => "intent", "op" => "op", "tool" => "tool", "recovery" => %{}}
 
-      assert {:error, {:ledger_corrupt, ^id, 1}} =
-               OperationLog.start_link(
-                 id: id,
-                 dir: Path.join(dir, "l"),
-                 name: :"ledger_corrupt_#{System.unique_integer([:positive])}"
-               )
+      for {line, reason} <- [
+            {"not json", {:ledger_corrupt, id, 1}},
+            {JSON.encode!(untagged), {:invalid_term_payload, %{}}}
+          ] do
+        File.write!(path, line <> "\n")
+
+        assert {:error, ^reason} =
+                 OperationLog.start_link(
+                   id: id,
+                   dir: Path.join(dir, "l"),
+                   name: :"ledger_corrupt_#{System.unique_integer([:positive])}"
+                 )
+      end
     end
   end
 end
