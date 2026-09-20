@@ -28,7 +28,9 @@ defmodule Alto.Runner.Execution do
   def abort(context, {:cancelled, reason}), do: cancelled(reason, context)
   def abort(context, reason), do: {:error, reason, result(context, nil, :error)}
 
-  alias Alto.Runner.Execution.Children
+  alias Alto.Runner.Execution.{Call, Children, Events, Model}
+  alias Alto.Runner.Execution.Transcript, as: RunTranscript
+  alias Alto.Runner.Execution.Session, as: RunSession
   alias Alto.Effect
   alias Alto.Event
   alias Alto.Runner.Result
@@ -141,7 +143,7 @@ defmodule Alto.Runner.Execution do
 
             outcome = schedule_outcome(outcome, opts)
 
-            persist_session_outcome(run, outcome)
+            RunSession.persist_outcome(run, outcome)
 
           {:error, reason} ->
             {:error, reason, Result.empty(session)}
@@ -173,7 +175,7 @@ defmodule Alto.Runner.Execution do
 
   @doc "Execute at most one effect, returning the next frame or a final outcome."
   def step(%Frame{effects: effects, terminal: terminal}, run) do
-    case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+    case {Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
       {{:cancelled, reason}, _} -> {:done, cancelled(reason, run)}
       {_, {:error, reason}} -> {:done, {:error, reason, result(run, nil, :error)}}
       {:continue, :ok} -> admit_input(effects, run, terminal)
@@ -197,7 +199,7 @@ defmodule Alto.Runner.Execution do
           {:done, {:error, reason, result(run, nil, :error)}}
 
         entry ->
-          case append_message(run, %{"role" => "user", "content" => entry.text}) do
+          case RunTranscript.append(run, %{"role" => "user", "content" => entry.text}) do
             {:ok, next} ->
               :ok = Alto.Input.ack(input, entry.id, max(Budget.remaining(run.budget), 1))
               event = Event.durable(:input_received, entry)
@@ -266,7 +268,7 @@ defmodule Alto.Runner.Execution do
 
           with {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
             Enum.each(ready, fn job ->
-              notify(
+              Alto.Events.notify(
                 run.event_sink,
                 Event.live(:tool_started, %{
                   call_id: job.id,
@@ -339,7 +341,7 @@ defmodule Alto.Runner.Execution do
   defp reserve_effect(%{budget: %{account: nil}} = run), do: Budget.take(run.budget)
 
   defp reserve_effect(run) do
-    case supervised_call(
+    case Call.run(
            fn -> Budget.take(run.budget) end,
            Budget.remaining(run.budget),
            run.cancel_ref
@@ -381,7 +383,7 @@ defmodule Alto.Runner.Execution do
         execute(rest, next_run, terminal)
 
       {:event, event, next_run} ->
-        next_run = record_event(next_run, event)
+        next_run = Events.record(next_run, event)
 
         case call_policy(
                fn ->
@@ -526,7 +528,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp checkpoint_call(fun, run) do
-    case supervised_call(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
+    case Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
       {:ok, value} -> value
       {:error, reason} -> {:error, {:checkpoint_process_failed, reason}}
       {:cancelled, reason} -> {:error, {:cancelled, reason}}
@@ -569,7 +571,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp call_policy(fun, run) do
-    case supervised_call(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
+    case Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
       {:ok, %Transition{} = transition} -> {:ok, transition}
       {:ok, other} -> {:error, {:invalid_transition, other}}
       {:error, reason} -> {:error, {:loop_process_failed, reason}}
@@ -653,7 +655,7 @@ defmodule Alto.Runner.Execution do
 
       {:ok, content} when is_binary(content) ->
         if String.valid?(content),
-          do: append_message(run, %{"role" => "user", "content" => content}),
+          do: RunTranscript.append(run, %{"role" => "user", "content" => content}),
           else: {:error, :invalid_context_message}
 
       _ ->
@@ -697,17 +699,17 @@ defmodule Alto.Runner.Execution do
     if run.model_requests >= run.max_steps do
       {:error, {:model_step_limit, run.max_steps}, run}
     else
-      live_sink = fn event -> notify(run.event_sink, event) end
+      live_sink = fn event -> Alto.Events.notify(run.event_sink, event) end
       {provider, provider_opts} = run.provider
       step = run.model_requests + 1
 
-      notify(
+      Alto.Events.notify(
         run.event_sink,
         Event.live(:model_started, %{step: step})
       )
 
       outcome =
-        stream_with_retries(provider, request, live_sink, provider_opts, run, step)
+        Model.stream(provider, request, live_sink, provider_opts, run, step)
 
       run = %{run | model_requests: run.model_requests + 1}
 
@@ -785,17 +787,6 @@ defmodule Alto.Runner.Execution do
     )
   end
 
-  defp stream_with_retries(provider, request, sink, opts, run, step),
-    do:
-      Alto.Runner.Execution.Model.stream(
-        provider,
-        request,
-        sink,
-        opts,
-        run,
-        step
-      )
-
   defp run_in_workspace(task, opts, manager, snapshot, identity),
     do:
       Alto.Runner.Execution.Workspace.execute(
@@ -813,7 +804,7 @@ defmodule Alto.Runner.Execution do
     with :ok <-
            Alto.Runner.Execution.Tool.check_native_result(data, run.max_tool_result_bytes),
          {:ok, run} <-
-           append_message(run, %{
+           RunTranscript.append(run, %{
              "role" => "user",
              "content" =>
                JSON.encode!(%{
@@ -843,7 +834,7 @@ defmodule Alto.Runner.Execution do
 
         assistant = Map.merge(assistant_message(message, calls), fields)
 
-        case append_message(run, assistant) do
+        case RunTranscript.append(run, assistant) do
           {:ok, run} ->
             request_usage = Usage.normalize(Map.get(completion, :usage))
             run = %{run | usage: Usage.merge(run.usage, request_usage)}
@@ -1035,7 +1026,7 @@ defmodule Alto.Runner.Execution do
         interpreted = batch_outcome(job, outcome, run)
 
         case interpreted do
-          {:event, event, next} -> {record_event(next, event), events ++ [event], failure}
+          {:event, event, next} -> {Events.record(next, event), events ++ [event], failure}
           {:error, reason, next} -> {next, events, failure || reason}
         end
       end)
@@ -1082,13 +1073,13 @@ defmodule Alto.Runner.Execution do
   end
 
   defp dispatch_tool_job(job, run) do
-    case cancellation(run.cancel_ref) do
+    case Call.cancellation(run.cancel_ref) do
       {:cancelled, reason} ->
         {:cancelled, reason, run}
 
       :continue ->
         with {:ok, run} <- History.dispatch(run, [job.op_id]) do
-          notify(
+          Alto.Events.notify(
             run.event_sink,
             Event.live(:tool_started, %{
               call_id: job.id,
@@ -1195,7 +1186,7 @@ defmodule Alto.Runner.Execution do
         do: {:tool_completed, :completed},
         else: {:tool_failed, :failed}
 
-    run = merge_verdict(run, outcome)
+    run = Events.merge_verdict(run, outcome)
 
     case add_outcome_message(run, job.origin, job.id, job.name, job.op_id, status, content) do
       {:ok, run} ->
@@ -1214,7 +1205,7 @@ defmodule Alto.Runner.Execution do
         {:event, Event.durable(type, Map.merge(common, data)), run}
 
       {:error, reason, run} ->
-        run = if outcome == :completed, do: merge_verdict(run, :unknown), else: run
+        run = if outcome == :completed, do: Events.merge_verdict(run, :unknown), else: run
         {:error, reason, run}
     end
   end
@@ -1251,7 +1242,7 @@ defmodule Alto.Runner.Execution do
   defp add_outcome_message(run, :provider, call_id, name, _op_id, _status, content) do
     message = %{"role" => "tool", "tool_call_id" => call_id, "content" => content}
 
-    case append_message(run, message) do
+    case RunTranscript.append(run, message) do
       {:ok, run} -> {:ok, consume_pending_provider_call(run, call_id, name)}
       error -> error
     end
@@ -1268,7 +1259,7 @@ defmodule Alto.Runner.Execution do
         status: status
       })
 
-    append_message(run, %{
+    RunTranscript.append(run, %{
       "role" => "user",
       "content" => [%{"type" => "text", "text" => metadata} | content]
     })
@@ -1285,13 +1276,7 @@ defmodule Alto.Runner.Execution do
         "content" => content
       })
 
-    append_message(run, %{"role" => "user", "content" => context})
-  end
-
-  defp append_message(run, message) do
-    alias Alto.Runner.Execution.Transcript, as: History
-
-    History.append(run, message)
+    RunTranscript.append(run, %{"role" => "user", "content" => context})
   end
 
   # An empty tool_calls array is not part of the Chat Completions shape, and
@@ -1336,11 +1321,6 @@ defmodule Alto.Runner.Execution do
 
   defp fetch_tool(_tools, name), do: {:error, {:invalid_tool_name, name}}
 
-  defp supervised_call(fun, timeout, cancel_ref),
-    do: Alto.Runner.Execution.Call.run(fun, timeout, cancel_ref)
-
-  defp cancellation(ref), do: Alto.Runner.Execution.Call.cancellation(ref)
-
   defp cancelled(reason, run) do
     run =
       case Map.get(run, :in_flight) do
@@ -1352,7 +1332,7 @@ defmodule Alto.Runner.Execution do
                  Map.delete(run, :in_flight)
                ) do
             {:event, event, next} ->
-              record_event(next, event) |> Map.put(:in_flight, run.in_flight)
+              Events.record(next, event) |> Map.put(:in_flight, run.in_flight)
 
             {:error, _, next} ->
               next |> Map.put(:in_flight, run.in_flight)
@@ -1372,15 +1352,10 @@ defmodule Alto.Runner.Execution do
       end
 
     run =
-      record_event(run, Event.durable(:run_cancelled, %{reason: reason, in_flight: in_flight}))
+      Events.record(run, Event.durable(:run_cancelled, %{reason: reason, in_flight: in_flight}))
 
     {:error, {:cancelled, reason}, result(run, nil, :cancelled)}
   end
-
-  defp record_event(run, event), do: Alto.Runner.Execution.Events.record(run, event)
-
-  defp persist_session_outcome(run, outcome),
-    do: Alto.Runner.Execution.Session.persist_outcome(run, outcome)
 
   defp persistence_status([]), do: :ok
   defp persistence_status(errors), do: {:degraded, errors}
@@ -1401,8 +1376,6 @@ defmodule Alto.Runner.Execution do
     "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
   end
 
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
-
   defp tool_summary(run, name, arguments) do
     present(
       run,
@@ -1415,7 +1388,7 @@ defmodule Alto.Runner.Execution do
   defp present(%{tool_presenter: nil}, _callback, fallback, _limit), do: fallback
 
   defp present(run, callback, fallback, limit) do
-    case supervised_call(callback, Budget.timeout(run.budget, run.tool_timeout), run.cancel_ref) do
+    case Call.run(callback, Budget.timeout(run.budget, run.tool_timeout), run.cancel_ref) do
       {:ok, text} when is_binary(text) ->
         Alto.Text.prefix(text, limit)
 
@@ -1474,7 +1447,7 @@ defmodule Alto.Runner.Execution do
       timeout = Keyword.get(opts, :run_timeout, 900_000)
 
       if is_integer(timeout) and timeout > 0 do
-        case supervised_call(
+        case Call.run(
                fn -> Alto.Runner.Execution.Setup.open(task, opts) end,
                timeout,
                Keyword.get(opts, :cancel_ref)
@@ -1526,10 +1499,6 @@ defmodule Alto.Runner.Execution do
       usage: Usage.to_map(run.usage),
       persistence: persistence_status(Enum.reverse(run.persistence_errors))
     }
-  end
-
-  defp merge_verdict(run, class) do
-    Alto.Runner.Execution.Events.merge_verdict(run, class)
   end
 
   defp final_verdict(:empty, :success), do: :completed

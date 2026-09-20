@@ -24,6 +24,36 @@ defmodule Alto.Protocol do
   @version 1
   @max_inspect_bytes 1_000
   @domains ~w(durable live)
+  @command_specs %{
+    "attach" =>
+      {:attach,
+       [
+         {:optional, "run_id", :binary, nil},
+         {:optional, "from_seq", {:integer, 1}, 1},
+         {:optional, "domains", :domains, [:durable, :live]}
+       ]},
+    "session_events" =>
+      {:session_events,
+       [
+         {:required, "session_id", :binary},
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "run_id", :binary, nil}
+       ]},
+    "cancel" => {:cancel, [{:required, "run_id", :binary}, {:optional, "reason", :binary, nil}]},
+    "queue_claim" =>
+      {:queue_claim, [{:optional, "count", {:integer, 1}, 1}, {:optional, "by", :binary, nil}]},
+    "queue_ack" => {:queue_ack, [{:required, "claim_id", :binary}]},
+    "queue_release" => {:queue_release, [{:required, "claim_id", :binary}]},
+    "ops_list" =>
+      {:ops_list,
+       [
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "filter", :filter, nil}
+       ]},
+    "reload" => {:reload, [{:required, "config", :binary}]}
+  }
 
   @type command ::
           {:attach, String.t(), String.t() | nil, pos_integer(), [atom()]}
@@ -119,15 +149,8 @@ defmodule Alto.Protocol do
           {:ok, iodata()} | {:error, :overflow}
   def event(id, run_id, seq, %Event{} = event, max_line_bytes) do
     encode(
-      %{
-        "type" => "event",
-        "id" => id,
-        "run_id" => run_id,
-        "seq" => seq,
-        "domain" => Atom.to_string(event.domain),
-        "at_ms" => event.at_ms,
-        "event" => %{"type" => Atom.to_string(event.type), "data" => encode_term(event.data)}
-      },
+      event_object(seq, event)
+      |> Map.merge(%{"type" => "event", "id" => id, "run_id" => run_id}),
       max_line_bytes
     )
   end
@@ -306,14 +329,6 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object("attach", id, object) do
-    with {:ok, run_id} <- optional_binary(object, "run_id"),
-         {:ok, from_seq} <- optional_integer(object, "from_seq", 1, 1),
-         {:ok, domains} <- optional_domains(object, "domains") do
-      {:ok, {:attach, id, run_id, from_seq, domains}}
-    end
-  end
-
   defp decode_object("start_run", id, object) do
     if Map.has_key?(object, "overrides") do
       {:error, :unsupported}
@@ -343,59 +358,10 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object("session_events", id, object) do
-    with {:ok, session_id} <- required_binary(object, "session_id"),
-         {:ok, limit} <- optional_integer(object, "limit", 20, 1),
-         {:ok, cursor} <- optional_integer(object, "cursor", 0, 0),
-         {:ok, run_id} <- optional_binary(object, "run_id") do
-      {:ok, {:session_events, id, session_id, limit, cursor, run_id}}
-    end
-  end
-
-  defp decode_object("cancel", id, object) do
-    with {:ok, run_id} <- required_binary(object, "run_id"),
-         {:ok, reason} <- optional_binary(object, "reason") do
-      {:ok, {:cancel, id, run_id, reason}}
-    end
-  end
-
   defp decode_object("approval_response", id, object) do
     with {:ok, request_id} <- required_binary(object, "request_id"),
          {:ok, decision} <- decision(object, "decision") do
       {:ok, {:approval_response, id, request_id, decision}}
-    end
-  end
-
-  defp decode_object("queue_claim", id, object) do
-    with {:ok, count} <- optional_integer(object, "count", 1, 1),
-         {:ok, by} <- optional_binary(object, "by") do
-      {:ok, {:queue_claim, id, count, by}}
-    end
-  end
-
-  defp decode_object("queue_ack", id, object) do
-    with {:ok, claim_id} <- required_binary(object, "claim_id") do
-      {:ok, {:queue_ack, id, claim_id}}
-    end
-  end
-
-  defp decode_object("queue_release", id, object) do
-    with {:ok, claim_id} <- required_binary(object, "claim_id") do
-      {:ok, {:queue_release, id, claim_id}}
-    end
-  end
-
-  defp decode_object("ops_list", id, object) do
-    with {:ok, limit} <- optional_integer(object, "limit", 20, 1),
-         {:ok, cursor} <- optional_integer(object, "cursor", 0, 0),
-         {:ok, filter} <- optional_filter(object, "filter") do
-      {:ok, {:ops_list, id, limit, cursor, filter}}
-    end
-  end
-
-  defp decode_object("reload", id, object) do
-    with {:ok, config} <- required_binary(object, "config") do
-      {:ok, {:reload, id, config}}
     end
   end
 
@@ -412,7 +378,47 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object(_type, id, _object), do: {:error, {:unknown_type, id}}
+  defp decode_object(type, id, object) do
+    case @command_specs do
+      %{^type => {command, fields}} ->
+        case Alto.Result.traverse(fields, &decode_field(object, &1)) do
+          {:ok, values} -> {:ok, List.to_tuple([command, id | values])}
+          error -> error
+        end
+
+      _ ->
+        {:error, {:unknown_type, id}}
+    end
+  end
+
+  defp decode_field(object, {:required, key, :binary}), do: required_binary(object, key)
+
+  defp decode_field(object, {:optional, key, type, default}) do
+    case Map.get(object, key) do
+      nil -> {:ok, default}
+      value -> validate_field(value, type, default)
+    end
+  end
+
+  defp validate_field(value, :binary, _default) when is_binary(value), do: {:ok, value}
+
+  defp validate_field(value, {:integer, minimum}, _default)
+       when is_integer(value) and value >= minimum,
+       do: {:ok, value}
+
+  defp validate_field(value, :filter, _default)
+       when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"],
+       do: {:ok, value}
+
+  defp validate_field(domains, :domains, _default) when is_list(domains) and domains != [] do
+    if Enum.all?(domains, &(&1 in @domains)) do
+      {:ok, Enum.map(domains, &String.to_existing_atom/1)}
+    else
+      {:error, :invalid}
+    end
+  end
+
+  defp validate_field(_value, _type, _default), do: {:error, :invalid}
 
   defp required_binary(object, key) do
     case Map.get(object, key) do
@@ -426,45 +432,6 @@ defmodule Alto.Protocol do
       nil -> {:ok, nil}
       value when is_binary(value) -> {:ok, value}
       _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_integer(object, key, default, minimum) do
-    case Map.get(object, key) do
-      nil -> {:ok, default}
-      value when is_integer(value) and value >= minimum -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_filter(object, key) do
-    case Map.get(object, key) do
-      nil ->
-        {:ok, nil}
-
-      value
-      when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"] ->
-        {:ok, value}
-
-      _other ->
-        {:error, :invalid}
-    end
-  end
-
-  defp optional_domains(object, key) do
-    case Map.get(object, key) do
-      nil ->
-        {:ok, [:durable, :live]}
-
-      domains when is_list(domains) ->
-        if domains != [] and Enum.all?(domains, &(&1 in @domains)) do
-          {:ok, Enum.map(domains, &String.to_existing_atom/1)}
-        else
-          {:error, :invalid}
-        end
-
-      _other ->
-        {:error, :invalid}
     end
   end
 
