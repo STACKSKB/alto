@@ -5,11 +5,7 @@ defmodule Alto.Runner.Execution.Setup do
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   require Logger
-  @default_provider_retries 0
-  @default_max_compactions 1
-  @default_compaction_keep_messages 10
-  @default_compaction_max_summary_bytes 8_000
-  @default_compaction_max_handoff_bytes 24_000
+
   @limits_options [
     max_steps: [type: :pos_integer, default: 32],
     provider_timeout: [type: :pos_integer, default: 125_000],
@@ -18,7 +14,12 @@ defmodule Alto.Runner.Execution.Setup do
     max_approval_details_bytes: [type: :pos_integer, default: 64_000],
     max_tool_result_bytes: [type: :pos_integer, default: 64_000],
     max_transcript_bytes: [type: :pos_integer, default: 8_000_000],
-    max_events: [type: :pos_integer, default: 1_000]
+    max_events: [type: :pos_integer, default: 1_000],
+    provider_retries: [type: :non_neg_integer, default: 0],
+    agent_depth: [type: :non_neg_integer, default: 0],
+    resume_snapshot: [type: :boolean, default: true],
+    session_history: [type: {:in, [:completed, :settled]}, default: :completed],
+    max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
   ]
   @limits_schema NimbleOptions.new!(@limits_options)
 
@@ -37,9 +38,6 @@ defmodule Alto.Runner.Execution.Setup do
          :ok <- Alto.Context.Policy.validate(spec.context),
          :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
          :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
-         :ok <- validate_session_history(Keyword.get(opts, :session_history, :completed)),
-         :ok <-
-           validate_conversation_limit(Keyword.get(opts, :max_conversation_bytes, 128_000_000)),
          {:ok, budget} <- resolve_budget(opts),
          {:ok, child_limits} <-
            resolve_child_policy(
@@ -51,13 +49,7 @@ defmodule Alto.Runner.Execution.Setup do
          {:ok, provider} <- provider,
          {:ok, approval} <- approval,
          :ok <- validate_directory(cwd),
-         {:ok, provider_retries} <-
-           normalize_retries(Keyword.get(opts, :provider_retries, @default_provider_retries)),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
-         {:ok, agent_depth} <- normalize_agent_depth(Keyword.get(opts, :agent_depth, 0)),
-         {:ok, _agent_identity} <- normalize_agent_identity(Keyword.get(opts, :agent_identity)),
-         {:ok, resume_snapshot} <-
-           normalize_resume_snapshot(Keyword.get(opts, :resume_snapshot, true)),
          :ok <- validate_session_dir(Keyword.get(opts, :session_dir)),
          {:ok, tool_map, definitions} <- Alto.Tool.Registry.build(tools),
          {:ok, definitions, model_exposure} <-
@@ -74,6 +66,7 @@ defmodule Alto.Runner.Execution.Setup do
            build_run(
              Map.merge(limits, %{
                spec: spec,
+               compaction: compaction,
                child_limits: child_limits,
                provider: provider,
                tools: tool_map,
@@ -87,12 +80,7 @@ defmodule Alto.Runner.Execution.Setup do
              cwd,
              opts
            ) do
-      init_run_extensions(run, opts, task,
-        provider_retries: provider_retries,
-        compaction: compaction,
-        agent_depth: agent_depth,
-        resume_snapshot: resume_snapshot
-      )
+      persist_start(run, opts, task)
     end
   end
 
@@ -123,8 +111,6 @@ defmodule Alto.Runner.Execution.Setup do
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       runner_options: Keyword.get(opts, :runner_options, []),
       input: Keyword.get(opts, :input),
-      session_history: Keyword.get(opts, :session_history, :completed),
-      max_conversation_bytes: Keyword.get(opts, :max_conversation_bytes, 128_000_000),
       resolved_operations: [],
       history_digest: nil,
       resume_context_observation:
@@ -156,37 +142,31 @@ defmodule Alto.Runner.Execution.Setup do
       request_model_tools: nil,
       event_sink: Keyword.get(opts, :event_sink, fn _event -> :ok end),
       cancel_ref: Keyword.get(opts, :cancel_ref),
-      session: nil,
-      session_dir: nil,
-      compaction: false,
+      session: Keyword.get(opts, :session),
+      session_dir: Keyword.get(opts, :session_dir),
       compacted?: false,
       compaction_count: 0,
-      provider_retries: @default_provider_retries,
       retry_policy: Keyword.get(opts, :retry_policy),
       tool_presenter: Keyword.get(opts, :tool_presenter),
-      agent_depth: 0,
       agent_identity: agent_identity,
-      max_agent_depth: 0,
+      max_agent_depth:
+        min(
+          settings.child_limits.max_depth,
+          Keyword.get(opts, :parent_max_agent_depth, settings.child_limits.max_depth)
+        ),
       workspaces:
         Keyword.get(opts, :parent_workspaces) ||
           settings.child_limits.workspaces,
       subagent_journal:
         Keyword.get(opts, :parent_subagent_journal) ||
           settings.child_limits.journal,
-      resume_snapshot: true,
-      tool_specs: [],
-      prompt_config: []
+      tool_specs: Keyword.get(opts, :tools, []),
+      prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
     }
 
     with {:ok, _} <- normalize_agent_identity(agent_identity),
          do: {:ok, Map.merge(initial, settings)}
   end
-
-  defp validate_session_history(mode) when mode in [:completed, :settled], do: :ok
-  defp validate_session_history(mode), do: {:error, {:invalid_session_history, mode}}
-
-  defp validate_conversation_limit(limit) when is_integer(limit) and limit > 0, do: :ok
-  defp validate_conversation_limit(limit), do: {:error, {:invalid_max_conversation_bytes, limit}}
 
   # A provider is model capability state: generic rule runs are constructed
   # without one and fail closed only if a model effect is requested.
@@ -231,28 +211,20 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp resume_revision(opts) do
-    if Keyword.has_key?(opts, :parent_transcript_revision) do
-      Keyword.fetch!(opts, :parent_transcript_revision)
-    else
-      ordinary_resume_revision(opts)
-    end
-  end
+    case {Keyword.fetch(opts, :parent_transcript_revision), Keyword.get(opts, :checkpoint),
+          Keyword.get(opts, :resume)} do
+      {{:ok, revision}, _, _} ->
+        revision
 
-  defp ordinary_resume_revision(opts) do
-    case Keyword.get(opts, :checkpoint) do
-      {%{"transcript_revision" => revision}, _decision}
+      {_, {%{"transcript_revision" => revision}, _}, _}
       when is_integer(revision) and revision >= 0 ->
         revision
 
-      _ ->
-        transcript_resume_revision(opts)
-    end
-  end
+      {_, _, %{revision: revision}} when is_integer(revision) and revision >= 1 ->
+        revision
 
-  defp transcript_resume_revision(opts) do
-    case Keyword.get(opts, :resume) do
-      %{revision: revision} when is_integer(revision) and revision >= 1 -> revision
-      _other -> :any
+      _ ->
+        :any
     end
   end
 
@@ -402,23 +374,6 @@ defmodule Alto.Runner.Execution.Setup do
     if File.dir?(path), do: :ok, else: {:error, {:invalid_cwd, path}}
   end
 
-  defp non_negative(_name, value) when is_integer(value) and value >= 0, do: :ok
-  defp non_negative(name, value), do: {:error, {:invalid_option, name, value}}
-
-  defp normalize_retries(value) do
-    case non_negative(:provider_retries, value) do
-      :ok -> {:ok, value}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp normalize_agent_depth(value) do
-    case non_negative(:agent_depth, value) do
-      :ok -> {:ok, value}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp normalize_agent_identity(nil), do: {:ok, nil}
 
   defp normalize_agent_identity(%{root_run_id: root_run_id, path: path} = identity)
@@ -435,18 +390,15 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_agent_identity(other),
     do: {:error, {:invalid_option, :agent_identity, other}}
 
-  defp normalize_resume_snapshot(value) when value in [true, false], do: {:ok, value}
-  defp normalize_resume_snapshot(other), do: {:error, {:invalid_option, :resume_snapshot, other}}
-
   @compaction_schema [
     strategy: [type: :any, default: :summary],
-    max_compactions: [type: :pos_integer, default: @default_max_compactions],
-    keep_recent_messages: [type: :pos_integer, default: @default_compaction_keep_messages],
+    max_compactions: [type: :pos_integer, default: 1],
+    keep_recent_messages: [type: :pos_integer, default: 10],
     keep_initial_messages: [type: :non_neg_integer, default: 0],
     max_input_bytes: [type: :pos_integer, default: 100_000],
     request_mode: [type: {:in, [:transcript, :isolated]}, default: :transcript],
-    max_summary_bytes: [type: :pos_integer, default: @default_compaction_max_summary_bytes],
-    max_handoff_bytes: [type: :pos_integer, default: @default_compaction_max_handoff_bytes],
+    max_summary_bytes: [type: :pos_integer, default: 8_000],
+    max_handoff_bytes: [type: :pos_integer, default: 24_000],
     artifact_dir: [type: :any, default: nil]
   ]
 
@@ -482,26 +434,7 @@ defmodule Alto.Runner.Execution.Setup do
   defp validate_session_dir(dir) when is_binary(dir), do: :ok
   defp validate_session_dir(other), do: {:error, {:invalid_session_dir, other}}
 
-  defp init_run_extensions(run, opts, task, extensions) do
-    run = %{
-      run
-      | session: Keyword.get(opts, :session),
-        session_dir: Keyword.get(opts, :session_dir),
-        compaction: Keyword.fetch!(extensions, :compaction),
-        compacted?: false,
-        compaction_count: 0,
-        provider_retries: Keyword.fetch!(extensions, :provider_retries),
-        agent_depth: Keyword.fetch!(extensions, :agent_depth),
-        resume_snapshot: Keyword.fetch!(extensions, :resume_snapshot),
-        max_agent_depth:
-          min(
-            run.child_limits.max_depth,
-            Keyword.get(opts, :parent_max_agent_depth, run.child_limits.max_depth)
-          ),
-        tool_specs: Keyword.get(opts, :tools, []),
-        prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
-    }
-
+  defp persist_start(run, opts, task) do
     if run.session do
       {provider_module, model} = provider_identity(run.provider)
 
@@ -511,7 +444,7 @@ defmodule Alto.Runner.Execution.Setup do
           parent_run_id: Keyword.get(opts, :parent_run_id),
           parent_session_id: Keyword.get(opts, :parent_session_id),
           agent_identity: run.agent_identity,
-          subagent: Keyword.fetch!(extensions, :agent_depth) > 0,
+          subagent: run.agent_depth > 0,
           session_owner: run.agent_depth == 0 or run.resume_snapshot,
           task: task,
           provider: provider_module,
