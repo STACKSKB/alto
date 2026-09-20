@@ -80,19 +80,10 @@ defmodule Alto.Session do
   def create(task, meta \\ %{}, opts \\ []) do
     id = generate_id()
 
-    record = %{
-      "v" => @version,
-      "type" => "started",
-      "at_ms" => System.system_time(:millisecond),
-      "run_id" => Map.get(meta, :run_id),
-      "parent_run_id" => Map.get(meta, :parent_run_id),
-      "subagent" => false,
-      "session_owner" => true,
-      "task" => preview_task(task),
-      "provider" => Map.get(meta, :provider),
-      "model" => Map.get(meta, :model),
-      "cwd" => Map.get(meta, :cwd)
-    }
+    record =
+      meta
+      |> Map.merge(%{task: task, subagent: false, session_owner: true})
+      |> started_record()
 
     case append(id, record, opts) do
       :ok -> {:ok, id}
@@ -143,7 +134,7 @@ defmodule Alto.Session do
     with :ok <- validate_id(id) do
       path = log_path(dir(opts), id)
 
-      case bounded_read(path, @max_log_bytes) do
+      case Alto.BoundedFile.read(path, @max_log_bytes) do
         {:ok, contents} -> decode_lines(contents, id)
         {:error, :enoent} -> {:error, {:session_not_found, id}}
         {:error, {:too_large, size, max}} -> {:error, {:session_too_large, id, size, max}}
@@ -174,28 +165,9 @@ defmodule Alto.Session do
     with :ok <- validate_id(id),
          {:ok, cursor} <- event_cursor(Keyword.get(opts, :cursor, 0)),
          {:ok, limit} <- event_limit(Keyword.get(opts, :limit, 100)),
-         {:ok, run_id} <- event_run_id(Keyword.get(opts, :run_id)) do
-      path = log_path(dir(opts), id)
-
-      case bounded_read(path, @max_log_bytes) do
-        {:ok, contents} ->
-          case decode_lines(contents, id) do
-            {:ok, records} ->
-              page_events(records, cursor, limit, run_id)
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-
-        {:error, :enoent} ->
-          {:error, {:session_not_found, id}}
-
-        {:error, {:too_large, size, max}} ->
-          {:error, {:session_too_large, id, size, max}}
-
-        {:error, reason} ->
-          {:error, {:session_read_failed, reason}}
-      end
+         {:ok, run_id} <- event_run_id(Keyword.get(opts, :run_id)),
+         {:ok, records} <- read(id, opts) do
+      page_events(records, cursor, limit, run_id)
     end
   end
 
@@ -594,8 +566,6 @@ defmodule Alto.Session do
       {:error, _error} -> {:error, {:session_corrupt, id, number}}
     end
   end
-
-  defp bounded_read(path, max), do: Alto.BoundedFile.read(path, max)
 
   defp safe_binary_to_term(binary) do
     case :erlang.binary_to_term(binary, [:safe, :used]) do
