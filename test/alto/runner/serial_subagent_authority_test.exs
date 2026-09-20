@@ -7,24 +7,44 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
+    @impl true
     def init(%{spawn: spawn}, _),
       do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
 
+    @impl true
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
       do: Transition.stop(state, data)
 
     def handle_event(_, state, _), do: Transition.continue(state)
+
+    @impl true
+    def resolve_child_provider(key, spec) do
+      case Keyword.fetch!(spec.driver_options, :child_providers) do
+        %{^key => provider} -> {:ok, provider}
+        _ -> {:error, :unknown_profile}
+      end
+    end
   end
 
   defmodule BatchParentLoop do
     @behaviour Alto.Loop
+    @impl true
     def init(%{spawns: spawns}, _),
       do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: spawns})])
 
+    @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _),
       do: Transition.stop(state, {:completed, data})
 
     def handle_event(_, state, _), do: Transition.continue(state)
+
+    @impl true
+    def resolve_child_provider(key, spec) do
+      case Keyword.fetch!(spec.driver_options, :child_providers) do
+        %{^key => provider} -> {:ok, provider}
+        _ -> {:error, :unknown_profile}
+      end
+    end
   end
 
   defmodule SpawnLoop do
@@ -122,8 +142,8 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     end
   end
 
-  defp parent_loop(depth, driver \\ ParentLoop),
-    do: Alto.loop(driver, subagents: Alto.Subagents.bounded(max_depth: depth))
+  defp parent_loop(depth, driver \\ ParentLoop, opts \\ []),
+    do: Alto.loop(driver, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
 
   test "child tools are an exact normalized subset and cannot add or replace capabilities" do
     for child_tools <- [[ExtraTool], [ReplacementSafeTool]] do
@@ -158,7 +178,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
     {:ok, handle} =
       Alto.start(
-        %{spawn: %{id: "child", task: "block", provider: {BlockingProvider, owner: owner}}},
+        %{spawn: %{id: "child", task: "block"}},
         loop: parent_loop(1),
         provider: {BlockingProvider, owner: owner}
       )
@@ -171,14 +191,14 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
   test "child cannot widen inherited depth by requesting a deeper policy" do
     owner = self()
-    grandchild = %{id: "grand", task: "must not run", provider: {MarkProvider, owner: owner}}
+    grandchild = %{id: "grand", task: "must not run"}
     child_loop = Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 100))
 
     assert {:ok, result} =
              Alto.run(
                %{spawn: %{id: "child", task: %{spawn: grandchild}, loop: child_loop}},
                loop: parent_loop(1),
-               provider: {UsageProvider, usage: %{}}
+               provider: {MarkProvider, owner: owner}
              )
 
     refute_received :grandchild_provider_called
@@ -202,20 +222,31 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     one = %{
       id: "one",
       task: "one",
-      provider: {UsageProvider, usage: %{"input_tokens" => 2, "output_tokens" => 3}}
+      profile_key: "usage-one"
     }
 
     two = %{
       id: "two",
       task: "two",
-      provider: {UsageProvider, usage: %{"input_tokens" => 5, "output_tokens" => 7}}
+      profile_key: "usage-two"
     }
 
-    assert {:ok, single} = Alto.run(%{spawn: one}, loop: parent_loop(1))
+    providers = %{
+      "usage-one" => {UsageProvider, usage: %{"input_tokens" => 2, "output_tokens" => 3}},
+      "usage-two" => {UsageProvider, usage: %{"input_tokens" => 5, "output_tokens" => 7}}
+    }
+
+    assert {:ok, single} =
+             Alto.run(%{spawn: one}, loop: parent_loop(1, ParentLoop, child_providers: providers))
+
     assert single.usage.input_tokens == 2
     assert single.usage.output_tokens == 3
 
-    assert {:ok, batch} = Alto.run(%{spawns: [one, two]}, loop: parent_loop(1, BatchParentLoop))
+    assert {:ok, batch} =
+             Alto.run(%{spawns: [one, two]},
+               loop: parent_loop(1, BatchParentLoop, child_providers: providers)
+             )
+
     assert batch.usage.input_tokens == 7
     assert batch.usage.output_tokens == 10
   end

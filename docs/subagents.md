@@ -39,8 +39,10 @@ Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
 
 `spawn_agents/1` accepts `%{agents: [...]}`. Each child is an atom-keyed map;
 string, mixed, and unknown keys are rejected. Each entry requires `:id` and
-`:task`, with optional provider,
-loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
+`:task`, with optional `:profile_key`, loop, tools, model tools, maximum steps,
+and system prompt. IDs must be unique. A named provider is resolved by the
+parent loop's `resolve_child_provider(profile_key, parent_spec)` callback on both
+initial dispatch and recovery; raw provider configuration is rejected.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
 `reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.

@@ -17,7 +17,6 @@ defmodule Alto.Runner.Execution.Children do
                   max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
                   tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
                   loop: [type: {:or, [nil, {:struct, Alto.Loop.Spec}]}, default: nil],
-                  provider: [type: :any, default: nil],
                   profile_key: [type: {:or, [nil, :string]}, default: nil],
                   system_prompt: [type: {:or, [nil, :string]}, default: nil],
                   model_tools: [type: {:or, [nil, {:list, :any}]}, default: nil]
@@ -27,9 +26,8 @@ defmodule Alto.Runner.Execution.Children do
     with true <- Enum.all?(Map.keys(data), &is_atom/1),
          {:ok, values} <- NimbleOptions.validate(Map.to_list(data), @spawn_schema),
          spec <- Map.new(values),
-         :ok <- validate_spawn_constraints(spec),
-         {:ok, provider} <- normalize_child_provider(spec.provider) do
-      {:ok, %{spec | provider: provider}}
+         :ok <- validate_spawn_constraints(spec) do
+      {:ok, spec}
     else
       false ->
         {:error, :spawn_fields_must_be_atoms}
@@ -66,15 +64,6 @@ defmodule Alto.Runner.Execution.Children do
 
       true ->
         :ok
-    end
-  end
-
-  defp normalize_child_provider(nil), do: {:ok, nil}
-
-  defp normalize_child_provider(provider) do
-    case normalize_provider(provider, []) do
-      {:ok, normalized} -> {:ok, normalized}
-      {:error, reason} -> {:error, {:invalid_spawn_field, :provider, reason}}
     end
   end
 
@@ -348,15 +337,15 @@ defmodule Alto.Runner.Execution.Children do
   # Resource setup/capture are bounded, cancellable operations. Worker execution
   # stays in this owned run process, holding the resource lock until it returns.
   defp start_subagent(spec, run) do
-    provider = spec.provider || run.provider
+    with {:ok, provider} <- resolve_child_provider(spec, run) do
+      if is_nil(provider) and is_nil(spec.loop) do
+        {:error, :provider_required}
+      else
+        sub_opts = child_options(spec, run, provider)
 
-    if is_nil(provider) and is_nil(spec.loop) do
-      {:error, :provider_required}
-    else
-      sub_opts = child_options(spec, run, provider)
-
-      with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run) do
-        Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+        with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run) do
+          Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+        end
       end
     end
   end
@@ -395,7 +384,7 @@ defmodule Alto.Runner.Execution.Children do
         tool_presenter: run.tool_presenter,
         checkpoint_version: run.checkpoint_version,
         parent_expires_at_ms: run.parent_expires_at_ms,
-        child_profile: checkpoint_profile(spec, run),
+        child_profile: checkpoint_profile(spec),
         runner_options: run.runner_options,
         tools: subagent_tools(spec.tools, run),
         approval: run.approval,
@@ -438,38 +427,19 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  # Retain only the profile key, never the resolved provider configuration.
-  # Unnamed overrides remain executable but cannot independently checkpoint.
-  defp checkpoint_profile(spec, run) do
-    profile =
-      spec
-      |> Map.drop([:workspace_assignment, :subagent_ticket, :resume_data])
-      |> Map.put(:provider, nil)
+  # The retained profile contains only the trusted resolver key, never provider
+  # configuration or credentials.
+  defp checkpoint_profile(spec),
+    do: Map.drop(spec, [:workspace_assignment, :subagent_ticket, :resume_data])
 
-    case {spec.provider, spec.profile_key} do
-      {nil, nil} ->
-        profile
+  defp resolve_child_provider(%{profile_key: nil}, run), do: {:ok, run.provider}
 
-      {_, nil} ->
-        :child_provider_requires_profile_key
-
-      {provider, key} ->
-        case resolve_named_provider(key, run) do
-          {:ok, ^provider} -> profile
-          _ -> :child_provider_profile_mismatch
-        end
+  defp resolve_child_provider(%{profile_key: key}, run) when is_binary(key) do
+    case resolve_named_provider(key, run) do
+      {:ok, nil} -> {:ok, run.provider}
+      result -> result
     end
   end
-
-  defp resolve_child_profile(%{profile_key: nil, provider: nil} = spec, _run), do: {:ok, spec}
-
-  defp resolve_child_profile(%{profile_key: key, provider: nil} = spec, run)
-       when is_binary(key) do
-    with {:ok, provider} <- resolve_named_provider(key, run),
-         do: {:ok, %{spec | provider: provider}}
-  end
-
-  defp resolve_child_profile(_, _), do: {:error, :invalid_child_profile}
 
   defp resolve_named_provider(key, run) do
     driver = run.spec.driver
@@ -530,7 +500,6 @@ defmodule Alto.Runner.Execution.Children do
   defp resume_child(entry, journal, run) do
     with {:ok, binding} <- Alto.Runner.Checkpoint.child_binding(entry.checkpoint),
          {:ok, spec} <- validate_spawn(binding.profile),
-         {:ok, spec} <- resolve_child_profile(spec, run),
          :ok <- validate_subagent_tools(spec.tools, run),
          true <- spec.id == entry.id,
          {:ok, handle} <-

@@ -488,8 +488,7 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   test "named child providers are re-resolved without retaining provider credentials", context do
-    first_provider = {Provider, api_key: "first-secret"}
-    :persistent_term.put({Parent, :provider}, first_provider)
+    :persistent_term.put({Parent, :provider}, {Provider, api_key: "first-secret"})
     :persistent_term.put({Provider, :observer}, self())
 
     on_exit(fn ->
@@ -498,13 +497,13 @@ defmodule Alto.Runner.ChildContinuationTest do
     end)
 
     options = opts(context, Alto.Runner.Serial)
-    child = %{id: "one", task: "work", provider: first_provider, profile_key: "worker"}
+    child = %{id: "one", task: "work", profile_key: "worker"}
     assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [child]}, options)
     assert_receive {:provider_key, "first-secret"}, 2_000
     {identity, batch} = journal(context, parked)
     {:ok, [entry]} = Continuation.suspended(batch)
     {:ok, binding} = Alto.Runner.Checkpoint.child_binding(entry.checkpoint)
-    assert binding.profile.provider == nil
+    refute Map.has_key?(binding.profile, :provider)
     assert binding.profile.profile_key == "worker"
     refute inspect(binding) =~ "first-secret"
     refute inspect(entry.checkpoint) =~ "first-secret"

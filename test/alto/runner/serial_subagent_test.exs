@@ -190,15 +190,11 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "the child inherits provider, tools, and approval by default", %{dir: dir} do
-    test_pid = self()
-
-    child_provider = {EchoCallProvider, []}
-
     assert {:ok, result} =
              Alto.run(
-               %{spawn: %{id: "sub-1", task: "do the echo", provider: child_provider}},
+               %{spawn: %{id: "sub-1", task: "do the echo"}},
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {EchoCallProvider, []},
                tools: [EchoTool],
                approval: Alto.Approvals.DenyAll,
                session: :new,
@@ -229,12 +225,11 @@ defmodule Alto.Runner.SerialSubagentTest do
                %{
                  spawn: %{
                    id: "sub-1",
-                   task: "guarded",
-                   provider: {GuardedEchoCallProvider, test_pid: test_pid}
+                   task: "guarded"
                  }
                },
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {GuardedEchoCallProvider, test_pid: test_pid},
                tools: [{GuardedEchoTool, test_pid: test_pid}],
                approval: Alto.Approvals.DenyAll,
                session: :new,
@@ -246,20 +241,17 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "an explicit tool set overrides inheritance", %{dir: dir} do
-    test_pid = self()
-
     assert {:ok, result} =
              Alto.run(
                %{
                  spawn: %{
                    id: "sub-1",
                    task: "no tools",
-                   tools: [],
-                   provider: {EchoCallProvider, []}
+                   tools: []
                  }
                },
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {EchoCallProvider, []},
                tools: [EchoTool],
                session: :new,
                session_dir: dir

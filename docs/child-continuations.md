@@ -5,13 +5,13 @@ budget account and a checkpoint version can park while individual children wait
 for approval. Automatic and manual execution use the same boundaries. Child loops must
 implement the loop checkpoint callbacks; the original normalized child spawn
 profile must be portable. Inherited providers remain trusted host configuration.
-For an explicit worker provider override, include a bounded `profile_key` in the
-spawn request and implement the pure optional parent loop callback
+For a worker provider override, include a bounded `profile_key` in the spawn
+request and implement the pure optional parent loop callback
 `resolve_child_provider(profile_key, parent_spec)`. It returns `{:ok, provider}`
-(or `{:ok, nil}` to inherit). The initial override must match that callback's
-resolution. Only the profile key is retained; provider options and credentials
-are excluded from the child profile and resolved again from the current trusted
-parent during recovery. Unnamed explicit overrides cannot independently suspend.
+(or `{:ok, nil}` to inherit). Only the profile key is retained; provider options
+and credentials are resolved from the current trusted parent on both initial
+dispatch and recovery. Raw provider configuration is not accepted in child spawn
+requests.
 
 The child saves its exact approval checkpoint in its parent continuation before returning.
 The packet includes the prepared tool arguments, loop state and pending effects,

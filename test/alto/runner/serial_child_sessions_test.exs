@@ -5,13 +5,29 @@ defmodule Alto.Runner.SerialChildSessionsTest do
 
   defmodule BatchLoop do
     @behaviour Alto.Loop
+    @impl true
     def init(%{agents: agents}, _),
       do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
 
+    @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, s, _),
       do: Transition.stop(s, {:completed, data.results})
 
     def handle_event(_, s, _), do: Transition.continue(s)
+
+    @impl true
+    def resolve_child_provider(key, _spec) do
+      case key do
+        "one" ->
+          {:ok, {Alto.Runner.SerialChildSessionsTest.ChildProvider, answer: "child-one"}}
+
+        "two" ->
+          {:ok, {Alto.Runner.SerialChildSessionsTest.ChildProvider, answer: "child-two"}}
+
+        _ ->
+          {:error, :unknown_profile}
+      end
+    end
   end
 
   defmodule ChildProvider do
@@ -44,8 +60,8 @@ defmodule Alto.Runner.SerialChildSessionsTest do
 
   defp agents do
     [
-      %{id: "one", task: "first", provider: {ChildProvider, answer: "child-one"}},
-      %{id: "two", task: "second", provider: {ChildProvider, answer: "child-two"}}
+      %{id: "one", task: "first", profile_key: "one"},
+      %{id: "two", task: "second", profile_key: "two"}
     ]
   end
 

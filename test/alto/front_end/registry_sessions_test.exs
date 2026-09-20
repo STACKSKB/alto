@@ -122,16 +122,14 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     # works over the string-task registry boundary.
     @behaviour Alto.Loop
     @impl true
-    def init(_task, spec) do
-      test_pid = Keyword.fetch!(spec.driver_options, :test_pid)
-
+    def init(_task, _spec) do
       Alto.Transition.continue(%{}, [
         Alto.Effect.spawn_agents(%{
           agents: [
             %{
               id: "sub-1",
               task: "child",
-              provider: {BlockingProvider, test_pid: test_pid}
+              profile_key: "blocking"
             }
           ]
         })
@@ -150,6 +148,13 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       do: Alto.Transition.stop(s, {:completed, data})
 
     def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+
+    @impl true
+    def resolve_child_provider("blocking", spec) do
+      {:ok, {BlockingProvider, test_pid: Keyword.fetch!(spec.driver_options, :test_pid)}}
+    end
+
+    def resolve_child_provider(_, _), do: {:error, :unknown_profile}
   end
 
   setup do

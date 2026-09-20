@@ -132,10 +132,18 @@ defmodule Alto.Runner.SerialExposureTest do
       do: Transition.stop(s, {:completed, data})
 
     def handle_event(_e, s, _), do: Transition.continue(s)
+
+    @impl true
+    def resolve_child_provider(key, spec) do
+      case Keyword.fetch!(spec.driver_options, :child_providers) do
+        %{^key => provider} -> {:ok, provider}
+        _ -> {:error, :unknown_profile}
+      end
+    end
   end
 
-  defp parent_loop(depth),
-    do: Alto.loop(SpawnOnceLoop, subagents: Alto.Subagents.bounded(max_depth: depth))
+  defp parent_loop(depth, opts \\ []),
+    do: Alto.loop(SpawnOnceLoop, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-s03-#{System.unique_integer([:positive])}")
@@ -169,8 +177,6 @@ defmodule Alto.Runner.SerialExposureTest do
 
     # Parent exposes only echo; child explicitly lists both tools and asks
     # for both, but the effective child exposure stays {echo}.
-    child_provider = {CaptureProvider, test_pid: test_pid}
-
     assert {:ok, result} =
              Alto.run(
                %{
@@ -178,8 +184,7 @@ defmodule Alto.Runner.SerialExposureTest do
                    id: "sub-1",
                    task: "hi",
                    tools: [EchoTool, HiddenTool],
-                   model_tools: ["echo", "hidden"],
-                   provider: child_provider
+                   model_tools: ["echo", "hidden"]
                  }
                },
                loop: parent_loop(1),
@@ -248,8 +253,11 @@ defmodule Alto.Runner.SerialExposureTest do
 
     assert {:ok, _} =
              Alto.run(
-               %{spawn: %{id: "sub-1", task: "hi", provider: {ChildCapture, test_pid: test_pid}}},
-               loop: parent_loop(1),
+               %{spawn: %{id: "sub-1", task: "hi", profile_key: "capture"}},
+               loop:
+                 parent_loop(1,
+                   child_providers: %{"capture" => {ChildCapture, test_pid: test_pid}}
+                 ),
                provider: {CaptureProvider, test_pid: test_pid},
                tools: [EchoTool, HiddenTool],
                model_tools: ["echo"],
@@ -261,6 +269,30 @@ defmodule Alto.Runner.SerialExposureTest do
     refute_received {:seen_tools, _}
     assert_receive {:child_tools, child_tools}
     assert Enum.map(child_tools, &get_in(&1, ["function", "name"])) == ["echo"]
+  end
+
+  test "named nil providers inherit and unknown profiles fail before model dispatch", %{dir: dir} do
+    test_pid = self()
+
+    assert {:ok, inherited} =
+             Alto.run(%{spawn: %{id: "sub-1", task: "hi", profile_key: "inherit"}},
+               loop: parent_loop(1, child_providers: %{"inherit" => nil}),
+               provider: {CaptureProvider, test_pid: test_pid},
+               session: :new,
+               session_dir: dir
+             )
+
+    assert {:completed, %{status: :ok}} = inherited.output
+    assert_receive {:seen_tools, []}
+
+    assert {:ok, rejected} =
+             Alto.run(%{spawn: %{id: "sub-2", task: "hi", profile_key: "missing"}},
+               loop: parent_loop(1, child_providers: %{}),
+               provider: {CaptureProvider, test_pid: test_pid}
+             )
+
+    assert {:failed, %{status: :error, error: :unknown_profile}} = rejected.output
+    refute_receive {:seen_tools, _}
   end
 
   test "approvals and cancellation are unchanged for exposed tools", %{dir: dir} do
@@ -303,9 +335,9 @@ defmodule Alto.Runner.SerialExposureTest do
 
     # Approval still gates the exposed tool inside the child.
     assert {:ok, result} =
-             Alto.run(%{spawn: %{id: "sub-1", task: "hi", provider: {EchoCallProvider, []}}},
+             Alto.run(%{spawn: %{id: "sub-1", task: "hi"}},
                loop: parent_loop(1),
-               provider: {CaptureProvider, test_pid: test_pid},
+               provider: {EchoCallProvider, []},
                tools: [{GuardedEcho, test_pid: test_pid}],
                model_tools: ["echo"],
                approval: Alto.Approvals.DenyAll,

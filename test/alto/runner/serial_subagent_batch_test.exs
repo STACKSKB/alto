@@ -149,7 +149,6 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
       max_steps: nil,
       tools: :inherit,
       loop: nil,
-      provider: nil,
       profile_key: nil,
       system_prompt: nil,
       model_tools: nil
@@ -170,6 +169,7 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
           %{id: "child", task: nil},
           %{id: "child", task: ""},
           %{id: "child", task: "work", max_steps: 0},
+          %{id: "child", task: "work", provider: nil},
           %{id: "child", task: "work", profile_key: ""},
           %{id: "child", task: "work", system_prompt: String.duplicate("x", 64_001)},
           %{id: "child", task: "work", model_tools: [""]}

@@ -202,7 +202,7 @@ defmodule Alto.Runner.Checkpoint do
   def capture_child(run, pending, remaining, terminal) do
     with %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
          true <- run.agent_depth > 0,
-         true <- is_map(run.child_profile) and is_nil(run.child_profile.provider),
+         true <- is_map(run.child_profile) and not Map.has_key?(run.child_profile, :provider),
          true <- is_struct(run.budget.account, Budget.Account),
          {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
          {:ok, packet} <- capture(%{run | agent_depth: 0}, pending, remaining, terminal),
