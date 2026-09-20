@@ -19,20 +19,25 @@ defmodule Alto.PromptTest do
   end
 
   test "describes capabilities from the actual tool registry" do
-    prompt = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles])
+    prompt = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [ListFiles]}, [])
 
     assert prompt =~ "read-only"
     assert prompt =~ "Command execution is disabled"
     refute prompt =~ "edit_file"
 
-    no_tools = Alto.Prompt.coding_agent("/workspace", tools: [])
+    no_tools = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: []}, [])
     assert no_tools =~ "No workspace tools are available"
 
-    writable = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles, EditFile, RunCommand])
+    writable =
+      Alto.Prompts.Coding.build(
+        %{cwd: "/workspace", tools: [ListFiles, EditFile, RunCommand]},
+        []
+      )
+
     assert writable =~ "Workspace editing tools are enabled"
     assert writable =~ "command executor configured by the harness"
 
-    command_only = Alto.Prompt.coding_agent("/workspace", tools: [RunCommand])
+    command_only = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [RunCommand]}, [])
     refute command_only =~ "read-only"
     assert command_only =~ "command executor configured by the harness"
   end
@@ -41,7 +46,11 @@ defmodule Alto.PromptTest do
     alias Alto.Tools.ReadFile
     alias Alto.Tools.SearchFiles
 
-    prompt = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles, ReadFile, SearchFiles])
+    prompt =
+      Alto.Prompts.Coding.build(
+        %{cwd: "/workspace", tools: [ListFiles, ReadFile, SearchFiles]},
+        []
+      )
 
     assert prompt =~ "This run is read-only"
     assert prompt =~ "Command execution is disabled"

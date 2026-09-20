@@ -94,30 +94,21 @@ defmodule Alto.Workspaces.GitPatch do
   end
 
   defp paths(output) do
-    output
-    |> String.split(<<0>>, trim: true)
-    |> Enum.reduce_while({:ok, []}, fn record, {:ok, paths} ->
-      case String.split(record, "\t", parts: 3) do
-        [_added, _removed, path] ->
-          case valid_path(path) do
-            :ok -> {:cont, {:ok, [path | paths]}}
-            error -> {:halt, error}
-          end
+    with {:ok, paths} <-
+           Alto.Result.traverse(String.split(output, <<0>>, trim: true), fn record ->
+             case String.split(record, "\t", parts: 3) do
+               [_added, _removed, path] ->
+                 with :ok <- valid_path(path), do: {:ok, path}
 
-        _ ->
-          {:halt, {:error, :invalid_patch_stat}}
-      end
-    end)
-    |> case do
-      {:ok, paths} ->
-        paths = paths |> Enum.uniq() |> Enum.sort()
+               _ ->
+                 {:error, :invalid_patch_stat}
+             end
+           end) do
+      paths = paths |> Enum.uniq() |> Enum.sort()
 
-        if length(paths) in 1..@max_files,
-          do: {:ok, paths},
-          else: {:error, :patch_file_count_exceeded}
-
-      error ->
-        error
+      if length(paths) in 1..@max_files,
+        do: {:ok, paths},
+        else: {:error, :patch_file_count_exceeded}
     end
   end
 

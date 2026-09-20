@@ -20,15 +20,6 @@ defmodule Alto.Prompt do
 
   def build(builder, _context), do: {:error, {:invalid_prompt_builder, builder}}
 
-  @doc "Compatibility constructor for the shipped coding prompt."
-  @spec coding_agent(binary(), keyword()) :: binary()
-  def coding_agent(cwd, opts \\ []) do
-    {:ok, prompt} =
-      build(Alto.Prompts.Coding, %{cwd: cwd, tools: Keyword.get(opts, :tools, [])})
-
-    prompt
-  end
-
   @doc "Render prompt fragments with stable separation."
   @spec render([fragment()]) :: binary()
   def render(fragments), do: Enum.join(fragments, "\n") <> "\n"
