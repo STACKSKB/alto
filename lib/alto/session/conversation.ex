@@ -475,19 +475,7 @@ defmodule Alto.Session.Conversation do
   defp validate_messages(_, _), do: {:error, :invalid_messages}
 
   defp dispatched_calls_retained?(messages, ids) do
-    retained =
-      messages
-      |> Enum.flat_map(fn
-        %{"role" => "assistant", "tool_calls" => calls} when is_list(calls) ->
-          Enum.flat_map(calls, fn
-            %{"id" => id} when is_binary(id) -> [id]
-            _ -> []
-          end)
-
-        _ ->
-          []
-      end)
-      |> MapSet.new()
+    retained = provider_call_ids(messages)
 
     Enum.all?(ids, &MapSet.member?(retained, &1))
   end
@@ -525,24 +513,23 @@ defmodule Alto.Session.Conversation do
         _ -> []
       end)
 
-    pending_calls =
-      if settled do
-        []
-      else
-        messages
-        |> Enum.flat_map(fn
-          %{"role" => "assistant", "tool_calls" => calls} when is_list(calls) ->
-            Enum.flat_map(calls, fn
-              %{"id" => id} when is_binary(id) -> [id]
-              _ -> []
-            end)
+    replies = MapSet.new(replies)
+    if settled, do: replies, else: MapSet.union(replies, provider_call_ids(messages))
+  end
 
-          _ ->
-            []
+  defp provider_call_ids(messages) do
+    messages
+    |> Enum.flat_map(fn
+      %{"role" => "assistant", "tool_calls" => calls} when is_list(calls) ->
+        Enum.flat_map(calls, fn
+          %{"id" => id} when is_binary(id) -> [id]
+          _ -> []
         end)
-      end
 
-    MapSet.new(replies ++ pending_calls)
+      _ ->
+        []
+    end)
+    |> MapSet.new()
   end
 
   defp validate_transcript_bytes(bytes) when is_integer(bytes) and bytes >= 0, do: :ok

@@ -136,7 +136,7 @@ defmodule Alto.Runner.Execution.Setup do
       events_dropped: 0,
       verdict: :empty,
       op_seq: 0,
-      pending_provider_calls: rebuild_pending_provider_calls(Enum.reverse(settings.messages_rev)),
+      pending_provider_calls: %{},
       transcript_revision: resume_revision(opts),
       persistence_errors: [],
       request_model_tools: nil,
@@ -439,25 +439,5 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp provider_identity({module, opts}) when is_atom(module) and is_list(opts) do
     {Atom.to_string(module), Keyword.get(opts, :model)}
-  end
-
-  defp rebuild_pending_provider_calls(messages) do
-    Enum.reduce(messages, %{}, fn
-      %{"role" => "assistant", "tool_calls" => calls}, pending when is_list(calls) ->
-        Enum.reduce(calls, pending, fn call, inner ->
-          key = {call["id"], get_in(call, ["function", "name"])}
-          Map.update(inner, key, 1, &(&1 + 1))
-        end)
-
-      %{"role" => "tool", "tool_call_id" => id}, pending ->
-        case Enum.find(pending, fn {{call_id, _name}, count} -> call_id == id and count > 0 end) do
-          {key, 1} -> Map.delete(pending, key)
-          {key, count} -> Map.put(pending, key, count - 1)
-          nil -> pending
-        end
-
-      _message, pending ->
-        pending
-    end)
   end
 end

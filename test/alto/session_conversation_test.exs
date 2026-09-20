@@ -105,13 +105,17 @@ defmodule Alto.SessionConversationTest do
                expected_revision: 1
              )
 
-    assert {:ok, %{messages: ^recovery, revision: 2}} =
+    assert {:ok, %{messages: ^recovery, revision: 2} = snapshot} =
              Session.transcript(id, session_dir: dir)
 
     assert {:ok, closed} = Transcript.close_interrupted(recovery)
     assert :ok = Transcript.validate(closed)
     assert List.last(closed)["tool_call_id"] == "call-1"
     assert JSON.decode!(List.last(closed)["content"])["outcome"] == "unknown"
+
+    assert {:ok, run} = Alto.Runner.Execution.Setup.open("continue", resume: snapshot)
+    assert run.pending_provider_calls == %{}
+    assert Enum.reverse(run.messages_rev) == closed ++ [user("continue")]
 
     assert {:error, {:conversation_revision_unsettled, ^id, 2}} =
              Session.fork(id, revision: 2, session_dir: dir)
