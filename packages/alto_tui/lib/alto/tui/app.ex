@@ -468,11 +468,11 @@ defmodule Alto.TUI.App do
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
       {false, input} when is_pid(input) and map_size(state.runs) < 32 ->
-        case take_input(input) do
+        case Alto.Input.take(input) do
           :empty ->
             state
 
-          :busy ->
+          {:error, :input_in_use} ->
             # Completion is delivered before the supervised runner releases
             # the channel. Retry after that handoff so accepted input survives
             # the completion race instead of crashing or being dropped.
@@ -517,35 +517,6 @@ defmodule Alto.TUI.App do
 
       _ ->
         state
-    end
-  end
-
-  defp take_input(input) do
-    case Alto.Input.claim(input) do
-      :ok ->
-        try do
-          case Alto.Input.peek(input, [:steer, :follow_up]) do
-            nil ->
-              :empty
-
-            {:error, reason} ->
-              {:error, reason}
-
-            entry ->
-              case Alto.Input.ack(input, entry.id) do
-                :ok -> {:ok, entry}
-                {:error, reason} -> {:error, reason}
-              end
-          end
-        after
-          Alto.Input.release(input)
-        end
-
-      {:error, :input_in_use} ->
-        :busy
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
