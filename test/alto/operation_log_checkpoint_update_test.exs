@@ -67,7 +67,7 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     assert :ok = OperationLog.record_attempt(name, "bank", "retry")
     assert :ok = OperationLog.record_outcome(name, "bank", "retry", :completed, %{})
 
-    assert {:error, :already_decided} =
+    assert {:error, :not_checkpointed} =
              OperationLog.update_checkpoint(name, "bank", 6, %{"used" => 2})
   end
 

@@ -288,7 +288,7 @@ defmodule Alto.SessionConversationTest do
     {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
     File.rm!(Path.join([dir, "conversations", id, "revision-1.json"]))
 
-    assert {:error, {:conversation_revision_not_found, ^id, 1}} =
+    assert {:error, {:session_read_failed, {:conversation_revision_not_found, ^id, 1}}} =
              Session.transcript(id, session_dir: dir)
   end
 end
