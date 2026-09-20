@@ -35,11 +35,11 @@ defmodule Alto.Harness.Catalog do
   def read(opts \\ []) do
     path = Keyword.get(opts, :path, default_path(opts)) |> Path.expand()
 
-    case bounded_read(path) do
+    case Alto.BoundedFile.read(path, @max_catalog_bytes) do
       {:ok, encoded} ->
         decode(encoded, path)
 
-      {:error, {:too_large, size}} ->
+      {:error, {:too_large, size, _max}} ->
         {:error, {:catalog_too_large, size, @max_catalog_bytes}}
 
       {:error, :enoent} ->
@@ -47,32 +47,6 @@ defmodule Alto.Harness.Catalog do
 
       {:error, reason} ->
         {:error, {:catalog_read_failed, reason}}
-    end
-  end
-
-  defp bounded_read(path) do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, @max_catalog_bytes + 1) do
-            {:error, reason} ->
-              {:error, reason}
-
-            :eof ->
-              {:ok, <<>>}
-
-            content when byte_size(content) > @max_catalog_bytes ->
-              {:error, {:too_large, @max_catalog_bytes + 1}}
-
-            content ->
-              {:ok, content}
-          end
-
-        File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 

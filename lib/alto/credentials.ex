@@ -27,9 +27,9 @@ defmodule Alto.Credentials do
   def load(path \\ default_path()) when is_binary(path) do
     expanded = Path.expand(path)
 
-    case bounded_read(expanded) do
+    case Alto.BoundedFile.read(expanded, @max_bytes) do
       {:ok, content} -> decode(expanded, content)
-      {:error, :too_large} -> {:error, {:credentials_too_large, @max_bytes}}
+      {:error, {:too_large, _size, _max}} -> {:error, {:credentials_too_large, @max_bytes}}
       {:error, :enoent} -> {:ok, %__MODULE__{path: expanded, providers: %{}}}
       {:error, reason} -> {:error, {:credentials_read_failed, expanded, reason}}
     end
@@ -131,25 +131,6 @@ defmodule Alto.Credentials do
   end
 
   defp valid_providers?(_providers), do: false
-
-  defp bounded_read(path) do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, @max_bytes + 1) do
-            {:error, _reason} -> {:error, :read_failed}
-            :eof -> {:ok, <<>>}
-            content when byte_size(content) > @max_bytes -> {:error, :too_large}
-            content -> {:ok, content}
-          end
-
-        File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 end
 
 defimpl Inspect, for: Alto.Credentials do
