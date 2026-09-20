@@ -25,4 +25,14 @@ defmodule Alto.TUI.ViewportTest do
       ExRatatui.CellSession.close(cached)
     end
   end
+
+  test "bottom uses native wrapping for blanks, Unicode, and long documents" do
+    assert Viewport.bottom("", 20, 5) == 0
+    assert Viewport.bottom("short", 20, 5) == 0
+    assert Viewport.bottom("one\ntwo\nthree\n\n", 20, 2) == 1
+    assert Viewport.bottom("猫猫猫猫猫猫", 4, 2) == 1
+    assert Viewport.bottom("one two three four", 5, 2) == 2
+    assert Viewport.bottom("one two three four", 30, 2) == 0
+    assert Viewport.bottom("start" <> String.duplicate("\n", 300) <> "end", 20, 2) == 299
+  end
 end

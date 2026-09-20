@@ -1,6 +1,6 @@
 defmodule Alto.TUI.MarkdownTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.{Markdown, Transcript, Viewport, Selection, Scroll}
+  alias Alto.TUI.{Markdown, Transcript, Viewport, Selection}
   alias ExRatatui.{CellSession, Text}
   alias ExRatatui.Event.{Key, Mouse}
   alias ExRatatui.Layout.Rect
@@ -182,7 +182,7 @@ defmodule Alto.TUI.MarkdownTest do
       refute Selection.text(selected) =~ "**"
     end
 
-    assert Scroll.bottom(text, 40, 8, :test) == length(text.lines) - 8
+    assert Viewport.bottom(text, 40, 8) == length(text.lines) - 8
   end
 
   test "the actual frame width controls reflow when resizing a report" do
@@ -226,7 +226,7 @@ defmodule Alto.TUI.MarkdownTest do
         content: fn -> [rect] end
       )
 
-    assert selected.scroll.limit.() == length(text.lines) - 8
+    assert selected.scroll.limit == length(text.lines) - 8
 
     selected =
       Enum.reduce(1..10, selected, fn _, selection ->

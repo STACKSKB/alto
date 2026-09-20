@@ -386,7 +386,7 @@ defmodule Alto.TUI.View do
 
     if details do
       {_, text} = details_content(state, details.presentation)
-      Alto.TUI.Scroll.bottom(text, details.content.width, details.content.height, :details)
+      Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
     else
       0
     end

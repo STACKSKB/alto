@@ -32,7 +32,11 @@ defmodule Alto.TUI.Viewport do
     do: max(length(lines) - max(height, 1), 0)
 
   def bottom(text, width, height),
-    do: max(tuple_size(rows(text, max(width, 1))) - max(height, 1), 0)
+    do:
+      max(
+        tuple_size(rows(String.trim_trailing(text), max(width, 1))) - max(height, 1),
+        0
+      )
 
   def rows(text, width) do
     key = {__MODULE__, :documents}

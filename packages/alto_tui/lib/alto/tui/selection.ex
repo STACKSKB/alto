@@ -230,7 +230,7 @@ defmodule Alto.TUI.Selection do
                   max(length(text.lines) - inner.height, 0)
 
                 widget.wrap ->
-                  Alto.TUI.Scroll.bottom(text, inner.width, inner.height, :selection)
+                  Alto.TUI.Viewport.bottom(text, inner.width, inner.height)
 
                 true ->
                   max(length(String.split(String.trim_trailing(text), "\n")) - inner.height, 0)
@@ -240,7 +240,7 @@ defmodule Alto.TUI.Selection do
           %{
             index: index,
             offset: offset,
-            limit: (fn value -> fn -> value end end).(limit.(selection.anchor)),
+            limit: limit.(selection.anchor),
             dimensions: dimensions,
             covered: covered,
             history: nil,
@@ -310,8 +310,7 @@ defmodule Alto.TUI.Selection do
 
   defp scroll_by(selection, delta) do
     scroll = selection.scroll
-    limit = if is_function(scroll.limit), do: scroll.limit.(), else: scroll.limit
-    scroll = %{scroll | limit: limit}
+    limit = scroll.limit
 
     offset =
       if is_integer(limit), do: min(max(scroll.offset + delta, 0), limit), else: scroll.offset
