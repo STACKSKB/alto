@@ -189,26 +189,9 @@ defmodule Alto.Codex.Backend do
   defp history_item(%{"type" => "agentMessage", "text" => text}) when is_binary(text),
     do: [%{kind: :codex_assistant, text: text}]
 
-  defp history_item(%{"type" => "commandExecution"} = item),
-    do: [
-      %{
-        kind: :tool,
-        text: "command · " <> Alto.Display.text(item["command"]),
-        detail: item["aggregatedOutput"]
-      }
-    ]
-
-  defp history_item(%{"type" => "fileChange"} = item),
-    do: [%{kind: :tool, text: "file changes", detail: Alto.Display.result(item["changes"])}]
-
-  defp history_item(%{"type" => "mcpToolCall"} = item),
-    do: [
-      %{
-        kind: :tool,
-        text: "MCP · #{item["server"]}/#{item["tool"]}",
-        detail: Alto.Display.result(item["result"])
-      }
-    ]
+  defp history_item(%{"type" => type} = item)
+       when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
+       do: [item_entry(item)]
 
   defp history_item(%{"type" => "reasoning"} = item) do
     case reasoning_text(item) do
@@ -229,6 +212,24 @@ defmodule Alto.Codex.Backend do
       do: summary,
       else: Enum.filter(item["content"] || [], &is_binary/1) |> Enum.join("\n\n")
   end
+
+  def item_entry(%{"type" => type} = item)
+      when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
+      do: %{kind: :tool, text: item_summary(item), detail: item_detail(item)}
+
+  def item_summary(%{"type" => "commandExecution", "command" => command}),
+    do: "command · " <> Alto.Display.text(command)
+
+  def item_summary(%{"type" => "fileChange"}), do: "file changes"
+
+  def item_summary(%{"type" => "mcpToolCall", "server" => server, "tool" => tool}),
+    do: "MCP · #{server}/#{tool}"
+
+  def item_summary(%{"type" => "mcpToolCall", "tool" => tool}), do: "MCP · #{tool}"
+  def item_summary(%{"type" => "dynamicToolCall", "tool" => tool}), do: "tool · #{tool}"
+  def item_summary(_item), do: nil
+
+  defp item_detail(item), do: item |> Map.drop(["id", "type"]) |> Alto.Display.result()
 
   defp client_options(opts), do: Keyword.take(opts, @client_keys)
 

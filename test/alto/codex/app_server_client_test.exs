@@ -47,7 +47,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
               {nil, state}
             "thread/read" ->
               if message["params"]["threadId"] == "thr-tools" do
-                items = [%{"type" => "commandExecution", "command" => "ls -la", "aggregatedOutput" => "file.txt"},
+                items = [%{"type" => "commandExecution", "command" => "ls -la", "aggregatedOutput" => "file.txt", "status" => "failed", "exitCode" => 2},
                   %{"type" => "fileChange", "changes" => [%{"path" => "file.txt", "kind" => "added"}]},
                   %{"type" => "mcpToolCall", "server" => "test", "tool" => "lookup", "result" => %{"error" => %{"message" => "Not available", "code" => 503}}}]
                 {%{"id" => id, "result" => %{"thread" => %{"turns" => [%{"items" => items}]}}}, state}
@@ -121,6 +121,8 @@ defmodule Alto.Codex.AppServer.ClientTest do
 
     assert {:ok, [command, file, mcp]} = Backend.history(client, "thr-tools")
     assert command.text == "command · ls -la"
+    assert command.detail =~ "Status: Failed"
+    assert command.detail =~ "Exit Code: 2"
     assert file.detail =~ "Path: file.txt"
     assert mcp.detail =~ "Message: Not available"
 
@@ -129,6 +131,15 @@ defmodule Alto.Codex.AppServer.ClientTest do
       refute entry.detail =~ "%{"
       refute entry.detail =~ "=>"
     end
+
+    assert command ==
+             Backend.item_entry(%{
+               "type" => "commandExecution",
+               "command" => "ls -la",
+               "aggregatedOutput" => "file.txt",
+               "status" => "failed",
+               "exitCode" => 2
+             })
   end
 
   test "approval levels map to Codex policy and sandbox independently", _context do

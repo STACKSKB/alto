@@ -101,11 +101,18 @@ defmodule Alto.TUI.AppTest do
               IO.puts(JSON.encode!(%{"id" => id, "result" => %{"thread" => %{"id" => message["params"]["threadId"]}}}))
               state
             method == "turn/start" ->
-              IO.puts(JSON.encode!(%{"id" => id, "result" => %{"turn" => %{"id" => "turn-tui", "status" => "inProgress"}}}))
+              IO.puts(JSON.encode!(%{"id" => "approval-evicted", "method" => "item/commandExecution/requestApproval", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "itemId" => "old-cmd", "command" => "old command", "cwd" => #{inspect(root)}}}))
+              Enum.each(1..101, fn index ->
+                IO.puts(JSON.encode!(%{"method" => "test/early", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "index" => index}}))
+              end)
               IO.puts(JSON.encode!(%{"method" => "item/agentMessage/delta", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "itemId" => "msg", "delta" => "Working. "}}))
               IO.puts(JSON.encode!(%{"method" => "thread/tokenUsage/updated", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "tokenUsage" => %{"modelContextWindow" => 100_000, "last" => %{"inputTokens" => 1_000, "outputTokens" => 10, "cachedInputTokens" => 600, "reasoningOutputTokens" => 0, "totalTokens" => 1_010, "cacheWriteInputTokens" => 0}, "total" => %{"inputTokens" => 1_000, "outputTokens" => 10, "cachedInputTokens" => 600, "reasoningOutputTokens" => 0, "totalTokens" => 1_010, "cacheWriteInputTokens" => 0}}}}))
               IO.puts(JSON.encode!(%{"id" => "approval-1", "method" => "item/commandExecution/requestApproval", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "itemId" => "cmd", "command" => "mix test", "cwd" => #{inspect(root)}}}))
+              IO.puts(JSON.encode!(%{"id" => id, "result" => %{"turn" => %{"id" => "turn-tui", "status" => "inProgress"}}}))
               %{state | pending_turn: true}
+            id == "approval-evicted" and message["error"] ->
+              File.write!(#{inspect(Path.join(root, "evicted-approval-rejected"))}, "rejected")
+              state
             id == "approval-1" and state.pending_turn ->
               IO.puts(JSON.encode!(%{"method" => "item/agentMessage/delta", "params" => %{"threadId" => "thr-tui", "turnId" => "turn-tui", "itemId" => "msg", "delta" => "Finished."}}))
               IO.puts(JSON.encode!(%{"method" => "turn/completed", "params" => %{"threadId" => "thr-tui", "turn" => %{"id" => "turn-tui", "status" => "completed", "items" => [], "error" => nil}}}))
@@ -1503,6 +1510,7 @@ defmodule Alto.TUI.AppTest do
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
 
     eventually(fn -> user_state(app).pending_approvals != [] end)
+    assert File.exists?(Path.join(context.root, "evicted-approval-rejected"))
     Runtime.inject_event(app, %Key{code: "f8", kind: "press"})
 
     eventually(fn ->

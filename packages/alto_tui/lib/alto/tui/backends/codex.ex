@@ -31,8 +31,7 @@ defmodule Alto.TUI.Backends.Codex do
       login: nil,
       loaded_threads: MapSet.new(),
       history_loading: MapSet.new(),
-      pending_events: [],
-      pending_requests: []
+      pending_messages: []
     }
 
     model =
@@ -268,8 +267,7 @@ defmodule Alto.TUI.Backends.Codex do
         }
 
         state = %{put_data(state, codex) | notice: "Codex working…"}
-        state = replay_codex_events(state, run)
-        {:noreply, replay_codex_requests(state, run)}
+        {:noreply, replay_codex_messages(state, run)}
 
       {run, {:error, reason}} ->
         {:noreply, fail_codex_start(state, local_id, run, reason)}
@@ -647,39 +645,42 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp maybe_buffer_codex_event(state, method, params) do
     if Enum.any?(state.runs, fn {_id, run} -> run.kind == :codex and run.status == :starting end) do
-      pending = (data(state).pending_events ++ [{method, params}]) |> Enum.take(-100)
-      put_in(state.backend_state[__MODULE__].pending_events, pending)
+      buffer_codex_message(state, {:notification, method, params})
     else
       state
     end
   end
 
-  defp replay_codex_events(state, run) do
+  defp replay_codex_messages(state, run) do
     {matching, rest} =
-      Enum.split_with(data(state).pending_events, fn {_method, params} ->
-        params["threadId"] == run.thread_id and
-          (is_nil(params["turnId"]) or params["turnId"] == run.turn_id)
-      end)
+      Enum.split_with(data(state).pending_messages, fn message ->
+        params = elem(message, tuple_size(message) - 1)
 
-    state = put_in(state.backend_state[__MODULE__].pending_events, rest)
-
-    Enum.reduce(matching, state, fn {method, params}, acc ->
-      apply_codex_run_event(acc, run, method, params)
-    end)
-  end
-
-  defp replay_codex_requests(state, run) do
-    {matching, rest} =
-      Enum.split_with(data(state).pending_requests, fn {_id, _method, params} ->
         (params["threadId"] || params["conversationId"]) == run.thread_id and
           (is_nil(params["turnId"]) or params["turnId"] == run.turn_id)
       end)
 
-    state = put_in(state.backend_state[__MODULE__].pending_requests, rest)
+    state = put_in(state.backend_state[__MODULE__].pending_messages, rest)
 
-    Enum.reduce(matching, state, fn {id, method, params}, acc ->
-      handle_codex_request(acc, id, method, params)
+    Enum.reduce(matching, state, fn
+      {:notification, method, params}, acc -> apply_codex_run_event(acc, run, method, params)
+      {:request, id, method, params}, acc -> handle_codex_request(acc, id, method, params)
     end)
+  end
+
+  defp buffer_codex_message(state, message) do
+    messages = data(state).pending_messages ++ [message]
+    {dropped, pending} = Enum.split(messages, max(length(messages) - 100, 0))
+
+    Enum.each(dropped, fn
+      {:request, id, _method, _params} ->
+        CodexClient.reject(data(state).client, id, -32001, "approval expired before turn start")
+
+      _notification ->
+        :ok
+    end)
+
+    put_in(state.backend_state[__MODULE__].pending_messages, pending)
   end
 
   defp apply_codex_run_event(state, run, "item/agentMessage/delta", %{"delta" => delta}),
@@ -736,27 +737,24 @@ defmodule Alto.TUI.Backends.Codex do
     state =
       cond do
         item["type"] == "reasoning" -> codex_phase(state, run, "thinking")
-        codex_item_summary(item) != nil -> codex_phase(state, run, "running tool")
+        CodexBackend.item_summary(item) != nil -> codex_phase(state, run, "running tool")
         true -> state
       end
 
-    case codex_item_summary(item) do
+    case CodexBackend.item_summary(item) do
       nil -> state
       text -> State.append_entry(state, run.task_id, %{kind: :tool, text: text <> " …"})
     end
   end
 
   defp apply_codex_run_event(state, run, "item/completed", %{"item" => item}) do
-    case codex_item_summary(item) do
+    case CodexBackend.item_summary(item) do
       nil ->
         state
 
       text ->
-        State.append_entry(state, run.task_id, %{
-          kind: :tool,
-          text: text <> " ✓",
-          detail: Alto.Display.result(item)
-        })
+        entry = CodexBackend.item_entry(item)
+        State.append_entry(state, run.task_id, %{entry | text: text <> " ✓"})
     end
   end
 
@@ -786,14 +784,6 @@ defmodule Alto.TUI.Backends.Codex do
       do: state,
       else: Host.update_run(state, run, phase: phase)
   end
-
-  defp codex_item_summary(%{"type" => "commandExecution", "command" => command}),
-    do: "command · " <> Alto.Display.text(command)
-
-  defp codex_item_summary(%{"type" => "fileChange"}), do: "file changes"
-  defp codex_item_summary(%{"type" => "mcpToolCall", "tool" => tool}), do: "MCP · #{tool}"
-  defp codex_item_summary(%{"type" => "dynamicToolCall", "tool" => tool}), do: "tool · #{tool}"
-  defp codex_item_summary(_item), do: nil
 
   defp finish_codex_run(state, run, status, error) do
     completed? = status == "completed"
@@ -849,11 +839,7 @@ defmodule Alto.TUI.Backends.Codex do
         if Enum.any?(state.runs, fn {_run_id, run} ->
              run.kind == :codex and run.status == :starting
            end) do
-          pending =
-            (data(state).pending_requests ++ [{id, method, params}])
-            |> Enum.take(-20)
-
-          put_in(state.backend_state[__MODULE__].pending_requests, pending)
+          buffer_codex_message(state, {:request, id, method, params})
         else
           CodexClient.reject(data(state).client, id, -32001, "no matching Alto task")
           state
