@@ -6,7 +6,7 @@ defmodule Alto.Runner.ToolBatch do
   Results are bounded before they leave workers and returned in source order.
   Worker guardians terminate work if the coordinator dies, including hard kills.
   """
-  alias Alto.Runner.{Budget, Execution.Call, Execution.Support, Execution.Tool}
+  alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
     owner = self()
@@ -18,7 +18,7 @@ defmodule Alto.Runner.ToolBatch do
             # Establish ownership before entering participant code. Doing
             # this from the coordinator after `async_nolink/2` would leave a
             # hard-death window with an unowned worker.
-            Support.guard_owner(owner)
+            Call.guard_owner(owner)
 
             tool
             |> Tool.invoke_tool(prepared, caps.context)
@@ -47,27 +47,16 @@ defmodule Alto.Runner.ToolBatch do
         {:error, reason, ordered(tasks, results, {:error, reason})}
 
       {:continue, :ok} ->
+        results = harvest(tasks, results)
+
         results =
           Enum.reduce(tasks, results, fn {task, deadline}, acc ->
-            if Map.has_key?(acc, task.ref) do
-              acc
+            if not Map.has_key?(acc, task.ref) and
+                 System.monotonic_time(:millisecond) >= deadline do
+              Task.shutdown(task, :brutal_kill)
+              Map.put(acc, task.ref, {:error, :timeout})
             else
-              result =
-                case Task.yield(task, 0) do
-                  {:ok, value} ->
-                    {:ok, value}
-
-                  {:exit, reason} ->
-                    {:error, reason}
-
-                  nil ->
-                    if System.monotonic_time(:millisecond) >= deadline do
-                      Task.shutdown(task, :brutal_kill)
-                      {:error, :timeout}
-                    end
-                end
-
-              if result, do: Map.put(acc, task.ref, result), else: acc
+              acc
             end
           end)
 
@@ -89,15 +78,14 @@ defmodule Alto.Runner.ToolBatch do
 
   # Match sequential execution: a successful participant value is the bounded
   # native result, rather than the surrounding outcome tuple.
-  defp bound_result({:ok, value} = outcome, limit) do
-    case Tool.check_native_result(value, limit) do
-      :ok -> outcome
-      {:error, reason} -> {:unknown, reason}
-    end
-  end
-
   defp bound_result(outcome, limit) do
-    case Tool.check_native_result(outcome, limit) do
+    value =
+      case outcome do
+        {:ok, value} -> value
+        other -> other
+      end
+
+    case Tool.check_native_result(value, limit) do
       :ok -> outcome
       {:error, reason} -> {:unknown, reason}
     end

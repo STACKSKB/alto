@@ -7,7 +7,7 @@ defmodule Alto.Runner.Execution.History do
   """
   alias Alto.Session
   alias Alto.Runner.Budget
-  import Alto.Runner.Execution.Support, only: [supervised_call: 3]
+  alias Alto.Runner.Execution.Call
 
   def initialize({:ok, run}, opts) do
     if Keyword.get(opts, :checkpoint) || Keyword.get(opts, :continuation) do
@@ -47,7 +47,7 @@ defmodule Alto.Runner.Execution.History do
       ]
 
       response =
-        supervised_call(
+        Call.run(
           fn ->
             Alto.Session.Conversation.persist(
               run.session,
@@ -102,7 +102,7 @@ defmodule Alto.Runner.Execution.History do
 
   defp mark_dispatched(run, operations) do
     response =
-      supervised_call(
+      Call.run(
         fn ->
           Session.mark_dispatched(run.session, operations,
             session_dir: run.session_dir,

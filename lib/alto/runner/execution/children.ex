@@ -715,7 +715,7 @@ defmodule Alto.Runner.Execution.Children do
   defp child_agent_identity(%{root_run_id: id, path: path}, child),
     do: %{root_run_id: id, path: path ++ [child]}
 
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
+  defp notify(sink, event), do: Alto.Events.notify(sink, event)
   defp cancellation(ref), do: Alto.Runner.Execution.Call.cancellation(ref)
   defp record_event(run, event), do: Events.record(run, event)
   defp merge_verdict(run, verdict), do: Events.merge_verdict(run, verdict)

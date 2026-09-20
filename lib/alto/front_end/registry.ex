@@ -140,7 +140,7 @@ defmodule Alto.FrontEnd.Registry do
 
   def command(server, name, payload) when is_binary(name) and is_map(payload) do
     with {:ok, callback, timeout} <- GenServer.call(server, {:command_callback, name}) do
-      case Alto.Runner.Execution.Support.supervised_call(
+      case Alto.Runner.Execution.Call.run(
              fn -> invoke_command(callback, payload) end,
              timeout,
              nil

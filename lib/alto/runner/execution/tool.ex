@@ -160,5 +160,5 @@ defmodule Alto.Runner.Execution.Tool do
   defp decision_name({:deny, reason}), do: {:denied, reason}
   defp decision_name({:error, reason}), do: {:error, reason}
   defp decision_name({:cancelled, reason}), do: {:cancelled, reason}
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
+  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 end

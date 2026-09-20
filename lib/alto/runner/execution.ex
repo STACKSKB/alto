@@ -1439,7 +1439,7 @@ defmodule Alto.Runner.Execution do
     "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
   end
 
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
+  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 
   defp tool_summary(run, name, arguments) do
     present(

@@ -255,5 +255,5 @@ defmodule Alto.Runner.Execution.Model do
     end
   end
 
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
+  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 end
