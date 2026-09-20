@@ -132,56 +132,37 @@ defmodule Alto.Subagents.Continuation do
   def list(ledger, metadata_filter \\ %{}, opts \\ []) do
     with true <- is_map(metadata_filter) and json?(metadata_filter),
          {:ok, deadline} <- Retained.deadline(opts) do
-      safe(fn -> list_keys(ledger, metadata_filter, deadline) end)
+      safe(fn -> list_entries(ledger, metadata_filter, deadline) end)
     else
       false -> {:error, :invalid_continuation_metadata_filter}
       {:error, _} = error -> error
     end
   end
 
-  defp list_keys(ledger, metadata_filter, deadline) do
-    with keys when is_list(keys) <- Retained.keys(ledger, deadline) do
-      Enum.reduce_while(Enum.sort(keys), {:ok, []}, fn key, {:ok, acc} ->
-        case Retained.read(ledger, key, deadline) do
-          {:ok, %{tool: @kind, recovery: %{"generation" => generation}}} ->
-            cell = %__MODULE__{
-              ledger: ledger,
-              key: key,
-              generation: generation,
-              deadline: deadline
-            }
+  defp list_entries(ledger, metadata_filter, deadline) do
+    with entries when is_list(entries) <- Retained.entries(ledger, deadline),
+         {:ok, items} <-
+           entries
+           |> Enum.filter(&(&1.tool == @kind))
+           |> Enum.sort_by(& &1.operation_key)
+           |> Alto.Result.traverse(&listed_entry/1) do
+      {:ok,
+       Enum.filter(items, fn item ->
+         Enum.all?(metadata_filter, fn {key, value} ->
+           Map.fetch(item.snapshot.metadata, key) == {:ok, value}
+         end)
+       end)}
+    end
+  end
 
-            case read(cell) do
-              {:ok, snapshot} ->
-                if Enum.all?(metadata_filter, fn {k, v} ->
-                     Map.fetch(snapshot.metadata, k) == {:ok, v}
-                   end),
-                   do: {:cont, {:ok, [%{identity: identity(cell), snapshot: snapshot} | acc]}},
-                   else: {:cont, {:ok, acc}}
-
-              {:error, _} = error ->
-                {:halt, error}
-            end
-
-          {:ok, %{tool: @kind}} ->
-            {:halt, {:error, :invalid_batch}}
-
-          {:ok, _foreign} ->
-            {:cont, {:ok, acc}}
-
-          {:error, :not_found} ->
-            {:cont, {:ok, acc}}
-
-          {:error, _} = error ->
-            {:halt, error}
-        end
-      end)
-      |> case do
-        {:ok, items} -> {:ok, Enum.reverse(items)}
-        error -> error
-      end
-    else
-      {:error, _} = error -> error
+  defp listed_entry(entry) do
+    with :ok <- valid_initial(entry),
+         {:ok, snapshot} <- snapshot(entry, entry.recovery["generation"]) do
+      {:ok,
+       %{
+         identity: %{"key" => entry.operation_key, "generation" => entry.recovery["generation"]},
+         snapshot: snapshot
+       }}
     end
   end
 
@@ -274,23 +255,9 @@ defmodule Alto.Subagents.Continuation do
   @doc "Inspect retained approvals and explicit decisions without granting execution."
   def suspended(%__MODULE__{} = batch) do
     with {:ok, snapshot} <- read(batch) do
-      Enum.reduce_while(snapshot.packet["children"], {:ok, []}, fn child, {:ok, acc} ->
-        if child["state"] in ["suspended", "decided"] do
-          case decode_approval(batch, child) do
-            {:ok, entry} ->
-              {:cont, {:ok, [entry | acc]}}
-
-            error ->
-              {:halt, error}
-          end
-        else
-          {:cont, {:ok, acc}}
-        end
-      end)
-      |> case do
-        {:ok, entries} -> {:ok, Enum.reverse(entries)}
-        error -> error
-      end
+      snapshot.packet["children"]
+      |> Enum.filter(&(&1["state"] in ["suspended", "decided"]))
+      |> Alto.Result.traverse(&decode_approval(batch, &1))
     end
   end
 
@@ -530,22 +497,14 @@ defmodule Alto.Subagents.Continuation do
   defp active(_), do: {:error, :batch_not_active}
 
   defp decode_results(children) do
-    Enum.reduce_while(children, {:ok, []}, fn child, {:ok, results} ->
-      case child do
-        %{"state" => "completed", "id" => id, "result" => encoded} ->
-          case Codec.decode(encoded, max_bytes: @max_result_bytes) do
-            {:ok, value} -> {:cont, {:ok, [{id, value} | results]}}
-            {:error, _} = error -> {:halt, error}
-          end
+    Alto.Result.traverse(children, fn
+      %{"state" => "completed", "id" => id, "result" => encoded} ->
+        with {:ok, value} <- Codec.decode(encoded, max_bytes: @max_result_bytes),
+             do: {:ok, {id, value}}
 
-        %{"state" => state, "id" => id} ->
-          {:halt, {:error, {:child_pending, id, state}}}
-      end
+      %{"state" => state, "id" => id} ->
+        {:error, {:child_pending, id, state}}
     end)
-    |> case do
-      {:ok, results} -> {:ok, Enum.reverse(results)}
-      error -> error
-    end
   end
 
   defp encode_result(result) do

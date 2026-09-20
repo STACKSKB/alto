@@ -44,10 +44,10 @@ defmodule Alto.Persistence.Retained do
          do: OperationLog.recovery(ledger, key, call_timeout(deadline))
   end
 
-  @doc "List retained operation keys under the supplied absolute deadline."
-  def keys(ledger, deadline \\ :infinity) do
+  @doc "Read one consistent set of operation views under the supplied deadline."
+  def entries(ledger, deadline \\ :infinity) do
     with :ok <- deadline_ok(deadline),
-         do: OperationLog.keys(ledger, call_timeout(deadline))
+         do: OperationLog.entries(ledger, :all, call_timeout(deadline))
   end
 
   @doc "Converge concurrent creation attempts on one immutable intent."

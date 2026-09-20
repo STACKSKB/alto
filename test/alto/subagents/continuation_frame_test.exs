@@ -107,6 +107,21 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     assert {:ok, _} = Continuation.open_frame(ledger, "one", %{"frame" => 1}, %{})
     assert {:ok, []} = Continuation.list(ledger, %{"missing" => nil})
 
+    for key <- ["z", "a"] do
+      assert {:ok, _} = Continuation.open_frame(ledger, key, %{"frame" => key}, %{"group" => 1})
+    end
+
+    assert {:ok, items} = Continuation.list(ledger, %{"group" => 1})
+    assert Enum.map(items, & &1.identity["key"]) == ["a", "z"]
+
+    for %{identity: identity, snapshot: snapshot} <- items do
+      assert {:ok, cell} = Continuation.restore(ledger, identity)
+      assert {:ok, ^snapshot} = Continuation.read(cell)
+    end
+
+    assert {:error, :run_timeout} =
+             Continuation.list(ledger, %{}, deadline: System.monotonic_time(:millisecond) - 1)
+
     monitor = Process.monitor(ledger)
     Process.exit(ledger, :shutdown)
     assert_receive {:DOWN, ^monitor, :process, ^ledger, _}
