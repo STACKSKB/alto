@@ -1,30 +1,12 @@
 defmodule Alto.Runner.Execution.Events do
-  @moduledoc "Bounded event retention, durable projection, and conservative outcome accounting."
+  @moduledoc """
+  Bounded event retention, durable persistence, and outcome accounting.
+
+  Operations update the supplied map directly. Durable events require its
+  session, session directory, and tool context; live events need only the
+  retention and sink fields.
+  """
   alias Alto.{Event, Session}
-
-  defmodule State do
-    @moduledoc "Event retention and storage capabilities, independent of a scheduler."
-    defstruct [
-      :session,
-      :session_dir,
-      :event_sink,
-      :events_rev,
-      :events_dropped,
-      :max_events,
-      :verdict,
-      :persistence_errors,
-      :run_id
-    ]
-  end
-
-  @fields Map.keys(State.__struct__()) -- [:__struct__, :run_id]
-
-  @doc false
-  def project(run),
-    do: struct!(State, Map.put(Map.take(run, @fields), :run_id, run.tool_context.session_id))
-
-  @doc false
-  def merge(run, %State{} = state), do: Map.merge(run, Map.take(state, @fields))
 
   def record(run, %Event{domain: :durable} = event) do
     run =
@@ -46,7 +28,7 @@ defmodule Alto.Runner.Execution.Events do
   defp persist_event(run, event) do
     Session.append(
       run.session,
-      Session.event_record(run.run_id, event),
+      Session.event_record(run.tool_context.session_id, event),
       session_dir_opt(run)
     )
   end

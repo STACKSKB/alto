@@ -36,7 +36,7 @@ defmodule Alto.Context.ReducerTest do
                compaction: [strategy: {Structured, owner: self()}, keep_recent_messages: 1]
              )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     assert {:ok, state} =
              Alto.Runner.Execution.Transcript.append(state, %{

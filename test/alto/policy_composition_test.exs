@@ -115,7 +115,7 @@ defmodule Alto.PolicyCompositionTest do
     {:ok, budget} = Alto.Runner.Budget.new([])
 
     run = %{
-      policy: Alto.Subagents.Policy.limits!(policy),
+      child_limits: Alto.Subagents.Policy.limits!(policy),
       budget: budget,
       tool_timeout: 1_000,
       cancel_ref: nil,

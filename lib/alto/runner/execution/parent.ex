@@ -52,9 +52,8 @@ defmodule Alto.Runner.Execution.Parent do
   def start(data, rest, terminal, run, complete) do
     with true <- run.agent_depth == 0 and not is_nil(run.subagent_journal),
          true <- is_struct(run.budget.account, Budget.Account),
-         {:ok, specs, concurrency} <- Children.validate_batch(data, Children.project(run)),
-         {:ok, specs, journal, state} <- Children.prepare_children(specs, Children.project(run)),
-         run = Children.merge(run, state),
+         {:ok, specs, concurrency} <- Children.validate_batch(data, run),
+         {:ok, specs, journal, run} <- Children.prepare_children(specs, run),
          {:ok, run} <- History.persist(run, allow_pending: true),
          pending = %{
            kind: :children,
@@ -83,9 +82,9 @@ defmodule Alto.Runner.Execution.Parent do
            ),
          {:ok, snapshot} <- call(fn -> Continuation.read(cell) end, run),
          true <- snapshot.phase == :pending do
-      case Children.run_prepared_children(specs, concurrency, journal, Children.project(run)) do
+      case Children.run_prepared_children(specs, concurrency, journal, run) do
         {:ok, :ok, _outcomes, _, state} ->
-          join(cell, snapshot, journal, Children.merge(run, state), rest, terminal, complete)
+          join(cell, snapshot, journal, state, rest, terminal, complete)
 
         {:ok, {kind, reason}, outcomes, _, state} ->
           state =
@@ -93,13 +92,13 @@ defmodule Alto.Runner.Execution.Parent do
               Children.merge_child_result(acc, outcome)
             end)
 
-          {kind, reason, Children.merge(run, state)}
+          {kind, reason, state}
 
         {:error, {:subagent_journal_failed, {:child_pending, _, _}}, _state} ->
           join(cell, snapshot, journal, run, rest, terminal, complete)
 
         {:error, reason, state} ->
-          {:error, reason, Children.merge(run, state)}
+          {:error, reason, state}
       end
     else
       false -> {:error, :parent_continuation_not_supported, run}
@@ -142,7 +141,7 @@ defmodule Alto.Runner.Execution.Parent do
                true <-
                  saved.packet["metadata"]["agent_identity"] ==
                    Alto.Protocol.encode_term(restored.agent_identity),
-               :ok <- Children.resume_decided(journal, Children.project(restored)) do
+               :ok <- Children.resume_decided(journal, restored) do
             join(cell, snapshot, journal, restored, frame.remaining, frame.terminal, complete)
           else
             false -> {:error, :parent_journal_mismatch, restored}
@@ -165,9 +164,7 @@ defmodule Alto.Runner.Execution.Parent do
   defp join(cell, snapshot, journal, run, rest, terminal, complete) do
     case call(fn -> Journal.join(journal) end, run) do
       {:ok, joined} ->
-        with {:ok, results, state} <-
-               Children.merge_retained(joined.results, Children.project(run)),
-             run = Children.merge(run, state),
+        with {:ok, results, run} <- Children.merge_retained(joined.results, run),
              {:continue, frame, next_run} <- complete.(results, journal, run, rest, terminal),
              {:ok, next_run} <- History.persist(next_run, allow_pending: true),
              {:ok, packet} <-

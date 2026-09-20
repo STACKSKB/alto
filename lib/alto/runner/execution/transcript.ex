@@ -1,52 +1,14 @@
 defmodule Alto.Runner.Execution.Transcript do
-  @moduledoc "Bounded conversation state with optional summary, handoff, or custom compaction."
+  @moduledoc """
+  Bounded conversation operations with optional compaction.
+
+  Functions update the supplied map directly, so standalone callers may pass
+  any map containing the fields needed by the selected operation.
+  """
   alias Alto.{Event, Session, Usage}
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Events
-
-  defmodule State do
-    @moduledoc "Transcript, model-compaction capabilities, and retained events."
-    defstruct [
-      :tool_definitions,
-      :model_tools,
-      :request_model_tools,
-      :messages_rev,
-      :transcript_bytes,
-      :max_transcript_bytes,
-      :compaction,
-      :compacted?,
-      :compaction_count,
-      :session,
-      :session_dir,
-      :provider,
-      :provider_timeout,
-      :budget,
-      :cancel_ref,
-      :event_sink,
-      :max_steps,
-      :model_requests,
-      :usage,
-      :run_id,
-      :events
-    ]
-  end
-
-  @fields Map.keys(State.__struct__()) -- [:__struct__, :run_id, :events]
-
-  @doc false
-  def project(run),
-    do:
-      struct!(
-        State,
-        Map.take(run, @fields)
-        |> Map.put(:run_id, run.tool_context.session_id)
-        |> Map.put(:events, Events.project(run))
-      )
-
-  @doc false
-  def merge(run, %State{} = state),
-    do: run |> Map.merge(Map.take(state, @fields)) |> Events.merge(state.events)
 
   def append(run, message) do
     message_bytes = byte_size(JSON.encode!(message))
@@ -152,6 +114,7 @@ defmodule Alto.Runner.Execution.Transcript do
 
   defp reduction_input(run, pinned, middle, recent, text, reason) do
     count = compaction_count(run) + 1
+    run_id = run.tool_context.session_id
 
     %{
       pinned: pinned,
@@ -164,10 +127,10 @@ defmodule Alto.Runner.Execution.Transcript do
       max_summary_bytes: run.compaction[:max_summary_bytes],
       max_handoff_bytes: run.compaction[:max_handoff_bytes],
       session: run.session,
-      run_id: run.run_id,
+      run_id: run_id,
       reason: reason,
       count: count,
-      artifact_id: if(count == 1, do: run.run_id, else: run.run_id <> "-context-#{count}"),
+      artifact_id: if(count == 1, do: run_id, else: run_id <> "-context-#{count}"),
       artifact_options:
         [session_dir: run.session_dir] ++
           if(run.compaction[:artifact_dir],
@@ -394,10 +357,8 @@ defmodule Alto.Runner.Execution.Transcript do
     end
   end
 
-  defp record_event(run, event), do: %{run | events: Events.record(run.events, event)}
-
-  defp add_persistence_error(run, reason),
-    do: %{run | events: Events.add_persistence_error(run.events, reason)}
+  defp record_event(run, event), do: Events.record(run, event)
+  defp add_persistence_error(run, reason), do: Events.add_persistence_error(run, reason)
 
   defp session_dir_opt(run), do: [session_dir: run.session_dir]
   defp supervised_call(fun, timeout, ref), do: Alto.Runner.Execution.Call.run(fun, timeout, ref)

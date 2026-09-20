@@ -348,7 +348,7 @@ defmodule Alto.Runner.SerialCompactionTest do
                session_dir: dir
              )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     state =
       Enum.reduce(1..4, state, fn index, state ->
@@ -401,7 +401,7 @@ defmodule Alto.Runner.SerialCompactionTest do
                session_dir: dir
              )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     assert {:ok, state} =
              Alto.Runner.Execution.Transcript.append(state, %{
@@ -528,7 +528,7 @@ defmodule Alto.Runner.SerialCompactionTest do
         session_dir: dir
       )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     {:ok, state} =
       Alto.Runner.Execution.Transcript.append(state, %{
@@ -565,7 +565,7 @@ defmodule Alto.Runner.SerialCompactionTest do
         session_dir: dir
       )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     {:ok, state} =
       Alto.Runner.Execution.Transcript.append(state, %{
@@ -596,7 +596,7 @@ defmodule Alto.Runner.SerialCompactionTest do
           session_dir: dir
         )
 
-      state = Alto.Runner.Execution.Transcript.project(run)
+      state = run
 
       {:ok, state} =
         Alto.Runner.Execution.Transcript.append(state, %{

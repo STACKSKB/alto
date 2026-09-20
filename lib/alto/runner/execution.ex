@@ -89,7 +89,7 @@ defmodule Alto.Runner.Execution do
           run_in_workspace(task, opts, manager, snapshot, identity)
       end
 
-    retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
+    Children.retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
   end
 
   defp run_without_workspace(task, opts) do
@@ -662,7 +662,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp interpret(%Effect{kind: :spawn_agent, data: data}, run) do
-    case validate_spawn(data) do
+    case Children.validate_spawn(data) do
       {:error, reason} ->
         {:error, {:invalid_spawn_agent, reason}, run}
 
@@ -671,22 +671,23 @@ defmodule Alto.Runner.Execution do
           {:event, Event.durable(:subagent_failed, %{id: spec.id, error: :max_depth_exceeded}),
            run}
         else
-          case with :ok <- validate_subagent_tools(spec.tools, run),
+          case with :ok <- Children.validate_subagent_tools(spec.tools, run),
                     do: Children.admit(run, [spec]) do
             :ok -> run_subagent(spec, run)
             {:cancelled, reason} -> {:cancelled, reason, run}
-            {:error, reason} -> {:event, subagent_failed(spec.id, reason), run}
+            {:error, reason} -> {:event, Children.subagent_failed(spec.id, reason), run}
           end
         end
     end
   end
 
   defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
-    with {:ok, specs, concurrency} <- validate_batch(data, run),
-         {:ok, status, outcomes, journal, run} <- run_children(specs, concurrency, run) do
+    with {:ok, specs, concurrency} <- Children.validate_batch(data, run),
+         {:ok, status, outcomes, journal, run} <-
+           Children.run_children(specs, concurrency, run) do
       {results, run} =
         Enum.map_reduce(outcomes, run, fn {id, outcome}, acc ->
-          {subagent_data(id, outcome), merge_child_result(acc, outcome)}
+          {Children.subagent_data(id, outcome), Children.merge_child_result(acc, outcome)}
         end)
 
       case status do
@@ -747,10 +748,7 @@ defmodule Alto.Runner.Execution do
   defp compact_context(run, opts) do
     alias Alto.Runner.Execution.Transcript, as: History
 
-    case History.reduce(History.project(run), opts) do
-      {:ok, state} -> {:ok, History.merge(run, state)}
-      {:error, reason, state} -> {:error, reason, History.merge(run, state)}
-    end
+    History.reduce(run, opts)
   end
 
   defp request_model(request, run) do
@@ -870,43 +868,18 @@ defmodule Alto.Runner.Execution do
         step
       )
 
-  defp validate_spawn(data), do: Children.validate_spawn(data)
-
-  defp validate_subagent_tools(tools, run),
-    do: Children.validate_subagent_tools(tools, Children.project(run))
-
-  defp validate_batch(data, run), do: Children.validate_batch(data, Children.project(run))
-  defp subagent_failed(id, reason), do: Children.subagent_failed(id, reason)
-  defp subagent_data(id, result), do: Children.subagent_data(id, result)
-  defp with_journal(data, journal), do: Children.with_journal(data, journal)
-  defp retain_child_outcome(ticket, outcome), do: Children.retain_child_outcome(ticket, outcome)
-
-  defp merge_child_result(run, outcome),
-    do: Children.merge(run, Children.merge_child_result(Children.project(run), outcome))
-
-  defp run_children(specs, concurrency, run) do
-    case Children.run_children(specs, concurrency, Children.project(run)) do
-      {:ok, status, outcomes, journal, state} ->
-        {:ok, status, outcomes, journal, Children.merge(run, state)}
-
-      {:error, reason, state} ->
-        {:error, reason, Children.merge(run, state)}
-
-      other ->
-        other
-    end
-  end
-
   defp run_subagent(spec, run) do
-    case run_children([spec], 1, run) do
+    case Children.run_children([spec], 1, run) do
       {:ok, :ok, [{id, outcome}], journal, run} ->
-        data = subagent_data(id, outcome) |> with_journal(journal)
+        data = Children.subagent_data(id, outcome) |> Children.with_journal(journal)
         type = if data.status == :error, do: :subagent_failed, else: :subagent_completed
-        {:event, Event.durable(type, data), merge_child_result(run, outcome)}
+        {:event, Event.durable(type, data), Children.merge_child_result(run, outcome)}
 
       {:ok, {status, reason}, outcomes, _journal, run} ->
         run =
-          Enum.reduce(outcomes, run, fn {_, outcome}, acc -> merge_child_result(acc, outcome) end)
+          Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
+            Children.merge_child_result(acc, outcome)
+          end)
 
         {status, reason, run}
 
@@ -914,7 +887,7 @@ defmodule Alto.Runner.Execution do
         {:error, reason, run}
 
       {:error, reason} ->
-        {:event, subagent_failed(spec.id, reason), run}
+        {:event, Children.subagent_failed(spec.id, reason), run}
     end
   end
 
@@ -930,7 +903,7 @@ defmodule Alto.Runner.Execution do
       )
 
   defp batch_completed(results, run, journal) do
-    data = with_journal(%{results: results}, journal)
+    data = Children.with_journal(%{results: results}, journal)
 
     with :ok <- check_native_result(data, run.max_tool_result_bytes),
          {:ok, run} <-
@@ -1464,10 +1437,7 @@ defmodule Alto.Runner.Execution do
   defp append_message(run, message) do
     alias Alto.Runner.Execution.Transcript, as: History
 
-    case History.append(History.project(run), message) do
-      {:ok, state} -> {:ok, History.merge(run, state)}
-      {:error, reason, state} -> {:error, reason, History.merge(run, state)}
-    end
+    History.append(run, message)
   end
 
   # An empty tool_calls array is not part of the Chat Completions shape, and
@@ -1556,12 +1526,7 @@ defmodule Alto.Runner.Execution do
     {:error, {:cancelled, reason}, result(run, nil, :cancelled)}
   end
 
-  defp record_event(run, event) do
-    state =
-      Alto.Runner.Execution.Events.project(run) |> Alto.Runner.Execution.Events.record(event)
-
-    Alto.Runner.Execution.Events.merge(run, state)
-  end
+  defp record_event(run, event), do: Alto.Runner.Execution.Events.record(run, event)
 
   defp persist_session_outcome(run, outcome) do
     state = Alto.Runner.Execution.Session.from_run(run)
@@ -1730,11 +1695,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp merge_verdict(run, class) do
-    events =
-      Alto.Runner.Execution.Events.project(run)
-      |> Alto.Runner.Execution.Events.merge_verdict(class)
-
-    Alto.Runner.Execution.Events.merge(run, events)
+    Alto.Runner.Execution.Events.merge_verdict(run, class)
   end
 
   defp final_verdict(:empty, :success), do: :completed
