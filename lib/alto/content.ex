@@ -2,11 +2,9 @@ defmodule Alto.Content do
   @moduledoc """
   Typed model-facing content returned by tools.
 
-  A `%Content{}` is deliberately distinct from ordinary tool values. The
-  runner must call `normalize_tool_result/2` before placing it in a transcript;
-  maps and lists returned by other tools continue through the legacy JSON-text
-  path. Normalized blocks contain only JSON-compatible values and survive
-  session persistence without provider-specific fields.
+  The runner validates typed blocks with `normalize_tool_result/2` before
+  adding them to a provider-neutral transcript. Ordinary tool values,
+  including maps and lists, are encoded as text.
   """
 
   @enforce_keys [:blocks]
@@ -63,9 +61,8 @@ defmodule Alto.Content do
   @doc """
   Normalize typed tool content for the provider-neutral transcript.
 
-  `:not_content` is returned for every value that is not an `%Alto.Content{}`,
-  including lookalike maps and lists, so existing native tool values retain
-  their legacy string/JSON behavior.
+  Returns `:not_content` for ordinary tool values, including lookalike maps
+  and lists; only `%Alto.Content{}` selects typed content.
   """
   @spec normalize_tool_result(term(), pos_integer()) ::
           :not_content

@@ -1173,14 +1173,10 @@ defmodule Alto.Runner.Execution do
   defp tool_event_summary(other, _summary), do: other
 
   defp tool_outcome(job, {:ok, value}, run) do
-    # Bounded native result contract: the native `value` is measured
-    # with `:erlang.external_size/1` against `max_tool_result_bytes` *before*
-    # any event retention, subscriber fanout, or session persistence. An
-    # oversize native value is rejected as a bounded `tool_failed` — the tool
-    # ran exactly once and that fact is retained; it is never re-executed and
-    # the raw value is never stored. `output` is a bounded legacy string;
-    # typed content uses an optional host presenter and remains intact in
-    # `value` and transcript content. Deterministic loops must prefer `value`.
+    # Bound native values before retention or persistence. An oversized result
+    # is an uncertain failure after dispatch, never permission to rerun.
+    # Deterministic loops consume `value`; providers receive normalized content
+    # and the host may supply a bounded display string in `output`.
     with :ok <- Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes),
          {:ok, content, output} <- model_result_content(value, run) do
       commit_tool_outcome(
