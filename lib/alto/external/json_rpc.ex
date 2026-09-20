@@ -31,6 +31,48 @@ defmodule Alto.External.JSONRPC do
     }
   end
 
+  def ensure_started(module, opts, key) do
+    name = {:via, Registry, {Alto.External.Registry, key}}
+    child = {module, Keyword.put(opts, :name, name)}
+
+    case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
+      {:ok, pid} ->
+        await_startup(pid, opts, module)
+
+      {:error, {:already_started, pid}} ->
+        await_startup(pid, opts, module)
+
+      {:error, reason} ->
+        {:error, {:external_client_failed, module, :start, reason}}
+    end
+  catch
+    :exit, reason -> {:error, {:external_client_failed, module, :supervisor, reason}}
+  end
+
+  defp await_startup(pid, opts, module) do
+    GenServer.call(pid, :await_ready, call_timeout(Keyword.fetch!(opts, :startup_timeout)))
+  catch
+    :exit, reason -> {:error, {:external_client_failed, module, :ready, reason}}
+  end
+
+  defp call_timeout(:infinity), do: :infinity
+  defp call_timeout(timeout) when is_integer(timeout), do: timeout + 100
+
+  def open(state, opener, initialize) do
+    case opener.(state.opts) do
+      {:ok, process} ->
+        state = %{state | process: process, port: ExternalProcess.port(process)}
+
+        case initialize.(state) do
+          {:ok, state} -> {:ok, arm_startup_timeout(state)}
+          {:error, reason} -> {:error, reason, state}
+        end
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
+
   def format_status(status) do
     Map.update(status, :state, %{}, fn state ->
       %{phase: state.phase, pending_count: map_size(state.pending)}

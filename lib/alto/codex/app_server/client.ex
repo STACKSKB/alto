@@ -25,23 +25,8 @@ defmodule Alto.Codex.AppServer.Client do
   @spec ensure_started(options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts \\ []) when is_list(opts) do
     with {:ok, opts} <- normalize_options(opts) do
-      key = client_key(opts)
-      name = {:via, Registry, {Alto.External.Registry, key}}
-      child = {__MODULE__, Keyword.put(opts, :name, name)}
-
-      case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
-        {:ok, pid} ->
-          await_ready(pid, Keyword.fetch!(opts, :startup_timeout))
-
-        {:error, {:already_started, pid}} ->
-          await_ready(pid, Keyword.fetch!(opts, :startup_timeout))
-
-        {:error, reason} ->
-          {:error, {:codex_app_server_start_failed, reason}}
-      end
+      JSONRPC.ensure_started(__MODULE__, opts, client_key(opts))
     end
-  catch
-    :exit, reason -> {:error, {:codex_app_server_supervisor_unavailable, reason}}
   end
 
   @doc "Receive App Server notifications and server requests in the calling process."
@@ -127,25 +112,18 @@ defmodule Alto.Codex.AppServer.Client do
 
   @impl true
   def handle_continue(:open, state) do
-    case open_port(state.opts) do
-      {:ok, process} ->
-        params = %{
-          "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
-          "capabilities" => %{"experimentalApi" => false}
-        }
+    params = %{
+      "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
+      "capabilities" => %{"experimentalApi" => false}
+    }
 
-        state = %{state | process: process, port: ExternalProcess.port(process)}
-
-        case send_request(state, "initialize", params, :initialize, false) do
-          {:ok, state} ->
-            {:noreply, JSONRPC.arm_startup_timeout(state)}
-
-          {:error, reason} ->
-            {:stop, reason, fail_all(state, reason)}
-        end
-
-      {:error, reason} ->
-        {:stop, reason, fail_all(state, reason)}
+    case JSONRPC.open(
+           state,
+           &open_port/1,
+           &send_request(&1, "initialize", params, :initialize, false)
+         ) do
+      {:ok, state} -> {:noreply, state}
+      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
@@ -474,12 +452,6 @@ defmodule Alto.Codex.AppServer.Client do
       })
 
     :ok
-  end
-
-  defp await_ready(pid, timeout) do
-    GenServer.call(pid, :await_ready, call_timeout(timeout))
-  catch
-    :exit, reason -> {:error, {:codex_app_server_startup_failed, reason}}
   end
 
   defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
