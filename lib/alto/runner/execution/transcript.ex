@@ -104,11 +104,8 @@ defmodule Alto.Runner.Execution.Transcript do
       true ->
         input = reduction_input(run, pinned, middle, recent, text, reason)
 
-        with {:ok, {module, opts}} <- Alto.Context.Reducer.resolve(run.compaction[:strategy]) do
-          execute_reducer(run, input, module, opts, required_headroom)
-        else
-          {:error, reason} -> record_compact_failed(run, reason)
-        end
+        {module, opts} = Keyword.fetch!(run.compaction, :strategy)
+        execute_reducer(run, input, module, opts, required_headroom)
     end
   end
 

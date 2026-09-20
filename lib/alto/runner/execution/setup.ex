@@ -244,31 +244,28 @@ defmodule Alto.Runner.Execution.Setup do
     end
   end
 
-  defp init_transcript(task, :resumed, max_transcript_bytes, opts) do
-    with {:ok, history, history_bytes} <- resume_history(Keyword.fetch!(opts, :resume)) do
-      user_message = %{"role" => "user", "content" => task_text(task)}
-      messages_rev = [user_message | Enum.reverse(history)]
-      transcript_bytes = history_bytes + byte_size(JSON.encode!(user_message))
+  defp init_transcript(_task, {:fresh, :generic}, _max, _opts), do: {:ok, [], 0}
 
-      if transcript_bytes > max_transcript_bytes do
-        {:error, {:transcript_limit, max_transcript_bytes}}
-      else
-        {:ok, messages_rev, transcript_bytes}
-      end
+  defp init_transcript(task, prompt, max_transcript_bytes, opts) do
+    with {:ok, history} <- initial_history(prompt, opts) do
+      messages_rev = [%{"role" => "user", "content" => task_text(task)} | Enum.reverse(history)]
+      bytes = Transcript.bytes(messages_rev)
+
+      if bytes <= max_transcript_bytes,
+        do: {:ok, messages_rev, bytes},
+        else: {:error, {:transcript_limit, max_transcript_bytes}}
     end
   end
 
-  defp init_transcript(task, {:fresh, prompt}, max_transcript_bytes, _opts) do
-    init_transcript(task, prompt, max_transcript_bytes)
-  end
+  defp initial_history(:resumed, opts), do: resume_history(Keyword.fetch!(opts, :resume))
+  defp initial_history({:fresh, nil}, _opts), do: {:ok, []}
+
+  defp initial_history({:fresh, prompt}, _opts),
+    do: {:ok, [%{"role" => "system", "content" => prompt}]}
 
   defp resume_history(%{messages: messages, transcript_bytes: bytes})
-       when is_list(messages) and is_integer(bytes) and bytes >= 0 do
-    with :ok <- Transcript.validate(messages, allow_pending: true),
-         {:ok, messages} <- Transcript.close_interrupted(messages) do
-      {:ok, messages, Transcript.bytes(messages)}
-    end
-  end
+       when is_list(messages) and is_integer(bytes) and bytes >= 0,
+       do: Transcript.close_interrupted(messages)
 
   defp resume_history(other), do: {:error, {:invalid_resume, other}}
 
@@ -289,31 +286,6 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp resolve_prompt_state(opts, cwd, tools, _provider, project_instructions),
     do: resolve_system_prompt(opts, cwd, tools, project_instructions)
-
-  defp init_transcript(_task, :generic, _max_transcript_bytes), do: {:ok, [], 0}
-
-  defp init_transcript(task, system_prompt, max_transcript_bytes) do
-    user_message = %{"role" => "user", "content" => task_text(task)}
-
-    messages_rev =
-      case system_prompt do
-        prompt when is_binary(prompt) and prompt != "" ->
-          [user_message, %{"role" => "system", "content" => prompt}]
-
-        _other ->
-          [user_message]
-      end
-
-    transcript_bytes =
-      messages_rev
-      |> Enum.reduce(0, fn message, total -> total + byte_size(JSON.encode!(message)) end)
-
-    if transcript_bytes > max_transcript_bytes do
-      {:error, {:transcript_limit, max_transcript_bytes}}
-    else
-      {:ok, messages_rev, transcript_bytes}
-    end
-  end
 
   # Project instructions are model capability state: `:auto` resolves bounded
   # workspace text at construction and is inert in generic provider-less runs.
@@ -404,9 +376,9 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_compaction(opts) when is_list(opts) do
     with true <- Keyword.keyword?(opts),
          {:ok, normalized} <- NimbleOptions.validate(opts, @compaction_schema),
-         :ok <- validate_compaction_strategy(normalized[:strategy]),
+         {:ok, strategy} <- Alto.Context.Reducer.resolve(normalized[:strategy]),
          :ok <- validate_artifact_dir(normalized[:artifact_dir]) do
-      {:ok, normalized}
+      {:ok, Keyword.put(normalized, :strategy, strategy)}
     else
       false -> {:error, {:invalid_compaction, opts}}
       {:error, reason} -> {:error, {:invalid_compaction, reason}}
@@ -414,13 +386,6 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp normalize_compaction(other), do: {:error, {:invalid_compaction, other}}
-
-  defp validate_compaction_strategy(strategy) do
-    case Alto.Context.Reducer.resolve(strategy) do
-      {:ok, _} -> :ok
-      error -> error
-    end
-  end
 
   defp validate_artifact_dir(nil), do: :ok
   defp validate_artifact_dir(path) when is_binary(path) and path != "", do: :ok
