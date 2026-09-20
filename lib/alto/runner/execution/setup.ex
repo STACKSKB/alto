@@ -144,7 +144,6 @@ defmodule Alto.Runner.Execution.Setup do
       cancel_ref: Keyword.get(opts, :cancel_ref),
       session: Keyword.get(opts, :session),
       session_dir: Keyword.get(opts, :session_dir),
-      compacted?: false,
       compaction_count: 0,
       retry_policy: Keyword.get(opts, :retry_policy),
       tool_presenter: Keyword.get(opts, :tool_presenter),

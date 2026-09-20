@@ -24,7 +24,6 @@ defmodule Alto.Runner.Checkpoint do
     :pending_provider_calls,
     :request_model_tools,
     :transcript_revision,
-    :compacted?,
     :compaction_count,
     :resolved_operations,
     :agent_identity
@@ -418,8 +417,7 @@ defmodule Alto.Runner.Checkpoint do
   defp valid_parent_saved?(_, _), do: false
 
   defp valid_compaction_state?(saved) do
-    is_boolean(saved.compacted?) and is_integer(saved.compaction_count) and
-      saved.compaction_count >= 0 and saved.compacted? == saved.compaction_count > 0
+    is_integer(saved.compaction_count) and saved.compaction_count >= 0
   end
 
   defp valid_history_state?(saved) do
