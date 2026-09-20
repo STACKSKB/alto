@@ -1278,8 +1278,13 @@ defmodule Alto.Runner.Execution do
   # are unchanged — loops keep matching on type.
   defp tool_failure(job, reason, outcome, run) do
     run = merge_verdict(run, outcome)
-    content = encode_tool_result(%{error: inspect(reason)}, run.max_tool_result_bytes)
     bounded_reason = bound_failure_reason(reason, run.max_tool_result_bytes)
+
+    content =
+      encode_tool_result(
+        %{error: Alto.Protocol.encode_term(bounded_reason)},
+        run.max_tool_result_bytes
+      )
 
     case add_outcome_message(
            run,
@@ -1553,7 +1558,9 @@ defmodule Alto.Runner.Execution do
     # A non-encodable tool result stays a bounded tool message; letting it
     # grow unbounded would trip the transcript limit and fail the whole run.
     error ->
-      bound_tool_result(inspect(%{encoding_error: Exception.message(error), value: value}), limit)
+      %{encoding_error: Exception.message(error), value: Alto.Protocol.encode_term(value)}
+      |> JSON.encode!()
+      |> bound_tool_result(limit)
   end
 
   defp bound_tool_result(encoded, limit),

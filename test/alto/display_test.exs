@@ -53,12 +53,20 @@ defmodule Alto.DisplayTest do
              "does not support model discovery"
   end
 
-  test "tool results and legacy serialized failures use labeled fields" do
-    text = Display.result(~s({"exit_code":1,"stderr":"No such file","error":"{:error, :enoent}"}))
+  test "tool results and structured failures use labeled fields" do
+    text =
+      Display.result(
+        JSON.encode!(%{
+          exit_code: 1,
+          stderr: "No such file",
+          error: Alto.Protocol.encode_term({:error, :enoent})
+        })
+      )
+
     assert text =~ "Exit code: 1"
     assert text =~ "Stderr: No such file"
     assert text =~ "File or folder not found"
-    text = Display.error(inspect(%{reason: {:error, :eacces}, path: "/tmp/project"}))
+    text = Display.error(%{reason: {:error, :eacces}, path: "/tmp/project"})
     assert text =~ "Permission denied"
     assert text =~ "Path: /tmp/project"
     refute text =~ "%{"
@@ -68,10 +76,10 @@ defmodule Alto.DisplayTest do
   test "readable display does not evaluate diagnostics or create atoms" do
     target = Path.join(System.tmp_dir!(), "alto-display-#{System.unique_integer([:positive])}")
     text = ~s|%{message: File.write!(#{inspect(target)}, "bad")}|
-    assert Display.error(text) == "Diagnostic details are unavailable"
+    assert Display.error(text) == text
     refute File.exists?(target)
     unknown = "untrusted_display_atom_#{System.unique_integer([:positive])}"
-    assert Display.error("%{" <> unknown <> ": 1}") == "Diagnostic details are unavailable"
+    assert Display.error("%{" <> unknown <> ": 1}") == "%{" <> unknown <> ": 1}"
     assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
     assert Display.error(%{"$inspect" => "#PID<0.1.0>"}) == "Diagnostic details are unavailable"
   end

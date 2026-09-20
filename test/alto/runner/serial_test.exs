@@ -629,7 +629,7 @@ defmodule Alto.Runner.SerialTest do
 
     assert Enum.any?(
              result.messages,
-             &(&1["role"] == "tool" and &1["content"] =~ ":boom")
+             &(&1["role"] == "tool" and JSON.decode!(&1["content"]) == %{"error" => "boom"})
            )
 
     refute_receive {:approval_decision, _request}
@@ -785,11 +785,11 @@ defmodule Alto.Runner.SerialTest do
     refute_receive {:provider_request, _request}
   end
 
-  test "unprepared legacy tools still follow run/2 without preparation" do
+  test "unprepared tools use run/3 and expose arguments for approval" do
     parent = self()
 
     assert {:ok, result} =
-             Alto.run("legacy run2",
+             Alto.run("unprepared tool",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
                approval: {RecordingApproval, test_pid: parent},
