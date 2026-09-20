@@ -1105,9 +1105,6 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp batch_outcome(job, {:ok, {:batch_oversize, reason}}, run),
-    do: finish_tool_job(job, {:uncertain, reason}, run)
-
   defp batch_outcome(job, {:ok, value}, run),
     do: finish_tool_job(job, {:participant, value}, run)
 
@@ -1229,35 +1226,12 @@ defmodule Alto.Runner.Execution do
     # `value` and transcript content. Deterministic loops must prefer `value`.
     with :ok <- Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes),
          {:ok, content, output} <- model_result_content(value, run) do
-      run = merge_verdict(run, :completed)
-
-      case add_outcome_message(
-             run,
-             job.origin,
-             job.id,
-             job.name,
-             job.op_id,
-             :completed,
-             content
-           ) do
-        {:ok, run} ->
-          run = History.resolve(run, job.op_id)
-          # `call_id` preserves tool-call correlation; `operation_id` is the
-          # globally unique runtime operation.
-          {:event,
-           Event.durable(:tool_completed, %{
-             call_id: job.id,
-             operation_id: job.op_id,
-             run_id: run.tool_context.session_id,
-             name: job.name,
-             output: output,
-             value: value,
-             outcome: :completed
-           }), run}
-
-        {:error, reason, run} ->
-          {:error, reason, merge_verdict(run, :unknown)}
-      end
+      commit_tool_outcome(
+        job,
+        content,
+        %{output: output, value: value, outcome: :completed},
+        run
+      )
     else
       {:error, reason} ->
         tool_failure(job, reason, :unknown, run)
@@ -1278,7 +1252,6 @@ defmodule Alto.Runner.Execution do
   # (timeout/crash) and uninterpretable returns pass `:unknown`. Event types
   # are unchanged — loops keep matching on type.
   defp tool_failure(job, reason, outcome, run) do
-    run = merge_verdict(run, outcome)
     bounded_reason = bound_failure_reason(reason, run.max_tool_result_bytes)
 
     content =
@@ -1287,33 +1260,41 @@ defmodule Alto.Runner.Execution do
         run.max_tool_result_bytes
       )
 
-    case add_outcome_message(
-           run,
-           job.origin,
-           job.id,
-           job.name,
-           job.op_id,
-           :failed,
-           content
-         ) do
+    commit_tool_outcome(
+      job,
+      content,
+      %{error: bounded_reason, outcome: outcome},
+      run
+    )
+  end
+
+  defp commit_tool_outcome(job, content, %{outcome: outcome} = data, run) do
+    {type, status} =
+      if outcome == :completed,
+        do: {:tool_completed, :completed},
+        else: {:tool_failed, :failed}
+
+    run = merge_verdict(run, outcome)
+
+    case add_outcome_message(run, job.origin, job.id, job.name, job.op_id, status, content) do
       {:ok, run} ->
         run =
           if outcome == :rejected_before_dispatch,
             do: run,
             else: History.resolve(run, job.op_id)
 
-        {:event,
-         Event.durable(:tool_failed, %{
-           call_id: job.id,
-           operation_id: job.op_id,
-           run_id: run.tool_context.session_id,
-           name: job.name,
-           error: bounded_reason,
-           outcome: outcome
-         }), run}
+        common = %{
+          call_id: job.id,
+          operation_id: job.op_id,
+          run_id: run.tool_context.session_id,
+          name: job.name
+        }
 
-      {:error, limit_reason, run} ->
-        {:error, limit_reason, run}
+        {:event, Event.durable(type, Map.merge(common, data)), run}
+
+      {:error, reason, run} ->
+        run = if outcome == :completed, do: merge_verdict(run, :unknown), else: run
+        {:error, reason, run}
     end
   end
 

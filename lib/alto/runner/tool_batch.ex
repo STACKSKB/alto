@@ -92,14 +92,14 @@ defmodule Alto.Runner.ToolBatch do
   defp bound_result({:ok, value} = outcome, limit) do
     case Tool.check_native_result(value, limit) do
       :ok -> outcome
-      {:error, reason} -> {:batch_oversize, reason}
+      {:error, reason} -> {:unknown, reason}
     end
   end
 
   defp bound_result(outcome, limit) do
     case Tool.check_native_result(outcome, limit) do
       :ok -> outcome
-      {:error, reason} -> {:batch_oversize, reason}
+      {:error, reason} -> {:unknown, reason}
     end
   end
 
