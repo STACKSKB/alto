@@ -58,7 +58,7 @@ defmodule Alto.Workspaces do
     with {:ok, %Snapshot{source: source, metadata: metadata}} <- normalize_snapshot(snapshot),
          :ok <- valid_identity(identity),
          :ok <- separate_root(manager.root, source) do
-      id = workspace_id(manager, identity)
+      id = workspace_id(identity)
 
       workspace = %{
         "id" => id,
@@ -413,10 +413,7 @@ defmodule Alto.Workspaces do
          true <- info.workspace["cwd"] == Path.join([manager.root, id, "checkout"]),
          true <-
            not check_backend? or
-             info.workspace["backend_fingerprint"] in [
-               fingerprint(manager),
-               legacy_fingerprint(manager)
-             ],
+             info.workspace["backend_fingerprint"] == fingerprint(manager),
          :ok <- safe_path(info.workspace["cwd"]) do
       {:ok, info}
     else
@@ -594,25 +591,10 @@ defmodule Alto.Workspaces do
         )
       )
 
-  defp legacy_fingerprint(manager),
-    do:
-      hash(
-        :erlang.term_to_binary(
-          {manager.backend, manager.backend.module_info(:md5), manager.backend_options}
-        )
-      )
-
   defp hash(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
 
-  defp workspace_id(manager, identity) do
-    current = "ws-" <> hash(:erlang.term_to_binary(identity, [:deterministic]))
-    legacy = "ws-" <> hash(:erlang.term_to_binary(identity))
-
-    case get(manager, legacy) do
-      {:ok, _} -> legacy
-      _ -> current
-    end
-  end
+  defp workspace_id(identity),
+    do: "ws-" <> hash(:erlang.term_to_binary(identity, [:deterministic]))
 
   defp attempt_id, do: "wa-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 end

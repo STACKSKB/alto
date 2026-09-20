@@ -145,7 +145,7 @@ defmodule Alto.ConsumerTest do
           tool_timeout: 50
         )
 
-      case Consumer.worst_outcome(result.events) do
+      case Consumer.worst_outcome(result) do
         :unknown -> {:park, :unknown_tool_outcome}
         :failed -> {:failed, :known}
         :completed -> :done
@@ -398,51 +398,6 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
     assert ["src:del-1"] = OperationLog.list_parked(l)
-  end
-
-  test "worst_outcome folds tool events" do
-    completed = %Alto.Event{
-      domain: :durable,
-      type: :tool_completed,
-      data: %{outcome: :completed},
-      at_ms: 0,
-      seq: nil
-    }
-
-    failed = %Alto.Event{
-      domain: :durable,
-      type: :tool_failed,
-      data: %{outcome: :failed_known},
-      at_ms: 0,
-      seq: nil
-    }
-
-    unknown = %Alto.Event{
-      domain: :durable,
-      type: :tool_failed,
-      data: %{outcome: :unknown},
-      at_ms: 0,
-      seq: nil
-    }
-
-    other = %Alto.Event{domain: :durable, type: :step_settled, data: %{}, at_ms: 0, seq: nil}
-
-    assert :empty = Consumer.worst_outcome([])
-    assert :empty = Consumer.worst_outcome([other])
-    assert :completed = Consumer.worst_outcome([completed])
-    assert :failed = Consumer.worst_outcome([completed, failed])
-    assert :unknown = Consumer.worst_outcome([failed, unknown, completed])
-
-    cancelled =
-      %Alto.Event{
-        domain: :durable,
-        type: :run_cancelled,
-        data: %{in_flight: %{operation_id: "op", outcome: :unknown}},
-        at_ms: 0,
-        seq: nil
-      }
-
-    assert :unknown = Consumer.worst_outcome([completed, cancelled])
   end
 
   test "authoritative run verdict survives bounded event eviction" do

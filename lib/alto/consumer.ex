@@ -95,8 +95,8 @@ defmodule Alto.Consumer do
     GenServer.call(server, :poll, :infinity)
   end
 
-  @doc "Read an authoritative runner verdict or fold legacy tool events."
-  @spec worst_outcome([Alto.Event.t()] | Alto.Runner.Result.t()) ::
+  @doc "Read the authoritative runner verdict."
+  @spec worst_outcome(Alto.Runner.Result.t()) ::
           :unknown | :failed | :completed | :empty
   def worst_outcome(%Alto.Runner.Result{verdict: :unknown}), do: :unknown
 
@@ -106,34 +106,6 @@ defmodule Alto.Consumer do
 
   def worst_outcome(%Alto.Runner.Result{verdict: :completed}), do: :completed
   def worst_outcome(%Alto.Runner.Result{verdict: :empty}), do: :empty
-
-  def worst_outcome(events) do
-    classes =
-      for event <- events,
-          event.type in [:tool_completed, :tool_failed],
-          do: event.data[:outcome]
-
-    cond do
-      :unknown in classes ->
-        :unknown
-
-      Enum.any?(classes, &(&1 in [:failed_known, :rejected_before_dispatch])) ->
-        :failed
-
-      Enum.any?(events, fn
-        %{type: :run_cancelled, data: %{in_flight: %{outcome: :unknown}}} -> true
-        %{type: :run_cancelled, data: %{in_flight: %{outcome: %{class: :unknown}}}} -> true
-        _event -> false
-      end) ->
-        :unknown
-
-      :completed in classes ->
-        :completed
-
-      true ->
-        :empty
-    end
-  end
 
   ## Server implementation
 

@@ -397,8 +397,8 @@ defmodule Alto.Listeners.Webhook do
 
   defp build_endpoint(spec) do
     with {:ok, path} <- endpoint_path(spec),
-         {:ok, {verify, legacy?}} <- endpoint_verify(Map.get(spec, :verify)),
-         {:ok, identity} <- endpoint_identity(Map.get(spec, :identity), legacy?),
+         {:ok, verify} <- endpoint_verify(Map.get(spec, :verify)),
+         {:ok, identity} <- endpoint_identity(Map.get(spec, :identity)),
          {:ok, on_event} <- endpoint_on_event(Map.get(spec, :on_event)),
          {:ok, max_body_bytes} <-
            max_body_bytes(Map.get(spec, :max_body_bytes, @default_max_body_bytes)),
@@ -423,48 +423,37 @@ defmodule Alto.Listeners.Webhook do
 
   defp endpoint_path(_spec), do: {:error, :invalid_path}
 
-  defp endpoint_verify({:hmac_sha256_base64, secret}) when is_binary(secret) and secret != "" do
-    # Compatibility for the pre-generic adapter. New endpoints must choose a
-    # verifier and identity explicitly; this path remains tied to the old
-    # headers so existing integrations can migrate without changing wire data.
-    {:ok, {{Alto.Ingress.HMAC, [secret: secret, header: "x-signature"]}, true}}
-  end
-
   defp endpoint_verify({module, opts}) when is_atom(module) and is_list(opts) do
     if Code.ensure_loaded?(module) and
          (function_exported?(module, :verify, 3) or function_exported?(module, :verify, 2)),
-       do: {:ok, {{module, opts}, false}},
+       do: {:ok, {module, opts}},
        else: {:error, :invalid_verify}
   end
 
   defp endpoint_verify({fun, opts})
        when (is_function(fun, 2) or is_function(fun, 3)) and is_list(opts),
-       do: {:ok, {{fun, opts}, false}}
+       do: {:ok, {fun, opts}}
 
   defp endpoint_verify(fun) when is_function(fun, 2) or is_function(fun, 3),
-    do: {:ok, {fun, false}}
+    do: {:ok, fun}
 
   defp endpoint_verify(_other), do: {:error, :invalid_verify}
 
-  defp endpoint_identity(nil, true),
-    do: {:ok, {Alto.Ingress.IdentityHeader, [header: "x-delivery-id"]}}
-
-  defp endpoint_identity({module, opts}, false) when is_atom(module) and is_list(opts) do
+  defp endpoint_identity({module, opts}) when is_atom(module) and is_list(opts) do
     if Code.ensure_loaded?(module) and
          (function_exported?(module, :extract, 2) or function_exported?(module, :extract, 1)),
        do: {:ok, {module, opts}},
        else: {:error, :invalid_identity}
   end
 
-  defp endpoint_identity({fun, opts}, false)
+  defp endpoint_identity({fun, opts})
        when (is_function(fun, 1) or is_function(fun, 2)) and is_list(opts),
        do: {:ok, {fun, opts}}
 
-  defp endpoint_identity(fun, false) when is_function(fun, 1) or is_function(fun, 2),
+  defp endpoint_identity(fun) when is_function(fun, 1) or is_function(fun, 2),
     do: {:ok, fun}
 
-  defp endpoint_identity(nil, false), do: {:error, :invalid_identity}
-  defp endpoint_identity(_other, _legacy), do: {:error, :invalid_identity}
+  defp endpoint_identity(_other), do: {:error, :invalid_identity}
 
   defp endpoint_source(source)
        when is_binary(source) and source != "" and byte_size(source) <= 256,
