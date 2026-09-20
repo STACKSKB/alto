@@ -11,124 +11,70 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
 
-  defp validate_spawn(data) when is_map(data) do
-    with {:ok, id} <- spawn_field(data, [:id, "id"], :binary),
-         {:ok, task} <- spawn_task(data),
-         {:ok, max_steps} <- spawn_optional(data, [:max_steps, "max_steps"], :positive),
-         {:ok, tools} <- spawn_optional(data, [:tools, "tools"], :tools),
-         {:ok, loop} <- spawn_optional(data, [:loop, "loop"], :loop),
-         {:ok, provider} <- spawn_optional(data, [:provider, "provider"], :provider),
-         {:ok, profile_key} <- spawn_optional(data, [:profile_key, "profile_key"], :profile_key),
-         {:ok, system_prompt} <- spawn_optional(data, [:system_prompt, "system_prompt"], :text),
-         {:ok, model_tools} <-
-           spawn_optional(data, [:model_tools, "model_tools"], :model_tools) do
-      {:ok,
-       %{
-         id: id,
-         task: task,
-         max_steps: max_steps,
-         tools: tools,
-         loop: loop,
-         provider: provider,
-         profile_key: profile_key,
-         system_prompt: system_prompt,
-         model_tools: model_tools
-       }}
+  @spawn_schema NimbleOptions.new!(
+                  id: [type: :string, required: true],
+                  task: [type: :any, required: true],
+                  max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
+                  tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
+                  loop: [type: {:or, [nil, {:struct, Alto.Loop.Spec}]}, default: nil],
+                  provider: [type: :any, default: nil],
+                  profile_key: [type: {:or, [nil, :string]}, default: nil],
+                  system_prompt: [type: {:or, [nil, :string]}, default: nil],
+                  model_tools: [type: {:or, [nil, {:list, :any}]}, default: nil]
+                )
+
+  defp validate_spawn(data) when is_map(data) and not is_struct(data) do
+    with true <- Enum.all?(Map.keys(data), &is_atom/1),
+         {:ok, values} <- NimbleOptions.validate(Map.to_list(data), @spawn_schema),
+         spec <- Map.new(values),
+         :ok <- validate_spawn_constraints(spec),
+         {:ok, provider} <- normalize_child_provider(spec.provider) do
+      {:ok, %{spec | provider: provider}}
+    else
+      false ->
+        {:error, :spawn_fields_must_be_atoms}
+
+      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
+        {:error, {:invalid_spawn_field, key, value}}
+
+      {:error, _} = error ->
+        error
     end
   end
 
   defp validate_spawn(data), do: {:error, {:not_a_map, data}}
 
-  defp spawn_field(data, keys, :binary) do
-    value = Enum.find_value(keys, fn key -> Map.get(data, key) end)
+  # Tasks intentionally accept any term except nil and the empty binary. The
+  # selected child loop owns the task shape.
+  defp validate_spawn_constraints(spec) do
+    cond do
+      spec.id == "" ->
+        {:error, {:invalid_spawn_field, :id, spec.id}}
 
-    if is_binary(value) and value != "" do
-      {:ok, value}
-    else
-      {:error, {:invalid_spawn_field, keys, value}}
+      is_nil(spec.task) or spec.task == "" ->
+        {:error, {:invalid_spawn_field, :task, spec.task}}
+
+      is_binary(spec.profile_key) and byte_size(spec.profile_key) not in 1..256 ->
+        {:error, {:invalid_spawn_field, :profile_key, spec.profile_key}}
+
+      is_binary(spec.system_prompt) and byte_size(spec.system_prompt) not in 1..64_000 ->
+        {:error, {:invalid_spawn_field, :system_prompt, spec.system_prompt}}
+
+      is_list(spec.model_tools) and
+          not Enum.all?(spec.model_tools, &(is_atom(&1) or (is_binary(&1) and &1 != ""))) ->
+        {:error, {:invalid_spawn_field, :model_tools, spec.model_tools}}
+
+      true ->
+        :ok
     end
   end
 
-  # A delegated task is any non-empty term: rule loops take lists and maps,
-  # model loops take strings. The child loop decides what it accepts.
-  defp spawn_task(data) do
-    value = Map.get(data, :task, Map.get(data, "task"))
+  defp normalize_child_provider(nil), do: {:ok, nil}
 
-    if is_nil(value) or value == "" do
-      {:error, {:invalid_spawn_field, [:task, "task"], value}}
-    else
-      {:ok, value}
-    end
-  end
-
-  defp spawn_optional(data, keys, :positive) do
-    case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
-      nil -> {:ok, nil}
-      value when is_integer(value) and value > 0 -> {:ok, value}
-      value -> {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :tools) do
-    case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
-      nil -> {:ok, :inherit}
-      :inherit -> {:ok, :inherit}
-      tools when is_list(tools) -> {:ok, tools}
-      value -> {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :loop) do
-    case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
-      nil -> {:ok, nil}
-      %Alto.Loop.Spec{} = spec -> {:ok, spec}
-      value -> {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :model_tools) do
-    case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
-      nil ->
-        {:ok, nil}
-
-      names when is_list(names) ->
-        if Enum.all?(names, &(is_atom(&1) or (is_binary(&1) and &1 != ""))) do
-          {:ok, names}
-        else
-          {:error, {:invalid_spawn_field, keys, names}}
-        end
-
-      value ->
-        {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :text) do
-    case Enum.find_value(keys, &Map.get(data, &1)) do
-      nil -> {:ok, nil}
-      value when is_binary(value) and byte_size(value) in 1..64_000 -> {:ok, value}
-      value -> {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :profile_key) do
-    case Enum.find_value(keys, &Map.get(data, &1)) do
-      nil -> {:ok, nil}
-      value when is_binary(value) and byte_size(value) in 1..256 -> {:ok, value}
-      value -> {:error, {:invalid_spawn_field, keys, value}}
-    end
-  end
-
-  defp spawn_optional(data, keys, :provider) do
-    case Enum.find_value(keys, fn key -> Map.get(data, key) end) do
-      nil ->
-        {:ok, nil}
-
-      provider ->
-        case normalize_provider(provider, []) do
-          {:ok, normalized} -> {:ok, normalized}
-          {:error, reason} -> {:error, {:invalid_spawn_field, keys, reason}}
-        end
+  defp normalize_child_provider(provider) do
+    case normalize_provider(provider, []) do
+      {:ok, normalized} -> {:ok, normalized}
+      {:error, reason} -> {:error, {:invalid_spawn_field, :provider, reason}}
     end
   end
 

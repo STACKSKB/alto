@@ -142,6 +142,46 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
     refute_receive {:batch_provider_invoked, _}, 100
   end
 
+  test "child requests use one atom-keyed schema and canonical nullable fields" do
+    request = %{
+      id: "child",
+      task: false,
+      max_steps: nil,
+      tools: :inherit,
+      loop: nil,
+      provider: nil,
+      profile_key: nil,
+      system_prompt: nil,
+      model_tools: nil
+    }
+
+    assert {:ok, result} =
+             Alto.run(%{agents: [request]},
+               loop: batch_loop([]),
+               provider: {CountingProvider, test_pid: self()}
+             )
+
+    assert {:completed, %{results: [%{status: :ok}]}} = result.output
+
+    for invalid <- [
+          %{"id" => "child", "task" => "work"},
+          %{"extra" => true, id: "child", task: "work"},
+          %{id: "", task: "work"},
+          %{id: "child", task: nil},
+          %{id: "child", task: ""},
+          %{id: "child", task: "work", max_steps: 0},
+          %{id: "child", task: "work", profile_key: ""},
+          %{id: "child", task: "work", system_prompt: String.duplicate("x", 64_001)},
+          %{id: "child", task: "work", model_tools: [""]}
+        ] do
+      assert {:error, {:invalid_spawn_agents, _}, _} =
+               Alto.run(%{agents: [invalid]},
+                 loop: batch_loop([]),
+                 provider: {CountingProvider, test_pid: self()}
+               )
+    end
+  end
+
   test "parent cancellation stops active children and never starts queued work", %{dir: dir} do
     {:ok, handle} =
       Alto.start(%{agents: agents(3)},

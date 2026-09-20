@@ -37,7 +37,8 @@ Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
   provider: MyProvider)
 ```
 
-`spawn_agents/1` accepts `%{agents: [...]}`. Each entry requires `:id` and
+`spawn_agents/1` accepts `%{agents: [...]}`. Each child is an atom-keyed map;
+string, mixed, and unknown keys are rejected. Each entry requires `:id` and
 `:task`, with optional provider,
 loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
 The batch preserves input order in `data.results`, even when children finish in

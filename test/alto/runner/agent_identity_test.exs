@@ -30,12 +30,22 @@ defmodule Alto.Runner.AgentIdentityTest do
   end
 
   test "nested native tool contexts carry a host-derived identity" do
-    request = %{
+    spoofed = %{
       id: "child-a",
       task: %{},
       loop: Alto.rule_loop(steps: ["capture"]),
       agent_identity: %{root_run_id: "forged", path: ["forged"]}
     }
+
+    assert {:error, {:invalid_spawn_agents, _}, _} =
+             Alto.run(%{spawn: spoofed},
+               loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 1)),
+               tools: [{CaptureTool, owner: self()}]
+             )
+
+    refute_receive {:identity, _}
+
+    request = Map.delete(spoofed, :agent_identity)
 
     assert {:ok, %{output: :done}} =
              Alto.run(%{spawn: request},
@@ -44,7 +54,7 @@ defmodule Alto.Runner.AgentIdentityTest do
              )
 
     assert_receive {:identity, %{root_run_id: root, path: ["child-a"]}}
-    assert is_binary(root) and root != "forged"
+    assert is_binary(root)
   end
 
   test "malformed internal identities fail before any tool executes" do
