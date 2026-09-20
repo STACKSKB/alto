@@ -13,11 +13,11 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   defmodule UnknownTool do
-    def name, do: :remote
-    def schema, do: %{parameters: %{type: "object"}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
-    def run(_, _), do: {:unknown, :transport_lost}
+    def name(_opts), do: :remote
+    def schema(_opts), do: %{parameters: %{type: "object"}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
+    def run(_, _, _opts), do: {:unknown, :transport_lost}
   end
 
   defmodule Provider do
@@ -35,11 +35,11 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   defmodule Native do
-    def name, do: :native
-    def schema, do: %{parameters: %{type: "object"}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(arguments, _), do: {:ok, %{value: arguments["value"]}}
+    def name(_opts), do: :native
+    def schema(_opts), do: %{parameters: %{type: "object"}}
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(arguments, _, _opts), do: {:ok, %{value: arguments["value"]}}
   end
 
   defmodule Parent do

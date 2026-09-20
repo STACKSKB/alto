@@ -38,11 +38,11 @@ defmodule Alto.TUI.RunLifecycleTest do
 
   defmodule ApprovalProbe do
     @behaviour Alto.Tool
-    def name, do: :approval_probe
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
-    def run(args, _), do: {:ok, args}
+    def name(_opts), do: :approval_probe
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :required
+    def run(args, _context, _opts), do: {:ok, args}
   end
 
   setup do

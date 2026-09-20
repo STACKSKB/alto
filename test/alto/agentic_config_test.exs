@@ -42,10 +42,10 @@ defmodule Alto.AgenticConfigTest do
       Enum.map(Keyword.fetch!(opts, :tools), fn
         {module, tool_opts} ->
           Code.ensure_loaded?(module)
-          if function_exported?(module, :name, 1), do: module.name(tool_opts), else: module.name()
+          if function_exported?(module, :name, 1), do: module.name(tool_opts), else: module.name([])
 
         module ->
-          module.name()
+          module.name([])
       end)
 
     assert :git_inspect in names

@@ -84,20 +84,8 @@ defmodule Alto.Tools.Transform do
     module = module(opts)
     inner_opts = inner_opts(opts)
 
-    case preparation(module) do
-      :arity2 ->
-        case module.prepare(arguments, context) do
-          {:ok, prepared, details} ->
-            {:ok, {__MODULE__, :prepared, prepared}, details}
-
-          {:error, _reason} = error ->
-            error
-
-          other ->
-            {:error, {:invalid_tool_prepare_return, other}}
-        end
-
-      :arity3 ->
+    case prepared?(module) do
+      true ->
         case module.prepare(arguments, context, inner_opts) do
           {:ok, prepared, details} ->
             {:ok, {__MODULE__, :prepared, prepared}, details}
@@ -109,50 +97,34 @@ defmodule Alto.Tools.Transform do
             {:error, {:invalid_tool_prepare_return, other}}
         end
 
-      :none ->
+      false ->
         {:ok, {__MODULE__, :raw, arguments}, %{}}
     end
   end
 
-  defp preparation(module) do
-    prepare2? = function_exported?(module, :prepare, 2)
-    prepared2? = function_exported?(module, :run_prepared, 2)
+  defp prepared?(module) do
     prepare3? = function_exported?(module, :prepare, 3)
     prepared3? = function_exported?(module, :run_prepared, 3)
 
-    cond do
-      prepare2? and prepared2? ->
-        :arity2
-
-      prepare3? and prepared3? ->
-        :arity3
-
-      prepare2? or prepared2? or prepare3? or prepared3? ->
-        raise ArgumentError, "wrapped tool has incomplete preparation callbacks"
-
-      true ->
-        :none
-    end
+    if prepare3? == prepared3?,
+      do: prepare3?,
+      else: raise(ArgumentError, "wrapped tool has incomplete preparation callbacks")
   end
 
   defp run_inner_prepared(prepared, context, opts) do
     module = module(opts)
     inner_opts = inner_opts(opts)
 
-    case preparation(module) do
-      :arity2 -> module.run_prepared(prepared, context)
-      :arity3 -> module.run_prepared(prepared, context, inner_opts)
-      :none -> {:error, :invalid_transformed_prepared}
-    end
+    if prepared?(module),
+      do: module.run_prepared(prepared, context, inner_opts),
+      else: {:error, :invalid_transformed_prepared}
   end
 
   defp run_inner_raw(arguments, context, opts) do
     module = module(opts)
     inner_opts = inner_opts(opts)
 
-    if inner_opts == [],
-      do: module.run(arguments, context),
-      else: module.run(arguments, context, inner_opts)
+    module.run(arguments, context, inner_opts)
   end
 
   defp module(opts) do

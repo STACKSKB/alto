@@ -25,10 +25,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -40,26 +40,26 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedEchoTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: RuleEchoTool.schema()
+    def schema(_opts), do: RuleEchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     # No approval/0 callback: defaults to :required, exercising the default.
     @impl true
@@ -73,10 +73,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :stamp
+    def name(_opts), do: :stamp
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Stamp a value.",
         parameters: %{
@@ -88,18 +88,18 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     # Approval/0 omitted: defaults to :required, so the prepared invocation
     # crosses the approval boundary before run_prepared consumes it.
     @impl true
-    def prepare(%{"value" => value}, _context) do
+    def prepare(%{"value" => value}, _context, _opts) do
       token = "prep-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
       {:ok, %{value: value, token: token}, %{stamped_with: value, token: token}}
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _context) do
+    def run_prepared(%{value: value, token: token}, _context, _opts) do
       {:ok, %{stamped: value, token: token}}
     end
   end
@@ -155,10 +155,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo_args
+    def name(_opts), do: :echo_args
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Report whether the tuple key survived as a native term.",
         parameters: %{
@@ -170,13 +170,13 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(arguments, _context) when is_map(arguments) do
+    def run(arguments, _context, _opts) when is_map(arguments) do
       {:ok, %{tuple_is_tuple: is_tuple(Map.get(arguments, :tuple))}}
     end
   end
@@ -467,15 +467,15 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     defmodule HiddenTool do
       @behaviour Alto.Tool
       @impl true
-      def name, do: :hidden
+      def name(_opts), do: :hidden
       @impl true
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
       @impl true
-      def execution_mode, do: :parallel
+      def execution_mode(_opts), do: :parallel
       @impl true
-      def approval, do: :never
+      def approval(_opts), do: :never
       @impl true
-      def run(_args, _ctx), do: {:ok, %{hid: true}}
+      def run(_args, _ctx, _opts), do: {:ok, %{hid: true}}
     end
 
     parent = self()

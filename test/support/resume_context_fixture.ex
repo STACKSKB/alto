@@ -3,18 +3,18 @@ defmodule Alto.Test.ResumeContextFixture do
   # does not. Only genuine counts from successful provider turns let it grow.
   defmodule PayloadTool do
     @behaviour Alto.Tool
-    def name, do: :payload
+    def name(_), do: :payload
 
-    def schema do
+    def schema(_) do
       %{
         description: "Return authored test text.",
         parameters: %{type: "object", properties: %{}, required: []}
       }
     end
 
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _), do: {:ok, %{text: String.duplicate("x", 1_800)}}
+    def execution_mode(_), do: :parallel
+    def approval(_), do: :never
+    def run(_, _, _), do: {:ok, %{text: String.duplicate("x", 1_800)}}
   end
 
   defmodule Provider do

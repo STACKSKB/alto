@@ -139,21 +139,12 @@ defmodule Alto.Runner.Execution.Tool do
       else: {:error, {:tool_result_too_large, %{limit: limit, size: size}}}
   end
 
-  defp invoke_prepare(%{module: module, preparation: :arity2}, arguments, context),
-    do: module.prepare(arguments, context)
-
-  defp invoke_prepare(%{module: module, opts: opts, preparation: :arity3}, arguments, context),
+  defp invoke_prepare(%{module: module, opts: opts}, arguments, context),
     do: module.prepare(arguments, context, opts)
 
   @doc "Invoke directly inside an already supervised, bounded worker."
-  def invoke_tool(%{module: module, preparation: :arity2}, prepared, context),
-    do: module.run_prepared(prepared, context)
-
-  def invoke_tool(%{module: module, opts: opts, preparation: :arity3}, prepared, context),
+  def invoke_tool(%{module: module, opts: opts, preparation: :prepared}, prepared, context),
     do: module.run_prepared(prepared, context, opts)
-
-  def invoke_tool(%{module: module, opts: []}, arguments, context),
-    do: module.run(arguments, context)
 
   def invoke_tool(%{module: module, opts: opts}, arguments, context),
     do: module.run(arguments, context, opts)

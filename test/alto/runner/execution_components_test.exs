@@ -6,9 +6,9 @@ defmodule Alto.Runner.ExecutionComponentsTest do
   alias Alto.Tool.Context
 
   defmodule PreparedTool do
-    def prepare(arguments, _context), do: {:ok, {:prepared, arguments}, %{resolved: true}}
-    def run_prepared({:prepared, arguments}, _context), do: {:ok, arguments}
-    def execution_mode, do: :exclusive
+    def prepare(arguments, _context, _opts), do: {:ok, {:prepared, arguments}, %{resolved: true}}
+    def run_prepared({:prepared, arguments}, _context, _opts), do: {:ok, arguments}
+    def execution_mode(_), do: :exclusive
   end
 
   defmodule ScriptedProvider do
@@ -34,7 +34,7 @@ defmodule Alto.Runner.ExecutionComponentsTest do
     tool = %{
       module: PreparedTool,
       opts: [],
-      preparation: :arity2,
+      preparation: :prepared,
       execution_mode: :exclusive,
       approval: :never
     }
@@ -49,7 +49,7 @@ defmodule Alto.Runner.ExecutionComponentsTest do
     tool = %{
       module: PreparedTool,
       opts: [],
-      preparation: :arity2,
+      preparation: :prepared,
       execution_mode: :exclusive,
       approval: :required
     }

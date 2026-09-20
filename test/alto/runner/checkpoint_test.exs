@@ -5,33 +5,34 @@ defmodule Alto.Runner.CheckpointTest do
 
   defmodule First do
     @behaviour Alto.Tool
-    def name, do: :first
-    def schema, do: %{description: "First", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def name(_opts), do: :first
+    def schema(_opts), do: %{description: "First", parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
 
-    def run(_, context) do
+    def run(_, context, _opts) do
       File.write!(Path.join(context.cwd, "first"), "1", [:append])
       {:ok, "first"}
     end
-
-    def run(arguments, context, _opts), do: run(arguments, context)
   end
 
   defmodule Guarded do
     @behaviour Alto.Tool
-    def name, do: :guarded
-    def schema, do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def name(_opts), do: :guarded
 
-    def prepare(_, context) do
+    def schema(_opts),
+      do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
+
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :required
+
+    def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "preparations"), "1", [:append])
       value = File.read!(Path.join(context.cwd, "input"))
       {:ok, %{value: value}, %{value: value}}
     end
 
-    def run_prepared(prepared, context) do
+    def run_prepared(prepared, context, _opts) do
       File.write!(Path.join(context.cwd, "guarded"), prepared.value, [:append])
       {:ok, prepared.value}
     end

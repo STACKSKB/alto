@@ -8,10 +8,10 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   defmodule ControlledTool do
     @behaviour Alto.Tool
 
-    def name, do: :controlled_batch_tool
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    def name(_), do: :controlled_batch_tool
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_), do: :parallel
+    def approval(_), do: :never
 
     def run(%{id: id}, _context, opts) do
       owner = Keyword.fetch!(opts, :owner)

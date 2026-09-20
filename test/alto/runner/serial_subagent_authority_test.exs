@@ -55,38 +55,41 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
   defmodule SafeTool do
     @behaviour Alto.Tool
-    def name, do: :safe
-    def schema, do: %{description: "safe", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _context), do: {:ok, :safe}
+    def name(_opts), do: :safe
+    def schema(_opts), do: %{description: "safe", parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(_, _context, _opts), do: {:ok, :safe}
   end
 
   defmodule ExtraTool do
     @behaviour Alto.Tool
-    def name, do: :extra
-    def schema, do: %{description: "extra", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _context), do: raise("extra tool dispatched")
+    def name(_opts), do: :extra
+    def schema(_opts), do: %{description: "extra", parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(_, _context, _opts), do: raise("extra tool dispatched")
   end
 
   defmodule ReplacementSafeTool do
     @behaviour Alto.Tool
-    def name, do: :safe
-    def schema, do: SafeTool.schema()
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _context), do: raise("replacement tool dispatched")
+    def name(_opts), do: :safe
+    def schema(_opts), do: SafeTool.schema([])
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(_, _context, _opts), do: raise("replacement tool dispatched")
   end
 
   defmodule UnknownTool do
     @behaviour Alto.Tool
-    def name, do: :unknown_tool
-    def schema, do: %{description: "unknown", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _), do: {:unknown, :transport_lost}
+    def name(_opts), do: :unknown_tool
+
+    def schema(_opts),
+      do: %{description: "unknown", parameters: %{type: "object", properties: %{}}}
+
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(_, _, _opts), do: {:unknown, :transport_lost}
   end
 
   defmodule BlockingProvider do

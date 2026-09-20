@@ -47,9 +47,9 @@ defmodule Alto.Runner.ParentContinuationTest do
 
   defmodule IntegrateTool do
     @behaviour Alto.Tool
-    def name, do: :integrate
+    def name(_opts), do: :integrate
 
-    def schema,
+    def schema(_opts),
       do: %{
         description: "Record one parent integration.",
         parameters: %{
@@ -59,10 +59,10 @@ defmodule Alto.Runner.ParentContinuationTest do
         }
       }
 
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
 
-    def run(%{"value" => value}, _context) do
+    def run(%{"value" => value}, _context, _opts) do
       send(:persistent_term.get({__MODULE__, :observer}), {:integrated, value})
       {:ok, %{integrated: value}}
     end

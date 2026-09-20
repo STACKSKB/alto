@@ -17,10 +17,10 @@ defmodule Alto.Tools.ReadImage do
   @hard_max_pixels 40_000_000
 
   @impl true
-  def name, do: :read_image
+  def name(_opts \\ []), do: :read_image
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description:
         "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
@@ -51,15 +51,14 @@ defmodule Alto.Tools.ReadImage do
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts \\ []), do: :parallel
 
   @impl true
-  def approval, do: :never
+  def approval(_opts \\ []), do: :never
 
   @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
+  def run(arguments, context, opts \\ [])
 
-  @impl true
   def run(arguments, %Context{} = context, opts) when is_map(arguments) do
     path = Map.get(arguments, "path")
     requested_width = Map.get(arguments, "max_width")

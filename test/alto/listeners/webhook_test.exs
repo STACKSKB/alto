@@ -18,16 +18,16 @@ defmodule Alto.Listeners.WebhookTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :task_tool
+    def name(_opts), do: :task_tool
 
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, _context, opts) do

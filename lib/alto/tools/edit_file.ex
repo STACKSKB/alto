@@ -27,13 +27,10 @@ defmodule Alto.Tools.EditFile do
   ]
 
   @impl true
-  def name, do: :edit_file
+  def name(_opts \\ []), do: :edit_file
 
   @impl true
-  def schema, do: schema([])
-
-  @impl true
-  def schema(opts) when is_list(opts) do
+  def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
     edit = %{
@@ -88,19 +85,17 @@ defmodule Alto.Tools.EditFile do
   end
 
   @impl true
-  def execution_mode, do: :exclusive
+  def execution_mode(_opts \\ []), do: :exclusive
 
   @impl true
-  def approval, do: :required
+  def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context), do: prepare_edit(arguments, context)
+  def prepare(arguments, %Context{} = context, opts \\ []),
+    do: prepare_edit(arguments, context, opts)
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts), do: prepare_edit(arguments, context, opts)
-
-  @impl true
-  def run_prepared(prepared, %Context{} = context) do
+  def run_prepared(prepared, %Context{} = context, _opts \\ []) do
     with {:ok, resolved} <- revalidate_target(prepared, context),
          {:ok, stat, content} <-
            read_snapshot(
@@ -130,21 +125,11 @@ defmodule Alto.Tools.EditFile do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts), do: run_prepared(prepared, context)
-
-  @impl true
-  def run(arguments, %Context{} = context) do
-    run(arguments, context, [])
-  end
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
       run_prepared(prepared, context, opts)
     end
   end
-
-  defp prepare_edit(arguments, %Context{} = context), do: prepare_edit(arguments, context, [])
 
   defp prepare_edit(arguments, %Context{} = context, opts)
        when is_map(arguments) and is_list(opts) do

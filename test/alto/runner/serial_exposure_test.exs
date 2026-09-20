@@ -20,46 +20,48 @@ defmodule Alto.Runner.SerialExposureTest do
   defmodule EchoTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
     @impl true
-    def schema,
+    def schema(_opts),
       do: %{
         description: "Echo.",
         parameters: %{type: "object", properties: %{value: %{type: "string"}}}
       }
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(%{"value" => v}, _ctx), do: {:ok, %{echo: v}}
+    def run(%{"value" => v}, _ctx, _opts), do: {:ok, %{echo: v}}
   end
 
   defmodule HiddenTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :hidden
+    def name(_opts), do: :hidden
     @impl true
-    def schema, do: %{description: "Hidden.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts),
+      do: %{description: "Hidden.", parameters: %{type: "object", properties: %{}}}
+
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: {:ok, %{hid: true}}
+    def run(_args, _ctx, _opts), do: {:ok, %{hid: true}}
   end
 
   defmodule GuardedHiddenTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :hidden
+    def name(_opts), do: :hidden
     @impl true
-    def schema, do: HiddenTool.schema()
+    def schema(_opts), do: HiddenTool.schema([])
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :required
+    def approval(_opts), do: :required
     @impl true
     def run(_args, ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:hidden_ran, ctx.session_id})
@@ -261,13 +263,13 @@ defmodule Alto.Runner.SerialExposureTest do
     defmodule GuardedEcho do
       @behaviour Alto.Tool
       @impl true
-      def name, do: :echo
+      def name(_opts), do: :echo
       @impl true
-      def schema, do: EchoTool.schema()
+      def schema(_opts), do: EchoTool.schema([])
       @impl true
-      def execution_mode, do: :parallel
+      def execution_mode(_opts), do: :parallel
       @impl true
-      def approval, do: :required
+      def approval(_opts), do: :required
       @impl true
       def run(%{"value" => v}, ctx, opts) do
         send(Keyword.fetch!(opts, :test_pid), {:echo_ran, v, ctx.session_id})

@@ -5,10 +5,10 @@ defmodule Alto.Runner.HistoryBoundariesTest do
 
   defmodule Tick do
     @behaviour Alto.Tool
-    def name, do: :tick
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def name(_opts), do: :tick
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
 
     def run(_, _, opts) do
       send(opts[:owner], :tick)

@@ -3,10 +3,10 @@ defmodule Alto.Runner.SettledHistoryTest do
 
   defmodule Change do
     @behaviour Alto.Tool
-    def name, do: :change
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def name(_opts), do: :change
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :required
 
     def run(_, context, opts) do
       File.write!(Path.join(context.cwd, "changed"), "yes")

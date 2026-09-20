@@ -41,53 +41,53 @@ defmodule Alto.Runner.SerialOutcomeTest do
   defmodule OkTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :ok_tool
+    def name(_opts), do: :ok_tool
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: {:ok, %{done: true}}
+    def run(_args, _ctx, _opts), do: {:ok, %{done: true}}
   end
 
   defmodule GuardedOkTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :ok_tool
+    def name(_opts), do: :ok_tool
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def run(_args, _ctx), do: {:ok, %{done: true}}
+    def run(_args, _ctx, _opts), do: {:ok, %{done: true}}
   end
 
   defmodule FlakyTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :flaky
+    def name(_opts), do: :flaky
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: {:error, :boom}
+    def run(_args, _ctx, _opts), do: {:error, :boom}
   end
 
   defmodule CommitThenTimeoutTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :committer
+    def name(_opts), do: :committer
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -99,13 +99,13 @@ defmodule Alto.Runner.SerialOutcomeTest do
   defmodule CommitThenCrashTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :crasher
+    def name(_opts), do: :crasher
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -116,15 +116,15 @@ defmodule Alto.Runner.SerialOutcomeTest do
   defmodule BlockingTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :blocker
+    def name(_opts), do: :blocker
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: receive(do: (:never -> {:ok, :done}))
+    def run(_args, _ctx, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
   defmodule BlockingApproval do

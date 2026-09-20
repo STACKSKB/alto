@@ -9,16 +9,16 @@ defmodule Alto.Tools.TransformTest do
   defmodule PreparedTool do
     @behaviour Alto.Tool
 
-    def name, do: :freeze
-    def schema, do: %{description: "Freeze input.", parameters: %{type: "object"}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def name(_), do: :freeze
+    def schema(_), do: %{description: "Freeze input.", parameters: %{type: "object"}}
+    def execution_mode(_), do: :exclusive
+    def approval(_), do: :required
 
-    def prepare(arguments, _context) do
+    def prepare(arguments, _context, _opts) do
       {:ok, {:prepared, arguments}, %{approved: arguments}}
     end
 
-    def run_prepared({:prepared, arguments}, _context) do
+    def run_prepared({:prepared, arguments}, _context, _opts) do
       {:ok, arguments}
     end
   end
@@ -26,11 +26,11 @@ defmodule Alto.Tools.TransformTest do
   defmodule RawTool do
     @behaviour Alto.Tool
 
-    def name, do: :raw
-    def schema, do: %{description: "Run transformed input.", parameters: %{type: "object"}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(arguments, _context), do: {:ok, arguments}
+    def name(_), do: :raw
+    def schema(_), do: %{description: "Run transformed input.", parameters: %{type: "object"}}
+    def execution_mode(_), do: :parallel
+    def approval(_), do: :never
+    def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
   defmodule CaptureApproval do

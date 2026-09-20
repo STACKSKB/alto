@@ -7,10 +7,10 @@ defmodule Alto.Runner.AgentIdentityTest do
 
   defmodule CaptureTool do
     @behaviour Alto.Tool
-    def name, do: :capture
-    def schema, do: %{description: "capture", parameters: %{type: "object"}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    def name(_opts), do: :capture
+    def schema(_opts), do: %{description: "capture", parameters: %{type: "object"}}
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
 
     def run(_arguments, context, opts) do
       send(Keyword.fetch!(opts, :owner), {:identity, context.agent_identity})
@@ -106,12 +106,12 @@ defmodule Alto.Runner.AgentIdentityTest do
 
   defmodule CheckpointCaptureTool do
     @behaviour Alto.Tool
-    def name, do: :capture_checkpoint
-    def schema, do: %{description: "capture", parameters: %{type: "object"}}
-    def execution_mode, do: :exclusive
-    def prepare(_arguments, context), do: {:ok, :prepared, context.agent_identity}
+    def name(_opts), do: :capture_checkpoint
+    def schema(_opts), do: %{description: "capture", parameters: %{type: "object"}}
+    def execution_mode(_opts), do: :exclusive
+    def prepare(_arguments, context, _opts), do: {:ok, :prepared, context.agent_identity}
 
-    def run_prepared(identity, context) do
+    def run_prepared(identity, context, _opts) do
       send(context.metadata.owner, {:checkpoint_identity, context.agent_identity})
       {:ok, identity}
     end

@@ -103,15 +103,15 @@ defmodule Alto.ConsumerTest do
     defmodule SleepyTool do
       @behaviour Alto.Tool
       @impl true
-      def name, do: :sleepy
+      def name(_opts), do: :sleepy
       @impl true
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
       @impl true
-      def execution_mode, do: :exclusive
+      def execution_mode(_opts), do: :exclusive
       @impl true
-      def approval, do: :never
+      def approval(_opts), do: :never
       @impl true
-      def run(_args, _ctx) do
+      def run(_args, _ctx, _opts) do
         Process.sleep(5_000)
         {:ok, :unreachable}
       end

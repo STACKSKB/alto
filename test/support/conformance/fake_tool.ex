@@ -25,52 +25,47 @@ defmodule Alto.Conformance.FakeTool do
     @moduledoc "Commits once to the fake service, then succeeds."
     @behaviour Alto.Tool
     @impl true
-    def name, do: :record_commit
+    def name(_), do: :record_commit
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
       key = Keyword.get(opts, :key, "op")
       Alto.Conformance.FakeService.call(service, key, %{})
     end
-
-    @impl true
-    def run(_args, _ctx), do: run(%{}, %{}, [])
   end
 
   defmodule FailKnown do
     @moduledoc "Participant-reported failure with no commit."
     @behaviour Alto.Tool
     @impl true
-    def name, do: :fail_known
+    def name(_), do: :fail_known
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, _opts), do: {:error, :downstream_rejected}
-    @impl true
-    def run(_args, _ctx), do: {:error, :downstream_rejected}
   end
 
   defmodule CommitThenTimeout do
     @moduledoc "Commits, then sleeps past the tool deadline (unknown outcome)."
     @behaviour Alto.Tool
     @impl true
-    def name, do: :commit_then_timeout
+    def name(_), do: :commit_then_timeout
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
@@ -84,22 +79,19 @@ defmodule Alto.Conformance.FakeTool do
       Process.sleep(10_000)
       {:ok, %{unreachable: true}}
     end
-
-    @impl true
-    def run(_args, _ctx), do: run(%{}, %{}, [])
   end
 
   defmodule CommitThenCrash do
     @moduledoc "Commits, then crashes (unknown outcome)."
     @behaviour Alto.Tool
     @impl true
-    def name, do: :commit_then_crash
+    def name(_), do: :commit_then_crash
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_), do: :exclusive
     @impl true
-    def approval, do: :never
+    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
@@ -110,8 +102,5 @@ defmodule Alto.Conformance.FakeTool do
       if test_pid, do: send(test_pid, {:committed, key})
       exit(:boom_after_commit)
     end
-
-    @impl true
-    def run(_args, _ctx), do: run(%{}, %{}, [])
   end
 end

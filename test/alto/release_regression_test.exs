@@ -30,11 +30,11 @@ defmodule Alto.ReleaseRegressionTest do
 
   defmodule EchoTool do
     @behaviour Alto.Tool
-    def name, do: :echo
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_args, _ctx), do: {:ok, %{echo: true}}
+    def name(_opts), do: :echo
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
+    def run(_args, _ctx, _opts), do: {:ok, %{echo: true}}
   end
 
   defmodule StrictLoop do

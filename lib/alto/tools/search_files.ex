@@ -27,13 +27,10 @@ defmodule Alto.Tools.SearchFiles do
   ]
 
   @impl true
-  def name, do: :search_files
+  def name(_opts \\ []), do: :search_files
 
   @impl true
-  def schema, do: schema([])
-
-  @impl true
-  def schema(opts) when is_list(opts) do
+  def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
     %{
@@ -64,16 +61,13 @@ defmodule Alto.Tools.SearchFiles do
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts \\ []), do: :parallel
 
   @impl true
-  def approval, do: :never
+  def approval(_opts \\ []), do: :never
 
   @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     query = Map.get(arguments, "query")
     path = Map.get(arguments, "path", ".")
     case_sensitive? = Map.get(arguments, "case_sensitive", true)

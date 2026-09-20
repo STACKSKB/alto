@@ -91,10 +91,10 @@ defmodule Alto.Tools.GitInspect do
   @actions ~w(status diff log show branches blame)
 
   @impl true
-  def name, do: :git_inspect
+  def name(_opts \\ []), do: :git_inspect
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description: "Inspect repository status, diffs, history, refs, or blame through Git.",
       parameters: %{
@@ -115,16 +115,13 @@ defmodule Alto.Tools.GitInspect do
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts \\ []), do: :parallel
 
   @impl true
-  def approval, do: :never
+  def approval(_opts \\ []), do: :never
 
   @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, args} <- args(arguments) do
       Git.run(inspect_args(args), context, Keyword.put(opts, :read_only, true))
     end
@@ -218,10 +215,10 @@ defmodule Alto.Tools.GitMutate do
   @actions ~w(stage unstage commit create_branch switch_branch)
 
   @impl true
-  def name, do: :git_mutate
+  def name(_opts \\ []), do: :git_mutate
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description:
         "Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
@@ -240,16 +237,13 @@ defmodule Alto.Tools.GitMutate do
   end
 
   @impl true
-  def execution_mode, do: :exclusive
+  def execution_mode(_opts \\ []), do: :exclusive
 
   @impl true
-  def approval, do: :required
+  def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context), do: prepare(arguments, context, [])
-
-  @impl true
-  def prepare(arguments, %Context{} = context, opts) do
+  def prepare(arguments, %Context{} = context, opts \\ []) do
     with {:ok, args} <- args(arguments),
          {:ok, prepared} <-
            Command.prepare(command(args, opts), context, Keyword.take(opts, [:executor, :policy])) do
@@ -258,10 +252,7 @@ defmodule Alto.Tools.GitMutate do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{}), do: run_prepared(prepared)
-
-  @impl true
-  def run_prepared(prepared, %Context{}, _opts), do: run_prepared(prepared)
+  def run_prepared(prepared, %Context{}, _opts \\ []), do: run_prepared(prepared)
 
   defp run_prepared(prepared) do
     case Command.execute(prepared) do

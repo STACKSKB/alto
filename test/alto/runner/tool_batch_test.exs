@@ -3,10 +3,10 @@ defmodule Alto.Runner.ToolBatchTest do
 
   defmodule Read do
     @behaviour Alto.Tool
-    def name, do: :read
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    def name(_), do: :read
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_), do: :parallel
+    def approval(_), do: :never
 
     def prepare(args, _context, opts) do
       send(opts[:test_pid], {:prepared, args["value"]})
@@ -28,10 +28,10 @@ defmodule Alto.Runner.ToolBatchTest do
 
   defmodule Write do
     @behaviour Alto.Tool
-    def name, do: :write
-    def schema, do: Read.schema()
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def name(_), do: :write
+    def schema(_), do: Read.schema([])
+    def execution_mode(_), do: :exclusive
+    def approval(_), do: :required
 
     def run(args, _context, opts) do
       send(opts[:test_pid], {:write, args["value"]})

@@ -99,12 +99,15 @@ defmodule Alto.Runner.ChildContinuationTest do
 
   defmodule Integrate do
     @behaviour Alto.Tool
-    def name, do: :integrate
-    def schema, do: %{description: "Integrate", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def name(_opts), do: :integrate
 
-    def run(_, context) do
+    def schema(_opts),
+      do: %{description: "Integrate", parameters: %{type: "object", properties: %{}}}
+
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
+
+    def run(_, context, _opts) do
       File.write!(Path.join(context.cwd, "integration"), "1", [:append])
       {:ok, "integrated"}
     end
@@ -112,12 +115,12 @@ defmodule Alto.Runner.ChildContinuationTest do
 
   defmodule First do
     @behaviour Alto.Tool
-    def name, do: :first
-    def schema, do: %{description: "First", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def name(_opts), do: :first
+    def schema(_opts), do: %{description: "First", parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
 
-    def run(%{"id" => id}, context) do
+    def run(%{"id" => id}, context, _opts) do
       File.write!(Path.join(context.cwd, "first-" <> id), "1", [:append])
       {:ok, "first"}
     end
@@ -125,17 +128,20 @@ defmodule Alto.Runner.ChildContinuationTest do
 
   defmodule Guarded do
     @behaviour Alto.Tool
-    def name, do: :guarded
-    def schema, do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def name(_opts), do: :guarded
 
-    def prepare(%{"id" => id}, context) do
+    def schema(_opts),
+      do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
+
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :required
+
+    def prepare(%{"id" => id}, context, _opts) do
       File.write!(Path.join(context.cwd, "prepared-" <> id), "1", [:append])
       {:ok, %{id: id, value: File.read!(Path.join(context.cwd, "input"))}, %{id: id}}
     end
 
-    def run_prepared(%{id: id, value: value}, context) do
+    def run_prepared(%{id: id, value: value}, context, _opts) do
       if observer = :persistent_term.get({__MODULE__, :observer}, nil) do
         send(observer, {:executing, self()})
 

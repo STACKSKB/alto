@@ -70,7 +70,7 @@ defmodule Alto.Capabilities do
       module: module_name(module),
       approval: Alto.Tool.requirement(module, opts),
       execution_mode: Alto.Tool.callback(module, :execution_mode, opts),
-      prepared: function_exported?(module, :prepare, 2) or function_exported?(module, :prepare, 3)
+      prepared: function_exported?(module, :prepare, 3)
     }
   end
 

@@ -4,13 +4,13 @@ defmodule Alto.FrontEnd.RegistryWorkspacesTest do
 
   defmodule FolderTool do
     @behaviour Alto.Tool
-    def name, do: :folder
+    def name(_opts), do: :folder
 
-    def schema,
+    def schema(_opts),
       do: %{description: "Report folder", parameters: %{type: "object", properties: %{}}}
 
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    def execution_mode(_opts), do: :parallel
+    def approval(_opts), do: :never
 
     def run(_, context, opts) do
       send(opts[:owner], {:folder, context.cwd})

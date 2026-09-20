@@ -11,24 +11,24 @@ defmodule Alto.Runner.ConformanceTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :prepared
+    def name(_opts), do: :prepared
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{description: "A conformance tool.", parameters: %{type: "object", properties: %{}}}
     end
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     @impl true
-    def approval, do: :required
+    def approval(_opts), do: :required
 
     @impl true
-    def prepare(_arguments, _context), do: {:ok, %{value: "prepared"}, %{display: "safe"}}
+    def prepare(_arguments, _context, _opts), do: {:ok, %{value: "prepared"}, %{display: "safe"}}
 
     @impl true
-    def run_prepared(prepared, context) do
+    def run_prepared(prepared, context, _opts) do
       send(context.metadata[:test_pid], {:prepared_ran, prepared.value})
       {:ok, prepared.value}
     end
@@ -119,20 +119,20 @@ defmodule Alto.Runner.ConformanceTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :registry_echo
+    def name(_opts), do: :registry_echo
 
     @impl true
-    def schema,
+    def schema(_opts),
       do: %{description: "Registry tool.", parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(_arguments, context) do
+    def run(_arguments, context, _opts) do
       if pid = context.metadata[:test_pid], do: send(pid, {:tool_ran, :registry})
       {:ok, :registry_ok}
     end

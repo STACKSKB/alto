@@ -12,10 +12,10 @@ defmodule Alto.FrontEnd.RegistryTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -27,32 +27,32 @@ defmodule Alto.FrontEnd.RegistryTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedEchoTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :required
+    def approval(_opts), do: :required
 
     @impl true
-    def run(arguments, _context), do: EchoTool.run(arguments, nil)
+    def run(arguments, _context, _opts), do: EchoTool.run(arguments, nil, [])
   end
 
   defmodule ToolThenAnswerProvider do

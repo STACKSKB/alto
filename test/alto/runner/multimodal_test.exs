@@ -5,10 +5,10 @@ defmodule Alto.Runner.MultimodalTest do
 
   defmodule Tool do
     @behaviour Alto.Tool
-    def name, do: :picture
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def approval, do: :never
-    def execution_mode, do: :parallel
+    def name(_opts), do: :picture
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def approval(_opts), do: :never
+    def execution_mode(_opts), do: :parallel
     def run(_, _, opts), do: {:ok, opts[:value]}
   end
 

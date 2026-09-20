@@ -6,8 +6,8 @@ defmodule Alto.Tool.Registry do
       with {:ok, module, tool_opts} <- normalize_tool(tool_spec),
            name when is_atom(name) <- Alto.Tool.callback(module, :name, tool_opts),
            schema when is_map(schema) <- Alto.Tool.callback(module, :schema, tool_opts),
-           {:ok, preparation} <- tool_preparation(module, tool_opts),
-           :ok <- validate_tool_execution(module, tool_opts, preparation) do
+           {:ok, preparation} <- tool_preparation(module),
+           :ok <- validate_tool_execution(module, preparation) do
         string_name = Atom.to_string(name)
 
         if Map.has_key?(tools, string_name) do
@@ -116,42 +116,30 @@ defmodule Alto.Tool.Registry do
   defp normalize_tool(module) when is_atom(module), do: {:ok, module, []}
   defp normalize_tool(other), do: {:error, {:invalid_tool, other}}
 
-  defp tool_preparation(module, opts) do
-    prepare2? = function_exported?(module, :prepare, 2)
-    prepared2? = function_exported?(module, :run_prepared, 2)
+  defp tool_preparation(module) do
     prepare3? = function_exported?(module, :prepare, 3)
     prepared3? = function_exported?(module, :run_prepared, 3)
-    any? = prepare2? or prepared2? or prepare3? or prepared3?
 
     cond do
-      prepare2? != prepared2? or prepare3? != prepared3? ->
+      prepare3? != prepared3? ->
         {:error, {:incomplete_tool_preparation_callbacks, module}}
 
-      opts == [] and prepare2? and prepared2? ->
-        {:ok, :arity2}
-
       prepare3? and prepared3? ->
-        {:ok, :arity3}
-
-      not any? ->
-        {:ok, :none}
+        {:ok, :prepared}
 
       true ->
-        {:error, {:tool_does_not_accept_options, module}}
+        {:ok, :none}
     end
   end
 
-  defp validate_tool_execution(module, opts, :none) do
-    arity = if opts == [], do: 2, else: 3
-
-    if function_exported?(module, :run, arity) do
+  defp validate_tool_execution(module, :none) do
+    if function_exported?(module, :run, 3) do
       :ok
     else
-      {:error, {:tool_does_not_accept_options, module}}
+      {:error, {:invalid_tool, module}}
     end
   end
 
-  defp validate_tool_execution(_module, _opts, preparation)
-       when preparation in [:arity2, :arity3],
-       do: :ok
+  defp validate_tool_execution(_module, :prepared),
+    do: :ok
 end

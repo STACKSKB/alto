@@ -51,16 +51,17 @@ defmodule Alto.Bench.OfflineReadTool do
   @behaviour Alto.Tool
 
   @impl true
-  def name, do: :offline_read
+  def name(_opts), do: :offline_read
 
   @impl true
-  def schema, do: %{parameters: %{type: "object", properties: %{index: %{type: "integer"}}}}
+  def schema(_opts),
+    do: %{parameters: %{type: "object", properties: %{index: %{type: "integer"}}}}
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts), do: :parallel
 
   @impl true
-  def approval, do: :never
+  def approval(_opts), do: :never
 
   @impl true
   def run(%{"index" => index}, _context, opts) do

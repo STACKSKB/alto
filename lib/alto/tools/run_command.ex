@@ -7,10 +7,10 @@ defmodule Alto.Tools.RunCommand do
   alias Alto.Tool.Context
 
   @impl true
-  def name, do: :run_command
+  def name(_opts \\ []), do: :run_command
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description:
         "Run one executable through the harness-configured command executor using an argument vector. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
@@ -44,16 +44,13 @@ defmodule Alto.Tools.RunCommand do
   end
 
   @impl true
-  def execution_mode, do: :exclusive
+  def execution_mode(_opts \\ []), do: :exclusive
 
   @impl true
-  def approval, do: :required
+  def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context), do: prepare(arguments, context, [])
-
-  @impl true
-  def prepare(arguments, %Context{} = context, opts) do
+  def prepare(arguments, %Context{} = context, opts \\ []) do
     case Alto.Command.prepare(arguments, context, opts) do
       {:ok, prepared} -> {:ok, prepared, prepared.approval_details}
       {:error, reason} -> {:error, reason}
@@ -61,14 +58,9 @@ defmodule Alto.Tools.RunCommand do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{}), do: Alto.Command.execute(prepared)
+  def run_prepared(prepared, %Context{}, _opts \\ []), do: Alto.Command.execute(prepared)
 
   @impl true
-  def run_prepared(prepared, %Context{}, _opts), do: Alto.Command.execute(prepared)
-
-  @impl true
-  def run(arguments, %Context{} = context), do: Alto.Command.run(arguments, context)
-
-  @impl true
-  def run(arguments, %Context{} = context, opts), do: Alto.Command.run(arguments, context, opts)
+  def run(arguments, %Context{} = context, opts \\ []),
+    do: Alto.Command.run(arguments, context, opts)
 end

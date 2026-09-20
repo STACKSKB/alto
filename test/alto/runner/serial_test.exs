@@ -7,10 +7,10 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -22,10 +22,10 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule ToolThenAnswerProvider do
@@ -108,19 +108,19 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(arguments, context), do: EchoTool.run(arguments, context)
+    def run(arguments, context, _opts), do: EchoTool.run(arguments, context, [])
   end
 
   defmodule NonEncodableTool do
@@ -131,57 +131,54 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(_arguments, _context), do: {:ok, %Payload{value: "x"}}
+    def run(_arguments, _context, _opts), do: {:ok, %Payload{value: "x"}}
   end
 
   defmodule BlockingTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(_arguments, _context), do: receive(do: (:never -> {:ok, :done}))
+    def run(_arguments, _context, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
   defmodule ConfiguredEchoTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(_arguments, _context), do: {:error, :configuration_missing}
+    def approval(_opts), do: :never
 
     @impl true
     def run(%{"value" => value}, _context, opts) do
@@ -213,13 +210,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(%{"value" => value}, _context, opts) do
@@ -240,13 +237,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -265,13 +262,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -290,13 +287,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -315,13 +312,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -340,13 +337,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -365,13 +362,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, _opts), do: {:ok, %{}, %{}}
@@ -381,13 +378,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def run_prepared(_prepared, _context, _opts), do: {:ok, %{echo: "unreachable"}}

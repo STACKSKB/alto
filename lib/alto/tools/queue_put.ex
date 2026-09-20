@@ -15,10 +15,10 @@ defmodule Alto.Tools.QueuePut do
   alias Alto.Queue
 
   @impl true
-  def name, do: :queue_put
+  def name(_opts \\ []), do: :queue_put
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description:
         "Idempotently add or update a record in a durable queue, keyed by a dedup key.",
@@ -35,16 +35,13 @@ defmodule Alto.Tools.QueuePut do
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts \\ []), do: :parallel
 
   @impl true
-  def approval, do: :never
+  def approval(_opts \\ []), do: :never
 
   @impl true
-  def run(arguments, context), do: run(arguments, context, [])
-
-  @impl true
-  def run(arguments, _context, opts) do
+  def run(arguments, _context, opts \\ []) do
     queue = Keyword.get(opts, :queue, Alto.Queue)
 
     case Map.get(arguments, "key") do

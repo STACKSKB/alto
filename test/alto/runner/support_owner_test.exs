@@ -4,10 +4,10 @@ defmodule Alto.Runner.SupportOwnerTest do
   defmodule BlockingTool do
     @behaviour Alto.Tool
 
-    def name, do: :owner_blocking_tool
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def name(_opts), do: :owner_blocking_tool
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :never
 
     def run(_arguments, _context, opts) do
       send(Keyword.fetch!(opts, :owner), {:tool_participant, self()})

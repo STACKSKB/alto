@@ -19,29 +19,29 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   defmodule EchoTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
     @impl true
-    def schema, do: %{description: "Echo.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{description: "Echo.", parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(%{"value" => v}, _ctx), do: {:ok, %{echo: v}}
+    def run(%{"value" => v}, _ctx, _opts), do: {:ok, %{echo: v}}
   end
 
   defmodule BigTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :big
+    def name(_opts), do: :big
     @impl true
-    def schema, do: %{description: "Big.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{description: "Big.", parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx) do
+    def run(_args, _ctx, _opts) do
       {:ok, String.duplicate("x", 100_000)}
     end
   end
@@ -49,15 +49,17 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   defmodule NestedBigTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :nested
+    def name(_opts), do: :nested
     @impl true
-    def schema, do: %{description: "Nested.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts),
+      do: %{description: "Nested.", parameters: %{type: "object", properties: %{}}}
+
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx) do
+    def run(_args, _ctx, _opts) do
       {:ok, %{level1: %{level2: [%{payload: String.duplicate("y", 100_000)}]}}}
     end
   end
@@ -65,41 +67,43 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   defmodule TupleTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :tup
+    def name(_opts), do: :tup
     @impl true
-    def schema, do: %{description: "Tup.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{description: "Tup.", parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: {:ok, {:tuple_ok, 1, 2}}
+    def run(_args, _ctx, _opts), do: {:ok, {:tuple_ok, 1, 2}}
   end
 
   defmodule MalformedTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :malformed
+    def name(_opts), do: :malformed
     @impl true
-    def schema, do: %{description: "Malformed.", parameters: %{type: "object", properties: %{}}}
+    def schema(_opts),
+      do: %{description: "Malformed.", parameters: %{type: "object", properties: %{}}}
+
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx), do: {:unexpected, %{nested: String.duplicate("m", 100_000)}}
+    def run(_args, _ctx, _opts), do: {:unexpected, %{nested: String.duplicate("m", 100_000)}}
   end
 
   defmodule GuardedBigTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :big
+    def name(_opts), do: :big
     @impl true
-    def schema, do: BigTool.schema()
+    def schema(_opts), do: BigTool.schema([])
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def approval, do: :required
+    def approval(_opts), do: :required
     @impl true
     def run(_args, ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:tool_ran, ctx.session_id})
@@ -321,11 +325,11 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "native failure reasons are bounded before event retention" do
     defmodule HugeFailureTool do
       @behaviour Alto.Tool
-      def name, do: :huge_failure
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
-      def execution_mode, do: :exclusive
-      def approval, do: :never
-      def run(_args, _ctx), do: {:error, String.duplicate("x", 100_000)}
+      def name(_opts), do: :huge_failure
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+      def execution_mode(_opts), do: :exclusive
+      def approval(_opts), do: :never
+      def run(_args, _ctx, _opts), do: {:error, String.duplicate("x", 100_000)}
     end
 
     assert {:error, _, result} =

@@ -17,10 +17,10 @@ defmodule Alto.Tools.Ripwire do
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
 
   @impl true
-  def name, do: :ripwire
+  def name(_opts \\ []), do: :ripwire
 
   @impl true
-  def schema do
+  def schema(_opts \\ []) do
     %{
       description:
         "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
@@ -42,18 +42,15 @@ defmodule Alto.Tools.Ripwire do
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def execution_mode(_opts \\ []), do: :parallel
 
   # Every exposed action is analytical. Ripwire may maintain its own index or
   # cache, but it receives no edit verb through this adapter.
   @impl true
-  def approval, do: :never
+  def approval(_opts \\ []), do: :never
 
   @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     action = Map.get(arguments, "action")
 
     with {:ok, args} <- build_args(arguments),

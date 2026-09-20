@@ -19,9 +19,9 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
   defmodule EchoTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo.",
         parameters: %{
@@ -33,33 +33,33 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
     @impl true
-    def run(%{"value" => value}, _ctx), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _ctx, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedEchoTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def approval, do: :required
+    def approval(_opts), do: :required
     @impl true
-    def run(%{"value" => value}, _ctx), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _ctx, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedStampTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :stamp
+    def name(_opts), do: :stamp
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Stamp.",
         parameters: %{
@@ -71,15 +71,15 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     end
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def prepare(%{"value" => value}, _ctx) do
+    def prepare(%{"value" => value}, _ctx, _opts) do
       token = "tok-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
       {:ok, %{value: value, token: token}, %{stamped_with: value, token: token}}
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _ctx),
+    def run_prepared(%{value: value, token: token}, _ctx, _opts),
       do: {:ok, %{stamped: value, token: token}}
   end
 

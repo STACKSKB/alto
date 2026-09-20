@@ -17,13 +17,10 @@ defmodule Alto.Tools.WriteFile do
   ]
 
   @impl true
-  def name, do: :write_file
+  def name(_opts \\ []), do: :write_file
 
   @impl true
-  def schema, do: schema([])
-
-  @impl true
-  def schema(opts) when is_list(opts) do
+  def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
     %{
@@ -46,19 +43,17 @@ defmodule Alto.Tools.WriteFile do
   end
 
   @impl true
-  def execution_mode, do: :exclusive
+  def execution_mode(_opts \\ []), do: :exclusive
 
   @impl true
-  def approval, do: :required
+  def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context), do: prepare_write(arguments, context)
+  def prepare(arguments, %Context{} = context, opts \\ []),
+    do: prepare_write(arguments, context, opts)
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts), do: prepare_write(arguments, context, opts)
-
-  @impl true
-  def run_prepared(prepared, %Context{} = context) do
+  def run_prepared(prepared, %Context{} = context, _opts \\ []) do
     with {:ok, resolved} <- revalidate_target(prepared, context),
          {:ok, mode} <- revalidate_original(prepared),
          write_result <- AtomicWrite.write(resolved, prepared.content, mode) do
@@ -81,21 +76,11 @@ defmodule Alto.Tools.WriteFile do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts), do: run_prepared(prepared, context)
-
-  @impl true
-  def run(arguments, %Context{} = context) do
-    run(arguments, context, [])
-  end
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
       run_prepared(prepared, context, opts)
     end
   end
-
-  defp prepare_write(arguments, %Context{} = context), do: prepare_write(arguments, context, [])
 
   defp prepare_write(arguments, %Context{} = context, opts) when is_list(opts) do
     with {:ok, limits} <- validate_options(opts) do

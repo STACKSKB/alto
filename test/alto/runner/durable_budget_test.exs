@@ -4,20 +4,20 @@ defmodule Alto.Runner.DurableBudgetTest do
 
   defmodule Guarded do
     @behaviour Alto.Tool
-    def name, do: :guarded_budget
+    def name(_opts), do: :guarded_budget
 
-    def schema,
+    def schema(_opts),
       do: %{description: "Record prepared value", parameters: %{type: "object", properties: %{}}}
 
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def execution_mode(_opts), do: :exclusive
+    def approval(_opts), do: :required
 
-    def prepare(_, context) do
+    def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "prepared"), "1", [:append])
       {:ok, %{value: File.read!(Path.join(context.cwd, "input"))}, %{action: "record"}}
     end
 
-    def run_prepared(prepared, context) do
+    def run_prepared(prepared, context, _opts) do
       File.write!(Path.join(context.cwd, "output"), prepared.value, [:append])
       {:ok, prepared.value}
     end
