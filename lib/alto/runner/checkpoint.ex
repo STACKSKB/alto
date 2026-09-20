@@ -32,38 +32,15 @@ defmodule Alto.Runner.Checkpoint do
 
   def capture(run, pending, remaining, terminal) do
     driver = run.spec.driver
+    frame = %{pending: pending, remaining: remaining, terminal: terminal}
 
     with true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
          true <- function_exported?(driver, :dump_checkpoint, 2),
          true <- function_exported?(driver, :load_checkpoint, 2),
          true <- run.agent_depth == 0,
-         {:ok, loop} <- driver.dump_checkpoint(run.loop_state, run.spec),
-         {:ok, revision} <- transcript_revision(run),
-         true <- run.transcript_revision in [:any, revision],
-         run <- %{run | transcript_revision: revision},
-         {:ok, fingerprint} <- fingerprint(run),
-         state <- %{
-           run: Map.take(run, @fields),
-           loop: loop,
-           pending: pending,
-           remaining: remaining,
-           terminal: terminal
-         },
-         {:ok, encoded} <- encode(state) do
-      {:ok,
-       %{
-         "format" => 1,
-         "continuation_format" => @continuation_format,
-         "version" => run.checkpoint_version,
-         "fingerprint" => fingerprint,
-         "state" => encoded,
-         "budget" => Budget.snapshot(run.budget),
-         "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(run.usage)),
-         "agent_identity" => Alto.Protocol.encode_term(run.agent_identity),
-         "session_id" => run.session,
-         "transcript_revision" => revision,
-         "request" => Alto.Protocol.encode_term(pending.request)
-       }}
+         {:ok, captured} <- capture_state(run, @fields, frame) do
+      packet = checkpoint_packet(run, captured, Budget.snapshot(run.budget))
+      {:ok, Map.put(packet, "request", Alto.Protocol.encode_term(pending.request))}
     else
       false -> {:error, :checkpoint_not_supported}
       {:error, _} = error -> error
@@ -79,37 +56,18 @@ defmodule Alto.Runner.Checkpoint do
         decision,
         opts
       ) do
-    with true <-
-           packet["version"] == run.checkpoint_version and is_binary(run.checkpoint_version),
-         {:ok, fingerprint} <- fingerprint(run),
-         true <-
-           packet["fingerprint"] == fingerprint,
-         true <- is_nil(packet["kind"]),
+    with true <- is_nil(packet["kind"]),
          true <- decision in [:approve, :deny],
          true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
          {:ok,
-          %{run: saved, loop: loop, pending: pending, remaining: remaining, terminal: terminal}} <-
-           decode(packet["state"]),
-         true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(@fields),
-         true <- valid_compaction_state?(saved),
-         true <- valid_history_state?(saved),
+          %{run: saved, loop: loop, pending: pending, remaining: remaining, terminal: terminal} =
+            decoded} <- decode_state(run, packet, @fields),
+         true <- map_size(decoded) == 5,
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          true <- saved.transcript_bytes <= run.max_transcript_bytes,
-         true <- saved.transcript_revision == packet["transcript_revision"],
-         true <- valid_agent_identity?(saved.agent_identity),
-         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
-         {:ok, current_revision} <- transcript_revision(run),
-         true <- current_revision == saved.transcript_revision,
          true <- within_budget?(budget) do
-      restored =
-        run
-        |> Map.merge(saved)
-        |> Map.put(:loop_state, state)
-        |> Map.put(:budget, budget)
-        |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
-
-      {:ok, restored,
+      {:ok, restore_run(run, saved, state, budget),
        %{pending: pending, remaining: remaining, terminal: terminal, decision: decision}}
     else
       false -> {:error, :checkpoint_mismatch}
@@ -143,18 +101,14 @@ defmodule Alto.Runner.Checkpoint do
   `parent_expires_at_ms` before capturing its subsequent frame.
   """
   def capture_parent(run, pending, remaining, terminal) do
+    frame = %{pending: pending, remaining: remaining, terminal: terminal}
+
     with :ok <- parent_capabilities(run),
          true <- valid_parent_pending?(pending),
          true <- valid_frame?(remaining, terminal),
          {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
-         {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
-         {:ok, revision} <- transcript_revision(run),
-         true <- run.transcript_revision in [:any, revision],
-         saved <- Map.take(%{run | transcript_revision: revision}, @parent_fields),
-         {:ok, fingerprint} <- fingerprint(run),
          authority <- Map.take(run, @authority_fields),
          true <- valid_authority?(authority),
-         true <- valid_parent_saved?(saved, authority),
          expires <- parent_expiry(run),
          true <- is_integer(expires),
          :ok <- unexpired(expires),
@@ -166,32 +120,18 @@ defmodule Alto.Runner.Checkpoint do
            budget: budget,
            session_id: run.session
          },
-         {:ok, encoded} <-
-           encode(%{
-             run: saved,
-             loop: loop,
-             pending: pending,
-             remaining: remaining,
-             terminal: terminal,
-             binding: binding
-           }) do
-      packet = %{
-        "format" => 1,
-        "continuation_format" => @continuation_format,
-        "kind" => "parent",
-        "stage" => Atom.to_string(pending.kind),
-        "version" => run.checkpoint_version,
-        "fingerprint" => fingerprint,
-        "state" => encoded,
-        "budget" => budget,
-        "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
-        "agent_identity" => Alto.Protocol.encode_term(saved.agent_identity),
-        "session_id" => run.session,
-        "transcript_revision" => revision,
-        "store" => store,
-        "authority" => Alto.Protocol.encode_term(authority),
-        "expires_at_ms" => expires
-      }
+         {:ok, captured} <- capture_state(run, @parent_fields, frame, %{binding: binding}),
+         true <- valid_parent_saved?(captured.saved, authority) do
+      packet =
+        run
+        |> checkpoint_packet(captured, budget)
+        |> Map.merge(%{
+          "kind" => "parent",
+          "stage" => Atom.to_string(pending.kind),
+          "store" => store,
+          "authority" => Alto.Protocol.encode_term(authority),
+          "expires_at_ms" => expires
+        })
 
       # Bound the envelope too, not merely its encoded state.
       with {:ok, _} <- encode(packet), do: {:ok, packet}
@@ -212,9 +152,6 @@ defmodule Alto.Runner.Checkpoint do
          true <- Enum.sort(Map.keys(packet)) == Enum.sort(@parent_packet_fields),
          true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
          true <- packet["kind"] == "parent" and packet["stage"] in ["children", "frame"],
-         true <- packet["version"] == run.checkpoint_version,
-         {:ok, fingerprint} <- fingerprint(run),
-         true <- packet["fingerprint"] == fingerprint,
          {:ok, _} <- encode(packet),
          {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
          true <- store == packet["store"],
@@ -226,7 +163,7 @@ defmodule Alto.Runner.Checkpoint do
             remaining: remaining,
             terminal: terminal,
             binding: binding
-          } = decoded} <- decode(packet["state"]),
+          } = decoded} <- decode_state(run, packet, @parent_fields),
          true <- map_size(decoded) == 6,
          true <- valid_parent_binding?(binding, packet),
          :ok <- parent_budget_binding(run, packet["budget"]),
@@ -237,12 +174,8 @@ defmodule Alto.Runner.Checkpoint do
          true <- valid_authority?(Map.take(run, @authority_fields)),
          authority <- narrow_authority(run, binding.authority),
          true <- saved.transcript_bytes <= authority.max_transcript_bytes,
-         true <- saved.transcript_revision == packet["transcript_revision"],
-         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
          true <- packet["usage"] == Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
          true <- packet["session_id"] == run.session,
-         {:ok, revision} <- transcript_revision(run),
-         true <- revision == saved.transcript_revision,
          :ok <- unexpired(binding.expires_at_ms),
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
@@ -250,13 +183,9 @@ defmodule Alto.Runner.Checkpoint do
          :ok <- Budget.check(budget),
          true <- within_budget?(budget) do
       restored =
-        run
-        |> Map.merge(saved)
+        restore_run(run, saved, state, budget)
         |> Map.merge(authority)
-        |> Map.put(:loop_state, state)
-        |> Map.put(:budget, budget)
         |> Map.put(:parent_expires_at_ms, binding.expires_at_ms)
-        |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
 
       {:ok, restored, %{pending: pending, remaining: remaining, terminal: terminal}}
     else
@@ -346,6 +275,61 @@ defmodule Alto.Runner.Checkpoint do
       {:error, _} = error -> error
       _ -> {:error, :child_checkpoint_mismatch}
     end
+  end
+
+  defp capture_state(run, fields, frame, extras \\ %{}) do
+    with {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
+         {:ok, revision} <- transcript_revision(run),
+         true <- run.transcript_revision in [:any, revision],
+         saved <- Map.take(%{run | transcript_revision: revision}, fields),
+         {:ok, fingerprint} <- fingerprint(run),
+         state <- Map.merge(%{run: saved, loop: loop}, Map.merge(frame, extras)),
+         {:ok, encoded} <- encode(state) do
+      {:ok, %{saved: saved, revision: revision, fingerprint: fingerprint, encoded: encoded}}
+    end
+  end
+
+  defp checkpoint_packet(run, captured, budget) do
+    %{
+      "format" => 1,
+      "continuation_format" => @continuation_format,
+      "version" => run.checkpoint_version,
+      "fingerprint" => captured.fingerprint,
+      "state" => captured.encoded,
+      "budget" => budget,
+      "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(captured.saved.usage)),
+      "agent_identity" => Alto.Protocol.encode_term(captured.saved.agent_identity),
+      "session_id" => run.session,
+      "transcript_revision" => captured.revision
+    }
+  end
+
+  defp decode_state(run, packet, fields) do
+    with true <-
+           is_binary(run.checkpoint_version) and packet["version"] == run.checkpoint_version,
+         {:ok, fingerprint} <- fingerprint(run),
+         true <- packet["fingerprint"] == fingerprint,
+         {:ok, decoded} <- decode(packet["state"]),
+         true <- is_map(decoded),
+         %{run: saved} <- decoded,
+         true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(fields),
+         true <- valid_compaction_state?(saved),
+         true <- valid_history_state?(saved),
+         true <- saved.transcript_revision == packet["transcript_revision"],
+         true <- valid_agent_identity?(saved.agent_identity),
+         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
+         {:ok, revision} <- transcript_revision(run),
+         true <- revision == saved.transcript_revision do
+      {:ok, decoded}
+    end
+  end
+
+  defp restore_run(run, saved, loop_state, budget) do
+    run
+    |> Map.merge(saved)
+    |> Map.put(:loop_state, loop_state)
+    |> Map.put(:budget, budget)
+    |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
   end
 
   defp parent_capabilities(run) do
