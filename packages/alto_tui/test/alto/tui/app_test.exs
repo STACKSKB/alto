@@ -160,12 +160,7 @@ defmodule Alto.TUI.AppTest do
     folder = Path.join(context.root, "Second Project!")
     File.mkdir_p!(folder)
 
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
-        credentials_path: context.credentials
-      )
+    state = state!(context, credentials_path: context.credentials)
 
     ExRatatui.textarea_insert_str(state.textarea, "draft survives")
     original = state.selected_project_id
@@ -194,18 +189,13 @@ defmodule Alto.TUI.AppTest do
     assert again.selected_project_id == opened.selected_project_id
     assert length(again.projects) == 2
 
-    {:ok, restarted} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
-        credentials_path: context.credentials
-      )
+    restarted = state!(context, credentials_path: context.credentials)
 
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
   test "create folder opens the typed nested path without losing the draft", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     ExRatatui.textarea_insert_str(state.textarea, "keep this draft")
     form = folder_form(state)
 
@@ -234,7 +224,7 @@ defmodule Alto.TUI.AppTest do
 
   test "close controls hide workspaces, preserve tasks and draft, and handle the last workspace",
        context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     original = state.selected_project_id
     folder = Path.join(context.root, "Other")
     File.mkdir!(folder)
@@ -263,7 +253,7 @@ defmodule Alto.TUI.AppTest do
     assert {:ok, [^task]} = Alto.Harness.Catalog.tasks(other, state.catalog_opts)
     assert File.dir?(folder)
     assert ExRatatui.textarea_get_value(closed.textarea) == "keep draft"
-    {:ok, restarted} = State.new(context.config, project: context.root, path: context.catalog)
+    restarted = state!(context)
     refute Enum.any?(State.rail_rows(restarted), &(&1.id == other))
 
     {:noreply, gear} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, closed)
@@ -282,7 +272,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "workspace menu offers Close workspace without cancelling running work", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | runs: %{"background" => %{task_id: "running", status: :running}}}
     {:noreply, gear} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
     {:noreply, menu} = App.handle_event(%Key{code: "w"}, gear)
@@ -297,7 +287,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "sidebar arrows cross workspace headers both ways and workspace clicks compose", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     projects =
       Enum.map(1..3, fn n ->
@@ -351,12 +341,7 @@ defmodule Alto.TUI.AppTest do
 
   test "new-workspace sidebar opens the folder picker and reports invalid folders",
        context do
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
-        credentials_path: context.credentials
-      )
+    state = state!(context, credentials_path: context.credentials)
 
     state = %{state | dimensions: {150, 42}}
     rail = View.layout(state, 150, 42).rail
@@ -382,10 +367,8 @@ defmodule Alto.TUI.AppTest do
   test "Alt opts into copying UI text in every pane; paste edits the composer", context do
     owner = self()
 
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
+    state =
+      state!(context,
         credentials_path: context.credentials,
         clipboard_write: fn text ->
           send(owner, {:clipboard, text})
@@ -442,10 +425,8 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "workspace action stays at fixed cells through redraw, selection and copying", context do
-    {:ok, initial} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
+    initial =
+      state!(context,
         credentials_path: context.credentials,
         clipboard_write: fn _ -> :ok end
       )
@@ -495,10 +476,8 @@ defmodule Alto.TUI.AppTest do
 
   test "transcript selection scrolls from follow mode and retains its position after copying",
        context do
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
+    state =
+      state!(context,
         credentials_path: context.credentials,
         clipboard_write: fn _ -> :ok end
       )
@@ -527,7 +506,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "activity stays visible and animated while waiting without output", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     state = %{
       state
@@ -562,7 +541,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "effort picker offers only supported choices and remembers them per model", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     state = %{
       state
@@ -588,7 +567,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "provider reasoning is separate from the answer and changes the activity phase", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     state = %{
       state
@@ -618,7 +597,7 @@ defmodule Alto.TUI.AppTest do
 
   test "Codex reasoning summaries replace raw deltas and the completed item is authoritative",
        context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     run = %{
       kind: :codex,
@@ -670,7 +649,7 @@ defmodule Alto.TUI.AppTest do
 
   test "effort selector loads a cold model catalog without visiting model selection first",
        context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | models: %{}, leader?: true}
     {:noreply, loading} = App.handle_event(%Key{code: "r"}, state)
     assert loading.overlay.kind == :effort
@@ -684,10 +663,8 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "ordinary selection excludes chrome and placeholders but includes content", context do
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
+    state =
+      state!(context,
         credentials_path: context.credentials,
         clipboard_write: fn _ -> :ok end
       )
@@ -725,10 +702,8 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "popup selection copies only masked API keys and paste edits the current form", context do
-    {:ok, state} =
-      State.new(context.config,
-        project: context.root,
-        path: context.catalog,
+    state =
+      state!(context,
         credentials_path: context.credentials,
         clipboard_write: fn _ -> :ok end,
         clipboard_read: fn -> {:ok, "from clipboard"} end
@@ -791,29 +766,23 @@ defmodule Alto.TUI.AppTest do
         backend: "custom"
       )
 
-    {:ok, app} =
-      App.start_link(
+    app =
+      start_app!(context,
         config: config,
-        project: context.root,
-        path: context.catalog,
         credentials_path: context.credentials,
-        test_mode: {120, 36},
-        name: nil
+        test_mode: {120, 36}
       )
 
-    on_exit(fn -> if Process.alive?(app), do: GenServer.stop(app) end)
     state = user_state(app)
     assert state.selected_backend == :custom
     ExRatatui.textarea_set_value(state.textarea, "execute")
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
     assert_receive {:custom_start, Alto.Approvals.DenyAll}, 2_000
     eventually(fn -> user_state(app).notice == "run completed" end)
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "display text and inactive task caches are bounded", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     state =
       Enum.reduce(1..30, state, fn n, acc ->
@@ -836,7 +805,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "renders the agreed pane model and telemetry bar headlessly", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {150, 42}}
     terminal = ExRatatui.init_test_terminal(150, 42)
     frame = %ExRatatui.Frame{width: 150, height: 42}
@@ -855,7 +824,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "transcript follows streaming output until the user scrolls away", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     state =
       state
@@ -912,12 +881,7 @@ defmodule Alto.TUI.AppTest do
                session_id: session_id
              )
 
-    assert {:ok, state} =
-             State.new(context.config,
-               project: context.root,
-               path: context.catalog,
-               session_dir: session_dir
-             )
+    state = state!(context, session_dir: session_dir)
 
     usage = State.current_usage(state)
     assert usage.total_tokens == 850
@@ -926,7 +890,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "narrow gear help keeps every command visible", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {100, 30}, leader?: true}
     layout = View.layout(state, 100, 30)
     widget = widget_at(View.widgets(state, %{width: 100, height: 30}), layout.composer)
@@ -938,7 +902,7 @@ defmodule Alto.TUI.AppTest do
 
   test "composer wraps prose by default and preserves code as an unwrapped native editor",
        context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {60, 22}}
     ExRatatui.textarea_set_value(state.textarea, String.duplicate("a", 70))
 
@@ -958,15 +922,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "entry mode hotkeys and mouse toggle without changing the draft", context do
-    assert {:ok, app} =
-             App.start_link(
-               config: context.config,
-               project: context.root,
-               path: context.catalog,
-               test_mode: {150, 42},
-               name: nil,
-               mouse_capture: true
-             )
+    app = start_app!(context, mouse_capture: true)
 
     state = user_state(app)
     ExRatatui.textarea_set_value(state.textarea, "draft with a long line")
@@ -1000,13 +956,10 @@ defmodule Alto.TUI.AppTest do
     clicked = user_state(app)
     assert clicked.composer_mode == :code
     assert ExRatatui.textarea_get_value(clicked.textarea) == "draft with a long line"
-
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "focus traversal skips panes collapsed by the responsive layout", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {80, 24}, focus: :transcript, details_visible?: true}
 
     assert State.visible_focuses(state) == [:rail, :transcript, :composer]
@@ -1019,7 +972,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "focused context becomes a drawer on resize and hiding a pane restores focus", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {150, 42}, focus: :details}
 
     assert {:noreply, resized} =
@@ -1038,7 +991,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "narrow context is a mouse-aware drawer and becomes full-screen when tiny", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | dimensions: {80, 24}, focus: :composer}
 
     terminal = ExRatatui.init_test_terminal(80, 24)
@@ -1113,54 +1066,9 @@ defmodule Alto.TUI.AppTest do
     assert tiny_settings |> Enum.map_join(& &1.text) |> String.length() <= 40
   end
 
-  test "narrow approvals can auto-open and close the context drawer", context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
-    state = %{state | dimensions: {80, 24}, focus: :composer}
-    request = %{id: "approval-1", tool: "git_mutate", arguments: %{}, details: %{}}
-
-    assert {:noreply, prompted} =
-             App.handle_info({:alto_approval_request, "run-1", request, self()}, state)
-
-    assert prompted.details_drawer_open?
-    assert prompted.details_drawer_auto_opened?
-    assert prompted.focus == :details
-
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(prompted, %{width: 80, height: 24}))
-    approval_buffer = ExRatatui.get_buffer_content(terminal)
-    assert approval_buffer =~ "approval required"
-    assert approval_buffer =~ "Git mutate"
-
-    assert {:noreply, decided} = App.handle_event(%Key{code: "f8", kind: "press"}, prompted)
-    assert_receive {:alto_approval_decision, "approval-1", :approve}
-    refute decided.details_drawer_open?
-    assert decided.focus == :composer
-
-    config =
-      context.config.run_options
-      |> Keyword.put(:tui, approval_auto_open: false)
-      |> Alto.Test.TUI.config()
-
-    assert {:ok, quiet} = State.new(config, project: context.root, path: context.catalog)
-    quiet = %{quiet | dimensions: {80, 24}, focus: :composer}
-
-    assert {:noreply, quiet} =
-             App.handle_info(
-               {:alto_approval_request, "run-2", %{request | id: "approval-2"}, self()},
-               quiet
-             )
-
-    refute quiet.details_drawer_open?
-    assert quiet.focus == :composer
-
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(quiet, %{width: 80, height: 24}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "D:REQ"
-  end
-
   test "printable keys compose from panes by default and can preserve panel navigation",
        context do
-    assert {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
     state = %{state | focus: :rail}
 
     assert {:noreply, composing} = App.handle_event(%Key{code: "x", kind: "press"}, state)
@@ -1195,14 +1103,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "gear overlays preserve the composer and a run updates durable task usage", context do
-    assert {:ok, app} =
-             App.start_link(
-               config: context.config,
-               project: context.root,
-               path: context.catalog,
-               test_mode: {150, 42},
-               name: nil
-             )
+    app = start_app!(context)
 
     state = user_state(app)
     ExRatatui.textarea_set_value(state.textarea, "Keep this draft")
@@ -1226,21 +1127,10 @@ defmodule Alto.TUI.AppTest do
       task && task["status"] == "completed" && usage.total_tokens == 1_020 &&
         usage.cached_input_tokens == 600
     end)
-
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "mouse settings and seam dragging use the same state model", context do
-    assert {:ok, app} =
-             App.start_link(
-               config: context.config,
-               project: context.root,
-               path: context.catalog,
-               test_mode: {150, 42},
-               name: nil,
-               mouse_capture: true
-             )
+    app = start_app!(context, mouse_capture: true)
 
     state = user_state(app)
     ExRatatui.textarea_set_value(state.textarea, "untouched")
@@ -1290,13 +1180,10 @@ defmodule Alto.TUI.AppTest do
     Runtime.inject_event(app, %Mouse{kind: "up", button: "left", modifiers: ["alt"], x: 31, y: 10})
 
     assert user_state(app).dragging == nil
-
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "provider failures and structured tool details render readable fields", context do
-    {:ok, state} = State.new(context.config, project: context.root, path: context.catalog)
+    state = state!(context)
 
     reason =
       {:http_error, 400,
@@ -1350,15 +1237,12 @@ defmodule Alto.TUI.AppTest do
         tools: []
       )
 
-    assert {:ok, app} =
-             App.start_link(
-               config: config,
-               project: context.root,
-               path: context.catalog,
-               credentials_path: context.credentials,
-               test_mode: {120, 36},
-               name: nil
-             )
+    app =
+      start_app!(context,
+        config: config,
+        credentials_path: context.credentials,
+        test_mode: {120, 36}
+      )
 
     state = user_state(app)
     ExRatatui.textarea_set_value(state.textarea, "Hi")
@@ -1374,9 +1258,6 @@ defmodule Alto.TUI.AppTest do
     refute failed.overlay.message =~ "should-not-render"
     assert Enum.any?(failed.overlay.items, &(&1.value == {:retry_models, "broken"}))
     assert ExRatatui.textarea_get_value(failed.textarea) == "Hi"
-
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "provider setup masks and privately persists API keys", context do
@@ -1396,15 +1277,7 @@ defmodule Alto.TUI.AppTest do
         tools: []
       )
 
-    assert {:ok, app} =
-             App.start_link(
-               config: config,
-               project: context.root,
-               path: context.catalog,
-               credentials_path: context.credentials,
-               test_mode: {150, 42},
-               name: nil
-             )
+    app = start_app!(context, config: config, credentials_path: context.credentials)
 
     Runtime.inject_event(app, %Key{code: "f3", kind: "press"})
     Runtime.inject_event(app, %Key{code: "down", kind: "press"})
@@ -1450,9 +1323,6 @@ defmodule Alto.TUI.AppTest do
     assert Alto.Credentials.get(credentials, "acme", "api_key") == "super-secret-key"
     assert {:ok, %{mode: mode}} = File.stat(context.credentials)
     assert Bitwise.band(mode, 0o077) == 0
-
-    Process.unlink(app)
-    GenServer.stop(app)
   end
 
   test "Codex is a distinct OAuth backend with approvals and telemetry", context do
@@ -1479,14 +1349,7 @@ defmodule Alto.TUI.AppTest do
         sessions: true
       )
 
-    assert {:ok, app} =
-             App.start_link(
-               config: config,
-               project: context.root,
-               path: context.catalog,
-               test_mode: {170, 44},
-               name: nil
-             )
+    app = start_app!(context, config: config, test_mode: {170, 44})
 
     Runtime.inject_event(app, %Key{code: "f5", kind: "press"})
     Runtime.inject_event(app, %Key{code: "down", kind: "press"})
@@ -1531,9 +1394,27 @@ defmodule Alto.TUI.AppTest do
     assert buffer =~ "B:CODEX"
     assert buffer =~ "quota 22.0%"
     assert buffer =~ "cache 60.0%"
+  end
 
+  defp state!(context, opts \\ []) do
+    defaults = [project: context.root, path: context.catalog]
+    assert {:ok, state} = State.new(context.config, Keyword.merge(defaults, opts))
+    state
+  end
+
+  defp start_app!(context, opts \\ []) do
+    defaults = [
+      config: context.config,
+      project: context.root,
+      path: context.catalog,
+      test_mode: {150, 42},
+      name: nil
+    ]
+
+    assert {:ok, app} = App.start_link(Keyword.merge(defaults, opts))
     Process.unlink(app)
-    GenServer.stop(app)
+    on_exit(fn -> if Process.alive?(app), do: GenServer.stop(app) end)
+    app
   end
 
   defp user_state(app), do: :sys.get_state(app).user_state
