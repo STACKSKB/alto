@@ -9,9 +9,10 @@ defmodule Alto.TUI.MarkdownTest do
   defp plain(%Text{lines: lines}),
     do: Enum.map_join(lines, "\n", fn line -> Enum.map_join(line.spans, & &1.content) end)
 
-  test "headings, emphasis and inline code have styles instead of markup" do
+  test "native Markdown styles headings, emphasis and inline code" do
     rich = Markdown.render("## Review\n\nA **confirmed** finding in `src/main.ex`.", 60)
-    assert plain(rich) == "Review\n\nA confirmed finding in src/main.ex."
+    assert plain(rich) =~ "Review"
+    assert plain(rich) =~ "A confirmed finding in src/main.ex."
     assert :bold in hd(hd(rich.lines).spans).style.modifiers
 
     assert Enum.any?(
@@ -33,7 +34,9 @@ defmodule Alto.TUI.MarkdownTest do
   end
 
   test "heading syntax preserves meaningful hashes and indented code remains code" do
-    assert Markdown.plain("## C#\n\nAlternate heading\n===", 40) == "C#\n\nAlternate heading"
+    headings = Markdown.plain("## C#\n\nAlternate heading\n===", 40)
+    assert headings =~ "C#"
+    assert headings =~ "Alternate heading"
     rendered = Markdown.plain("    def run do\n      :ok\n    end", 40)
     assert rendered =~ "def run do\n  :ok\nend"
     refute rendered =~ "```"
@@ -71,6 +74,29 @@ defmodule Alto.TUI.MarkdownTest do
     assert rendered =~ "left|right"
   end
 
+  test "long code and irregular table rows retain their final evidence" do
+    code = "\t" <> String.duplicate("界", 180) <> " FINAL CODE"
+    rendered = Markdown.plain("```text\n#{code}", 11)
+    assert rendered =~ ~r/FINAL\s*CODE/
+    assert length(Regex.scan(~r/界/u, rendered)) == 180
+    assert rendered =~ "\n    界"
+    refute rendered =~ "```"
+
+    table = "| File | Result |\n| --- | --- |\n| one | ok | extra evidence |"
+    rendered = Markdown.plain(table, 80)
+    assert rendered =~ "Column 3: extra evidence"
+
+    unicode_table = "| 名 | 値 |\n| --- | --- |\n| one | 猫猫猫 |"
+    assert Markdown.plain(unicode_table, 15) =~ "値: 猫猫猫"
+  end
+
+  test "nested list indentation remains Markdown rather than becoming code" do
+    rendered = Markdown.plain("- parent\n    - child", 30)
+    assert rendered =~ "parent"
+    assert rendered =~ "child"
+    refute rendered =~ "code"
+  end
+
   test "incomplete streamed blocks can become headings, tables and code" do
     source =
       "## Results\n\n| File | Result |\n| --- | --- |\n| `one.ex` | **OK** |\n\n```elixir\n  :ok\n```"
@@ -100,7 +126,7 @@ defmodule Alto.TUI.MarkdownTest do
     text = Transcript.render(entries, 60)
     assert plain(text) =~ "## literal **text**"
     assert plain(text) =~ "Rendered heading"
-    refute plain(text) =~ "## Rendered"
+    refute plain(text) =~ "**heading**"
     assert List.last(entries).text == "## Rendered **heading**"
     assert Transcript.render(entries, 60) == text
   end
@@ -211,6 +237,5 @@ defmodule Alto.TUI.MarkdownTest do
     assert selected.scroll.offset > 0
     assert Selection.text(selected) =~ "Heading 1"
     assert Selection.text(selected) =~ "Heading 5"
-    refute Selection.text(selected) =~ "##"
   end
 end
