@@ -1294,20 +1294,13 @@ defmodule Alto.TUI.App do
           min(max(state.details_scroll + delta, 0), View.details_bottom_scroll(state))
     }
 
-  defp navigate(state, %Key{code: code}) when code in ["down", "j"] do
-    case state.focus do
-      :rail -> move_rail(state, 1)
-      :transcript -> scroll_transcript(state, 1)
-      :details -> scroll_details(state, 1)
-      _other -> state
-    end
-  end
+  defp navigate(state, %Key{code: code}) when code in ["down", "j", "up", "k"] do
+    delta = if code in ["down", "j"], do: 1, else: -1
 
-  defp navigate(state, %Key{code: code}) when code in ["up", "k"] do
     case state.focus do
-      :rail -> move_rail(state, -1)
-      :transcript -> scroll_transcript(state, -1)
-      :details -> scroll_details(state, -1)
+      :rail -> move_rail(state, delta)
+      :transcript -> scroll_transcript(state, delta)
+      :details -> scroll_details(state, delta)
       _other -> state
     end
   end
