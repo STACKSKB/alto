@@ -55,7 +55,7 @@ defmodule Alto.FrontEnd.Registry do
 
   alias Alto.FrontEnd.Registry.Subscriber
 
-  @capacity_options [
+  @options [
     max_buffer_messages: [type: :non_neg_integer, default: 10_000],
     max_buffer_bytes: [type: :non_neg_integer, default: 8_000_000],
     max_retained_events: [type: :non_neg_integer, default: 1_000],
@@ -63,9 +63,11 @@ defmodule Alto.FrontEnd.Registry do
     max_subscribers: [type: :non_neg_integer, default: 128],
     max_finished_runs: [type: :non_neg_integer, default: 100],
     max_claim_bytes: [type: :non_neg_integer, default: 1_046_528],
-    command_timeout: [type: :pos_integer, default: 30_000]
+    command_timeout: [type: :pos_integer, default: 30_000],
+    commands: [type: {:map, {:custom, __MODULE__, :command_name, []}, {:fun, 1}}, default: %{}],
+    disconnect_after_overflow: [type: {:in, [:never, :immediately]}, default: :never]
   ]
-  @capacity_schema NimbleOptions.new!(@capacity_options)
+  @options_schema NimbleOptions.new!(@options)
   @max_task_bytes 1_000_000
 
   ## Client API
@@ -311,19 +313,16 @@ defmodule Alto.FrontEnd.Registry do
   def init(opts) do
     {sessions_enabled, session_dir} = normalize_sessions(opts)
 
-    with {:ok, capacity} <- capacity_options(opts),
-         :ok <- validate_commands(Keyword.get(opts, :commands, %{})) do
+    with {:ok, options} <-
+           NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@options)), @options_schema) do
       state =
-        Map.merge(capacity, %{
+        Map.merge(Map.new(options), %{
           resolver: Keyword.fetch!(opts, :config_resolver),
           cwd: Keyword.get(opts, :cwd, File.cwd!()),
           queue: Keyword.get(opts, :queue),
           ledger: Keyword.get(opts, :ledger),
-          commands: Keyword.get(opts, :commands, %{}),
           sessions_enabled: sessions_enabled,
           session_dir: session_dir,
-          disconnect_after_overflow:
-            validate_disconnect(Keyword.get(opts, :disconnect_after_overflow, :never)),
           subscribers: %{},
           runs: %{},
           finished_order: []
@@ -353,43 +352,9 @@ defmodule Alto.FrontEnd.Registry do
   defp validate_owner(owner) when is_pid(owner), do: :ok
   defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
 
-  defp validate_commands(commands) when is_map(commands) do
-    if Enum.all?(commands, fn {name, callback} ->
-         is_binary(name) and name != "" and is_function(callback, 1)
-       end) do
-      :ok
-    else
-      {:error, {:invalid_option, :commands, commands}}
-    end
-  end
-
-  defp validate_commands(commands), do: {:error, {:invalid_option, :commands, commands}}
-
-  defp validate_disconnect(:never), do: :never
-
-  defp validate_disconnect(:immediately), do: :immediately
-
-  defp validate_disconnect(other),
-    do: raise(ArgumentError, "invalid disconnect_after_overflow: #{inspect(other)}")
-
-  defp capacity_options(opts) do
-    case NimbleOptions.validate(
-           Keyword.take(opts, Keyword.keys(@capacity_options)),
-           @capacity_schema
-         ) do
-      {:ok, options} ->
-        {:ok, Map.new(options)}
-
-      {:error, %NimbleOptions.ValidationError{key: :max_finished_runs, value: value}} ->
-        {:error, {:invalid_max_finished_runs, value}}
-
-      {:error, %NimbleOptions.ValidationError{key: :max_claim_bytes, value: value}} ->
-        {:error, {:invalid_max_claim_bytes, value}}
-
-      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
-        {:error, {:invalid_option, key, value}}
-    end
-  end
+  @doc false
+  def command_name(name) when is_binary(name) and name != "", do: {:ok, name}
+  def command_name(_name), do: {:error, "expected a nonempty command name"}
 
   defp active_capacity(state) do
     count = Enum.count(state.runs, fn {_id, run} -> run.result == :running end)
@@ -674,13 +639,6 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   @impl true
-  def handle_info({:alto_run_event, run_id, %Event{} = event}, state) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} -> {:noreply, ingest_event(state, run, event)}
-      :error -> {:noreply, state}
-    end
-  end
-
   def handle_info({:alto_runner_result, ref, outcome}, state) do
     case find_run(state, completion_ref: ref) do
       %{result: :running} = run -> {:noreply, finish_run(state, run, outcome)}
