@@ -7,6 +7,13 @@ defmodule Alto.Tools.Git do
 
   @spec run([String.t()], Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(args, %Context{} = context, opts) do
+    with {:ok, prepared} <- prepare(args, context, opts),
+         {:ok, result} <- Command.execute(prepared) do
+      normalize_result(result)
+    end
+  end
+
+  def prepare(args, context, opts) do
     command = %{
       "program" => Keyword.get(opts, :executable, "git"),
       "args" => command_args(args, opts),
@@ -15,9 +22,7 @@ defmodule Alto.Tools.Git do
         Keyword.get(opts, :max_output_bytes, min(64_000, Invocation.max_output_bytes()))
     }
 
-    with {:ok, result} <- Command.run(command, context, Keyword.take(opts, [:executor, :policy])) do
-      normalize_result(result)
-    end
+    Command.prepare(command, context, Keyword.take(opts, [:executor, :policy]))
   end
 
   defp command_args(args, opts) do
@@ -245,16 +250,13 @@ defmodule Alto.Tools.GitMutate do
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) do
     with {:ok, args} <- args(arguments),
-         {:ok, prepared} <-
-           Command.prepare(command(args, opts), context, Keyword.take(opts, [:executor, :policy])) do
+         {:ok, prepared} <- Git.prepare(args, context, opts) do
       {:ok, prepared, prepared.approval_details}
     end
   end
 
   @impl true
-  def run_prepared(prepared, %Context{}, _opts \\ []), do: run_prepared(prepared)
-
-  defp run_prepared(prepared) do
+  def run_prepared(prepared, %Context{}, _opts \\ []) do
     case Command.execute(prepared) do
       {:ok, %{termination: :timeout}} ->
         {:unknown, :git_timeout}
@@ -309,13 +311,4 @@ defmodule Alto.Tools.GitMutate do
   end
 
   defp path_args(_prefix, paths), do: {:error, {:invalid_git_paths, paths}}
-
-  defp command(args, opts) do
-    %{
-      "program" => Keyword.get(opts, :executable, "git"),
-      "args" => ["--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false" | args],
-      "timeout_ms" => Keyword.get(opts, :timeout_ms, 30_000),
-      "max_output_bytes" => Keyword.get(opts, :max_output_bytes, 64_000)
-    }
-  end
 end
