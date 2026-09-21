@@ -6,11 +6,13 @@ defmodule Alto.Workspaces.Git do
   alias Alto.Command
   alias Alto.Tool.Context
 
-  @default_source_bytes 512 * 1_024 * 1_024
-  @default_max_files 20_000
-  @default_checkout_bytes 128 * 1_024 * 1_024
-  @default_patch_bytes 1_000_000
-  @default_timeout 120_000
+  @options_schema NimbleOptions.new!(
+                    max_source_bytes: [type: :pos_integer, default: 512 * 1_024 * 1_024],
+                    max_files: [type: :pos_integer, default: 20_000],
+                    max_checkout_bytes: [type: :pos_integer, default: 128 * 1_024 * 1_024],
+                    max_patch_bytes: [type: {:in, 1..1_000_000}, default: 1_000_000],
+                    timeout_ms: [type: {:in, 1..120_000}, default: 120_000]
+                  )
 
   @doc false
   def command(cwd, args, opts \\ []) do
@@ -178,37 +180,13 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp limits(opts) do
-    defaults = [
-      max_source_bytes: @default_source_bytes,
-      max_files: @default_max_files,
-      max_checkout_bytes: @default_checkout_bytes,
-      max_patch_bytes: @default_patch_bytes,
-      timeout_ms: @default_timeout
-    ]
-
-    if Keyword.keyword?(opts) and Keyword.keys(opts) -- Keyword.keys(defaults) == [] do
-      values = Keyword.merge(defaults, opts)
-
-      with :ok <- positive(values[:max_source_bytes], :max_source_bytes),
-           :ok <- positive(values[:max_files], :max_files),
-           :ok <- positive(values[:max_checkout_bytes], :max_checkout_bytes),
-           :ok <- positive(values[:max_patch_bytes], :max_patch_bytes),
-           :ok <- positive(values[:timeout_ms], :timeout_ms),
-           true <- values[:timeout_ms] <= @default_timeout or {:error, :invalid_timeout},
-           true <-
-             values[:max_patch_bytes] <= @default_patch_bytes or {:error, :invalid_patch_limit} do
-        {:ok, Map.new(values)}
-      else
-        false -> {:error, :invalid_workspace_limits}
-        {:error, _} = error -> error
-      end
+    if Keyword.keyword?(opts) do
+      with {:ok, values} <- NimbleOptions.validate(opts, @options_schema),
+           do: {:ok, Map.new(values)}
     else
       {:error, :invalid_workspace_options}
     end
   end
-
-  defp positive(value, _name) when is_integer(value) and value > 0, do: :ok
-  defp positive(_, name), do: {:error, {:invalid_workspace_limit, name}}
 
   defp repository_root(repo, limits) do
     root = Path.expand(repo)
