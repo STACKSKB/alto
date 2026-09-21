@@ -16,6 +16,16 @@ defmodule Alto.Tools.ReadImage do
   @default_max_pixels 20_000_000
   @hard_max_pixels 40_000_000
 
+  @options_schema [
+    max_encoded_bytes: [
+      type: {:in, 1..@hard_max_encoded_bytes},
+      default: @default_max_encoded_bytes
+    ],
+    max_dimension: [type: {:in, 1..@hard_max_dimension}, default: @default_max_dimension],
+    max_pixels: [type: {:in, 1..@hard_max_pixels}, default: @default_max_pixels],
+    processor: [type: :any, default: nil]
+  ]
+
   @impl true
   def name(_opts \\ []), do: :read_image
 
@@ -92,48 +102,13 @@ defmodule Alto.Tools.ReadImage do
 
   def run(_arguments, _context, _opts), do: {:error, :image_arguments_must_be_object}
 
-  defp config(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      max_encoded_bytes = Keyword.get(opts, :max_encoded_bytes, @default_max_encoded_bytes)
-      max_dimension = Keyword.get(opts, :max_dimension, @default_max_dimension)
-      max_pixels = Keyword.get(opts, :max_pixels, @default_max_pixels)
-      processor = Keyword.get(opts, :processor)
-
-      unknown =
-        Keyword.keys(opts) -- [:max_encoded_bytes, :max_dimension, :max_pixels, :processor]
-
-      cond do
-        unknown != [] ->
-          {:error, {:unknown_image_options, unknown}}
-
-        not is_integer(max_encoded_bytes) or max_encoded_bytes <= 0 or
-            max_encoded_bytes > @hard_max_encoded_bytes ->
-          {:error, {:invalid_max_encoded_bytes, max_encoded_bytes}}
-
-        not is_integer(max_dimension) or max_dimension <= 0 or
-            max_dimension > @hard_max_dimension ->
-          {:error, {:invalid_max_dimension, max_dimension}}
-
-        not is_integer(max_pixels) or max_pixels <= 0 or max_pixels > @hard_max_pixels ->
-          {:error, {:invalid_max_pixels, max_pixels}}
-
-        true ->
-          with {:ok, processor} <- normalize_processor(processor) do
-            {:ok,
-             %{
-               max_encoded_bytes: max_encoded_bytes,
-               max_dimension: max_dimension,
-               max_pixels: max_pixels,
-               processor: processor
-             }}
-          end
-      end
-    else
-      {:error, {:invalid_image_options, opts}}
+  defp config(opts) do
+    with {:ok, config} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_image_options),
+         {:ok, processor} <- normalize_processor(config.processor) do
+      {:ok, %{config | processor: processor}}
     end
   end
-
-  defp config(opts), do: {:error, {:invalid_image_options, opts}}
 
   defp normalize_processor(nil), do: {:ok, nil}
 
@@ -145,8 +120,7 @@ defmodule Alto.Tools.ReadImage do
   defp normalize_processor(processor), do: {:error, {:invalid_image_processor, processor}}
 
   defp validate_processor(module, opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :resize, 5) do
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, Alto.Image.Processor) do
       {:ok, {module, opts}}
     else
       {:error, {:invalid_image_processor, {module, opts}}}
