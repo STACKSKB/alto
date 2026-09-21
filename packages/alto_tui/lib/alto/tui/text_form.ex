@@ -7,10 +7,10 @@ defmodule Alto.TUI.TextForm do
 
   def new(kind, title, fields, opts \\ []) do
     fields =
-      Enum.map(fields, fn {key, value, locked?} ->
+      Enum.map(fields, fn {key, label, value, options} ->
         input = ExRatatui.text_input_new()
         ExRatatui.text_input_set_value(input, value || "")
-        %{key: key, input: input, locked?: locked?}
+        options |> Map.new() |> Map.merge(%{key: key, label: label, input: input})
       end)
 
     %{
@@ -25,7 +25,23 @@ defmodule Alto.TUI.TextForm do
 
   def values(form), do: Map.new(form.fields, &{&1.key, ExRatatui.text_input_get_value(&1.input)})
   def value(form), do: ExRatatui.text_input_get_value(active_field(form).input)
-  def field(form, key), do: Enum.find(form.fields, &(&1.key == key))
+  def field_row(index), do: index + 2
+
+  def button_rows(form) do
+    first = 3 + length(form.fields) + Map.get(form, :button_gap, 0)
+    {first, first + 1}
+  end
+
+  def click(form, row) do
+    {submit_row, cancel_row} = button_rows(form)
+
+    cond do
+      row in 2..(length(form.fields) + 1) -> {:edit, select(form, row - 2)}
+      row == submit_row -> :submit
+      row == cancel_row -> :cancel
+      true -> {:edit, form}
+    end
+  end
 
   def masked_state(%{input: input}) do
     {value, cursor, viewport_offset} = ExRatatui.Native.text_input_snapshot(input)
@@ -59,7 +75,7 @@ defmodule Alto.TUI.TextForm do
 
   defp edit(form, fun) do
     field = active_field(form)
-    unless field.locked?, do: fun.(field.input)
+    unless Map.get(field, :locked?, false), do: fun.(field.input)
     {:edit, %{form | error: nil}}
   end
 

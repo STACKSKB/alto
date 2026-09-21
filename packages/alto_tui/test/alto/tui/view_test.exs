@@ -1,7 +1,7 @@
 defmodule Alto.TUI.ViewTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{State, View}
+  alias Alto.TUI.{State, TextForm, View}
   alias ExRatatui.Widgets.{Paragraph, TextInput}
 
   test "uses a native input with the saved-key placeholder" do
@@ -147,9 +147,46 @@ defmodule Alto.TUI.ViewTest do
     popup_y = div(30 - div(30 * 42, 100), 2)
     assert rects["  [ Use model ]"].y == popup_y + 6
     assert rects["  [ Cancel ]"].y == popup_y + 7
+    assert TextForm.click(state.overlay, rects["  [ Use model ]"].y - popup_y - 1) == :submit
+    assert TextForm.click(state.overlay, rects["  [ Cancel ]"].y - popup_y - 1) == :cancel
   end
 
   defp base_state(overlay) do
+    kind = Map.get(overlay, :kind, :provider_form)
+    provider? = kind == :provider_form
+
+    labels = %{
+      id: "ID",
+      label: "Name",
+      base_url: "Base URL",
+      api_key: "API key",
+      model: "Model ID"
+    }
+
+    placeholder =
+      if overlay[:key_saved?], do: "(saved — leave blank to keep)", else: "(not saved)"
+
+    fields = Map.get(overlay, :fields, [])
+
+    definitions =
+      Enum.map(fields, fn field ->
+        {field.key, labels[field.key], "",
+         [secret?: field.key == :api_key, placeholder: if(field.key == :api_key, do: placeholder)]}
+      end)
+
+    form =
+      TextForm.new(kind, Map.get(overlay, :title, "configure provider"), definitions,
+        intro: "Configure",
+        hint: "Enter · Esc",
+        prefix_width: if(provider?, do: 16, else: 12),
+        width_percent: if(provider?, do: 72, else: 62),
+        height_percent: if(provider?, do: 66, else: 42),
+        button_gap: if(provider?, do: 0, else: 1),
+        buttons: [if(provider?, do: "[ Save provider ]", else: "[ Use model ]"), "[ Cancel ]"]
+      )
+
+    form = %{form | fields: Enum.zip_with(form.fields, fields, &Map.put(&1, :input, &2.input))}
+
     %State{
       textarea: ExRatatui.textarea_new(),
       run_options: [],
@@ -161,17 +198,7 @@ defmodule Alto.TUI.ViewTest do
       selected_model: nil,
       backend_state: %{Alto.TUI.Backends.Codex => %{account: nil}},
       focus: :composer,
-      overlay:
-        Map.merge(
-          %{
-            kind: :provider_form,
-            title: "configure provider",
-            field_index: 0,
-            key_saved?: false,
-            error: nil
-          },
-          overlay
-        )
+      overlay: Map.merge(form, Map.drop(overlay, [:fields]))
     }
   end
 

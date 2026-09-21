@@ -61,17 +61,19 @@ defmodule Alto.TUI.View do
   def selection_content(%State{overlay: %{kind: kind} = form}, width, height)
       when kind in [:provider_form, :model_form] do
     rect = content_rect(overlay_rect(form, width, height))
-    {prefix, row_offset} = if kind == :provider_form, do: {16, 2}, else: {12, 2}
+    prefix = form.prefix_width
 
     form.fields
     |> Enum.with_index()
     |> Enum.flat_map(fn {field, row} ->
-      if ExRatatui.text_input_get_value(field.input) == "" or row + row_offset >= rect.height,
+      field_row = TextForm.field_row(row)
+
+      if ExRatatui.text_input_get_value(field.input) == "" or field_row >= rect.height,
         do: [],
         else: [
           %Rect{
             x: rect.x + prefix,
-            y: rect.y + row_offset + row,
+            y: rect.y + field_row,
             width: max(rect.width - prefix, 0),
             height: 1
           }
@@ -511,32 +513,9 @@ defmodule Alto.TUI.View do
   defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
     do: widgets ++ WorkspaceForm.widgets(form, root)
 
-  defp add_overlay(widgets, %{kind: :provider_form} = form, root),
-    do:
-      widgets ++
-        text_form_widgets(form, root,
-          intro: "Credentials are saved privately outside the workspace.",
-          hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
-          fields: [
-            {:id, "ID", []},
-            {:label, "Name", []},
-            {:base_url, "Base URL", []},
-            {:api_key, "API key", [secret?: true, placeholder: api_key_placeholder(form)]},
-            {:model, "Default model", []}
-          ],
-          buttons: ["[ Save provider ]", "[ Cancel ]"]
-        )
-
-  defp add_overlay(widgets, %{kind: :model_form} = form, root),
-    do:
-      widgets ++
-        text_form_widgets(form, root,
-          intro: "Use the provider's exact model identifier.",
-          hint: "Enter use · Esc",
-          fields: [{:model, "Model ID", []}],
-          button_gap: 1,
-          buttons: ["[ Use model ]", "[ Cancel ]"]
-        )
+  defp add_overlay(widgets, %{kind: kind} = form, root)
+       when kind in [:provider_form, :model_form],
+       do: widgets ++ text_form_widgets(form, root)
 
   defp add_overlay(widgets, overlay, root) do
     items = Menu.items(overlay)
@@ -585,23 +564,24 @@ defmodule Alto.TUI.View do
     widgets ++ [{popup, root}]
   end
 
-  defp text_form_widgets(form, root, opts) do
+  defp text_form_widgets(form, root) do
     rect = overlay_rect(form, root.width, root.height)
     inner = content_rect(rect)
     bg = style(fg: :white, bg: @panel_alt)
-    fields = Keyword.fetch!(opts, :fields)
-    field_widgets = Enum.flat_map(Enum.with_index(fields), &text_form_field(form, inner, bg, &1))
-    error_row = 2 + length(fields)
-    button_row = error_row + 1 + Keyword.get(opts, :button_gap, 0)
-    buttons = Keyword.fetch!(opts, :buttons)
+
+    field_widgets =
+      Enum.flat_map(Enum.with_index(form.fields), &text_form_field(form, inner, bg, &1))
+
+    error_row = 2 + length(form.fields)
+    {button_row, _cancel_row} = TextForm.button_rows(form)
 
     [
       {%Clear{}, rect},
       {%Paragraph{
-         text: "  " <> Keyword.fetch!(opts, :intro),
+         text: "  " <> form.intro,
          style: bg,
          block: %Block{
-           title: " #{form.title} │ #{Keyword.fetch!(opts, :hint)} ",
+           title: " #{form.title} │ #{form.hint} ",
            borders: [:all],
            border_type: :rounded,
            border_style: style(fg: @accent),
@@ -612,20 +592,23 @@ defmodule Alto.TUI.View do
           [
             {form_paragraph(if(form.error, do: "  ! " <> form.error, else: ""), bg),
              form_row(inner, error_row)},
-            {form_paragraph("  " <> Enum.at(buttons, 0), bg), form_row(inner, button_row)},
-            {form_paragraph("  " <> Enum.at(buttons, 1), bg), form_row(inner, button_row + 1)}
+            {form_paragraph("  " <> Enum.at(form.buttons, 0), bg), form_row(inner, button_row)},
+            {form_paragraph("  " <> Enum.at(form.buttons, 1), bg),
+             form_row(inner, button_row + 1)}
           ]
     ]
   end
 
-  defp text_form_field(form, inner, bg, {{key, label, opts}, index}) do
-    field = TextForm.field(form, key)
+  defp text_form_field(form, inner, bg, {field, index}) do
     active? = form.field_index == index
     locked? = Map.get(field, :locked?, false)
-    secret? = Keyword.get(opts, :secret?, false)
-    prefix_width = if form.kind == :provider_form, do: 16, else: 12
-    prefix = if(active?, do: "› ", else: "  ") <> String.pad_trailing(label, prefix_width - 2)
-    row = form_row(inner, index + 2)
+    secret? = Map.get(field, :secret?, false)
+    prefix_width = form.prefix_width
+
+    prefix =
+      if(active?, do: "› ", else: "  ") <> String.pad_trailing(field.label, prefix_width - 2)
+
+    row = form_row(inner, TextForm.field_row(index))
     value = ExRatatui.text_input_get_value(field.input)
 
     if active? and not locked? do
@@ -637,7 +620,7 @@ defmodule Alto.TUI.View do
         {form_paragraph(prefix, bg), %{row | width: min(prefix_width, row.width)}},
         {%TextInput{
            state: state,
-           placeholder: Keyword.get(opts, :placeholder),
+           placeholder: Map.get(field, :placeholder),
            placeholder_style: style(fg: @muted, bg: @panel_alt),
            style: bg,
            cursor_style: style(fg: :black, bg: @accent)
@@ -647,7 +630,7 @@ defmodule Alto.TUI.View do
       display =
         cond do
           secret? and value != "" -> String.duplicate("•", length(String.codepoints(value)))
-          secret? -> Keyword.get(opts, :placeholder, "")
+          secret? -> Map.get(field, :placeholder, "")
           true -> value
         end
 
@@ -660,12 +643,6 @@ defmodule Alto.TUI.View do
     do: %{inner | y: inner.y + offset, height: min(max(inner.height - offset, 0), 1)}
 
   defp form_paragraph(text, style), do: %Paragraph{text: text, wrap: false, style: style}
-
-  defp api_key_placeholder(form) do
-    if form.key_saved?,
-      do: "(saved — leave blank to keep)",
-      else: "(optional for local providers)"
-  end
 
   @doc "Settings labels and exact click widths."
   def settings_segments(state) do
@@ -834,11 +811,9 @@ defmodule Alto.TUI.View do
   defp overlay_rect(%{kind: :workspace_form}, width, height),
     do: WorkspaceForm.rect(width, height)
 
-  defp overlay_rect(%{kind: :provider_form}, width, height),
-    do: popup_rect(width, height, 72, 66)
-
-  defp overlay_rect(%{kind: :model_form}, width, height),
-    do: popup_rect(width, height, 62, 42)
+  defp overlay_rect(%{kind: kind} = form, width, height)
+       when kind in [:provider_form, :model_form],
+       do: popup_rect(width, height, form.width_percent, form.height_percent)
 
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
 

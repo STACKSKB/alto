@@ -1081,11 +1081,9 @@ defmodule Alto.TUI.App do
   defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
     do: workspace_form_result(state, WorkspaceForm.key(form, key))
 
-  defp overlay_key(%{overlay: %{kind: :provider_form}} = state, key),
-    do: text_form_result(state, TextForm.key(state.overlay, key))
-
-  defp overlay_key(%{overlay: %{kind: :model_form}} = state, key),
-    do: text_form_result(state, TextForm.key(state.overlay, key))
+  defp overlay_key(%{overlay: %{kind: kind} = form} = state, key)
+       when kind in [:provider_form, :model_form],
+       do: text_form_result(state, TextForm.key(form, key))
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
 
@@ -1518,20 +1516,21 @@ defmodule Alto.TUI.App do
     profile = Enum.find(state.profiles, &(&1.id == profile_id))
     new? = is_nil(profile)
 
-    defaults = %{
-      id: (profile && profile.id) || "",
-      label: (profile && profile.label) || "",
-      base_url: (profile && Keyword.get(profile.options, :base_url)) || "",
-      api_key: "",
-      model: (profile && profile.default_model) || ""
-    }
-
     stored? = profile && ProviderStore.api_key_saved?(profile, credentials_opts(state))
 
-    fields =
-      Enum.map([:id, :label, :base_url, :api_key, :model], fn key ->
-        {key, Map.fetch!(defaults, key), key == :id and not new?}
-      end)
+    key_placeholder =
+      if(stored? == true,
+        do: "(saved — leave blank to keep)",
+        else: "(optional for local providers)"
+      )
+
+    fields = [
+      {:id, "ID", profile && profile.id, [locked?: not new?]},
+      {:label, "Name", profile && profile.label, []},
+      {:base_url, "Base URL", profile && Keyword.get(profile.options, :base_url), []},
+      {:api_key, "API key", "", [secret?: true, placeholder: key_placeholder]},
+      {:model, "Default model", profile && profile.default_model, []}
+    ]
 
     %{
       state
@@ -1540,9 +1539,13 @@ defmodule Alto.TUI.App do
             :provider_form,
             if(new?, do: "add provider", else: "configure #{profile.label}"),
             fields,
+            intro: "Credentials are saved privately outside the workspace.",
+            hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
+            buttons: ["[ Save provider ]", "[ Cancel ]"],
+            prefix_width: 16,
+            width_percent: 72,
+            height_percent: 66,
             field_index: if(new?, do: 0, else: 3),
-            existing_id: profile_id,
-            key_saved?: stored? == true,
             after_save:
               if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
           ),
@@ -1592,7 +1595,17 @@ defmodule Alto.TUI.App do
       state
       | selected_provider_id: profile_id,
         overlay:
-          TextForm.new(:model_form, "exact model ID", [{:model, "", false}],
+          TextForm.new(
+            :model_form,
+            "exact model ID",
+            [{:model, "Model ID", "", []}],
+            intro: "Use the provider's exact model identifier.",
+            hint: "Enter use · Esc",
+            buttons: ["[ Use model ]", "[ Cancel ]"],
+            prefix_width: 12,
+            width_percent: 62,
+            height_percent: 42,
+            button_gap: 1,
             profile_id: profile_id
           )
     }
@@ -1646,22 +1659,9 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp handle_overlay_click(%{overlay: %{kind: :provider_form}} = state, row) do
-    cond do
-      row in 2..6 -> %{state | overlay: TextForm.select(state.overlay, row - 2)}
-      row == 8 -> save_provider_form(state)
-      row == 9 -> %{state | overlay: nil}
-      true -> state
-    end
-  end
-
-  defp handle_overlay_click(%{overlay: %{kind: :model_form}} = state, row) do
-    cond do
-      row == 5 -> text_form_result(state, :submit)
-      row == 6 -> %{state | overlay: nil}
-      true -> state
-    end
-  end
+  defp handle_overlay_click(%{overlay: %{kind: kind} = form} = state, row)
+       when kind in [:provider_form, :model_form],
+       do: text_form_result(state, TextForm.click(form, row))
 
   defp handle_overlay_click(state, row),
     do: state |> put_overlay_index(row - overlay_list_offset(state.overlay)) |> select_overlay()
