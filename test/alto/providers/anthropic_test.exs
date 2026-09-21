@@ -181,7 +181,11 @@ defmodule Alto.Providers.AnthropicTest do
     assert body["temperature"] == 0
 
     assert List.last(body["messages"])["content"] == [
-             %{"type" => "tool_result", "tool_use_id" => "prev", "content" => "Contents"}
+             %{
+               "type" => "tool_result",
+               "tool_use_id" => "prev",
+               "content" => [%{"type" => "text", "text" => "Contents"}]
+             }
            ]
 
     assert_received {:event, %Alto.Event{type: :model_delta, data: %{text: "Done"}}}

@@ -92,10 +92,9 @@ defmodule Alto.Providers.Anthropic do
     with [] <- unsupported,
          true <- is_integer(max_tokens) and max_tokens > 0,
          :ok <- Alto.Context.Transcript.validate(request.messages),
-         {:ok, system_content} <- system_content(request.messages),
-         {:ok, messages} <- anthropic_messages(request.messages, config.supports_images) do
-      has_system? = Enum.any?(request.messages, &(&1["role"] == "system"))
-
+         {systems, messages} <- Enum.split_with(request.messages, &(&1["role"] == "system")),
+         {:ok, system_content} <- system_content(systems),
+         {:ok, messages} <- Alto.Result.traverse(messages, &message(&1, config.supports_images)) do
       body =
         Map.merge(options, %{
           "model" => config.model,
@@ -105,7 +104,7 @@ defmodule Alto.Providers.Anthropic do
         })
 
       body =
-        if has_system?, do: Map.put(body, "system", system_content), else: body
+        if systems == [], do: body, else: Map.put(body, "system", system_content)
 
       body =
         if request[:tool_choice] == :none,
@@ -135,7 +134,6 @@ defmodule Alto.Providers.Anthropic do
 
   defp system_content(messages) do
     messages
-    |> Enum.filter(&(&1["role"] == "system"))
     |> Alto.Result.traverse(fn
       %{"content" => content} when is_binary(content) -> {:ok, content}
       _message -> {:error, :anthropic_system_content_must_be_text}
@@ -144,12 +142,6 @@ defmodule Alto.Providers.Anthropic do
       {:ok, contents} -> {:ok, Enum.join(contents, "\n\n")}
       {:error, _} = error -> error
     end
-  end
-
-  defp anthropic_messages(messages, supports_images) do
-    messages
-    |> Enum.reject(&(&1["role"] == "system"))
-    |> Alto.Result.traverse(&message(&1, supports_images))
   end
 
   defp message(%{"role" => "tool"} = message, supports_images) do
@@ -168,9 +160,13 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
+  defp message(%{"role" => role, "alto_anthropic_content" => content}, _supports_images)
+       when role in ["user", "assistant"],
+       do: {:ok, %{"role" => role, "content" => content}}
+
   defp message(%{"role" => role} = message, supports_images)
        when role in ["user", "assistant"] do
-    with {:ok, content} <- anthropic_message_content(message, supports_images) do
+    with {:ok, content} <- anthropic_content(message["content"], supports_images) do
       calls =
         Enum.map(message["tool_calls"] || [], fn call ->
           input = JSON.decode!(call["function"]["arguments"])
@@ -187,7 +183,7 @@ defmodule Alto.Providers.Anthropic do
       {:ok,
        %{
          "role" => role,
-         "content" => Map.get(message, "alto_anthropic_content", content ++ calls)
+         "content" => content ++ calls
        }}
     end
   end
@@ -195,19 +191,13 @@ defmodule Alto.Providers.Anthropic do
   defp message(message, _supports_images),
     do: {:error, {:invalid_anthropic_message, message}}
 
-  defp anthropic_message_content(%{"alto_anthropic_content" => _content}, _supports_images),
-    do: {:ok, []}
-
-  defp anthropic_message_content(message, supports_images),
-    do: anthropic_content(message["content"], supports_images, empty: [])
-
-  defp anthropic_content(value, supports_images, opts \\ []) do
+  defp anthropic_content(value, supports_images) do
     case Content.decode_transcript(value) do
-      :not_content when is_binary(value) ->
-        {:ok, if(value == "", do: Keyword.get(opts, :empty, ""), else: text_content(value, opts))}
+      :not_content when value in [nil, ""] ->
+        {:ok, []}
 
-      :not_content when is_nil(value) ->
-        {:ok, Keyword.get(opts, :empty, "")}
+      :not_content when is_binary(value) ->
+        {:ok, [%{"type" => "text", "text" => value}]}
 
       {:ok, content} ->
         anthropic_blocks(content.blocks, supports_images)
@@ -218,10 +208,6 @@ defmodule Alto.Providers.Anthropic do
       :not_content ->
         {:error, :invalid_anthropic_message_content}
     end
-  end
-
-  defp text_content(value, opts) do
-    if Keyword.has_key?(opts, :empty), do: [%{"type" => "text", "text" => value}], else: value
   end
 
   defp anthropic_blocks(blocks, supports_images) do
