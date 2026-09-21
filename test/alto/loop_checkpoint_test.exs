@@ -40,12 +40,11 @@ defmodule Alto.LoopCheckpointTest do
     assert [%{data: %{context: %{window: 3}}}] = next.effects
   end
 
-  test "rule checkpoint rehydrates trusted function steps" do
+  test "rule checkpoint excludes configured function steps" do
     function = fn task, results -> %{"task" => task["id"], "prior" => results} end
     spec = Spec.new(Rule, steps: [%{tool: "first", arguments: function}, "second"])
 
     state = %Rule{
-      steps: [%{tool: "first", arguments: function}, "second"],
       index: 1,
       arguments: %{"id" => "job"},
       results: []
@@ -54,7 +53,7 @@ defmodule Alto.LoopCheckpointTest do
     assert {:ok, checkpoint} = Rule.dump_checkpoint(state, spec)
     refute Map.has_key?(checkpoint, :steps)
     assert {:ok, restored} = Rule.load_checkpoint(checkpoint, spec)
-    assert restored.steps == spec.driver_options[:steps]
+    assert restored == state
 
     assert [%{data: %{arguments: %{"task" => "job", "prior" => []}}}] =
              Runtime.init(spec, restored.arguments).effects
