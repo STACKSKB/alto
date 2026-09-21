@@ -58,9 +58,8 @@ defmodule Alto.Runner.Execution.Setup do
              Keyword.get(opts, :model_tools),
              Keyword.get(opts, :parent_model_tools)
            ),
-         {:ok, prompt_setup} <- prompt_setup(opts, cwd, tools, provider),
          {:ok, messages_rev, transcript_bytes} <-
-           init_transcript(task, prompt_setup, limits.max_transcript_bytes, opts),
+           init_transcript(task, opts, cwd, tools, provider, limits.max_transcript_bytes),
          {:ok, run} <-
            build_run(
              Map.merge(limits, %{
@@ -228,38 +227,41 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_approval(module) when is_atom(module), do: {:ok, {module, []}}
   defp normalize_approval(other), do: {:error, {:invalid_approval, other}}
 
-  # Resume reuses stored history verbatim: prompt and project-instruction
-  # options are evaluated for fresh runs only and ignored on resume, where
-  # the history already carries its own system message.
-  defp prompt_setup(opts, cwd, tools, provider) do
+  # Resume reuses stored history verbatim; prompt options are only evaluated
+  # for fresh runs, since the history already carries its system message.
+  defp init_transcript(task, opts, cwd, tools, provider, max_transcript_bytes) do
     if Keyword.has_key?(opts, :resume) do
-      {:ok, :resumed}
-    else
-      with {:ok, project_instructions} <- resolve_project_instructions(opts, cwd, provider),
-           {:ok, prompt} <- resolve_prompt_state(opts, cwd, tools, provider, project_instructions) do
-        {:ok, {:fresh, prompt}}
+      with {:ok, history} <- resume_history(Keyword.fetch!(opts, :resume)) do
+        prepend_task(task, history, max_transcript_bytes)
       end
+    else
+      fresh_transcript(task, opts, cwd, tools, provider, max_transcript_bytes)
     end
   end
 
-  defp init_transcript(_task, {:fresh, :generic}, _max, _opts), do: {:ok, [], 0}
+  # Generic rule runs have no model transcript or project instructions.
+  defp fresh_transcript(_task, opts, _cwd, _tools, nil, _max_transcript_bytes) do
+    if Keyword.get(opts, :prompt) in [nil, ""],
+      do: {:ok, [], 0},
+      else: {:error, :prompt_options_require_provider}
+  end
 
-  defp init_transcript(task, prompt, max_transcript_bytes, opts) do
-    with {:ok, history} <- initial_history(prompt, opts) do
-      messages_rev = [%{"role" => "user", "content" => task_text(task)} | Enum.reverse(history)]
-      bytes = Transcript.bytes(messages_rev)
-
-      if bytes <= max_transcript_bytes,
-        do: {:ok, messages_rev, bytes},
-        else: {:error, {:transcript_limit, max_transcript_bytes}}
+  defp fresh_transcript(task, opts, cwd, tools, _provider, max_transcript_bytes) do
+    with {:ok, project_instructions} <- resolve_project_instructions(opts, cwd),
+         {:ok, prompt} <- resolve_system_prompt(opts, cwd, tools, project_instructions) do
+      history = if prompt, do: [%{"role" => "system", "content" => prompt}], else: []
+      prepend_task(task, history, max_transcript_bytes)
     end
   end
 
-  defp initial_history(:resumed, opts), do: resume_history(Keyword.fetch!(opts, :resume))
-  defp initial_history({:fresh, nil}, _opts), do: {:ok, []}
+  defp prepend_task(task, history, max_transcript_bytes) do
+    messages_rev = [%{"role" => "user", "content" => task_text(task)} | Enum.reverse(history)]
+    bytes = Transcript.bytes(messages_rev)
 
-  defp initial_history({:fresh, prompt}, _opts),
-    do: {:ok, [%{"role" => "system", "content" => prompt}]}
+    if bytes <= max_transcript_bytes,
+      do: {:ok, messages_rev, bytes},
+      else: {:error, {:transcript_limit, max_transcript_bytes}}
+  end
 
   defp resume_history(%{messages: messages, transcript_bytes: bytes})
        when is_list(messages) and is_integer(bytes) and bytes >= 0,
@@ -267,25 +269,8 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp resume_history(other), do: {:error, {:invalid_resume, other}}
 
-  # Prompt and transcript state are model capability state. Generic
-  # provider-less runs carry no prompt configuration; requesting one is a
-  # configuration error rather than silently ignored input.
-  defp resolve_prompt_state(opts, _cwd, _tools, nil, _project_instructions) do
-    if Keyword.get(opts, :prompt) not in [nil, ""] do
-      {:error, :prompt_options_require_provider}
-    else
-      {:ok, :generic}
-    end
-  end
-
-  defp resolve_prompt_state(opts, cwd, tools, _provider, project_instructions),
-    do: resolve_system_prompt(opts, cwd, tools, project_instructions)
-
-  # Project instructions are model capability state: `:auto` resolves bounded
-  # workspace text at construction and is inert in generic provider-less runs.
-  defp resolve_project_instructions(_opts, _cwd, nil), do: {:ok, nil}
-
-  defp resolve_project_instructions(opts, cwd, _provider) do
+  # `:auto` resolves bounded workspace text for model-backed runs.
+  defp resolve_project_instructions(opts, cwd) do
     case Keyword.get(opts, :project_instructions) do
       nil ->
         {:ok, nil}

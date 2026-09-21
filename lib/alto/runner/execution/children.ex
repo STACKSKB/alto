@@ -85,18 +85,7 @@ defmodule Alto.Runner.Execution.Children do
   @doc "Execute an already prepared batch; callers may persist its parent first."
   def run_prepared_children(specs, concurrency, journal, run) do
     {status, outcomes} =
-      Alto.Runner.SubagentBatch.run(
-        specs,
-        concurrency,
-        &dispatch_subagent(&1, run, journal),
-        fn ->
-          case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-            {{:cancelled, _} = cancelled, _} -> cancelled
-            {_, {:error, _} = error} -> error
-            _ -> :continue
-          end
-        end
-      )
+      run_batch(specs, concurrency, &dispatch_subagent(&1, run, journal), run)
 
     case durable_call(fn -> finish_child_journal(journal, outcomes) end, run) do
       :ok ->
@@ -474,28 +463,22 @@ defmodule Alto.Runner.Execution.Children do
       decided = Enum.filter(entries, &(&1.state == :decided))
 
       {status, _outcomes} =
-        Alto.Runner.SubagentBatch.run(
-          decided,
-          run.child_limits.max_concurrency,
-          &resume_child(&1, journal, run),
-          fn ->
-            case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref),
-                  Budget.check(run.budget)} do
-              {{:cancelled, _} = cancelled, _} -> cancelled
-              {_, {:error, _} = error} -> error
-              _ -> :continue
-            end
-          end
-        )
+        run_batch(decided, run.child_limits.max_concurrency, &resume_child(&1, journal, run), run)
 
-      # Each child retains its own terminal outcome before collection. A failed
+      # Each child retains its terminal outcome before collection. A failed
       # start or losing grant leaves the durable entry parked for inspection.
-      case status do
-        :ok -> :ok
-        {:cancelled, reason} -> {:cancelled, reason}
-        {:error, reason} -> {:error, reason}
-      end
+      status
     end
+  end
+
+  defp run_batch(specs, concurrency, start, run) do
+    Alto.Runner.SubagentBatch.run(specs, concurrency, start, fn ->
+      case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
+        {{:cancelled, _} = cancelled, _} -> cancelled
+        {_, {:error, _} = error} -> error
+        _ -> :continue
+      end
+    end)
   end
 
   defp resume_child(entry, journal, run) do
