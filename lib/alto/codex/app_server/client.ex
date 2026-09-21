@@ -227,25 +227,9 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
-    case Enum.find(state.pending, fn {_id, entry} ->
-           entry.monitor == monitor and entry.owner == owner
-         end) do
-      {id, %{timer: timer}} ->
-        cancel_request(state, id)
-        JSONRPC.cancel_timer(timer)
-        {:noreply, %{state | pending: Map.delete(state.pending, id)}}
-
-      nil ->
-        ready_waiters = Enum.reject(state.ready_waiters, fn {_from, ref} -> ref == monitor end)
-
-        subscribers =
-          case Enum.find(state.subscribers, fn {_pid, ref} -> ref == monitor end) do
-            {subscriber, ^monitor} -> Map.delete(state.subscribers, subscriber)
-            nil -> state.subscribers
-          end
-
-        {:noreply, %{state | ready_waiters: ready_waiters, subscribers: subscribers}}
-    end
+    state = JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1))
+    subscribers = Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
+    {:noreply, %{state | subscribers: subscribers}}
   end
 
   def handle_info(_message, state), do: {:noreply, state}

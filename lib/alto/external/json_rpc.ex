@@ -206,6 +206,24 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
+  def drop_owner(state, monitor, owner, cancel) do
+    {owned, pending} =
+      Enum.split_with(state.pending, fn {_id, entry} ->
+        entry.monitor == monitor and entry.owner == owner
+      end)
+
+    Enum.each(owned, fn {id, entry} ->
+      cancel.(id)
+      release(entry)
+    end)
+
+    %{
+      state
+      | pending: Map.new(pending),
+        ready_waiters: Enum.reject(state.ready_waiters, fn {_from, ref} -> ref == monitor end)
+    }
+  end
+
   def release(%{timer: timer, owner: owner, monitor: monitor}) do
     cancel_timer(timer)
     demonitor(owner, monitor)

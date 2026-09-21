@@ -172,27 +172,8 @@ defmodule Alto.External.MCP.Client do
   end
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
-    case Enum.find(state.pending, fn {_id, entry} ->
-           entry.monitor == monitor and entry.owner == owner
-         end) do
-      {id, %{reply: reply, timer: timer}} ->
-        cancel_request(state, id, "owner_disconnected")
-        JSONRPC.cancel_timer(timer)
-        reply_error(reply, {:mcp_request_owner_down, owner}, :unknown)
-        {:noreply, %{state | pending: Map.delete(state.pending, id)}}
-
-      nil ->
-        case Enum.find(state.ready_waiters, fn {_from, ref} -> ref == monitor end) do
-          {from, ^monitor} ->
-            GenServer.reply(from, {:error, {:mcp_startup_owner_down, owner}})
-
-            {:noreply,
-             %{state | ready_waiters: List.delete(state.ready_waiters, {from, monitor})}}
-
-          nil ->
-            {:noreply, state}
-        end
-    end
+    {:noreply,
+     JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1, "owner_disconnected"))}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
