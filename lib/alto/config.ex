@@ -60,14 +60,6 @@ defmodule Alto.Config do
     approval_auto_open: [type: :boolean]
   ]
   @tui_schema NimbleOptions.new!(@tui_options)
-  @tui_errors %{
-    type_to_compose: "must be a boolean",
-    narrow_context: "must be :adaptive, :drawer, or :fullscreen",
-    narrow_context_width: "must be an integer from 40 to 100",
-    narrow_context_fullscreen_below: "must be an integer from 0 to 300",
-    approval_auto_open: "must be a boolean"
-  }
-
   @enforce_keys [:run_options]
   defstruct [:run_options]
 
@@ -109,8 +101,8 @@ defmodule Alto.Config do
       {:ok, _} ->
         :ok
 
-      {:error, %NimbleOptions.ValidationError{key: key}} ->
-        raise ArgumentError, "Alto TUI #{inspect(key)} #{@tui_errors[key]}"
+      {:error, error} ->
+        raise ArgumentError, "Alto TUI #{Exception.message(error)}"
     end
   end
 

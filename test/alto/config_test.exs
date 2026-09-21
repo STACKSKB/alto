@@ -59,15 +59,15 @@ defmodule Alto.ConfigTest do
       Config.new(tui: [mystery: true])
     end
 
-    assert_raise ArgumentError, ~r/:type_to_compose must be a boolean/, fn ->
+    assert_raise ArgumentError, ~r/Alto TUI.*:type_to_compose.*boolean/, fn ->
       Config.new(tui: [type_to_compose: :sometimes])
     end
 
-    assert_raise ArgumentError, ~r/:narrow_context must be/, fn ->
+    assert_raise ArgumentError, ~r/Alto TUI.*:narrow_context/, fn ->
       Config.new(tui: [narrow_context: :bottom_sheet])
     end
 
-    assert_raise ArgumentError, ~r/:narrow_context_width must be/, fn ->
+    assert_raise ArgumentError, ~r/Alto TUI.*:narrow_context_width/, fn ->
       Config.new(tui: [narrow_context_width: 20])
     end
   end
@@ -75,7 +75,7 @@ defmodule Alto.ConfigTest do
   test "TUI schemas retain integer bounds and reject duplicate keys" do
     for value <- [39, 101, 40.0, nil] do
       assert_raise ArgumentError,
-                   ~r/:narrow_context_width must be an integer from 40 to 100/,
+                   ~r/Alto TUI.*:narrow_context_width/,
                    fn ->
                      Config.new(tui: [narrow_context_width: value])
                    end
