@@ -41,29 +41,23 @@ defmodule Alto.Tools.EditFile do
       additionalProperties: false
     }
 
-    %{
-      description:
-        "Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute file path."
-          },
-          edits: %{
-            type: "array",
-            minItems: 1,
-            maxItems: limits.max_edits,
-            items:
-              put_in(edit, [:properties, :new_text, :maxLength], limits.max_replacement_bytes),
-            description: "Exact replacements, all matched against the original file snapshot."
-          }
+    Alto.Tool.object_schema(
+      "Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute file path."
         },
-        required: ["path", "edits"],
-        additionalProperties: false
-      }
-    }
+        edits: %{
+          type: "array",
+          minItems: 1,
+          maxItems: limits.max_edits,
+          items: put_in(edit, [:properties, :new_text, :maxLength], limits.max_replacement_bytes),
+          description: "Exact replacements, all matched against the original file snapshot."
+        }
+      },
+      ["path", "edits"]
+    )
   end
 
   @impl true

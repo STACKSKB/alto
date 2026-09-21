@@ -8,36 +8,31 @@ defmodule Alto.Tools.RunCommand do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Run one executable through the harness-configured command executor using an argument vector. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          program: %{type: "string", minLength: 1, description: "Executable name or path."},
-          args: %{
-            type: "array",
-            items: %{type: "string"},
-            maxItems: Invocation.max_args(),
-            description: "Arguments passed directly to the executable."
-          },
-          timeout_ms: %{
-            type: "integer",
-            minimum: 1,
-            maximum: Invocation.max_timeout_ms(),
-            description: "Deadline in milliseconds."
-          },
-          max_output_bytes: %{
-            type: "integer",
-            minimum: 1,
-            maximum: Invocation.max_output_bytes(),
-            description: "Combined stdout/stderr capture limit."
-          }
+    Alto.Tool.object_schema(
+      "Run one executable through the harness-configured command executor using an argument vector. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
+      %{
+        program: %{type: "string", minLength: 1, description: "Executable name or path."},
+        args: %{
+          type: "array",
+          items: %{type: "string"},
+          maxItems: Invocation.max_args(),
+          description: "Arguments passed directly to the executable."
         },
-        required: ["program"],
-        additionalProperties: false
-      }
-    }
+        timeout_ms: %{
+          type: "integer",
+          minimum: 1,
+          maximum: Invocation.max_timeout_ms(),
+          description: "Deadline in milliseconds."
+        },
+        max_output_bytes: %{
+          type: "integer",
+          minimum: 1,
+          maximum: Invocation.max_output_bytes(),
+          description: "Combined stdout/stderr capture limit."
+        }
+      },
+      ["program"]
+    )
   end
 
   @impl true

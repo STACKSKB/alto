@@ -28,33 +28,28 @@ defmodule Alto.Tools.ReadImage do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute image path."
-          },
-          max_width: %{
-            type: "integer",
-            minimum: 1,
-            maximum: @hard_max_dimension,
-            description: "Optional maximum output width in pixels."
-          },
-          max_height: %{
-            type: "integer",
-            minimum: 1,
-            maximum: @hard_max_dimension,
-            description: "Optional maximum output height in pixels."
-          }
+    Alto.Tool.object_schema(
+      "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute image path."
         },
-        required: ["path"],
-        additionalProperties: false
-      }
-    }
+        max_width: %{
+          type: "integer",
+          minimum: 1,
+          maximum: @hard_max_dimension,
+          description: "Optional maximum output width in pixels."
+        },
+        max_height: %{
+          type: "integer",
+          minimum: 1,
+          maximum: @hard_max_dimension,
+          description: "Optional maximum output height in pixels."
+        }
+      },
+      ["path"]
+    )
   end
 
   @impl true

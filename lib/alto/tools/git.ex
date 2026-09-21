@@ -97,23 +97,19 @@ defmodule Alto.Tools.GitInspect do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description: "Inspect repository status, diffs, history, refs, or blame through Git.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          action: %{type: "string", enum: @actions},
-          ref: %{type: "string", description: "Revision for show, or starting revision for log."},
-          path: %{type: "string", description: "Optional repository-relative literal path."},
-          staged: %{type: "boolean", description: "For diff, inspect the staged changes."},
-          limit: %{type: "integer", minimum: 1, maximum: 100},
-          line_start: %{type: "integer", minimum: 1},
-          line_end: %{type: "integer", minimum: 1}
-        },
-        required: ["action"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Inspect repository status, diffs, history, refs, or blame through Git.",
+      %{
+        action: %{type: "string", enum: @actions},
+        ref: %{type: "string", description: "Revision for show, or starting revision for log."},
+        path: %{type: "string", description: "Optional repository-relative literal path."},
+        staged: %{type: "boolean", description: "For diff, inspect the staged changes."},
+        limit: %{type: "integer", minimum: 1, maximum: 100},
+        line_start: %{type: "integer", minimum: 1},
+        line_end: %{type: "integer", minimum: 1}
+      },
+      ["action"]
+    )
   end
 
   @impl true
@@ -212,21 +208,16 @@ defmodule Alto.Tools.GitMutate do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          action: %{type: "string", enum: @actions},
-          paths: %{type: "array", items: %{type: "string"}, minItems: 1, maxItems: 200},
-          message: %{type: "string", minLength: 1, maxLength: 10_000},
-          branch: %{type: "string", minLength: 1, maxLength: 256}
-        },
-        required: ["action"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
+      %{
+        action: %{type: "string", enum: @actions},
+        paths: %{type: "array", items: %{type: "string"}, minItems: 1, maxItems: 200},
+        message: %{type: "string", minLength: 1, maxLength: 10_000},
+        branch: %{type: "string", minLength: 1, maxLength: 256}
+      },
+      ["action"]
+    )
   end
 
   @impl true

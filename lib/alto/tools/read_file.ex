@@ -17,27 +17,23 @@ defmodule Alto.Tools.ReadFile do
   def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
-    %{
-      description: "Read a bounded byte range from a file inside the workspace.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute path."
-          },
-          offset: %{type: "integer", minimum: 0, description: "Byte offset; defaults to 0."},
-          limit: %{
-            type: "integer",
-            minimum: 1,
-            maximum: limits.max_bytes,
-            description: "Maximum bytes to read."
-          }
+    Alto.Tool.object_schema(
+      "Read a bounded byte range from a file inside the workspace.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute path."
         },
-        required: ["path"],
-        additionalProperties: false
-      }
-    }
+        offset: %{type: "integer", minimum: 0, description: "Byte offset; defaults to 0."},
+        limit: %{
+          type: "integer",
+          minimum: 1,
+          maximum: limits.max_bytes,
+          description: "Maximum bytes to read."
+        }
+      },
+      ["path"]
+    )
   end
 
   @impl true

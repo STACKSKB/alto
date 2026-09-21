@@ -16,19 +16,14 @@ defmodule Alto.Tools.QueuePut do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Idempotently add or update a record in a durable queue, keyed by a dedup key.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          key: %{type: "string", description: "Dedup key, e.g. the record id."},
-          payload: %{type: "object", description: "The record payload."}
-        },
-        required: ["key"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Idempotently add or update a record in a durable queue, keyed by a dedup key.",
+      %{
+        key: %{type: "string", description: "Dedup key, e.g. the record id."},
+        payload: %{type: "object", description: "The record payload."}
+      },
+      ["key"]
+    )
   end
 
   @impl true

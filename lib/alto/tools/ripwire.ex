@@ -20,24 +20,19 @@ defmodule Alto.Tools.Ripwire do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          action: %{type: "string", enum: @actions},
-          query: %{
-            type: "string",
-            description:
-              "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
-          },
-          top_k: %{type: "integer", minimum: 1, maximum: 100}
+    Alto.Tool.object_schema(
+      "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
+      %{
+        action: %{type: "string", enum: @actions},
+        query: %{
+          type: "string",
+          description:
+            "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
         },
-        required: ["action"],
-        additionalProperties: false
-      }
-    }
+        top_k: %{type: "integer", minimum: 1, maximum: 100}
+      },
+      ["action"]
+    )
   end
 
   @impl true

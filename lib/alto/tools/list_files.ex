@@ -13,16 +13,12 @@ defmodule Alto.Tools.ListFiles do
   def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
-    %{
-      description: "List one directory inside the workspace (non-recursive and bounded).",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{type: "string", description: "Directory path; defaults to the workspace root."}
-        },
-        additionalProperties: false
+    Alto.Tool.object_schema(
+      "List one directory inside the workspace (non-recursive and bounded).",
+      %{
+        path: %{type: "string", description: "Directory path; defaults to the workspace root."}
       }
-    }
+    )
     |> put_in(
       [:parameters, :properties, :path, :description],
       "Directory path; defaults to the workspace root (up to #{limits.max_entries} entries)."

@@ -19,22 +19,17 @@ defmodule Alto.Tools.WriteFile do
   def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
-    %{
-      description:
-        "Create or replace a UTF-8 file inside the workspace. Parent directories must exist.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute path."
-          },
-          content: %{type: "string", description: "Complete new file content."}
+    Alto.Tool.object_schema(
+      "Create or replace a UTF-8 file inside the workspace. Parent directories must exist.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute path."
         },
-        required: ["path", "content"],
-        additionalProperties: false
-      }
-    }
+        content: %{type: "string", description: "Complete new file content."}
+      },
+      ["path", "content"]
+    )
     |> put_in([:parameters, :properties, :content, :maxLength], limits.max_bytes)
   end
 

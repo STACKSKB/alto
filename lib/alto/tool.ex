@@ -70,6 +70,16 @@ defmodule Alto.Tool do
     end
   end
 
+  @doc "Build a tool schema whose object parameters reject undeclared fields."
+  def object_schema(description, properties, required \\ nil) do
+    parameters = %{type: "object", properties: properties, additionalProperties: false}
+
+    parameters =
+      if is_nil(required), do: parameters, else: Map.put(parameters, :required, required)
+
+    %{description: description, parameters: parameters}
+  end
+
   def callback(module, callback, opts), do: apply(module, callback, [opts])
 
   def requirement(module, opts) do

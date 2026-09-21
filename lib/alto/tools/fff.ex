@@ -7,58 +7,57 @@ defmodule Alto.Tools.FFF do
   in-memory index can remain resident across runs.
   """
 
-  @file_schema %{
-    description:
-      "Frecency- and git-aware fuzzy path search using the external FFF index. Keep queries short; supports path prefixes and FFF glob constraints.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        query: %{type: "string", description: "Fuzzy path query and optional FFF constraints."},
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  }
+  @file_schema Alto.Tool.object_schema(
+                 "Frecency- and git-aware fuzzy path search using the external FFF index. Keep queries short; supports path prefixes and FFF glob constraints.",
+                 %{
+                   query: %{
+                     type: "string",
+                     description: "Fuzzy path query and optional FFF constraints."
+                   },
+                   maxResults: %{type: "number", minimum: 1, maximum: 100},
+                   cursor: %{
+                     type: "string",
+                     description: "Opaque cursor from a previous result page."
+                   }
+                 },
+                 ["query"]
+               )
 
-  @grep_schema %{
-    description:
-      "Search file contents through the external FFF warm index. Put filename, directory, glob, and exclusion constraints inline before the query.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        query: %{type: "string", description: "Content query."},
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        output_mode: %{type: "string"},
-        context: %{type: "number", minimum: 0, maximum: 100},
-        cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  }
+  @grep_schema Alto.Tool.object_schema(
+                 "Search file contents through the external FFF warm index. Put filename, directory, glob, and exclusion constraints inline before the query.",
+                 %{
+                   query: %{type: "string", description: "Content query."},
+                   maxResults: %{type: "number", minimum: 1, maximum: 100},
+                   output_mode: %{type: "string"},
+                   context: %{type: "number", minimum: 0, maximum: 100},
+                   cursor: %{
+                     type: "string",
+                     description: "Opaque cursor from a previous result page."
+                   }
+                 },
+                 ["query"]
+               )
 
-  @multi_schema %{
-    description:
-      "Search several content patterns in one call through the external FFF warm index.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        patterns: %{type: "array", items: %{type: "string"}, minItems: 1, maxItems: 50},
-        constraints: %{
-          type: "string",
-          description: "FFF file constraints, such as '*.{ex,exs} !deps/'."
-        },
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        output_mode: %{type: "string"},
-        context: %{type: "number", minimum: 0, maximum: 100},
-        cursor: %{type: "string"}
-      },
-      required: ["patterns"],
-      additionalProperties: false
-    }
-  }
+  @multi_schema Alto.Tool.object_schema(
+                  "Search several content patterns in one call through the external FFF warm index.",
+                  %{
+                    patterns: %{
+                      type: "array",
+                      items: %{type: "string"},
+                      minItems: 1,
+                      maxItems: 50
+                    },
+                    constraints: %{
+                      type: "string",
+                      description: "FFF file constraints, such as '*.{ex,exs} !deps/'."
+                    },
+                    maxResults: %{type: "number", minimum: 1, maximum: 100},
+                    output_mode: %{type: "string"},
+                    context: %{type: "number", minimum: 0, maximum: 100},
+                    cursor: %{type: "string"}
+                  },
+                  ["patterns"]
+                )
 
   @doc """
   Return three tools backed by one workspace-scoped FFF server.

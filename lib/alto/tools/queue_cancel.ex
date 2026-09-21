@@ -14,17 +14,13 @@ defmodule Alto.Tools.QueueCancel do
 
   @impl true
   def schema(_opts \\ []) do
-    %{
-      description: "Remove all queued records carrying a dedup key (record cancellation).",
-      parameters: %{
-        type: "object",
-        properties: %{
-          key: %{type: "string", description: "The dedup key to blank."}
-        },
-        required: ["key"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Remove all queued records carrying a dedup key (record cancellation).",
+      %{
+        key: %{type: "string", description: "The dedup key to blank."}
+      },
+      ["key"]
+    )
   end
 
   @impl true

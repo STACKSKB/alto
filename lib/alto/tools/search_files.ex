@@ -30,31 +30,26 @@ defmodule Alto.Tools.SearchFiles do
   def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
-    %{
-      description:
-        "Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          query: %{
-            type: "string",
-            minLength: 1,
-            maxLength: limits.max_query_bytes,
-            description: "Literal text to find; this is not a regular expression."
-          },
-          path: %{
-            type: "string",
-            description: "File or directory to search; defaults to the workspace root."
-          },
-          case_sensitive: %{
-            type: "boolean",
-            description: "Whether letter case must match; defaults to true."
-          }
+    Alto.Tool.object_schema(
+      "Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
+      %{
+        query: %{
+          type: "string",
+          minLength: 1,
+          maxLength: limits.max_query_bytes,
+          description: "Literal text to find; this is not a regular expression."
         },
-        required: ["query"],
-        additionalProperties: false
-      }
-    }
+        path: %{
+          type: "string",
+          description: "File or directory to search; defaults to the workspace root."
+        },
+        case_sensitive: %{
+          type: "boolean",
+          description: "Whether letter case must match; defaults to true."
+        }
+      },
+      ["query"]
+    )
   end
 
   @impl true
