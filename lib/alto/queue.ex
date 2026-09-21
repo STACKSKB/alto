@@ -952,11 +952,8 @@ defmodule Alto.Queue do
   # after the complete mutation has been durably appended.
   defp commit(original, current, records, reply, wrap_error \\ false) do
     with {:ok, next} <-
-           Enum.reduce_while(records, {:ok, current}, fn record, {:ok, acc} ->
-             case log_apply(acc, record["type"], record) do
-               {:ok, next} -> {:cont, {:ok, next}}
-               error -> {:halt, error}
-             end
+           Alto.Result.reduce(records, current, fn record, acc ->
+             log_apply(acc, record["type"], record)
            end),
          :ok <- append(current, records) do
       {:reply, reply, next}

@@ -75,13 +75,11 @@ defmodule Alto.Providers.Anthropic.Stream do
 
     blocks
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, state}, fn {block, index}, {:ok, state} ->
+    |> Alto.Result.reduce(state, fn {block, index}, state ->
       with {:ok, value} <- new_block(block),
            {:ok, _complete} <- finalize_block(value) do
         emit_block(value, sink)
-        {:cont, {:ok, put_block(state, index, value)}}
-      else
-        {:error, _} = error -> {:halt, error}
+        {:ok, put_block(state, index, value)}
       end
     end)
   end

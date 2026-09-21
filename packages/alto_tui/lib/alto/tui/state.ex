@@ -618,11 +618,9 @@ defmodule Alto.TUI.State do
   defp merge_record_usage(_record, usage), do: usage
 
   defp load_tasks(projects, opts) do
-    Enum.reduce_while(projects, {:ok, %{}}, fn project, {:ok, acc} ->
-      case Catalog.tasks(project["id"], opts) do
-        {:ok, tasks} -> {:cont, {:ok, Map.put(acc, project["id"], tasks)}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
+    Alto.Result.reduce(projects, %{}, fn project, acc ->
+      with {:ok, tasks} <- Catalog.tasks(project["id"], opts),
+           do: {:ok, Map.put(acc, project["id"], tasks)}
     end)
   end
 

@@ -115,13 +115,13 @@ defmodule Alto.Handoff do
   end
 
   defp validate_fields(fields) when is_map(fields) do
-    Enum.reduce_while(@files, {:ok, %{}}, fn {key, _filename}, {:ok, artifact} ->
+    Alto.Result.reduce(@files, %{}, fn {key, _filename}, artifact ->
       value = Map.get(fields, key, Map.get(fields, Atom.to_string(key)))
 
       if is_binary(value) and value != "" and String.valid?(value) do
-        {:cont, {:ok, Map.put(artifact, key, value)}}
+        {:ok, Map.put(artifact, key, value)}
       else
-        {:halt, {:error, {:invalid_handoff_field, key}}}
+        {:error, {:invalid_handoff_field, key}}
       end
     end)
   end
@@ -137,8 +137,8 @@ defmodule Alto.Handoff do
     parent = Path.dirname(final_dir)
     temp_dir = final_dir <> ".tmp-" <> random_suffix()
 
-    with :ok <- mkdir(parent),
-         :ok <- mkdir(temp_dir),
+    with :ok <- Alto.Storage.ensure_private_dir(parent),
+         :ok <- Alto.Storage.ensure_private_dir(temp_dir),
          :ok <- write_artifacts(temp_dir, artifact),
          :ok <- rename_publish(temp_dir, final_dir) do
       {:ok,
@@ -168,13 +168,6 @@ defmodule Alto.Handoff do
     case File.rename(temp_dir, final_dir) do
       :ok -> :ok
       {:error, :eexist} -> {:error, :handoff_already_exists}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp mkdir(path) do
-    case Alto.Storage.ensure_private_dir(path) do
-      :ok -> :ok
       {:error, reason} -> {:error, reason}
     end
   end

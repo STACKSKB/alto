@@ -144,21 +144,21 @@ defmodule Alto.Command.Executors.Bubblewrap do
     paths = Keyword.get(opts, :protected_paths, [])
 
     if is_list(paths) do
-      Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
+      Alto.Result.reduce(paths, [], fn path, acc ->
         with true <- is_binary(path) and Path.type(path) == :relative and path != ".",
              {:ok, resolved} <- Alto.Tools.Path.resolve(path, cwd),
              true <- resolved != Path.expand(cwd),
              true <- resolved == Path.expand(path, cwd),
              {:ok, stat} <- File.lstat(resolved) do
           if stat.type in [:regular, :directory],
-            do: {:cont, {:ok, [resolved | acc]}},
-            else: {:halt, {:error, {:invalid_protected_path, path}}}
+            do: {:ok, [resolved | acc]},
+            else: {:error, {:invalid_protected_path, path}}
         else
           {:error, :enoent} ->
-            {:cont, {:ok, acc}}
+            {:ok, acc}
 
           _ ->
-            {:halt, {:error, {:invalid_protected_path, path}}}
+            {:error, {:invalid_protected_path, path}}
         end
       end)
       |> case do
@@ -179,17 +179,17 @@ defmodule Alto.Command.Executors.Bubblewrap do
   defp environment(extra) when is_list(extra) do
     base = %{"HOME" => "/tmp/alto-home", "LANG" => "C.UTF-8", "PATH" => @default_path}
 
-    Enum.reduce_while(extra, {:ok, base}, fn
-      {name, value}, {:ok, environment}
+    Alto.Result.reduce(extra, base, fn
+      {name, value}, environment
       when is_binary(name) and is_binary(value) and name != "" ->
         if String.contains?(name, ["=", <<0>>]) or String.contains?(value, <<0>>) do
-          {:halt, {:error, {:invalid_environment_entry, name}}}
+          {:error, {:invalid_environment_entry, name}}
         else
-          {:cont, {:ok, Map.put(environment, name, value)}}
+          {:ok, Map.put(environment, name, value)}
         end
 
       entry, _acc ->
-        {:halt, {:error, {:invalid_environment_entry, entry}}}
+        {:error, {:invalid_environment_entry, entry}}
     end)
   end
 

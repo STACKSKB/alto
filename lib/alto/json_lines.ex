@@ -20,13 +20,8 @@ defmodule Alto.JSONLines do
   def join(lines), do: Enum.join(lines, "\n") <> "\n"
 
   def fold(state, lines, apply_record) do
-    lines
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, state}, fn {line, number}, {:ok, state} ->
-      case apply_record.(state, line, number) do
-        {:ok, state} -> {:cont, {:ok, state}}
-        {:error, _} = error -> {:halt, error}
-      end
+    Alto.Result.reduce(Enum.with_index(lines, 1), state, fn {line, number}, state ->
+      apply_record.(state, line, number)
     end)
   end
 end
