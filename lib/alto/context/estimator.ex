@@ -67,50 +67,16 @@ defmodule Alto.Context.Estimator do
   @spec config(keyword()) :: t()
   def config(opts \\ []) when is_list(opts) do
     opts =
-      Keyword.validate!(opts,
-        tokenizer: &default_tokenizer/1,
-        provider_overhead: 0,
-        message_overhead: 0,
-        tool_overhead: 0,
-        model: nil,
-        model_overhead: %{}
+      NimbleOptions.validate!(opts,
+        tokenizer: [type: {:fun, 1}, default: &default_tokenizer/1],
+        provider_overhead: [type: :non_neg_integer, default: 0],
+        message_overhead: [type: :non_neg_integer, default: 0],
+        tool_overhead: [type: :non_neg_integer, default: 0],
+        model: [type: :any, default: nil],
+        model_overhead: [type: {:map, :any, :non_neg_integer}, default: %{}]
       )
 
-    tokenizer = Keyword.fetch!(opts, :tokenizer)
-    provider_overhead = Keyword.fetch!(opts, :provider_overhead)
-    message_overhead = Keyword.fetch!(opts, :message_overhead)
-    tool_overhead = Keyword.fetch!(opts, :tool_overhead)
-    model_overhead = Keyword.fetch!(opts, :model_overhead)
-
-    cond do
-      not is_function(tokenizer, 1) ->
-        raise ArgumentError, "tokenizer must be a unary function"
-
-      not non_negative_integer?(provider_overhead) ->
-        raise ArgumentError, "provider_overhead must be a non-negative integer"
-
-      not non_negative_integer?(message_overhead) ->
-        raise ArgumentError, "message_overhead must be a non-negative integer"
-
-      not non_negative_integer?(tool_overhead) ->
-        raise ArgumentError, "tool_overhead must be a non-negative integer"
-
-      not is_map(model_overhead) ->
-        raise ArgumentError, "model_overhead must be a map"
-
-      not Enum.all?(model_overhead, fn {_model, overhead} -> non_negative_integer?(overhead) end) ->
-        raise ArgumentError, "model_overhead values must be non-negative integers"
-
-      true ->
-        %__MODULE__{
-          tokenizer: tokenizer,
-          provider_overhead: provider_overhead,
-          message_overhead: message_overhead,
-          tool_overhead: tool_overhead,
-          model: Keyword.fetch!(opts, :model),
-          model_overhead: model_overhead
-        }
-    end
+    struct!(__MODULE__, opts)
   end
 
   defp tokenize_entry(acc, entry, tokenizer, overhead) do
