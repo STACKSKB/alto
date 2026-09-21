@@ -55,18 +55,13 @@ defmodule Alto.ConsumerTest do
     assert {:decided, :completed, _} = OperationLog.status(l, "src:del-1")
   end
 
-  test "retry releases with a counted attempt, then completes", %{queue: q, ledger: l} do
+  test "retry releases and advances the handler attempt number", %{queue: q, ledger: l} do
     {:ok, _} = Queue.admit(q, "src:del-1", %{})
     test_pid = self()
 
-    handler = fn _payload, _ctx ->
-      send(test_pid, :ran)
-
-      receive do
-        :allow_done -> :done
-      after
-        0 -> {:retry, :downstream_busy}
-      end
+    handler = fn _payload, ctx ->
+      send(test_pid, {:ran, ctx.attempt})
+      {:retry, :downstream_busy}
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
@@ -74,10 +69,12 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:released]} = Consumer.poll(c)
     assert %{pending: 1, claimed: 0} = Queue.count(q)
     assert 1 = OperationLog.attempts(l, "src:del-1")
+    assert_received {:ran, 1}
 
     # Second poll retries under the same identity.
     assert {:handled, [:released]} = Consumer.poll(c)
     assert 2 = OperationLog.attempts(l, "src:del-1")
+    assert_received {:ran, 2}
   end
 
   test "attempts beyond the bound park for an operator", %{queue: q, ledger: l} do

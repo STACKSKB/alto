@@ -165,95 +165,86 @@ defmodule Alto.Consumer do
     op = operation_key(record)
     claim_id = record.claim_id
 
-    case ledger_status(state, op) do
+    with {:ok, recovery} <- recover_record(record, op, state) do
+      case recovery.status do
+        {:intended} ->
+          dispatch(op, claim_id, record.payload, recovery, state)
+
+        {:checkpointed, _checkpoint, _attempt} ->
+          ack_quietly(state, claim_id)
+          :acked_checkpoint
+
+        {:dispatched, attempt} ->
+          park_existing(
+            op,
+            claim_id,
+            attempt,
+            :previous_attempt_unknown,
+            %{prior: :dispatched},
+            state
+          )
+
+        {:decided, class, _evidence}
+        when record.admission == :recovery and class in [:unknown, :requires_operator] ->
+          release_quietly(state, claim_id)
+          :awaiting_reconciliation
+
+        {:decided, :unknown, _evidence} ->
+          ack_quietly(state, claim_id)
+          :parked_unknown
+
+        {:decided, _class, _evidence} ->
+          ack_quietly(state, claim_id)
+          :acked_decided
+      end
+    else
       {:error, reason} ->
         release_quietly(state, claim_id)
         {:error, reason}
-
-      :no_intent ->
-        case ledger_call(fn ->
-               Alto.OperationLog.record_intent(
-                 state.ledger,
-                 op,
-                 state.tool,
-                 record.key,
-                 %{key: record.key, generation_id: record.generation_id, payload: record.payload}
-               )
-             end) do
-          :ok ->
-            dispatch(op, claim_id, record.payload, state)
-
-          {:error, reason} ->
-            release_quietly(state, claim_id)
-            {:error, reason}
-        end
-
-      {:intended} ->
-        dispatch(op, claim_id, record.payload, state)
-
-      {:checkpointed, _checkpoint, _attempt} ->
-        ack_quietly(state, claim_id)
-        :acked_checkpoint
-
-      {:dispatched, attempt} ->
-        park_existing(
-          op,
-          claim_id,
-          attempt,
-          :previous_attempt_unknown,
-          %{prior: :dispatched},
-          state
-        )
-
-      {:decided, class, _evidence}
-      when record.admission == :recovery and class in [:unknown, :requires_operator] ->
-        release_quietly(state, claim_id)
-        :awaiting_reconciliation
-
-      {:decided, :unknown, _evidence} ->
-        ack_quietly(state, claim_id)
-        :parked_unknown
-
-      {:decided, _class, _evidence} ->
-        ack_quietly(state, claim_id)
-        :acked_decided
     end
   end
 
   # Fresh intent or a released retry: count attempts, then run.
-  defp dispatch(op, claim_id, payload, state) do
-    case attempt_count(state, op) do
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
+  defp dispatch(op, claim_id, payload, recovery, state) do
+    attempt_n = max(recovery.attempts - length(recovery.checkpointed_attempts), 0)
 
-      {:ok, attempt_n} when attempt_n >= state.max_attempts ->
-        park(op, claim_id, :attempts_exhausted, %{}, state)
+    if attempt_n >= state.max_attempts do
+      park(op, claim_id, :attempts_exhausted, %{}, state)
+    else
+      case ledger_call(fn -> Alto.OperationLog.record_attempt(state.ledger, op, claim_id) end) do
+        :ok ->
+          run_handler(op, claim_id, attempt_n + 1, payload, state)
 
-      {:ok, attempt_n} ->
-        case ledger_call(fn ->
-               Alto.OperationLog.record_attempt(state.ledger, op, claim_id)
-             end) do
-          :ok ->
-            run_handler(op, claim_id, attempt_n + 1, payload, state)
-
-          {:error, reason} ->
-            release_quietly(state, claim_id)
-            {:error, reason}
-        end
+        {:error, reason} ->
+          release_quietly(state, claim_id)
+          {:error, reason}
+      end
     end
   end
 
-  defp attempt_count(state, op) do
-    case Alto.OperationLog.recovery(state.ledger, op) do
-      {:ok, %{attempts: total, checkpointed_attempts: checkpointed}} ->
-        {:ok, max(total - length(checkpointed), 0)}
+  defp recover_record(record, op, state) do
+    ledger_call(fn ->
+      case Alto.OperationLog.recovery(state.ledger, op) do
+        {:error, :not_found} ->
+          with :ok <-
+                 Alto.OperationLog.record_intent(
+                   state.ledger,
+                   op,
+                   state.tool,
+                   record.key,
+                   %{
+                     key: record.key,
+                     generation_id: record.generation_id,
+                     payload: record.payload
+                   }
+                 ) do
+            Alto.OperationLog.recovery(state.ledger, op)
+          end
 
-      {:error, reason} ->
-        {:error, reason}
-    end
-  catch
-    :exit, reason -> {:error, {:ledger_unavailable, reason}}
+        result ->
+          result
+      end
+    end)
   end
 
   # The handler is linked to its owning consumer. A consumer crash therefore
@@ -438,10 +429,6 @@ defmodule Alto.Consumer do
         release_quietly(state, claim_id)
         {:error, reason}
     end
-  end
-
-  defp ledger_status(state, op) do
-    ledger_call(fn -> Alto.OperationLog.status(state.ledger, op) end)
   end
 
   defp ledger_call(fun) do
