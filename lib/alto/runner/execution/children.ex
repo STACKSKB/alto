@@ -451,7 +451,7 @@ defmodule Alto.Runner.Execution.Children do
              run.cancel_ref
            ) do
         {:ok, {:ok, provider}} ->
-          normalize_provider(provider, [])
+          Alto.Runner.Execution.Setup.normalize_provider(provider)
 
         {:ok, {:error, _} = error} ->
           error
@@ -676,9 +676,6 @@ defmodule Alto.Runner.Execution.Children do
       error -> error
     end
   end
-
-  defp normalize_provider(provider, opts),
-    do: Alto.Runner.Execution.Setup.normalize_provider(provider, opts)
 
   defp next_operation(run) do
     seq = run.op_seq + 1

@@ -26,13 +26,14 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: true,
                input: input,
                output: output,
-               provider: CatalogProvider,
-               provider_options: [
-                 models: [
-                   %{id: "anthropic/claude", name: "Claude", context_length: 200_000},
-                   %{id: "openai/gpt", name: "GPT", context_length: 128_000}
-                 ]
-               ]
+               provider:
+                 {CatalogProvider,
+                  [
+                    models: [
+                      %{id: "anthropic/claude", name: "Claude", context_length: 200_000},
+                      %{id: "openai/gpt", name: "GPT", context_length: 128_000}
+                    ]
+                  ]}
              )
 
     {_input, body} = StringIO.contents(output)
@@ -59,8 +60,7 @@ defmodule Alto.CLI.OnboardingTest do
              Onboarding.resolve(
                credentials_path: context.credentials_path,
                interactive: false,
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
   end
 
@@ -71,8 +71,7 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: false,
                api_key: "environment-key",
                model: "environment/model",
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
 
     assert {:ok, credentials} = Credentials.load(context.credentials_path)
@@ -100,8 +99,7 @@ defmodule Alto.CLI.OnboardingTest do
                model: "supplied/model",
                input: input,
                output: output,
-               provider: CatalogProvider,
-               provider_options: [models: [%{id: "new/model", name: "New"}]]
+               provider: {CatalogProvider, models: [%{id: "new/model", name: "New"}]}
              )
 
     {:ok, saved} = Credentials.load(context.credentials_path)
@@ -118,8 +116,7 @@ defmodule Alto.CLI.OnboardingTest do
              Onboarding.resolve(
                credentials_path: context.credentials_path,
                interactive: false,
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
 
     assert message =~ "OPENROUTER_API_KEY"
@@ -142,8 +139,7 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: true,
                input: input,
                output: output,
-               provider: CatalogProvider,
-               provider_options: [models: models]
+               provider: {CatalogProvider, models: models}
              )
   end
 end

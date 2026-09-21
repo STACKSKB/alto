@@ -13,7 +13,6 @@ defmodule Alto.Config do
     :input,
     :loop,
     :provider,
-    :provider_options,
     :provider_profiles,
     :codex_backend,
     :tools,

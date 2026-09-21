@@ -29,7 +29,9 @@ provider =
   end)
 ```
 
-Use this provider specification in `Alto.Config.new/1` or a provider profile.
+Use this `{module, options}` provider specification in `Alto.Config.new/1` or a
+provider profile. A bare module means `{module, []}`; provider options belong
+inside the tuple.
 Omit the wrapper to omit diagnostics; nest wrappers to compose observers.
 Observers run for each transport attempt (including retries and reduction),
 inside the provider's existing timeout and cancellation boundary. They receive

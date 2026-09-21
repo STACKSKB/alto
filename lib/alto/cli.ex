@@ -419,14 +419,11 @@ defmodule Alto.CLI do
 
   defp setup(options, []) do
     if Onboarding.terminal?() do
-      provider_options = discovery_provider_options(options)
-
       case Onboarding.resolve(
              force: true,
              interactive: true,
              api_key: environment_api_key(options, :openrouter),
-             provider: OpenAICompatible,
-             provider_options: provider_options
+             provider: {OpenAICompatible, discovery_provider_options(options)}
            ) do
         {:ok, %{model: model}} ->
           IO.puts(:stderr, "OpenRouter setup complete. Default model: #{model}")
@@ -582,8 +579,7 @@ defmodule Alto.CLI do
         api_key: environment_api_key(options, :openrouter),
         model: requested_model(options),
         interactive: Onboarding.terminal?(),
-        provider: OpenAICompatible,
-        provider_options: discovery_provider_options(options, base_url)
+        provider: {OpenAICompatible, discovery_provider_options(options, base_url)}
       )
     else
       with {:ok, model} <- required_model(options) do

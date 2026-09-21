@@ -107,13 +107,10 @@ defmodule Alto.CLI.Onboarding do
 
   defp discover_model(credentials, opts) do
     if opts[:interactive] do
-      provider = Keyword.fetch!(opts, :provider)
+      {provider, provider_options} = Keyword.fetch!(opts, :provider)
       IO.puts(opts[:output], "Fetching available models from OpenRouter…")
 
-      provider_options =
-        opts
-        |> Keyword.get(:provider_options, [])
-        |> Keyword.put(:api_key, opts[:api_key])
+      provider_options = Keyword.put(provider_options, :api_key, opts[:api_key])
 
       with true <-
              Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),

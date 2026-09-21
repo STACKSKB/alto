@@ -26,8 +26,7 @@ defmodule Alto.Runner.Execution.Setup do
   def open(task, opts) do
     spec = Keyword.get(opts, :loop, Alto.default_loop())
 
-    provider =
-      normalize_provider(Keyword.get(opts, :provider), Keyword.get(opts, :provider_options, []))
+    provider = normalize_provider(Keyword.get(opts, :provider))
 
     tools = Keyword.get(opts, :tools, [])
     cwd = opts |> Keyword.get(:cwd, File.cwd!()) |> Path.expand()
@@ -166,15 +165,14 @@ defmodule Alto.Runner.Execution.Setup do
 
   # A provider is model capability state: generic rule runs are constructed
   # without one and fail closed only if a model effect is requested.
-  def normalize_provider(nil, _opts), do: {:ok, nil}
+  def normalize_provider(nil), do: {:ok, nil}
 
-  def normalize_provider({module, opts}, _fallback) when is_atom(module) and is_list(opts),
+  def normalize_provider({module, opts}) when is_atom(module) and is_list(opts),
     do: provider_contract(module, opts)
 
-  def normalize_provider(module, opts) when is_atom(module) and is_list(opts),
-    do: provider_contract(module, opts)
+  def normalize_provider(module) when is_atom(module), do: provider_contract(module, [])
 
-  def normalize_provider(other, _opts), do: {:error, {:invalid_provider, other}}
+  def normalize_provider(other), do: {:error, {:invalid_provider, other}}
 
   defp provider_contract(module, opts) do
     if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, Alto.Provider),

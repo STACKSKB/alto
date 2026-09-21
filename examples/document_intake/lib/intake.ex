@@ -279,36 +279,12 @@ defmodule DocumentIntake do
   end
 
   defp configured_provider(opts) do
-    case Keyword.get(opts, :provider) do
-      {module, provider_opts} = provider when is_atom(module) and is_list(provider_opts) ->
-        provider
+    case Keyword.get(opts, :config) do
+      %Alto.Config{} = config ->
+        Keyword.get(opts, :provider) || Keyword.get(Alto.Config.run_options(config), :provider)
 
-      module when is_atom(module) and not is_nil(module) ->
-        {module, Keyword.get(opts, :provider_options, [])}
-
-      nil ->
-        case Keyword.get(opts, :config) do
-          %Alto.Config{} = config ->
-            config_opts = Alto.Config.run_options(config)
-
-            case Keyword.get(config_opts, :provider) do
-              nil ->
-                nil
-
-              {module, provider_opts} = provider
-              when is_atom(module) and is_list(provider_opts) ->
-                provider
-
-              provider when is_atom(provider) ->
-                {provider, Keyword.get(config_opts, :provider_options, [])}
-            end
-
-          _ ->
-            nil
-        end
-
-      provider ->
-        provider
+      _ ->
+        Keyword.get(opts, :provider)
     end
   end
 
