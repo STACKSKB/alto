@@ -178,9 +178,9 @@ defmodule Alto.Subagents.Continuation do
          {:ok, snapshot} <- read(batch),
          true <- snapshot.revision == expected_revision,
          child when not is_nil(child) <-
-           Enum.find(snapshot.packet["children"], &(&1["id"] == child_id)),
+           Map.get(snapshot.packet["children"], child_id),
          true <- child["state"] in ["suspended", "decided"],
-         {:ok, entry} <- decode_approval(batch, child) do
+         {:ok, entry} <- decode_approval(batch, child_id, child) do
       {:ok, Map.put(entry, :revision, snapshot.revision)}
     else
       false -> {:error, :stale_child_approval}
@@ -255,32 +255,28 @@ defmodule Alto.Subagents.Continuation do
   @doc "Inspect retained approvals and explicit decisions without granting execution."
   def suspended(%__MODULE__{} = batch) do
     with {:ok, snapshot} <- read(batch) do
-      snapshot.packet["children"]
-      |> Enum.filter(&(&1["state"] in ["suspended", "decided"]))
-      |> Alto.Result.traverse(&decode_approval(batch, &1))
+      snapshot.ids
+      |> Enum.filter(&(snapshot.packet["children"][&1]["state"] in ["suspended", "decided"]))
+      |> Alto.Result.traverse(&decode_approval(batch, &1, snapshot.packet["children"][&1]))
     end
   end
 
   @doc "Persist an explicit approval decision at the exact viewed batch revision."
   def decide(%__MODULE__{} = batch, revision, identity, decision)
-      when decision in [:approve, :deny] do
+      when is_map(identity) and decision in [:approve, :deny] do
     with {:ok, snapshot} <- read(batch),
          :ok <- active(snapshot),
          true <- snapshot.revision == revision,
          child when not is_nil(child) <-
-           Enum.find(snapshot.packet["children"], &(child_identity(batch, &1) == identity)),
+           Map.get(snapshot.packet["children"], identity["id"]),
+         true <- child_identity(batch, identity["id"], child) == identity,
          true <- child["state"] == "suspended" and is_nil(snapshot.packet["join"]) do
-      children =
-        Enum.map(snapshot.packet["children"], fn current ->
-          if current == child,
-            do:
-              current
-              |> Map.put("state", "decided")
-              |> put_in(["suspension", "decision"], Atom.to_string(decision)),
-            else: current
-        end)
+      child =
+        child
+        |> Map.put("state", "decided")
+        |> put_in(["suspension", "decision"], Atom.to_string(decision))
 
-      replace(batch, snapshot, Map.put(snapshot.packet, "children", children))
+      replace(batch, snapshot, put_in(snapshot.packet, ["children", identity["id"]], child))
     else
       false -> {:error, :stale_child_decision}
       nil -> {:error, :stale_child_decision}
@@ -299,7 +295,7 @@ defmodule Alto.Subagents.Continuation do
   def claim_child(%Ticket{batch: batch, grant: grant} = ticket, identity, decision)
       when decision in [:approve, :deny] do
     change_child(batch, ticket.id, fn child ->
-      if child_identity(batch, child) == identity and child["state"] == "decided" and
+      if child_identity(batch, ticket.id, child) == identity and child["state"] == "decided" and
            child["suspension"]["decision"] == Atom.to_string(decision) and nonce?(grant) do
         {:ok, child |> Map.put("state", "resuming") |> put_in(["suspension", "grant"], grant)}
       else
@@ -319,10 +315,10 @@ defmodule Alto.Subagents.Continuation do
     }
   end
 
-  defp child_identity(batch, child) do
+  defp child_identity(batch, id, child) do
     %{
       "journal" => identity(batch),
-      "id" => child["id"],
+      "id" => id,
       "attempt" => child["attempt"],
       "suspension" => get_in(child, ["suspension", "token"])
     }
@@ -365,7 +361,7 @@ defmodule Alto.Subagents.Continuation do
   @doc "Read ordered results when every child has a retained outcome. Never dispatches."
   def join(%__MODULE__{} = batch) do
     with {:ok, snapshot} <- read(batch),
-         {:ok, results} <- decode_results(snapshot.packet["children"]) do
+         {:ok, results} <- decode_results(snapshot.ids, snapshot.packet["children"]) do
       {:ok, Map.put(snapshot, :results, results)}
     end
   end
@@ -376,7 +372,7 @@ defmodule Alto.Subagents.Continuation do
          :ok <- valid_parent(packet),
          {:ok, %{phase: :children} = snapshot} <- read(cell),
          :ok <- active(snapshot),
-         {:ok, results} <- decode_results(snapshot.packet["children"]),
+         {:ok, results} <- decode_results(snapshot.ids, snapshot.packet["children"]),
          snapshot <- Map.put(snapshot, :results, results),
          true <- not is_nil(snapshot.parent) and snapshot.revision == expected_revision,
          replacement <- %{
@@ -441,9 +437,9 @@ defmodule Alto.Subagents.Continuation do
   defp change_child(batch, id, fun) do
     update(batch, fn packet ->
       with true <- is_nil(packet["join"]),
-           index when is_integer(index) <- Enum.find_index(packet["children"], &(&1["id"] == id)),
-           {:ok, child} <- fun.(Enum.at(packet["children"], index)) do
-        {:ok, Map.update!(packet, "children", &List.replace_at(&1, index, child))}
+           child when not is_nil(child) <- Map.get(packet["children"], id),
+           {:ok, child} <- fun.(child) do
+        {:ok, put_in(packet, ["children", id], child)}
       else
         false -> {:error, :batch_already_joined}
         nil -> {:error, :unknown_child}
@@ -496,14 +492,16 @@ defmodule Alto.Subagents.Continuation do
   defp active(%{state: :active}), do: :ok
   defp active(_), do: {:error, :batch_not_active}
 
-  defp decode_results(children) do
-    Alto.Result.traverse(children, fn
-      %{"state" => "completed", "id" => id, "result" => encoded} ->
-        with {:ok, value} <- Codec.decode(encoded, max_bytes: @max_result_bytes),
-             do: {:ok, {id, value}}
+  defp decode_results(ids, children) do
+    Alto.Result.traverse(ids, fn id ->
+      case children[id] do
+        %{"state" => "completed", "result" => encoded} ->
+          with {:ok, value} <- Codec.decode(encoded, max_bytes: @max_result_bytes),
+               do: {:ok, {id, value}}
 
-      %{"state" => state, "id" => id} ->
-        {:error, {:child_pending, id, state}}
+        %{"state" => state} ->
+          {:error, {:child_pending, id, state}}
+      end
     end)
   end
 
@@ -539,10 +537,7 @@ defmodule Alto.Subagents.Continuation do
 
   defp initialize(batch, %{status: {:dispatched, @initialize}, recovery: initial}) do
     children =
-      Enum.map(
-        initial["ids"],
-        &%{"id" => &1, "state" => "planned", "attempt" => nil, "result" => nil}
-      )
+      Map.new(initial["ids"], &{&1, %{"state" => "planned", "attempt" => nil, "result" => nil}})
 
     packet = %{
       "phase" => "children",
@@ -638,7 +633,7 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  defp decode_approval(batch, child) do
+  defp decode_approval(batch, id, child) do
     with {:ok, saved} <-
            Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes),
          true <-
@@ -648,9 +643,9 @@ defmodule Alto.Subagents.Continuation do
        %{
          checkpoint: saved["checkpoint"],
          workspace: saved["workspace"],
-         id: child["id"],
+         id: id,
          state: if(child["state"] == "suspended", do: :suspended, else: :decided),
-         identity: child_identity(batch, child),
+         identity: child_identity(batch, id, child),
          decision: child["suspension"]["decision"]
        }}
     else
@@ -701,9 +696,9 @@ defmodule Alto.Subagents.Continuation do
   defp valid_initial(_), do: {:error, :invalid_batch}
 
   defp valid_packet(%{"generation" => generation, "children" => children} = packet, initial)
-       when map_size(packet) == 4 and is_list(children) do
-    if generation == initial["generation"] and Enum.all?(children, &valid_child?/1) and
-         Enum.map(children, & &1["id"]) == initial["ids"] do
+       when map_size(packet) == 4 and is_map(children) do
+    if generation == initial["generation"] and Enum.all?(Map.values(children), &valid_child?/1) and
+         MapSet.new(Map.keys(children)) == MapSet.new(initial["ids"]) do
       valid_phase(packet, initial["parent"])
     else
       {:error, :invalid_batch}
@@ -716,52 +711,48 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_phase(%{"phase" => "children", "join" => join, "children" => children}, nil)
        when is_map(join) and map_size(join) > 0 do
-    if Enum.all?(children, &(&1["state"] == "completed")),
+    if Enum.all?(Map.values(children), &(&1["state"] == "completed")),
       do: :ok,
       else: {:error, :invalid_batch}
   end
 
   defp valid_phase(%{"phase" => phase, "packet" => packet, "children" => children}, parent)
        when phase in ["ready", "claimed"] and not is_nil(parent) do
-    if Enum.all?(children, &(&1["state"] == "completed")),
+    if Enum.all?(Map.values(children), &(&1["state"] == "completed")),
       do: valid_parent(packet),
       else: {:error, :invalid_batch}
   end
 
   defp valid_phase(_, _), do: {:error, :invalid_batch}
 
-  defp valid_child?(
-         %{"id" => id, "state" => state, "attempt" => attempt, "result" => result} = child
-       )
-       when map_size(child) == 4 do
-    valid_id?(id) and
-      case state do
-        "planned" ->
-          is_nil(attempt) and is_nil(result)
+  defp valid_child?(%{"state" => state, "attempt" => attempt, "result" => result} = child)
+       when map_size(child) == 3 do
+    case state do
+      "planned" ->
+        is_nil(attempt) and is_nil(result)
 
-        "dispatched" ->
-          nonce?(attempt) and is_nil(result)
+      "dispatched" ->
+        nonce?(attempt) and is_nil(result)
 
-        "completed" ->
-          (is_nil(attempt) or nonce?(attempt)) and is_binary(result) and
-            byte_size(result) <= div(@max_result_bytes * 4, 3) + 8
+      "completed" ->
+        (is_nil(attempt) or nonce?(attempt)) and is_binary(result) and
+          byte_size(result) <= div(@max_result_bytes * 4, 3) + 8
 
-        _ ->
-          false
-      end
+      _ ->
+        false
+    end
   end
 
   defp valid_child?(
          %{
-           "id" => id,
            "state" => state,
            "attempt" => attempt,
            "result" => nil,
            "suspension" => suspension
          } = child
        )
-       when map_size(child) == 5 and state in ["suspended", "decided", "resuming"] do
-    valid_id?(id) and nonce?(attempt) and is_map(suspension) and
+       when map_size(child) == 4 and state in ["suspended", "decided", "resuming"] do
+    nonce?(attempt) and is_map(suspension) and
       Enum.sort(Map.keys(suspension)) == Enum.sort(~w(token checkpoint decision grant)) and
       nonce?(suspension["token"]) and
       if(state == "resuming", do: nonce?(suspension["grant"]), else: is_nil(suspension["grant"])) and

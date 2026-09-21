@@ -85,20 +85,32 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     assert {:error, :invalid_batch} = Continuation.list(ledger)
   end
 
-  test "malformed retained children are rejected without raising", %{ledger: ledger} do
-    assert {:ok, cell} = Continuation.open_frame(ledger, "bad-ready", %{"frame" => "pending"})
-    assert {:ok, pending} = Continuation.read(cell)
-    assert {:ok, ready} = Continuation.ready(cell, pending.revision, %{"frame" => "ready"})
+  test "retained children must exactly match the plan and contain valid state", %{ledger: ledger} do
+    child = %{"state" => "planned", "attempt" => nil, "result" => nil}
 
-    assert {:ok, _} =
-             OperationLog.update_checkpoint(
-               ledger,
-               "bad-ready",
-               ready.revision,
-               %{ready.packet | "children" => [1]}
-             )
+    invalid = [
+      [child],
+      %{},
+      %{"other" => child},
+      %{"worker" => 1},
+      %{"worker" => Map.put(child, "id", "worker")}
+    ]
 
-    assert {:error, :invalid_batch} = Continuation.read(cell)
+    for {children, index} <- Enum.with_index(invalid) do
+      key = "bad-children-#{index}"
+      assert {:ok, cell} = Continuation.open(ledger, key, ["worker"])
+      assert {:ok, snapshot} = Continuation.read(cell)
+
+      assert {:ok, _} =
+               OperationLog.update_checkpoint(
+                 ledger,
+                 key,
+                 snapshot.revision,
+                 %{snapshot.packet | "children" => children}
+               )
+
+      assert {:error, :invalid_batch} = Continuation.read(cell)
+    end
   end
 
   test "metadata filters require present keys and discovery contains dead stores", %{

@@ -135,7 +135,9 @@ defmodule Alto.Runner.SerialContinuationTest do
     assert result.verdict == :unknown
     [key] = OperationLog.keys(ledger)
     assert {:ok, entry} = OperationLog.recovery(ledger, key)
-    assert [%{"state" => "dispatched", "result" => nil}] = entry.checkpoint["children"]
+
+    assert %{"worker" => %{"state" => "dispatched", "result" => nil}} =
+             entry.checkpoint["children"]
   end
 
   test "forced child shutdown preserves cancellation and leaves missing evidence uncertain", %{

@@ -40,10 +40,10 @@ defmodule Alto.Subagents.ContinuationTest do
     id: id
   } do
     %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
-    batch = open!(ledger, "batch-order", ["first", "second"])
+    batch = open!(ledger, "batch-order", ["z-first", "a-second"])
     identity = Continuation.identity(batch)
-    {:ok, first} = Continuation.dispatch(batch, "first")
-    {:ok, second} = Continuation.dispatch(batch, "second")
+    {:ok, first} = Continuation.dispatch(batch, "z-first")
+    {:ok, second} = Continuation.dispatch(batch, "a-second")
     assert {:ok, _} = Continuation.complete(second, %{value: 2})
     assert {:ok, _} = Continuation.complete(first, %{value: 1})
     stop_supervised!(child_id)
@@ -51,7 +51,7 @@ defmodule Alto.Subagents.ContinuationTest do
     %{ledger: restarted} = start_ledger!(dir, id)
     {:ok, restored} = Continuation.restore(restarted, identity)
 
-    assert {:ok, %{results: [{"first", %{value: 1}}, {"second", %{value: 2}}]}} =
+    assert {:ok, %{results: [{"z-first", %{value: 1}}, {"a-second", %{value: 2}}]}} =
              Continuation.join(restored)
   end
 
@@ -88,7 +88,7 @@ defmodule Alto.Subagents.ContinuationTest do
     {:ok, restored} = Continuation.restore(restarted, identity)
     assert {:error, :child_already_admitted} = Continuation.dispatch(restored, "child-a")
 
-    assert {:ok, %{packet: %{"children" => [%{"state" => "dispatched"}]}}} =
+    assert {:ok, %{packet: %{"children" => %{"child-a" => %{"state" => "dispatched"}}}}} =
              Continuation.read(restored)
   end
 
