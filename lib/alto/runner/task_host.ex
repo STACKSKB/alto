@@ -100,8 +100,7 @@ defmodule Alto.Runner.TaskHost do
        result: nil,
        subscribers: [],
        waiters: %{},
-       owner: if(owner, do: Process.monitor(owner)),
-       expiry: nil
+       owner: if(owner, do: Process.monitor(owner))
      }}
   end
 
@@ -204,8 +203,8 @@ defmodule Alto.Runner.TaskHost do
       GenServer.reply(from, outcome)
     end)
 
-    expiry = Process.send_after(self(), :expire, 60_000)
-    %{state | result: outcome, subscribers: [], waiters: %{}, expiry: expiry}
+    Process.send_after(self(), :expire, 60_000)
+    %{state | result: outcome, subscribers: [], waiters: %{}}
   end
 
   defp cancel_timer(nil), do: :ok

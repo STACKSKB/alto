@@ -135,19 +135,19 @@ defmodule Alto.External.MCP.Client do
     do: {:reply, {:error, {:mcp_not_ready, state.phase}}, state}
 
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state) do
+  def handle_info({port, {:data, data}}, %{process: %{port: port}} = state) do
     case JSONRPC.ingest(state, data, :mcp_message_limit, &consume_lines/1) do
       {:ok, state} -> {:noreply, state}
       {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
+  def handle_info({port, {:exit_status, status}}, %{process: %{port: port}} = state) do
     reason = {:mcp_server_exit, status}
     {:stop, reason, fail_all(state, reason)}
   end
 
-  def handle_info({:EXIT, port, reason}, %{port: port} = state) do
+  def handle_info({:EXIT, port, reason}, %{process: %{port: port}} = state) do
     {:stop, {:mcp_server_exit, reason}, fail_all(state, {:mcp_server_exit, reason})}
   end
 
@@ -291,7 +291,7 @@ defmodule Alto.External.MCP.Client do
   defp send_notification(state, method) do
     payload = JSON.encode!(%{"jsonrpc" => "2.0", "method" => method})
 
-    case port_command(state.port, payload <> "\n") do
+    case port_command(state.process.port, payload <> "\n") do
       :ok -> {:ok, state}
       {:error, reason} -> {:error, reason}
     end
@@ -381,7 +381,7 @@ defmodule Alto.External.MCP.Client do
       "error" => %{"code" => -32601, "message" => "Alto MCP client supports tools only"}
     }
 
-    _ = port_command(state.port, JSON.encode!(response) <> "\n")
+    _ = port_command(state.process.port, JSON.encode!(response) <> "\n")
     {:ok, state}
   end
 
@@ -401,7 +401,7 @@ defmodule Alto.External.MCP.Client do
         "params" => %{"requestId" => id, "reason" => reason}
       })
 
-    _ = port_command(state.port, payload <> "\n")
+    _ = port_command(state.process.port, payload <> "\n")
     :ok
   end
 

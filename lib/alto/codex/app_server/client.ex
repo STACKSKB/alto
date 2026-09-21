@@ -188,19 +188,19 @@ defmodule Alto.Codex.AppServer.Client do
     do: {:reply, {:error, {:codex_app_server_not_ready, state.phase}}, state}
 
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state) do
+  def handle_info({port, {:data, data}}, %{process: %{port: port}} = state) do
     case JSONRPC.ingest(state, data, :codex_app_server_message_limit, &consume_lines/1) do
       {:ok, next} -> {:noreply, next}
       {:error, reason, next} -> {:stop, reason, fail_all(next, reason)}
     end
   end
 
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
+  def handle_info({port, {:exit_status, status}}, %{process: %{port: port}} = state) do
     reason = {:codex_app_server_exit, status}
     {:stop, reason, fail_all(state, reason)}
   end
 
-  def handle_info({:EXIT, port, reason}, %{port: port} = state) do
+  def handle_info({:EXIT, port, reason}, %{process: %{port: port}} = state) do
     failure = {:codex_app_server_exit, reason}
     {:stop, failure, fail_all(state, failure)}
   end
@@ -340,7 +340,7 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   defp send_payload(state, payload),
-    do: JSONRPC.send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
+    do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
   defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
 

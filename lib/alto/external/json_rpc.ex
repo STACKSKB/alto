@@ -7,7 +7,6 @@ defmodule Alto.External.JSONRPC do
     Map.merge(
       %{
         opts: opts,
-        port: nil,
         process: nil,
         buffer: "",
         phase: :starting,
@@ -64,7 +63,7 @@ defmodule Alto.External.JSONRPC do
   def open(state, opener, initialize) do
     case opener.(state.opts) do
       {:ok, process} ->
-        state = %{state | process: process, port: ExternalProcess.port(process)}
+        state = %{state | process: process}
 
         case initialize.(state) do
           {:ok, state} -> {:ok, arm_startup_timeout(state)}
@@ -155,7 +154,8 @@ defmodule Alto.External.JSONRPC do
         id = state.next_id
         payload = %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
 
-        with :ok <- send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes)) do
+        with :ok <-
+               send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes)) do
           pending = %{
             reply: reply,
             owner: owner,
