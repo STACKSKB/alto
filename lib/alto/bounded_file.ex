@@ -3,11 +3,18 @@ defmodule Alto.BoundedFile do
   @chunk_size 64 * 1024
 
   def read(path, max) when is_integer(max) and max >= 0 do
+    with {:ok, content} <- range(path, 0, max + 1) do
+      if byte_size(content) > max,
+        do: {:error, {:too_large, max + 1, max}},
+        else: {:ok, content}
+    end
+  end
+
+  @doc "Read up to length bytes at an offset, returning empty content past EOF."
+  def range(path, offset, length)
+      when is_integer(offset) and offset >= 0 and is_integer(length) and length > 0 do
     with_file(path, fn io ->
-      case read_prefix(io, max + 1) do
-        {:ok, content} when byte_size(content) > max -> {:error, {:too_large, max + 1, max}}
-        result -> result
-      end
+      with {:ok, _position} <- :file.position(io, offset), do: read_prefix(io, length)
     end)
   end
 

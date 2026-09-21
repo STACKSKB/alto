@@ -42,6 +42,11 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:ok, %{content: "bcd", truncated: true}} =
              ReadFile.run(%{"path" => "sample.txt", "offset" => 1, "limit" => 3}, context)
 
+    for offset <- [6, 9] do
+      assert {:ok, %{content: "", truncated: false}} =
+               ReadFile.run(%{"path" => "sample.txt", "offset" => offset}, context)
+    end
+
     assert File.read!(Path.join(root, "sample.txt")) == "abcdef"
 
     assert {:error, {:path_outside_workspace, "../outside.txt"}} =

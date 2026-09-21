@@ -57,32 +57,9 @@ defmodule Alto.Tools.ReadFile do
     with {:ok, limits} <- validate_options(opts),
          limit <- Map.get(arguments, "limit", limits.max_bytes),
          :ok <- valid_range(offset, limit, limits.max_bytes),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd) do
-      case :file.open(String.to_charlist(resolved), [:read, :binary]) do
-        {:ok, file} ->
-          try do
-            with {:ok, content} <- read(file, offset, limit) do
-              {:ok, encode_content(path, offset, content, limit)}
-            end
-          after
-            :file.close(file)
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp read(file, offset, limit) do
-    with {:ok, _position} <- :file.position(file, offset) do
-      case :file.read(file, limit + 1) do
-        {:ok, content} -> {:ok, content}
-        :eof -> {:ok, ""}
-        {:error, reason} -> {:error, reason}
-      end
+         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+         {:ok, content} <- Alto.BoundedFile.range(resolved, offset, limit + 1) do
+      {:ok, encode_content(path, offset, content, limit)}
     end
   end
 
