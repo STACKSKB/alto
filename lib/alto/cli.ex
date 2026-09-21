@@ -169,11 +169,9 @@ defmodule Alto.CLI do
     with {:ok, config} <- load_config(options),
          {:ok, command_mode} <- command_mode(options),
          {:ok, base_options} <- serve_run_options(options, config, command_mode),
-         {:ok, named_runs} <- serve_named_runs(config),
          {:ok, listener_specs} <- serve_listener_specs(config, options),
          {:ok, queue} <- start_serve_queue(config),
-         {:ok, registry_opts} <-
-           serve_registry_opts(config, queue, base_options, named_runs),
+         registry_opts = serve_registry_opts(config, queue, base_options),
          {:ok, registry} <- Registry.start_link(registry_opts) do
       case start_serve_listeners(listener_specs, registry) do
         {:ok, descriptions} ->
@@ -191,41 +189,18 @@ defmodule Alto.CLI do
   # configuration's `sessions:` key: `true`, or `[session_dir: path]`).
   # Without it, served runs stay unpersisted; `session_dir:` alone selects
   # the directory resume reads from.
-  defp serve_registry_opts(config, queue, base_options, named_runs) do
+  defp serve_registry_opts(config, queue, base_options) do
     run_options = Config.run_options(config)
 
-    case normalize_serve_sessions(Keyword.get(run_options, :sessions)) do
-      {:ok, sessions} ->
-        {:ok,
-         [
-           config_resolver: serve_resolver(base_options, named_runs),
-           cwd: File.cwd!(),
-           queue: queue,
-           sessions: sessions,
-           session_dir: Keyword.get(run_options, :session_dir)
-         ]
-         |> Keyword.reject(fn {_k, v} -> is_nil(v) end)}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    [
+      config_resolver: serve_resolver(base_options, Keyword.get(run_options, :runs, %{})),
+      cwd: File.cwd!(),
+      queue: queue,
+      sessions: Keyword.get(run_options, :sessions) || false,
+      session_dir: Keyword.get(run_options, :session_dir)
+    ]
+    |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
   end
-
-  defp normalize_serve_sessions(nil), do: {:ok, false}
-  defp normalize_serve_sessions(true), do: {:ok, true}
-  defp normalize_serve_sessions(false), do: {:ok, false}
-
-  defp normalize_serve_sessions(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) and
-         Enum.all?(Keyword.keys(opts), &(&1 in [:session_dir])) do
-      {:ok, opts}
-    else
-      {:error, "invalid sessions: want true or [session_dir: path]"}
-    end
-  end
-
-  defp normalize_serve_sessions(_other),
-    do: {:error, "invalid sessions: want true or [session_dir: path]"}
 
   defp serve_resolver(base_options, named_runs) do
     fn
@@ -240,32 +215,6 @@ defmodule Alto.CLI do
     end
   end
 
-  # Named compiled run specs for multi-workflow hosts (webhook `on_event`
-  # names such as `"job"`). Each value is a keyword list of run
-  # options merged over the base configuration; no code over the wire.
-  defp serve_named_runs(config) do
-    case Config.run_options(config) |> Keyword.get(:runs, %{}) do
-      runs when runs == %{} ->
-        {:ok, %{}}
-
-      runs when is_map(runs) ->
-        Enum.reduce_while(runs, {:ok, %{}}, fn
-          {name, overrides}, {:ok, acc} when is_binary(name) and is_list(overrides) ->
-            if Keyword.keyword?(overrides) do
-              {:cont, {:ok, Map.put(acc, name, overrides)}}
-            else
-              {:halt, {:error, "invalid runs: values must be keyword lists of run options"}}
-            end
-
-          _entry, {:ok, _acc} ->
-            {:halt, {:error, "invalid runs: want %{name => keyword run options}"}}
-        end)
-
-      _other ->
-        {:error, "invalid runs: want %{name => keyword run options}"}
-    end
-  end
-
   # The durable queue behind the claim/ack surface (the integration contract): opt in
   # via the compiled configuration's `queue:` key (Alto.Queue start options).
   # Without it, the queue commands answer `unsupported`.
@@ -274,11 +223,8 @@ defmodule Alto.CLI do
       nil ->
         {:ok, nil}
 
-      opts when is_list(opts) ->
+      opts ->
         Alto.Queue.start_link(Keyword.put_new(opts, :name, Alto.Queue))
-
-      _other ->
-        {:error, "invalid queue: want a keyword list of Alto.Queue options"}
     end
   end
 
@@ -319,30 +265,12 @@ defmodule Alto.CLI do
       |> Config.run_options()
       |> Keyword.get(:listeners, [{UnixSocket, []}, {WebServer, []}])
 
-    with {:ok, specs} <- validate_listener_specs(specs),
-         specs = specs |> fill_listener_defaults() |> apply_listener_flags(options),
-         :ok <- validate_listener_ports(specs) do
+    specs = specs |> fill_listener_defaults() |> apply_listener_flags(options)
+
+    with :ok <- validate_listener_ports(specs) do
       {:ok, specs}
     end
   end
-
-  defp validate_listener_specs(specs) when is_list(specs) do
-    if Enum.all?(specs, &valid_listener_spec?/1) do
-      {:ok, specs}
-    else
-      {:error,
-       "invalid listeners: want [{Alto.Listeners.UnixSocket, opts}, {Alto.Listeners.WebServer, opts}]"}
-    end
-  end
-
-  defp validate_listener_specs(_specs) do
-    {:error, "invalid listeners: want a list of {module, options} pairs"}
-  end
-
-  defp valid_listener_spec?({module, opts}),
-    do: module in [UnixSocket, WebServer, Webhook] and Keyword.keyword?(opts)
-
-  defp valid_listener_spec?(_other), do: false
 
   defp validate_listener_ports(specs) do
     ports =

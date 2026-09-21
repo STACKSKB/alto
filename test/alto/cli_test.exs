@@ -431,7 +431,7 @@ defmodule Alto.CLITest do
     )
 
     assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid listeners"
+    assert message =~ ":listeners"
   end
 
   test "serve rejects a non-list listeners value", %{root: root} do
@@ -448,7 +448,7 @@ defmodule Alto.CLITest do
     )
 
     assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid listeners"
+    assert message =~ ":listeners"
   end
 
   test "serve rejects an invalid sessions value", %{root: root} do
@@ -466,6 +466,6 @@ defmodule Alto.CLITest do
     )
 
     assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid sessions"
+    assert message =~ ":sessions"
   end
 end

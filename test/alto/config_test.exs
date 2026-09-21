@@ -28,7 +28,7 @@ defmodule Alto.ConfigTest do
   end
 
   test "rejects unknown and duplicate options" do
-    assert_raise ArgumentError, ~r/unknown Alto configuration options/, fn ->
+    assert_raise NimbleOptions.ValidationError, ~r/unknown options.*unknown/, fn ->
       Config.new(unknown: true)
     end
 
@@ -55,27 +55,27 @@ defmodule Alto.ConfigTest do
     config = Config.new(tui: tui)
     assert Config.run_options(config)[:tui] == tui
 
-    assert_raise ArgumentError, ~r/unknown Alto TUI configuration options/, fn ->
+    assert_raise NimbleOptions.ValidationError, ~r/unknown options.*mystery/, fn ->
       Config.new(tui: [mystery: true])
     end
 
-    assert_raise ArgumentError, ~r/Alto TUI.*:type_to_compose.*boolean/, fn ->
+    assert_raise NimbleOptions.ValidationError, ~r/:type_to_compose.*boolean/, fn ->
       Config.new(tui: [type_to_compose: :sometimes])
     end
 
-    assert_raise ArgumentError, ~r/Alto TUI.*:narrow_context/, fn ->
+    assert_raise NimbleOptions.ValidationError, ~r/:narrow_context/, fn ->
       Config.new(tui: [narrow_context: :bottom_sheet])
     end
 
-    assert_raise ArgumentError, ~r/Alto TUI.*:narrow_context_width/, fn ->
+    assert_raise NimbleOptions.ValidationError, ~r/:narrow_context_width/, fn ->
       Config.new(tui: [narrow_context_width: 20])
     end
   end
 
   test "TUI schemas retain integer bounds and reject duplicate keys" do
     for value <- [39, 101, 40.0, nil] do
-      assert_raise ArgumentError,
-                   ~r/Alto TUI.*:narrow_context_width/,
+      assert_raise NimbleOptions.ValidationError,
+                   ~r/:narrow_context_width/,
                    fn ->
                      Config.new(tui: [narrow_context_width: value])
                    end
@@ -110,6 +110,38 @@ defmodule Alto.ConfigTest do
 
     config = Config.new(sessions: [session_dir: "/tmp/alto-sess"], session_dir: "/tmp/alto-sess")
     assert Config.run_options(config)[:sessions] == [session_dir: "/tmp/alto-sess"]
+  end
+
+  test "rejects invalid host shapes at the configuration boundary" do
+    for options <- [
+          [runs: []],
+          [runs: %{job: []}],
+          [runs: %{"job" => ["not a keyword"]}],
+          [sessions: "yes"],
+          [sessions: [unknown: true]],
+          [sessions: [session_dir: 42]],
+          [queue: :yes],
+          [listeners: :none],
+          [listeners: [{String, []}]],
+          [listeners: [{Alto.Listeners.WebServer, %{port: 4747}}]]
+        ] do
+      assert_raise NimbleOptions.ValidationError, fn -> Config.new(options) end
+    end
+  end
+
+  test "preserves configured host options and explicit opt-outs" do
+    options = [
+      runs: %{"job" => [max_steps: 2]},
+      sessions: nil,
+      queue: nil,
+      listeners: [
+        {Alto.Listeners.UnixSocket, path: "/tmp/alto.sock"},
+        {Alto.Listeners.WebServer, port: 0},
+        {Alto.Listeners.Webhook, port: 0, endpoints: []}
+      ]
+    ]
+
+    assert Config.run_options(Config.new(options)) == options
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do

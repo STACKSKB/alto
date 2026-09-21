@@ -57,7 +57,30 @@ defmodule Alto.Config do
     narrow_context_fullscreen_below: [type: {:in, 0..300}],
     approval_auto_open: [type: :boolean]
   ]
-  @tui_schema NimbleOptions.new!(@tui_options)
+  @schema NimbleOptions.new!(
+            Keyword.merge(Enum.map(@allowed_options, &{&1, [type: :any]}),
+              tui: [type: :keyword_list, keys: @tui_options],
+              sessions: [
+                type: {:or, [nil, :boolean, {:keyword_list, session_dir: [type: :string]}]}
+              ],
+              queue: [type: {:or, [nil, :keyword_list]}],
+              runs: [type: {:map, :string, :keyword_list}],
+              listeners: [
+                type:
+                  {:list,
+                   {:tuple,
+                    [
+                      {:in,
+                       [
+                         Alto.Listeners.UnixSocket,
+                         Alto.Listeners.WebServer,
+                         Alto.Listeners.Webhook
+                       ]},
+                      :keyword_list
+                    ]}}
+              ]
+            )
+          )
   @enforce_keys [:run_options]
   defstruct [:run_options]
 
@@ -68,40 +91,19 @@ defmodule Alto.Config do
   def new(run_options \\ [])
 
   def new(run_options) do
-    validate_keys!(run_options, @allowed_options, "Alto")
-    validate_tui_options!(Keyword.get(run_options, :tui, []))
-    %__MODULE__{run_options: run_options}
+    validate_unique!(run_options, "Alto")
+    validate_unique!(Keyword.get(run_options, :tui, []), "Alto TUI")
+    %__MODULE__{run_options: NimbleOptions.validate!(run_options, @schema)}
   end
 
-  defp validate_keys!(options, allowed, label) do
-    unless is_list(options) and Keyword.keyword?(options),
+  defp validate_unique!(options, label) do
+    unless Keyword.keyword?(options),
       do: raise(ArgumentError, "#{label} configuration must be a keyword list")
 
     keys = Keyword.keys(options)
-    unknown = Enum.reject(keys, &(&1 in allowed)) |> Enum.uniq()
 
-    cond do
-      unknown != [] ->
-        raise ArgumentError, "unknown #{label} configuration options: #{inspect(unknown)}"
-
-      length(keys) != MapSet.size(MapSet.new(keys)) ->
-        raise ArgumentError, "#{label} configuration options must be unique"
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_tui_options!(options) do
-    validate_keys!(options, Keyword.keys(@tui_options), "Alto TUI")
-
-    case NimbleOptions.validate(options, @tui_schema) do
-      {:ok, _} ->
-        :ok
-
-      {:error, error} ->
-        raise ArgumentError, "Alto TUI #{Exception.message(error)}"
-    end
+    if length(keys) != MapSet.size(MapSet.new(keys)),
+      do: raise(ArgumentError, "#{label} configuration options must be unique")
   end
 
   @doc "Return the validated runner options stored in a configuration."
