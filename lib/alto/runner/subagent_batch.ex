@@ -15,16 +15,17 @@ defmodule Alto.Runner.SubagentBatch do
   defp drive(state, concurrency, start, check, runner) do
     case check.() do
       :continue ->
-        case admit(state, concurrency, start, check, runner) do
-          {:ok, state} ->
-            if state.pending == [] and map_size(state.active) == 0 do
-              {:ok, state}
-            else
-              drive(collect(state, 50), concurrency, start, check, runner)
-            end
+        cond do
+          state.pending != [] and map_size(state.active) < concurrency ->
+            [spec | pending] = state.pending
+            next = start_child(%{state | pending: pending}, spec, start, runner)
+            drive(next, concurrency, start, check, runner)
 
-          {status, state} ->
-            {status, stop(state, status, runner)}
+          state.pending == [] and map_size(state.active) == 0 ->
+            {:ok, state}
+
+          true ->
+            drive(collect(state, 50), concurrency, start, check, runner)
         end
 
       status ->
@@ -32,38 +33,20 @@ defmodule Alto.Runner.SubagentBatch do
     end
   end
 
-  defp admit(%{pending: []} = state, _concurrency, _start, _check, _runner), do: {:ok, state}
+  defp start_child(state, spec, start, runner) do
+    case start.(spec) do
+      {:ok, handle} ->
+        case runner.subscribe(handle, self()) do
+          {:ok, ref} ->
+            %{state | active: Map.put(state.active, ref, {spec.id, handle})}
 
-  defp admit(state, concurrency, start, check, runner) do
-    if map_size(state.active) >= concurrency do
-      {:ok, state}
-    else
-      case check.() do
-        :continue ->
-          [spec | pending] = state.pending
-          state = %{state | pending: pending}
+          {:error, reason} ->
+            runner.terminate(handle, :subscription_failed)
+            complete(state, spec.id, {:error, {:subscription_failed, reason}})
+        end
 
-          state =
-            case start.(spec) do
-              {:ok, handle} ->
-                case runner.subscribe(handle, self()) do
-                  {:ok, ref} ->
-                    %{state | active: Map.put(state.active, ref, {spec.id, handle})}
-
-                  {:error, reason} ->
-                    runner.terminate(handle, :subscription_failed)
-                    complete(state, spec.id, {:error, {:subscription_failed, reason}})
-                end
-
-              {:error, reason} ->
-                complete(state, spec.id, {:error, reason})
-            end
-
-          admit(state, concurrency, start, check, runner)
-
-        status ->
-          {status, state}
-      end
+      {:error, reason} ->
+        complete(state, spec.id, {:error, reason})
     end
   end
 
