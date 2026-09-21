@@ -978,22 +978,16 @@ defmodule Alto.Queue do
   end
 
   defp view(%Record{} = record) do
-    %{
-      id: record.id,
-      key: record.key,
-      payload: record.payload,
-      revision: record.revision,
-      status: record.status,
-      at_ms: record.at_ms,
-      claim_id: record.claim_id,
-      claimed_by: record.claimed_by,
-      lease_until_ms: record.lease_until_ms,
-      not_before_ms: record.not_before_ms,
-      generation_id: record.generation_id,
-      operation_key: record.operation_key,
-      admission: record.mode
-    }
+    {mode, fields} = Map.pop(Map.from_struct(record), :mode)
+
+    fields
+    |> Map.put(:admission, mode)
+    |> Map.put(:operation_key, operation_key(record))
   end
+
+  defp operation_key(%Record{operation_key: key}) when is_binary(key), do: key
+  defp operation_key(%Record{mode: :delivery, key: key}), do: key
+  defp operation_key(%Record{generation_id: id}), do: "business-generation:" <> id
 
   defp generate_generation_id do
     "gen-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)

@@ -162,7 +162,7 @@ defmodule Alto.Consumer do
   end
 
   defp handle_record(record, state) do
-    op = operation_key(record)
+    op = record.operation_key
     claim_id = record.claim_id
 
     with {:ok, recovery} <- recover_record(record, op, state) do
@@ -442,10 +442,4 @@ defmodule Alto.Consumer do
   catch
     :exit, reason -> {:error, {:queue_unavailable, reason}}
   end
-
-  defp operation_key(%{operation_key: op}) when is_binary(op), do: op
-  defp operation_key(%{admission: :delivery, key: key}), do: key
-
-  defp operation_key(%{generation_id: generation_id}),
-    do: "business-generation:" <> generation_id
 end

@@ -119,6 +119,7 @@ defmodule Alto.QueueTest do
       assert {:ok, %{records: first, next_cursor: 100}} = Queue.snapshot_page(name, 0, 100)
       assert length(first) == 100
       assert hd(first).key == "job-1"
+      assert hd(first).operation_key == "business-generation:" <> hd(first).generation_id
 
       assert {:ok, %{records: second, next_cursor: nil}} = Queue.snapshot_page(name, 100, 100)
       assert length(second) == 5

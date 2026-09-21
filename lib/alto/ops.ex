@@ -136,7 +136,7 @@ defmodule Alto.Ops do
            key: record.key,
            source: source_of(record.key),
            operation: record.key,
-           operation_key: operation_of(record),
+           operation_key: record.operation_key,
            record_id: record.id,
            attempts: 0,
            safe_to_retry: false,
@@ -230,10 +230,6 @@ defmodule Alto.Ops do
       :exit, reason -> {:error, {:ledger_unavailable, reason}}
     end
   end
-
-  defp operation_of(%{operation_key: key}) when is_binary(key), do: key
-  defp operation_of(%{admission: :business, generation_id: id}), do: "business-generation:" <> id
-  defp operation_of(record), do: record.key
 
   defp ledger_rows(%{status: {:intended}}, live) when not is_nil(live), do: []
 
