@@ -10,10 +10,9 @@ defmodule Alto.TUI.State do
   @max_entries_per_task 2_000
   @max_cached_tasks 12
 
-  @enforce_keys [:textarea, :config, :run_options, :catalog_opts]
+  @enforce_keys [:textarea, :run_options, :catalog_opts]
   defstruct [
     :textarea,
-    :config,
     :run_options,
     :credentials_path,
     :selected_project_id,
@@ -111,7 +110,6 @@ defmodule Alto.TUI.State do
             if(opts[:test_mode], do: fn _ -> :ok end, else: &Alto.TUI.Clipboard.write/1)
           ),
         clipboard_read: Keyword.get(opts, :clipboard_read, &Alto.TUI.Clipboard.read/0),
-        config: config,
         run_options: run_options,
         credentials_path: credentials_path,
         catalog_opts: catalog_opts,

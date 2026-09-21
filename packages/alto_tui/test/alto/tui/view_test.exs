@@ -152,7 +152,6 @@ defmodule Alto.TUI.ViewTest do
   defp base_state(overlay) do
     %State{
       textarea: ExRatatui.textarea_new(),
-      config: Alto.Test.TUI.config(provider_profiles: [], tools: []),
       run_options: [],
       catalog_opts: [],
       dimensions: {120, 36},

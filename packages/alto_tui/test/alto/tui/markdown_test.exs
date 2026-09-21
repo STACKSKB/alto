@@ -190,7 +190,6 @@ defmodule Alto.TUI.MarkdownTest do
 
     state = %Alto.TUI.State{
       textarea: ExRatatui.textarea_new(),
-      config: Alto.Test.TUI.config(),
       run_options: [],
       catalog_opts: [],
       dimensions: {240, 70}

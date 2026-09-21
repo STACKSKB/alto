@@ -118,16 +118,6 @@ defmodule Alto.Config do
   @spec run_options(t()) :: keyword()
   def run_options(%__MODULE__{run_options: run_options}), do: run_options
 
-  @doc "Classify whether provider selection is explicit or uses the CLI default."
-  @spec provider_mode(t()) :: :default | :none | {:configured, term()}
-  def provider_mode(%__MODULE__{run_options: run_options}) do
-    case Keyword.fetch(run_options, :provider) do
-      :error -> :default
-      {:ok, nil} -> :none
-      {:ok, provider} -> {:configured, provider}
-    end
-  end
-
   @doc "Evaluate a trusted Elixir configuration file."
   @spec load(Path.t()) :: {:ok, t()} | {:error, term()}
   def load(path) when is_binary(path) do

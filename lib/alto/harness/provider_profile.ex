@@ -20,7 +20,10 @@ defmodule Alto.Harness.ProviderProfile do
           credential_id: String.t()
         }
 
-  @doc "Normalize configured profiles or derive one from the run provider."
+  @doc """
+  Normalize atom-keyed profile maps or keywords, or derive one from the run provider.
+  `:provider` is a module or `{module, options}`; options belong to that spec.
+  """
   @spec from_run_options(keyword()) :: {:ok, [t()]} | {:error, term()}
   def from_run_options(run_options) when is_list(run_options) do
     case Keyword.get(run_options, :provider_profiles) do
@@ -89,39 +92,22 @@ defmodule Alto.Harness.ProviderProfile do
       else: {:error, :invalid_profile}
   end
 
-  defp normalize(profile) when is_map(profile) do
-    id = get(profile, :id)
-    label = get(profile, :label) || id
-    models = normalize_models(get(profile, :models, :discover))
+  defp normalize(%{options: _}), do: {:error, :profile_options_belong_in_provider_spec}
 
-    case get(profile, :provider) do
-      {module, options} when is_atom(module) and is_list(options) ->
-        validate(%__MODULE__{
-          id: id,
-          label: label,
-          module: module,
-          options: options,
-          models: models,
-          default_model: get(profile, :default_model) || Keyword.get(options, :model),
-          credential_id: get(profile, :credential_id) || id
-        })
+  defp normalize(%{provider: module} = profile) when is_atom(module) and not is_nil(module),
+    do: normalize(%{profile | provider: {module, []}})
 
-      module when is_atom(module) ->
-        options = get(profile, :options, [])
-
-        validate(%__MODULE__{
-          id: id,
-          label: label,
-          module: module,
-          options: options,
-          models: models,
-          default_model: get(profile, :default_model) || Keyword.get(options, :model),
-          credential_id: get(profile, :credential_id) || id
-        })
-
-      other ->
-        {:error, {:invalid_profile_provider, id, other}}
-    end
+  defp normalize(%{id: id, provider: {module, options}} = profile)
+       when is_atom(module) and not is_nil(module) and is_list(options) do
+    validate(%__MODULE__{
+      id: id,
+      label: Map.get(profile, :label) || id,
+      module: module,
+      options: options,
+      models: normalize_models(Map.get(profile, :models, :discover)),
+      default_model: Map.get(profile, :default_model) || Keyword.get(options, :model),
+      credential_id: Map.get(profile, :credential_id) || id
+    })
   end
 
   defp normalize(other), do: {:error, {:invalid_provider_profile, other}}
@@ -175,9 +161,6 @@ defmodule Alto.Harness.ProviderProfile do
     ids = Enum.map(profiles, & &1.id)
     if length(ids) == MapSet.size(MapSet.new(ids)), do: :ok, else: {:error, :duplicate_profile_id}
   end
-
-  defp get(map, key, default \\ nil),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
 
   defp valid_name?(value),
     do: is_binary(value) and value != "" and byte_size(value) <= 200 and String.valid?(value)

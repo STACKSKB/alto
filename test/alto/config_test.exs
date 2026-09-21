@@ -112,14 +112,6 @@ defmodule Alto.ConfigTest do
     assert Config.run_options(config)[:sessions] == [session_dir: "/tmp/alto-sess"]
   end
 
-  test "distinguishes the default provider from an explicit providerless profile" do
-    assert Config.provider_mode(Config.new()) == :default
-    assert Config.provider_mode(Config.new(provider: nil)) == :none
-
-    provider = {Alto.Providers.OpenAICompatible, model: "configured"}
-    assert Config.provider_mode(Config.new(provider: provider)) == {:configured, provider}
-  end
-
   test "reports evaluation failures and invalid return values", %{root: root} do
     broken = Path.join(root, "broken.exs")
     invalid = Path.join(root, "invalid.exs")

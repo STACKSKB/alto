@@ -30,6 +30,30 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert provider_opts[:model] == "large"
   end
 
+  test "module and tuple specs share defaults without losing provider options" do
+    assert {:ok, [plain, configured]} =
+             ProviderProfile.from_run_options(
+               provider_profiles: [
+                 %{id: "plain", provider: Provider, models: ["small"]},
+                 %{id: "configured", provider: {Provider, model: "large", timeout: 500}}
+               ]
+             )
+
+    assert plain.label == "plain"
+    assert plain.credential_id == "plain"
+    assert plain.options == []
+    assert {:ok, [%{id: "small", name: "small"}]} = ProviderProfile.models(plain)
+    assert configured.default_model == "large"
+    assert configured.options == [model: "large", timeout: 500]
+
+    assert {:error, :profile_options_belong_in_provider_spec} =
+             ProviderProfile.from_run_options(
+               provider_profiles: [
+                 %{id: "split", provider: Provider, options: [model: "large"]}
+               ]
+             )
+  end
+
   test "rejects duplicate ids" do
     profile = [id: "same", provider: Provider, models: ["one"]]
 

@@ -568,8 +568,7 @@ defmodule Alto.TUI.App do
     profile = State.selected_profile(state)
 
     cond do
-      is_nil(profile) and
-          Alto.Config.provider_mode(state.config) != :none ->
+      is_nil(profile) and Keyword.fetch(state.run_options, :provider) != {:ok, nil} ->
         %{state | notice: "choose a provider before sending"}
 
       not is_nil(profile) and (is_nil(state.selected_model) or state.selected_model == "") ->
