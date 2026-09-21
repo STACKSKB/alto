@@ -24,7 +24,22 @@ defmodule Alto.Protocol do
   @version 1
   @max_inspect_bytes 1_000
   @domains ~w(durable live)
+  @unsupported_fields %{"start_run" => ["overrides"], "session_transcript" => ["limit", "cursor"]}
   @command_specs %{
+    "runs" => {:runs, []},
+    "sessions" => {:sessions, []},
+    "start_run" =>
+      {:start_run,
+       [
+         {:required, "config", :binary},
+         {:required, "task", :binary},
+         {:optional, "resume", :binary, nil}
+       ]},
+    "session_transcript" => {:session_transcript, [{:required, "session_id", :binary}]},
+    "approval_response" =>
+      {:approval_response,
+       [{:required, "request_id", :binary}, {:required, "decision", :decision}]},
+    "command" => {:command, [{:required, "name", :binary}, {:required, "payload", :map}]},
     "attach" =>
       {:attach,
        [
@@ -329,61 +344,18 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object("start_run", id, object) do
-    if Map.has_key?(object, "overrides") do
-      {:error, :unsupported}
-    else
-      with {:ok, config} <- required_binary(object, "config"),
-           {:ok, task} <- required_binary(object, "task"),
-           {:ok, resume} <- optional_binary(object, "resume") do
-        {:ok, {:start_run, id, config, task, resume}}
-      end
-    end
-  end
-
-  defp decode_object("runs", id, _object), do: {:ok, {:runs, id}}
-
-  defp decode_object("sessions", id, _object) do
-    {:ok, {:sessions, id}}
-  end
-
-  defp decode_object("session_transcript", id, object) do
-    with {:ok, session_id} <- required_binary(object, "session_id"),
-         :ok <-
-           if(Map.has_key?(object, "limit") or Map.has_key?(object, "cursor"),
-             do: {:error, :unsupported},
-             else: :ok
-           ) do
-      {:ok, {:session_transcript, id, session_id}}
-    end
-  end
-
-  defp decode_object("approval_response", id, object) do
-    with {:ok, request_id} <- required_binary(object, "request_id"),
-         {:ok, decision} <- decision(object, "decision") do
-      {:ok, {:approval_response, id, request_id, decision}}
-    end
-  end
-
   defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, object}}
 
   defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, object}}
 
-  defp decode_object("command", id, object) do
-    with {:ok, name} <- required_binary(object, "name"),
-         payload when is_map(payload) <- Map.get(object, "payload") do
-      {:ok, {:command, id, name, payload}}
-    else
-      _ -> {:error, :invalid}
-    end
-  end
-
   defp decode_object(type, id, object) do
     case @command_specs do
       %{^type => {command, fields}} ->
-        case Alto.Result.traverse(fields, &decode_field(object, &1)) do
-          {:ok, values} -> {:ok, List.to_tuple([command, id | values])}
-          error -> error
+        if Enum.any?(Map.get(@unsupported_fields, type, []), &Map.has_key?(object, &1)) do
+          {:error, :unsupported}
+        else
+          with {:ok, values} <- Alto.Result.traverse(fields, &decode_field(object, &1)),
+               do: {:ok, List.to_tuple([command, id | values])}
         end
 
       _ ->
@@ -391,26 +363,30 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_field(object, {:required, key, :binary}), do: required_binary(object, key)
+  defp decode_field(object, {:required, key, :binary}),
+    do: validate_field(Map.get(object, key), :nonempty_binary)
+
+  defp decode_field(object, {:required, key, type}),
+    do: validate_field(Map.get(object, key), type)
 
   defp decode_field(object, {:optional, key, type, default}) do
     case Map.get(object, key) do
       nil -> {:ok, default}
-      value -> validate_field(value, type, default)
+      value -> validate_field(value, type)
     end
   end
 
-  defp validate_field(value, :binary, _default) when is_binary(value), do: {:ok, value}
+  defp validate_field(value, :binary) when is_binary(value), do: {:ok, value}
 
-  defp validate_field(value, {:integer, minimum}, _default)
+  defp validate_field(value, {:integer, minimum})
        when is_integer(value) and value >= minimum,
        do: {:ok, value}
 
-  defp validate_field(value, :filter, _default)
+  defp validate_field(value, :filter)
        when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"],
        do: {:ok, value}
 
-  defp validate_field(domains, :domains, _default) when is_list(domains) and domains != [] do
+  defp validate_field(domains, :domains) when is_list(domains) and domains != [] do
     if Enum.all?(domains, &(&1 in @domains)) do
       {:ok, Enum.map(domains, &String.to_existing_atom/1)}
     else
@@ -418,33 +394,14 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp validate_field(_value, _type, _default), do: {:error, :invalid}
+  defp validate_field(value, :nonempty_binary) when is_binary(value) and value != "",
+    do: {:ok, value}
 
-  defp required_binary(object, key) do
-    case Map.get(object, key) do
-      value when is_binary(value) and value != "" -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
+  defp validate_field(value, :map) when is_map(value), do: {:ok, value}
+  defp validate_field("approve", :decision), do: {:ok, :approve}
 
-  defp optional_binary(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, nil}
-      value when is_binary(value) -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
+  defp validate_field(%{"deny" => reason}, :decision) when is_binary(reason),
+    do: {:ok, {:deny, reason}}
 
-  defp decision(object, key) do
-    case Map.get(object, key) do
-      "approve" ->
-        {:ok, :approve}
-
-      %{"deny" => reason} when is_binary(reason) ->
-        {:ok, {:deny, reason}}
-
-      _other ->
-        {:error, :invalid}
-    end
-  end
+  defp validate_field(_value, _type), do: {:error, :invalid}
 end

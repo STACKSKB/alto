@@ -330,6 +330,11 @@ defmodule Alto.ProtocolTest do
         })
 
       assert {:ok, {:session_transcript, "c-9", "sess-1"}} = Protocol.decode_command(line)
+
+      for key <- ["limit", "cursor"] do
+        rejected = line |> JSON.decode!() |> Map.put(key, nil) |> JSON.encode!()
+        assert Protocol.decode_command(rejected) == {:error, :unsupported}
+      end
     end
 
     test "session_events decodes bounded replay parameters" do
@@ -432,6 +437,34 @@ defmodule Alto.ProtocolTest do
         })
 
       assert {:ok, {:queue_release, "c-15", "clm-1"}} = Protocol.decode_command(release)
+    end
+
+    test "command payloads stay maps and malformed required fields fail decoding" do
+      envelope = %{
+        "v" => 1,
+        "id" => "client",
+        "type" => "command",
+        "name" => "inspect",
+        "payload" => %{"query" => [1, 2]}
+      }
+
+      assert {:ok, {:command, "client", "inspect", %{"query" => [1, 2]}}} =
+               Protocol.decode_command(JSON.encode!(envelope))
+
+      for fields <- [
+            %{"type" => "command", "name" => "inspect", "payload" => []},
+            %{"type" => "command", "name" => "", "payload" => %{}},
+            %{
+              "type" => "approval_response",
+              "request_id" => "request",
+              "decision" => %{"deny" => 0}
+            },
+            %{"type" => "approval_response", "request_id" => "", "decision" => "approve"},
+            %{"type" => "start_run", "config" => "config", "task" => "task", "resume" => 7}
+          ] do
+        line = JSON.encode!(Map.merge(%{"v" => 1, "id" => "client"}, fields))
+        assert Protocol.decode_command(line) == {:error, :invalid}
+      end
     end
 
     test "reserved types decode for the listener to reject explicitly" do
