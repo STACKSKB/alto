@@ -54,16 +54,12 @@ defmodule Alto.Credentials do
 
       Alto.Storage.with_lock(path <> ".lock", fn ->
         with {:ok, latest} <- load(path),
-             :ok <-
-               persist(%__MODULE__{
-                 path: path,
-                 providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
-               }) do
-          {:ok,
-           %__MODULE__{
-             path: path,
-             providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
-           }}
+             updated = %{
+               latest
+               | providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
+             },
+             :ok <- persist(updated) do
+          {:ok, updated}
         end
       end)
     end
@@ -126,7 +122,7 @@ defmodule Alto.Credentials do
   defp valid_providers?(providers) when is_map(providers) do
     Enum.all?(providers, fn {provider, values} ->
       is_binary(provider) and provider != "" and is_map(values) and
-        Enum.all?(values, fn {key, value} -> is_binary(key) and is_binary(value) end)
+        validate_values(values) == :ok
     end)
   end
 
