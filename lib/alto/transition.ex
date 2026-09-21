@@ -4,15 +4,13 @@ defmodule Alto.Transition do
   alias Alto.Effect
 
   @enforce_keys [:status, :state, :effects]
-  defstruct [:status, :state, :effects, :result, :error]
+  defstruct [:status, :state, :effects]
 
-  @type status :: :continue | :stop | :error
+  @type status :: :continue | {:stop, term()} | {:error, term()}
   @type t :: %__MODULE__{
           status: status(),
           state: term(),
-          effects: [Effect.t()],
-          result: term() | nil,
-          error: term() | nil
+          effects: [Effect.t()]
         }
 
   @spec continue(term(), [Effect.t()]) :: t()
@@ -22,12 +20,12 @@ defmodule Alto.Transition do
 
   @spec stop(term(), term(), [Effect.t()]) :: t()
   def stop(state, result, effects \\ []) do
-    %__MODULE__{status: :stop, state: state, result: result, effects: effects}
+    %__MODULE__{status: {:stop, result}, state: state, effects: effects}
   end
 
   @spec error(term(), term(), [Effect.t()]) :: t()
   def error(state, reason, effects \\ []) do
-    %__MODULE__{status: :error, state: state, error: reason, effects: effects}
+    %__MODULE__{status: {:error, reason}, state: state, effects: effects}
   end
 
   @doc "Place effects before work already requested by the inner transition."

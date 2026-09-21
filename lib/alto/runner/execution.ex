@@ -11,7 +11,7 @@ defmodule Alto.Runner.Execution do
   defmodule Frame do
     @moduledoc "Pending ordered effects and the disposition after they drain."
     defstruct effects: [], terminal: :continue
-    @type t :: %__MODULE__{effects: [Alto.Effect.t()], terminal: term()}
+    @type t :: %__MODULE__{effects: [Alto.Effect.t()], terminal: Alto.Transition.status()}
   end
 
   @opaque context :: map()
@@ -163,11 +163,10 @@ defmodule Alto.Runner.Execution do
   defp drive(%Transition{} = transition, run, remaining_effects) do
     run = %{run | loop_state: transition.state}
 
-    case transition.status do
-      :continue -> execute(transition.effects ++ remaining_effects, run, :continue)
-      :stop -> execute(transition.effects, run, {:stop, transition.result})
-      :error -> execute(transition.effects, run, {:error, transition.error})
-    end
+    effects =
+      transition.effects ++ if(transition.status == :continue, do: remaining_effects, else: [])
+
+    execute(effects, run, transition.status)
   end
 
   defp execute(effects, run, terminal),
@@ -1057,8 +1056,7 @@ defmodule Alto.Runner.Execution do
 
         case transition.status do
           :continue -> dispatch_batch(events, next, effects ++ transition.effects, rest, terminal)
-          :stop -> execute(effects ++ transition.effects, next, {:stop, transition.result})
-          :error -> execute(effects ++ transition.effects, next, {:error, transition.error})
+          terminal -> execute(effects ++ transition.effects, next, terminal)
         end
 
       {:cancelled, reason} ->

@@ -84,7 +84,6 @@ defmodule Alto.Loops.DefaultTest do
 
     stopped = Runtime.dispatch(spec, settled, completed.state)
 
-    assert stopped.status == :stop
-    assert stopped.result == "done"
+    assert stopped.status == {:stop, "done"}
   end
 end

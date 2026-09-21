@@ -18,8 +18,7 @@ defmodule Alto.Loops.ChatTest do
         initial.state
       )
 
-    assert completed.status == :stop
-    assert completed.result == "hi"
+    assert completed.status == {:stop, "hi"}
   end
 
   test "rejects tool calls instead of silently ignoring them" do
@@ -36,7 +35,6 @@ defmodule Alto.Loops.ChatTest do
         initial.state
       )
 
-    assert transition.status == :error
-    assert transition.error == {:tools_not_supported, ["call-1"]}
+    assert transition.status == {:error, {:tools_not_supported, ["call-1"]}}
   end
 end
