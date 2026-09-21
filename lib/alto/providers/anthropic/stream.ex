@@ -169,7 +169,7 @@ defmodule Alto.Providers.Anthropic.Stream do
        when is_integer(index) do
     case Map.get(state.blocks, index) do
       nil -> %{state | error: {:unexpected_stream_chunk, :content_block_without_start}}
-      block -> %{state | blocks: Map.put(state.blocks, index, Map.put(block, :stopped?, true))}
+      _block -> state
     end
   end
 
@@ -180,23 +180,24 @@ defmodule Alto.Providers.Anthropic.Stream do
     do: %{state | error: {:unexpected_stream_event, type}}
 
   defp new_block(%{"type" => "text", "text" => text}) when is_binary(text),
-    do: {:ok, %{type: "text", text: text}}
+    do: {:ok, %{"type" => "text", "text" => text}}
 
   defp new_block(%{"type" => "thinking", "thinking" => thinking} = block)
        when is_binary(thinking) do
     signature = block["signature"]
 
     if is_nil(signature) or is_binary(signature),
-      do: {:ok, %{type: "thinking", text: thinking, signature: signature || ""}},
+      do: {:ok, %{"type" => "thinking", "thinking" => thinking, "signature" => signature || ""}},
       else: {:error, :unsupported_anthropic_content}
   end
 
   defp new_block(%{"type" => "redacted_thinking", "data" => data}) when is_binary(data),
-    do: {:ok, %{type: "redacted_thinking", data: data}}
+    do: {:ok, %{"type" => "redacted_thinking", "data" => data}}
 
   defp new_block(%{"type" => "tool_use", "id" => id, "name" => name, "input" => input})
        when is_binary(id) and id != "" and is_binary(name) and name != "" and is_map(input),
-       do: {:ok, %{type: "tool_use", id: id, name: name, input: input, chunks: []}}
+       do:
+         {:ok, %{"type" => "tool_use", "id" => id, "name" => name, "input" => input, chunks: []}}
 
   defp new_block(_), do: {:error, :unsupported_anthropic_content}
 
@@ -208,48 +209,39 @@ defmodule Alto.Providers.Anthropic.Stream do
     }
   end
 
-  defp consume_delta(state, index, block, %{"type" => "text_delta", "text" => text}, sink)
-       when block.type == "text" and is_binary(text) do
-    sink.(Event.live(:model_delta, %{text: text}))
-    update_block(state, index, %{block | text: block.text <> text})
+  @delta_fields %{
+    "text_delta" => {"text", "text", :model_delta},
+    "thinking_delta" => {"thinking", "thinking", :model_reasoning_delta},
+    "signature_delta" => {"thinking", "signature", nil},
+    "input_json_delta" => {"tool_use", "partial_json", nil}
+  }
+
+  defp consume_delta(state, index, block, delta, sink) do
+    with {type, field, event} <- @delta_fields[delta["type"]],
+         true <- block["type"] == type,
+         text when is_binary(text) <- delta[field] do
+      if event, do: sink.(Event.live(event, %{text: text}))
+
+      updated =
+        if field == "partial_json",
+          do: %{block | chunks: [text | block.chunks]},
+          else: Map.update!(block, field, &(&1 <> text))
+
+      update_block(state, index, updated)
+    else
+      _ -> %{state | error: :unsupported_anthropic_content}
+    end
   end
-
-  defp consume_delta(state, index, block, %{"type" => "thinking_delta", "thinking" => text}, sink)
-       when block.type == "thinking" and is_binary(text) do
-    sink.(Event.live(:model_reasoning_delta, %{text: text}))
-    update_block(state, index, %{block | text: block.text <> text})
-  end
-
-  defp consume_delta(
-         state,
-         index,
-         block,
-         %{"type" => "signature_delta", "signature" => signature},
-         _sink
-       )
-       when block.type == "thinking" and is_binary(signature),
-       do: update_block(state, index, %{block | signature: block.signature <> signature})
-
-  defp consume_delta(
-         state,
-         index,
-         block,
-         %{"type" => "input_json_delta", "partial_json" => json},
-         _sink
-       )
-       when block.type == "tool_use" and is_binary(json),
-       do: update_block(state, index, %{block | chunks: [json | block.chunks]})
-
-  defp consume_delta(state, _index, _block, _delta, _sink),
-    do: %{state | error: :unsupported_anthropic_content}
 
   defp update_block(state, index, block),
     do: %{state | blocks: Map.put(state.blocks, index, block)}
 
-  defp emit_block(%{type: type, text: text}, sink)
-       when type in ["text", "thinking"] and text != "" do
-    event = if type == "text", do: :model_delta, else: :model_reasoning_delta
-    sink.(Event.live(event, %{text: text}))
+  defp emit_block(%{"type" => "text", "text" => text}, sink) when text != "" do
+    sink.(Event.live(:model_delta, %{text: text}))
+  end
+
+  defp emit_block(%{"type" => "thinking", "thinking" => text}, sink) when text != "" do
+    sink.(Event.live(:model_reasoning_delta, %{text: text}))
   end
 
   defp emit_block(_block, _sink), do: :ok
@@ -273,16 +265,19 @@ defmodule Alto.Providers.Anthropic.Stream do
     Alto.Result.traverse(state.block_order, &finalize_block(Map.fetch!(state.blocks, &1)))
   end
 
-  defp finalize_block(%{type: "text", text: text}), do: {:ok, %{"type" => "text", "text" => text}}
+  defp finalize_block(%{"type" => "text"} = block), do: {:ok, block}
 
-  defp finalize_block(%{type: "thinking", text: text, signature: signature})
+  defp finalize_block(
+         %{"type" => "thinking", "thinking" => text, "signature" => signature} = block
+       )
        when is_binary(text) and is_binary(signature) and signature != "",
-       do: {:ok, %{"type" => "thinking", "thinking" => text, "signature" => signature}}
+       do: {:ok, block}
 
-  defp finalize_block(%{type: "redacted_thinking", data: data}),
-    do: {:ok, %{"type" => "redacted_thinking", "data" => data}}
+  defp finalize_block(%{"type" => "redacted_thinking"} = block), do: {:ok, block}
 
-  defp finalize_block(%{type: "tool_use", id: id, name: name, input: input, chunks: chunks}) do
+  defp finalize_block(
+         %{"type" => "tool_use", "id" => id, "input" => input, chunks: chunks} = block
+       ) do
     json =
       if chunks == [],
         do: JSON.encode!(input),
@@ -290,7 +285,7 @@ defmodule Alto.Providers.Anthropic.Stream do
 
     case JSON.decode(json) do
       {:ok, value} when is_map(value) ->
-        {:ok, %{"type" => "tool_use", "id" => id, "name" => name, "input" => value}}
+        {:ok, block |> Map.delete(:chunks) |> Map.put("input", value)}
 
       _ ->
         {:error, {:invalid_tool_arguments, id}}
