@@ -8,12 +8,9 @@ defmodule Alto.Tools.QueueCancel do
   idempotent. Same local-boundary trust decision as `Alto.Tools.QueuePut`.
   """
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :queue_cancel, execution_mode: :parallel, approval: :never
 
   alias Alto.Queue
-
-  @impl true
-  def name(_opts \\ []), do: :queue_cancel
 
   @impl true
   def schema(_opts \\ []) do
@@ -29,12 +26,6 @@ defmodule Alto.Tools.QueueCancel do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, _context, opts \\ []) do

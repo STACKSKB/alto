@@ -8,16 +8,15 @@ defmodule Alto.Tools.Ripwire do
   surface out of every model prompt.
   """
 
-  @behaviour Alto.Tool
+  # Every exposed action is analytical. Ripwire may maintain its own index or
+  # cache, but it receives no edit verb through this adapter.
+  use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never
 
   alias Alto.Command
   alias Alto.Command.Invocation
   alias Alto.Tool.Context
 
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
-
-  @impl true
-  def name(_opts \\ []), do: :ripwire
 
   @impl true
   def schema(_opts \\ []) do
@@ -40,14 +39,6 @@ defmodule Alto.Tools.Ripwire do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  # Every exposed action is analytical. Ripwire may maintain its own index or
-  # cache, but it receives no edit verb through this adapter.
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do

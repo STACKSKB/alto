@@ -1,7 +1,7 @@
 defmodule Alto.Tools.WriteFile do
   @moduledoc "Opt-in, bounded, workspace-confined whole-file writes."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :write_file, execution_mode: :exclusive, approval: :required
 
   alias Alto.Tool.Context
   alias Alto.Tools.FileChange
@@ -14,9 +14,6 @@ defmodule Alto.Tools.WriteFile do
     preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
     diff_bytes: [type: :non_neg_integer, default: 16_384]
   ]
-
-  @impl true
-  def name(_opts \\ []), do: :write_file
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
@@ -40,12 +37,6 @@ defmodule Alto.Tools.WriteFile do
     }
     |> put_in([:parameters, :properties, :content, :maxLength], limits.max_bytes)
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :exclusive
-
-  @impl true
-  def approval(_opts \\ []), do: :required
 
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) when is_list(opts) do

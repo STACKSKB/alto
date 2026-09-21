@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadImage do
   @moduledoc "Bounded, workspace-confined PNG/JPEG reads for vision-capable models."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :read_image, execution_mode: :parallel, approval: :never
 
   alias Alto.Content
   alias Alto.BoundedFile
@@ -25,9 +25,6 @@ defmodule Alto.Tools.ReadImage do
     max_pixels: [type: {:in, 1..@hard_max_pixels}, default: @default_max_pixels],
     processor: [type: :any, default: nil]
   ]
-
-  @impl true
-  def name(_opts \\ []), do: :read_image
 
   @impl true
   def schema(_opts \\ []) do
@@ -59,12 +56,6 @@ defmodule Alto.Tools.ReadImage do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, context, opts \\ [])

@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadFile do
   @moduledoc "Bounded, workspace-confined file reads."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never
 
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -12,9 +12,6 @@ defmodule Alto.Tools.ReadFile do
   # the read has already completed.
   @max_bytes 47_000
   @options_schema [max_bytes: [type: :pos_integer, default: @max_bytes]]
-
-  @impl true
-  def name(_opts \\ []), do: :read_file
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
@@ -42,12 +39,6 @@ defmodule Alto.Tools.ReadFile do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do

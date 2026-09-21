@@ -10,12 +10,9 @@ defmodule Alto.Tools.QueuePut do
   that talks to an external system.
   """
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :queue_put, execution_mode: :parallel, approval: :never
 
   alias Alto.Queue
-
-  @impl true
-  def name(_opts \\ []), do: :queue_put
 
   @impl true
   def schema(_opts \\ []) do
@@ -33,12 +30,6 @@ defmodule Alto.Tools.QueuePut do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, _context, opts \\ []) do

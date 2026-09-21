@@ -1,7 +1,7 @@
 defmodule Alto.Tools.SearchFiles do
   @moduledoc "Bounded, workspace-confined recursive literal text search."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :search_files, execution_mode: :parallel, approval: :never
   @behaviour Alto.Search.Backend
 
   alias Alto.Tool.Context
@@ -25,9 +25,6 @@ defmodule Alto.Tools.SearchFiles do
       default: [".git", "_build", "deps", "node_modules"]
     ]
   ]
-
-  @impl true
-  def name(_opts \\ []), do: :search_files
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
@@ -59,12 +56,6 @@ defmodule Alto.Tools.SearchFiles do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do

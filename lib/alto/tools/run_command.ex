@@ -1,13 +1,10 @@
 defmodule Alto.Tools.RunCommand do
   @moduledoc "Opt-in argv command tool using a configurable policy and executor."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :run_command, execution_mode: :exclusive, approval: :required
 
   alias Alto.Command.Invocation
   alias Alto.Tool.Context
-
-  @impl true
-  def name(_opts \\ []), do: :run_command
 
   @impl true
   def schema(_opts \\ []) do
@@ -42,12 +39,6 @@ defmodule Alto.Tools.RunCommand do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :exclusive
-
-  @impl true
-  def approval(_opts \\ []), do: :required
 
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) do

@@ -48,6 +48,28 @@ defmodule Alto.Tool do
                       run_prepared: 3,
                       run: 3
 
+  @doc """
+  Declare constant metadata while implementing schema and execution normally.
+
+      use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never
+
+  All three values are explicit. Tools whose metadata depends on options can
+  implement the behaviour callbacks directly instead.
+  """
+  defmacro __using__(opts) do
+    opts = Keyword.validate!(opts, [:name, :execution_mode, :approval])
+
+    quote do
+      @behaviour Alto.Tool
+      @impl true
+      def name(_opts \\ []), do: unquote(Keyword.fetch!(opts, :name))
+      @impl true
+      def execution_mode(_opts \\ []), do: unquote(Keyword.fetch!(opts, :execution_mode))
+      @impl true
+      def approval(_opts \\ []), do: unquote(Keyword.fetch!(opts, :approval))
+    end
+  end
+
   def callback(module, callback, opts), do: apply(module, callback, [opts])
 
   def requirement(module, opts) do

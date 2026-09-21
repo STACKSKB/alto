@@ -88,15 +88,12 @@ end
 defmodule Alto.Tools.GitInspect do
   @moduledoc "Bounded, read-only access to the installed Git CLI."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :git_inspect, execution_mode: :parallel, approval: :never
 
   alias Alto.Tool.Context
   alias Alto.Tools.Git
 
   @actions ~w(status diff log show branches blame)
-
-  @impl true
-  def name(_opts \\ []), do: :git_inspect
 
   @impl true
   def schema(_opts \\ []) do
@@ -118,12 +115,6 @@ defmodule Alto.Tools.GitInspect do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :parallel
-
-  @impl true
-  def approval(_opts \\ []), do: :never
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do
@@ -211,16 +202,13 @@ end
 defmodule Alto.Tools.GitMutate do
   @moduledoc "Narrow, approval-required mutations through the installed Git CLI."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :git_mutate, execution_mode: :exclusive, approval: :required
 
   alias Alto.Command
   alias Alto.Tool.Context
   alias Alto.Tools.Git
 
   @actions ~w(stage unstage commit create_branch switch_branch)
-
-  @impl true
-  def name(_opts \\ []), do: :git_mutate
 
   @impl true
   def schema(_opts \\ []) do
@@ -240,12 +228,6 @@ defmodule Alto.Tools.GitMutate do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :exclusive
-
-  @impl true
-  def approval(_opts \\ []), do: :required
 
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) do

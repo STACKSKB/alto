@@ -1,7 +1,7 @@
 defmodule Alto.Tools.EditFile do
   @moduledoc "Opt-in, atomic, workspace-confined exact-text edits."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :edit_file, execution_mode: :exclusive, approval: :required
 
   alias Alto.Tool.Context
   alias Alto.Tools.FileChange
@@ -22,9 +22,6 @@ defmodule Alto.Tools.EditFile do
     preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
     patch_bytes: [type: :non_neg_integer, default: @patch_bytes]
   ]
-
-  @impl true
-  def name(_opts \\ []), do: :edit_file
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
@@ -68,12 +65,6 @@ defmodule Alto.Tools.EditFile do
       }
     }
   end
-
-  @impl true
-  def execution_mode(_opts \\ []), do: :exclusive
-
-  @impl true
-  def approval(_opts \\ []), do: :required
 
   @impl true
   def prepare(arguments, context, opts \\ [])
