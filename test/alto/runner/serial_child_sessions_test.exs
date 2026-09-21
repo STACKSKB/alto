@@ -156,9 +156,24 @@ defmodule Alto.Runner.SerialChildSessionsTest do
     assert {:ok, []} = Session.list(session_dir: dir)
   end
 
-  test "invalid session policy is rejected", _context do
-    assert_raise ArgumentError, fn ->
-      Alto.Subagents.bounded(max_depth: 1, sessions: :isolated)
+  test "bounded policies validate individual limits and their relationship", _context do
+    for opts <- [
+          [sessions: :isolated],
+          [max_depth: -1],
+          [max_children: 0],
+          [max_children: 65],
+          [max_children: 1.0],
+          [max_concurrency: 0],
+          [workspaces: %{}]
+        ] do
+      assert_raise NimbleOptions.ValidationError, fn -> Alto.Subagents.bounded(opts) end
     end
+
+    assert_raise ArgumentError, ~r/max_concurrency/, fn ->
+      Alto.Subagents.bounded(max_children: 1, max_concurrency: 2)
+    end
+
+    assert %{max_children: 64, max_concurrency: 64, sessions: :separate} =
+             Alto.Subagents.bounded(max_children: 64, max_concurrency: 64, sessions: :separate)
   end
 end
