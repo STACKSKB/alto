@@ -1185,7 +1185,7 @@ defmodule Alto.Runner.Execution do
 
     run = Events.merge_verdict(run, outcome)
 
-    case add_outcome_message(run, job.origin, job.id, job.name, job.op_id, status, content) do
+    case add_outcome_message(run, job, status, content) do
       {:ok, run} ->
         run =
           if outcome == :rejected_before_dispatch,
@@ -1225,55 +1225,32 @@ defmodule Alto.Runner.Execution do
   # messages, and only after `interpret/2` proved the call is pending. Native
   # outcomes are independent host effects, so a later model sees them as
   # explicit context rather than an orphan provider-tool reply.
-  defp add_outcome_message(
-         %{provider: nil} = run,
-         _origin,
-         _call_id,
-         _name,
-         _op_id,
-         _status,
-         _content
-       ),
-       do: {:ok, run}
+  defp add_outcome_message(%{provider: nil} = run, _job, _status, _content), do: {:ok, run}
 
-  defp add_outcome_message(run, :provider, call_id, name, _op_id, _status, content) do
-    message = %{"role" => "tool", "tool_call_id" => call_id, "content" => content}
+  defp add_outcome_message(run, %{origin: :provider} = job, _status, content) do
+    message = %{"role" => "tool", "tool_call_id" => job.id, "content" => content}
 
     case RunTranscript.append(run, message) do
-      {:ok, run} -> {:ok, consume_pending_provider_call(run, call_id, name)}
+      {:ok, run} -> {:ok, consume_pending_provider_call(run, job.id, job.name)}
       error -> error
     end
   end
 
-  defp add_outcome_message(run, :native, call_id, name, op_id, status, content)
-       when is_list(content) do
-    metadata =
-      JSON.encode!(%{
-        type: "alto_native_tool_result",
-        call_id: call_id,
-        name: name,
-        operation_id: op_id,
-        status: status
-      })
+  defp add_outcome_message(run, %{origin: :native} = job, status, content) do
+    metadata = %{
+      type: "alto_native_tool_result",
+      call_id: job.id,
+      name: job.name,
+      operation_id: job.op_id,
+      status: status
+    }
 
-    RunTranscript.append(run, %{
-      "role" => "user",
-      "content" => [%{"type" => "text", "text" => metadata} | content]
-    })
-  end
+    content =
+      if is_list(content),
+        do: [%{"type" => "text", "text" => JSON.encode!(metadata)} | content],
+        else: JSON.encode!(Map.put(metadata, :content, content))
 
-  defp add_outcome_message(run, :native, call_id, name, op_id, status, content) do
-    context =
-      JSON.encode!(%{
-        "type" => "alto_native_tool_result",
-        "call_id" => call_id,
-        "operation_id" => op_id,
-        "name" => name,
-        "status" => Atom.to_string(status),
-        "content" => content
-      })
-
-    RunTranscript.append(run, %{"role" => "user", "content" => context})
+    RunTranscript.append(run, %{"role" => "user", "content" => content})
   end
 
   # An empty tool_calls array is not part of the Chat Completions shape, and
