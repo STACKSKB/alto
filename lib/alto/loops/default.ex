@@ -74,24 +74,19 @@ defmodule Alto.Loops.Default do
       )
       when type in [:tool_completed, :tool_failed] do
     call_id = Map.fetch!(event.data, :call_id)
-    next_state = %{state | observations: [event | state.observations]}
 
     case pending do
-      %{^call_id => 1} ->
-        if map_size(pending) == 1 do
-          settle(next_state, :request_model, :tools_completed)
-        else
-          Transition.continue(%{
-            next_state
-            | phase: {:awaiting_tools, Map.delete(pending, call_id)}
-          })
-        end
+      %{^call_id => count} when is_integer(count) and count > 0 ->
+        pending =
+          if count == 1,
+            do: Map.delete(pending, call_id),
+            else: Map.put(pending, call_id, count - 1)
 
-      %{^call_id => count} when is_integer(count) and count > 1 ->
-        Transition.continue(%{
-          next_state
-          | phase: {:awaiting_tools, Map.put(pending, call_id, count - 1)}
-        })
+        next = %{state | observations: [event | state.observations]}
+
+        if pending == %{},
+          do: settle(next, :request_model, :tools_completed),
+          else: Transition.continue(%{next | phase: {:awaiting_tools, pending}})
 
       _other ->
         Transition.error(state, {:unknown_tool_call, call_id})
