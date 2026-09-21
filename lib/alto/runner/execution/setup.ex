@@ -159,8 +159,9 @@ defmodule Alto.Runner.Execution.Setup do
       prompt_config: Keyword.take(opts, [:prompt, :project_instructions])
     }
 
-    with {:ok, _} <- normalize_agent_identity(agent_identity),
-         do: {:ok, Map.merge(initial, settings)}
+    if Alto.AgentIdentity.valid?(agent_identity),
+      do: {:ok, Map.merge(initial, settings)},
+      else: {:error, {:invalid_option, :agent_identity, agent_identity}}
   end
 
   # A provider is model capability state: generic rule runs are constructed
@@ -316,22 +317,6 @@ defmodule Alto.Runner.Execution.Setup do
   defp validate_directory(path) do
     if File.dir?(path), do: :ok, else: {:error, {:invalid_cwd, path}}
   end
-
-  defp normalize_agent_identity(nil), do: {:ok, nil}
-
-  defp normalize_agent_identity(%{root_run_id: root_run_id, path: path} = identity)
-       when is_binary(root_run_id) and byte_size(root_run_id) in 1..256 and is_list(path) do
-    if map_size(identity) == 2 and length(path) <= 64 and
-         String.valid?(root_run_id) and
-         Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1))) do
-      {:ok, identity}
-    else
-      {:error, {:invalid_option, :agent_identity, identity}}
-    end
-  end
-
-  defp normalize_agent_identity(other),
-    do: {:error, {:invalid_option, :agent_identity, other}}
 
   @compaction_schema [
     strategy: [type: :any, default: :summary],

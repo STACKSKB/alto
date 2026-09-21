@@ -315,7 +315,7 @@ defmodule Alto.Runner.Checkpoint do
          true <- valid_compaction_state?(saved),
          true <- valid_history_state?(saved),
          true <- saved.transcript_revision == packet["transcript_revision"],
-         true <- valid_agent_identity?(saved.agent_identity),
+         true <- Alto.AgentIdentity.valid?(saved.agent_identity),
          true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
          {:ok, revision} <- transcript_revision(run),
          true <- revision == saved.transcript_revision do
@@ -399,7 +399,7 @@ defmodule Alto.Runner.Checkpoint do
 
   defp valid_parent_saved?(saved, authority) when is_map(saved) do
     Enum.sort(Map.keys(saved)) == Enum.sort(@parent_fields) and
-      valid_agent_identity?(saved.agent_identity) and saved.agent_identity.path == [] and
+      Alto.AgentIdentity.valid?(saved.agent_identity) and saved.agent_identity.path == [] and
       is_list(saved.messages_rev) and Enum.all?(saved.messages_rev, &is_map/1) and
       is_integer(saved.transcript_bytes) and saved.transcript_bytes >= 0 and
       saved.transcript_bytes <= authority.max_transcript_bytes and
@@ -487,15 +487,6 @@ defmodule Alto.Runner.Checkpoint do
     saved["effects_used"] <= saved["max_effects"] and
       saved["model_requests_used"] <= saved["max_model_requests"]
   end
-
-  defp valid_agent_identity?(%{root_run_id: root_run_id, path: path} = identity)
-       when is_binary(root_run_id) and byte_size(root_run_id) in 1..256 and is_list(path) do
-    map_size(identity) == 2 and length(path) <= 64 and
-      String.valid?(root_run_id) and
-      Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1)))
-  end
-
-  defp valid_agent_identity?(_), do: false
 
   defp fingerprint(run) do
     with {:ok, data} <- fingerprint_data_for(run) do

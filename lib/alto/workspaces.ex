@@ -532,15 +532,9 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp valid_identity(%{root_run_id: root, path: path} = value) do
-    if map_size(value) == 2 and is_binary(root) and byte_size(root) in 1..256 and
-         String.valid?(root) and is_list(path) and length(path) <= 64 and
-         Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1))),
-       do: :ok,
-       else: {:error, :invalid_workspace_owner}
+  defp valid_identity(identity) do
+    if Alto.AgentIdentity.valid?(identity), do: :ok, else: {:error, :invalid_workspace_owner}
   end
-
-  defp valid_identity(_), do: {:error, :invalid_workspace_owner}
 
   defp valid_id(id) when is_binary(id) do
     if Regex.match?(~r/\Aws-[0-9a-f]{64}\z/, id), do: :ok, else: {:error, :invalid_workspace_id}

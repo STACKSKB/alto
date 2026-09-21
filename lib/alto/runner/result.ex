@@ -32,7 +32,7 @@ defmodule Alto.Runner.Result do
           transcript_bytes: non_neg_integer(),
           session_id: String.t() | nil,
           run_id: String.t() | nil,
-          agent_identity: %{root_run_id: binary(), path: [binary()]} | nil,
+          agent_identity: Alto.AgentIdentity.t() | nil,
           transcript_revision: non_neg_integer() | :any | nil,
           context_observation: map() | nil,
           resolved_operations: [binary()],
