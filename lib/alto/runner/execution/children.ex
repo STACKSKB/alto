@@ -90,7 +90,7 @@ defmodule Alto.Runner.Execution.Children do
         concurrency,
         &dispatch_subagent(&1, run, journal),
         fn ->
-          case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+          case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
             {{:cancelled, _} = cancelled, _} -> cancelled
             {_, {:error, _} = error} -> error
             _ -> :continue
@@ -107,7 +107,9 @@ defmodule Alto.Runner.Execution.Children do
 
       {:error, reason} ->
         run =
-          run |> merge_verdict(:unknown) |> add_persistence_error({:subagent_journal, reason})
+          run
+          |> Events.merge_verdict(:unknown)
+          |> Events.add_persistence_error({:subagent_journal, reason})
 
         if status == :ok do
           run =
@@ -237,7 +239,7 @@ defmodule Alto.Runner.Execution.Children do
           journal: Continuation.identity(journal)
         })
 
-      {:ok, journal, record_event(run, event)}
+      {:ok, journal, Events.record(run, event)}
     end
   end
 
@@ -479,7 +481,8 @@ defmodule Alto.Runner.Execution.Children do
           run.child_limits.max_concurrency,
           &resume_child(&1, journal, run),
           fn ->
-            case {cancellation(run.cancel_ref), Budget.check(run.budget)} do
+            case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref),
+                  Budget.check(run.budget)} do
               {{:cancelled, _} = cancelled, _} -> cancelled
               {_, {:error, _} = error} -> error
               _ -> :continue
@@ -555,7 +558,10 @@ defmodule Alto.Runner.Execution.Children do
   defp subagent_sink(run, id) do
     fn event ->
       if event.domain == :live do
-        notify(run.event_sink, Event.live(:subagent_progress, %{id: id, event: event}))
+        Alto.Events.notify(
+          run.event_sink,
+          Event.live(:subagent_progress, %{id: id, event: event})
+        )
       end
 
       :ok
@@ -587,22 +593,22 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   def merge_child_result(run, {:error, {:run_process_failed, _}, _}),
-    do: merge_verdict(run, :unknown)
+    do: Events.merge_verdict(run, :unknown)
 
   def merge_child_result(run, {:error, {:run_process_failed, _}}),
-    do: merge_verdict(run, :unknown)
+    do: Events.merge_verdict(run, :unknown)
 
   def merge_child_result(run, {:error, _reason, result}),
     do: merge_child_result(run, {:ok, result})
 
   def merge_child_result(run, {:ok, result}) do
-    run = merge_verdict(run, result.verdict)
+    run = Events.merge_verdict(run, result.verdict)
     run = %{run | usage: Usage.merge(run.usage, struct(Usage, result.usage))}
 
     Enum.reduce(
       existing_persistence_errors(result),
       run,
-      &add_persistence_error(&2, {:subagent, &1})
+      &Events.add_persistence_error(&2, {:subagent, &1})
     )
   end
 
@@ -683,12 +689,6 @@ defmodule Alto.Runner.Execution.Children do
 
   defp child_agent_identity(%{root_run_id: id, path: path}, child),
     do: %{root_run_id: id, path: path ++ [child]}
-
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
-  defp cancellation(ref), do: Alto.Runner.Execution.Call.cancellation(ref)
-  defp record_event(run, event), do: Events.record(run, event)
-  defp merge_verdict(run, verdict), do: Events.merge_verdict(run, verdict)
-  defp add_persistence_error(run, reason), do: Events.add_persistence_error(run, reason)
 
   defp existing_persistence_errors(%{persistence: {:degraded, errors}}), do: errors
   defp existing_persistence_errors(_), do: []

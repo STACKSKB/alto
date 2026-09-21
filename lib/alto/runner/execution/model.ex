@@ -156,7 +156,7 @@ defmodule Alto.Runner.Execution.Model do
 
     case decision do
       {:retry, delay, kind} ->
-        notify(
+        Alto.Events.notify(
           caps.event_sink,
           Event.live(:model_retry, %{
             step: step,
@@ -235,6 +235,4 @@ defmodule Alto.Runner.Execution.Model do
       end
     end
   end
-
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 end

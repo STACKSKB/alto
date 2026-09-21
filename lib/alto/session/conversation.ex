@@ -223,7 +223,7 @@ defmodule Alto.Session.Conversation do
     path = entry_path(opts, id, revision)
 
     with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true) do
-      case bounded_read(path, @max_entry_bytes) do
+      case Alto.BoundedFile.read(path, @max_entry_bytes) do
         {:ok, existing} ->
           existing_entry_result(existing, encoded, id, revision, path)
 
@@ -262,7 +262,7 @@ defmodule Alto.Session.Conversation do
   end
 
   defp read_snapshot(id, opts) do
-    with {:ok, contents} <- bounded_read(transcript_path(opts, id), 256) do
+    with {:ok, contents} <- Alto.BoundedFile.read(transcript_path(opts, id), 256) do
       with {:ok, %{"v" => @version, "revision" => revision}} <- JSON.decode(contents),
            {:ok, revision} when is_integer(revision) <- requested_revision(revision) do
         select_revision(id, revision, nil, opts)
@@ -276,7 +276,7 @@ defmodule Alto.Session.Conversation do
   defp select_revision(_id, revision, %{revision: revision} = head, _opts), do: {:ok, head}
 
   defp select_revision(id, revision, _head, opts) do
-    case bounded_read(entry_path(opts, id, revision), @max_entry_bytes) do
+    case Alto.BoundedFile.read(entry_path(opts, id, revision), @max_entry_bytes) do
       {:ok, contents} -> decode_entry(contents, id, revision)
       {:error, :enoent} -> {:error, {:conversation_revision_not_found, id, revision}}
       {:error, reason} -> {:error, {:conversation_read_failed, reason}}
@@ -360,7 +360,7 @@ defmodule Alto.Session.Conversation do
   end
 
   defp read_dispatch_fence(id, opts) do
-    case bounded_read(dispatch_path(opts, id), @max_entry_bytes) do
+    case Alto.BoundedFile.read(dispatch_path(opts, id), @max_entry_bytes) do
       {:ok, contents} -> decode_dispatch_fence(String.trim(contents), id)
       {:error, :enoent} -> {:ok, nil}
       {:error, reason} -> {:error, {:conversation_read_failed, reason}}
@@ -628,6 +628,4 @@ defmodule Alto.Session.Conversation do
   end
 
   defp lock_path(path), do: path <> ".lock"
-
-  defp bounded_read(path, max), do: Alto.BoundedFile.read(path, max)
 end

@@ -34,7 +34,7 @@ defmodule Alto.Runner.Execution.Events do
   end
 
   defp do_record(run, %Event{} = event) do
-    notify(run.event_sink, event)
+    Alto.Events.notify(run.event_sink, event)
 
     run = merge_event_verdict(run, event)
 
@@ -82,6 +82,5 @@ defmodule Alto.Runner.Execution.Events do
     if Map.get(severity, right, 0) > Map.get(severity, left, 0), do: right, else: left
   end
 
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
   defp session_dir_opt(run), do: [session_dir: run.session_dir]
 end

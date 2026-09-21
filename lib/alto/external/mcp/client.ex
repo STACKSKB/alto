@@ -166,7 +166,7 @@ defmodule Alto.External.MCP.Client do
       {%{reply: reply, owner: owner, monitor: monitor}, pending} ->
         reason = {:mcp_request_timeout, id}
         cancel_request(state, id, "timeout")
-        demonitor(owner, monitor)
+        JSONRPC.demonitor(owner, monitor)
         reply_error(reply, reason, :unknown)
         {:noreply, %{state | pending: pending}}
     end
@@ -178,7 +178,7 @@ defmodule Alto.External.MCP.Client do
          end) do
       {id, %{reply: reply, timer: timer}} ->
         cancel_request(state, id, "owner_disconnected")
-        cancel_timer(timer)
+        JSONRPC.cancel_timer(timer)
         reply_error(reply, {:mcp_request_owner_down, owner}, :unknown)
         {:noreply, %{state | pending: Map.delete(state.pending, id)}}
 
@@ -337,17 +337,17 @@ defmodule Alto.External.MCP.Client do
           {:ok, JSONRPC.ready(state)}
 
         {:error, reason} ->
-          {:error, reason, fail_waiters(state, reason)}
+          {:error, reason, JSONRPC.fail_waiters(state, reason)}
       end
     else
       reason = {:mcp_initialize_protocol_mismatch, expected, result["protocolVersion"]}
-      {:error, {:mcp_initialize_failed, reason}, fail_waiters(state, reason)}
+      {:error, {:mcp_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
     end
   end
 
   defp settle_response(:initialize, message, state) do
     reason = response_error(message)
-    {:error, {:mcp_initialize_failed, reason}, fail_waiters(state, reason)}
+    {:error, {:mcp_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
   end
 
   defp settle_response({:list_tools, from}, %{"result" => %{"tools" => tools}}, state)
@@ -387,16 +387,11 @@ defmodule Alto.External.MCP.Client do
 
   defp maybe_refuse_server_request(_message, state), do: {:ok, state}
 
-  defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
-
   defp fail_all(state, reason),
     do:
       JSONRPC.fail_all(state, reason, fn reply, reason ->
         reply_error(reply, reason, classify_failure(reply))
       end)
-
-  defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
-  defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)
 
   defp cancel_request(state, id, reason) do
     payload =

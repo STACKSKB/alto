@@ -65,7 +65,7 @@ defmodule Alto.Runner.Execution.Tool do
       details: details
     }
 
-    notify(caps.event_sink, Event.live(:approval_requested, %{request: request}))
+    Alto.Events.notify(caps.event_sink, Event.live(:approval_requested, %{request: request}))
 
     outcome =
       Call.run(
@@ -84,7 +84,7 @@ defmodule Alto.Runner.Execution.Tool do
         {:cancelled, reason} -> {:cancelled, reason}
       end
 
-    notify(
+    Alto.Events.notify(
       caps.event_sink,
       Event.live(:approval_resolved, %{request: request, decision: decision_name(decision)})
     )
@@ -143,5 +143,4 @@ defmodule Alto.Runner.Execution.Tool do
   defp decision_name({:deny, reason}), do: {:denied, reason}
   defp decision_name({:error, reason}), do: {:error, reason}
   defp decision_name({:cancelled, reason}), do: {:cancelled, reason}
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 end

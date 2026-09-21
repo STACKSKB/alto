@@ -251,10 +251,8 @@ defmodule Alto.Tools.EditFile do
     do: %{content: content, truncated: false}
 
   defp bounded(content: content, limit: limit) do
-    %{content: utf8_prefix(content, limit), truncated: true}
+    %{content: Alto.Text.prefix(content, limit), truncated: true}
   end
-
-  defp utf8_prefix(content, limit), do: Alto.Text.prefix(content, limit)
 
   defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok
   defp validate_size(_size, max_file_bytes), do: {:error, {:file_too_large, max_file_bytes}}

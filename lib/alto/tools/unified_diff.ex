@@ -147,10 +147,8 @@ defmodule Alto.Tools.UnifiedDiff do
     if size <= remaining do
       take_chunks(rest, remaining - size, [chunk | acc], truncated?)
     else
-      prefix = utf8_prefix(chunk, remaining)
+      prefix = Alto.Text.prefix(chunk, remaining)
       {Enum.reverse([prefix | acc]) |> IO.iodata_to_binary(), true}
     end
   end
-
-  defp utf8_prefix(content, limit), do: Alto.Text.prefix(content, limit)
 end

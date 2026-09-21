@@ -138,7 +138,7 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   defp execute_reducer(run, input, module, opts, headroom) do
-    notify(
+    Alto.Events.notify(
       run.event_sink,
       Event.live(:context_compacting, %{dropped_messages: length(input.middle)})
     )
@@ -298,7 +298,7 @@ defmodule Alto.Runner.Execution.Transcript do
   defp max_compactions(run), do: Keyword.get(run.compaction, :max_compactions, 1)
 
   defp record_compact_failed(run, reason) do
-    run = record_event(run, Event.durable(:context_compact_failed, %{error: reason}))
+    run = Events.record(run, Event.durable(:context_compact_failed, %{error: reason}))
     {:error, reason, run}
   end
 
@@ -322,15 +322,11 @@ defmodule Alto.Runner.Execution.Transcript do
     end
   end
 
-  defp record_event(run, event), do: Events.record(run, event)
-
   # Internal reducer output is not an assistant answer. Keep progress observable
   # without leaking JSON artifacts (or reducer reasoning) into the conversation.
   defp compaction_sink(sink) do
     fn event ->
-      notify(sink, Event.live(:context_compaction_progress, %{event: event.type}))
+      Alto.Events.notify(sink, Event.live(:context_compaction_progress, %{event: event.type}))
     end
   end
-
-  defp notify(sink, event), do: Alto.Events.notify(sink, event)
 end

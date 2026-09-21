@@ -218,9 +218,9 @@ defmodule Alto.Codex.AppServer.Client do
         {:noreply, state}
 
       {%{reply: reply, timer: timer, owner: owner, monitor: monitor}, pending} ->
-        cancel_timer(timer)
+        JSONRPC.cancel_timer(timer)
         cancel_request(state, id)
-        demonitor(owner, monitor)
+        JSONRPC.demonitor(owner, monitor)
         reply_error(reply, {:codex_app_server_request_timeout, id})
         {:noreply, %{state | pending: pending}}
     end
@@ -232,7 +232,7 @@ defmodule Alto.Codex.AppServer.Client do
          end) do
       {id, %{timer: timer}} ->
         cancel_request(state, id)
-        cancel_timer(timer)
+        JSONRPC.cancel_timer(timer)
         {:noreply, %{state | pending: Map.delete(state.pending, id)}}
 
       nil ->
@@ -387,18 +387,18 @@ defmodule Alto.Codex.AppServer.Client do
         {:ok, JSONRPC.ready(state)}
 
       {:error, reason} ->
-        {:error, reason, fail_waiters(state, reason)}
+        {:error, reason, JSONRPC.fail_waiters(state, reason)}
     end
   end
 
   defp settle_response(:initialize, %{"result" => result}, state) do
     reason = {:invalid_codex_app_server_initialize_result, result}
-    {:error, {:codex_app_server_initialize_failed, reason}, fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
   end
 
   defp settle_response(:initialize, message, state) do
     reason = response_error(message)
-    {:error, {:codex_app_server_initialize_failed, reason}, fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
   end
 
   defp settle_response({:request, from, _method}, %{"result" => result}, state) do
@@ -417,9 +417,6 @@ defmodule Alto.Codex.AppServer.Client do
   defp broadcast(state, message),
     do: Enum.each(state.subscribers, fn {pid, _ref} -> send(pid, message) end)
 
-  defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
-  defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)
-
   defp cancel_request(state, id) do
     _ =
       send_payload(state, %{
@@ -430,8 +427,6 @@ defmodule Alto.Codex.AppServer.Client do
 
     :ok
   end
-
-  defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
 
   defp fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
 
