@@ -83,13 +83,30 @@ defmodule Alto.Providers.ReasoningStreamTest do
 
   test "JSON fallback and reasoning_content use the same readable event" do
     owner = self()
-    message = %{"content" => "Answer", "reasoning_content" => "Provider explanation"}
+
+    message = %{
+      "content" => "Answer",
+      "reasoning_content" => "Provider explanation",
+      "tool_calls" => [
+        %{"id" => "z", "function" => %{"name" => "read", "arguments" => ~s({"path":"z"})}},
+        %{"id" => "a", "function" => %{"name" => "read", "arguments" => ~s({"path":"a"})}}
+      ]
+    }
 
     assert {:ok, stream} =
              Stream.from_response(%{"choices" => [%{"message" => message}]}, &send(owner, &1))
 
     assert {:ok, result} = Stream.result(stream)
+    assert result.message == "Answer"
+
+    assert result.tool_calls == [
+             %{id: "z", name: "read", arguments_json: ~s({"path":"z"})},
+             %{id: "a", name: "read", arguments_json: ~s({"path":"a"})}
+           ]
+
     assert result.provider_fields["reasoning_content"] == "Provider explanation"
+    assert_received %{type: :model_delta, data: %{text: "Answer"}}
+    refute_received %{type: :model_delta}
     assert_received %{type: :model_reasoning_delta, data: %{text: "Provider explanation"}}
 
     assert Alto.Reasoning.text(%{

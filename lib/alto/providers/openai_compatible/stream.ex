@@ -13,7 +13,6 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
             calls: %{},
             usage: nil,
             error: nil,
-            done?: false,
             bytes: 0,
             max_bytes: @default_max_bytes
 
@@ -22,7 +21,6 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
           calls: map(),
           usage: map() | nil,
           error: term() | nil,
-          done?: boolean(),
           bytes: non_neg_integer(),
           max_bytes: pos_integer()
         }
@@ -33,7 +31,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
       do: %__MODULE__{max_bytes: max_bytes}
 
   @spec consume(t(), binary(), (Event.t() -> any())) :: t()
-  def consume(%__MODULE__{} = state, "[DONE]", _sink), do: %{state | done?: true}
+  def consume(%__MODULE__{} = state, "[DONE]", _sink), do: state
 
   def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
     bytes = state.bytes + byte_size(payload)
@@ -64,27 +62,11 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
 
   def from_response(%{"choices" => [%{"message" => message} | _]} = response, sink)
       when is_map(message) do
-    content = Map.get(message, "content")
-    state = consume_reasoning(new(), message, sink)
-
-    if is_binary(content) and content != "" do
-      sink.(Event.live(:model_delta, %{text: content}))
-    end
-
     calls =
-      message
-      |> Map.get("tool_calls", [])
-      |> Enum.with_index()
-      |> Map.new(fn {call, index} -> {index, complete_call(call)} end)
+      Enum.with_index(message["tool_calls"] || [], &Map.put(&1, "index", &2))
 
-    {:ok,
-     %{
-       state
-       | content: if(is_binary(content), do: [content], else: []),
-         calls: calls,
-         usage: Map.get(response, "usage"),
-         done?: true
-     }}
+    state = consume_delta(new(), Map.put(message, "tool_calls", calls), sink)
+    {:ok, %{state | usage: response["usage"]}}
   end
 
   def from_response(other, _sink), do: {:error, {:unexpected_response, other}}
@@ -133,20 +115,11 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
 
     calls =
       Enum.reduce(delta["tool_calls"] || [], state.calls, fn fragment, calls ->
-        case Map.get(fragment, "index") do
-          index when is_integer(index) ->
-            Map.update(calls, index, complete_call(fragment), &merge_call(&1, fragment))
-
-          _missing when map_size(calls) == 0 ->
-            %{0 => complete_call(fragment)}
-
-          _missing ->
-            # Index-less providers stream fragments for their most recent call;
-            # without an index there is no other boundary to key on.
-            Map.update(calls, Enum.max(Map.keys(calls)), complete_call(fragment), fn call ->
-              merge_call(call, fragment)
-            end)
-        end
+        # Index-less providers append to their most recent call.
+        index = fragment["index"]
+        index = if is_integer(index), do: index, else: Enum.max(Map.keys(calls), fn -> 0 end)
+        call = Map.get(calls, index, %{id: nil, name: nil, argument_chunks: []})
+        Map.put(calls, index, merge_call(call, fragment))
       end)
 
     %{state | calls: calls}
@@ -208,16 +181,6 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
           "reasoning_details",
           Enum.map(Enum.reverse(state.reasoning_order), &Map.fetch!(state.reasoning_details, &1))
         )
-  end
-
-  defp complete_call(call) do
-    function = Map.get(call, "function", %{})
-
-    %{
-      id: Map.get(call, "id"),
-      name: Map.get(function, "name"),
-      argument_chunks: present(Map.get(function, "arguments"))
-    }
   end
 
   defp merge_call(call, fragment) do
