@@ -177,20 +177,9 @@ defmodule Alto.Runner.Budget.Account do
       else
         evidence = Map.take(snapshot.packet, @limits ++ @counters)
 
-        with :ok <- Retained.record_attempt(account.ledger, account.key, @close, :infinity),
-             :ok <-
-               Retained.record_outcome(
-                 account.ledger,
-                 account.key,
-                 @close,
-                 :completed,
-                 evidence,
-                 :infinity
-               ) do
-          :ok
-        else
+        case Retained.finish(account.ledger, account.key, @close, evidence) do
           {:error, :already_decided} -> closed_after_race(account)
-          error -> error
+          result -> result
         end
       end
     end

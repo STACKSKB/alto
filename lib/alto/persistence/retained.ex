@@ -4,8 +4,8 @@ defmodule Alto.Persistence.Retained do
   Alto.OperationLog.
 
   Domain modules own packet validation and state transitions. This module only
-  bounds calls by an absolute monotonic deadline and provides the common
-  intent-convergence and compare-and-swap operations.
+  bounds calls by an absolute monotonic deadline and provides intent convergence,
+  compare-and-swap, and deterministic lifecycle completion.
   """
 
   alias Alto.OperationLog
@@ -124,18 +124,18 @@ defmodule Alto.Persistence.Retained do
     end
   end
 
-  def record_outcome(ledger, key, attempt, class, evidence, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         result <-
-           OperationLog.record_outcome(
-             ledger,
-             key,
-             attempt,
-             class,
-             evidence,
-             call_timeout(deadline)
-           ) do
-      result
+  @doc "Finish an internal lifecycle transition using its deterministic attempt."
+  def finish(ledger, key, attempt, evidence, deadline \\ :infinity) do
+    with :ok <- record_attempt(ledger, key, attempt, deadline),
+         :ok <- deadline_ok(deadline) do
+      OperationLog.record_outcome(
+        ledger,
+        key,
+        attempt,
+        :completed,
+        evidence,
+        call_timeout(deadline)
+      )
     end
   end
 end

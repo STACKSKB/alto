@@ -590,29 +590,11 @@ defmodule Alto.Subagents.Continuation do
       if snapshot.state == :retired do
         :ok
       else
-        case Retained.record_attempt(batch.ledger, batch.key, @retire, batch.deadline) do
-          :ok ->
-            case Retained.record_outcome(
-                   batch.ledger,
-                   batch.key,
-                   @retire,
-                   :completed,
-                   %{
-                     "generation" => batch.generation,
-                     "joined" => true
-                   },
-                   batch.deadline
-                 ) do
-              :ok -> :ok
-              {:error, :already_decided} -> retired_after_race(batch)
-              error -> error
-            end
+        evidence = %{"generation" => batch.generation, "joined" => true}
 
-          {:error, :already_decided} ->
-            retired_after_race(batch)
-
-          error ->
-            error
+        case Retained.finish(batch.ledger, batch.key, @retire, evidence, batch.deadline) do
+          {:error, :already_decided} -> retired_after_race(batch)
+          result -> result
         end
       end
     end
