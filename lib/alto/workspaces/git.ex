@@ -456,27 +456,10 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp reject_symlink_components(path) do
-    expanded = Path.expand(path)
-
-    {root, parts} =
-      if String.starts_with?(expanded, "/"),
-        do: {"/", Path.split(expanded) |> tl()},
-        else: {"", Path.split(expanded)}
-
-    parts
-    |> Enum.reduce_while({:ok, root}, fn part, {:ok, prefix} ->
-      current = if prefix == "/", do: "/" <> part, else: Path.join(prefix, part)
-
-      case File.lstat(current) do
-        {:ok, %File.Stat{type: :symlink}} -> {:halt, {:error, :symlink_unsupported}}
-        {:ok, _} -> {:cont, {:ok, current}}
-        {:error, :enoent} -> {:cont, {:ok, current}}
-        {:error, reason} -> {:halt, {:error, {:path_stat_failed, reason}}}
-      end
-    end)
-    |> case do
-      {:ok, _} -> :ok
-      error -> error
+    case Alto.Workspaces.safe_path(path) do
+      {:error, :workspace_path_symlink} -> {:error, :symlink_unsupported}
+      {:error, reason} -> {:error, {:path_stat_failed, reason}}
+      :ok -> :ok
     end
   end
 

@@ -93,6 +93,21 @@ defmodule Alto.Workspaces.GitTest do
     assert {:error, :symlink_unsupported} = Git.snapshot(repo)
   end
 
+  test "rejects symlinked source and destination ancestors", %{root: root, repo: repo} do
+    link = Path.join(root, "linked-root")
+    File.ln_s!(repo, link)
+    assert {:error, :symlink_unsupported} = Git.snapshot(link)
+    assert {:error, :symlink_unsupported} = Git.integration_target(link)
+
+    assert {:ok, snapshot} = Git.snapshot(repo)
+    assert {:error, :symlink_unsupported} = Git.checkout(snapshot, Path.join(link, "child"))
+    refute File.exists?(Path.join(repo, "child"))
+
+    dangling = Path.join(root, "dangling")
+    File.ln_s!(Path.join(root, "missing"), dangling)
+    assert {:error, :symlink_unsupported} = Git.checkout(snapshot, Path.join(dangling, "child"))
+  end
+
   test "rejects a tampered separate git pointer without touching source", %{
     root: root,
     repo: repo

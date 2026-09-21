@@ -562,26 +562,9 @@ defmodule Alto.CLI do
 
   defp configured_provider(options) do
     base_url = base_url(options)
-
-    if openrouter?(base_url) do
-      configure_openrouter(options, base_url)
-    else
-      configure_compatible_provider(options, base_url)
-    end
-  end
-
-  defp configure_openrouter(options, base_url) do
     timeout = Keyword.get(options, :timeout, 120_000)
-    discovery_options = discovery_provider_options(options, base_url)
 
-    with {:ok, selected} <-
-           Onboarding.resolve(
-             api_key: environment_api_key(options, :openrouter),
-             model: requested_model(options),
-             interactive: Onboarding.terminal?(),
-             provider: OpenAICompatible,
-             provider_options: discovery_options
-           ) do
+    with {:ok, selected} <- select_provider(options, base_url) do
       provider_options = [
         model: selected.model,
         base_url: base_url,
@@ -593,18 +576,19 @@ defmodule Alto.CLI do
     end
   end
 
-  defp configure_compatible_provider(options, base_url) do
-    with {:ok, model} <- required_model(options) do
-      timeout = Keyword.get(options, :timeout, 120_000)
-
-      provider_options = [
-        model: model,
-        base_url: base_url,
-        api_key: environment_api_key(options, :compatible),
-        timeout: timeout
-      ]
-
-      {:ok, {OpenAICompatible, provider_options}, timeout + 5_000}
+  defp select_provider(options, base_url) do
+    if openrouter?(base_url) do
+      Onboarding.resolve(
+        api_key: environment_api_key(options, :openrouter),
+        model: requested_model(options),
+        interactive: Onboarding.terminal?(),
+        provider: OpenAICompatible,
+        provider_options: discovery_provider_options(options, base_url)
+      )
+    else
+      with {:ok, model} <- required_model(options) do
+        {:ok, %{model: model, api_key: environment_api_key(options, :compatible)}}
+      end
     end
   end
 
