@@ -110,38 +110,21 @@ defmodule Alto.Ops do
 
   defp collect(queue, ledger) do
     with {:ok, live} <- live_items(queue),
-         live_by_key =
-           Enum.reduce(live, %{}, fn item, acc ->
-             acc
-             |> Map.put(item.key, item)
-             |> Map.put(Map.get(item, :operation_key, item.operation), item)
-           end),
-         {:ok, ledger_only} <- ledger_items_complete(ledger, live_by_key) do
-      ledger_by_key =
-        Enum.reduce(ledger_only, %{}, fn item, acc ->
-          acc
-          |> Map.put(item.key, item)
-          |> Map.put(Map.get(item, :operation_key, item.key), item)
-        end)
+         live_by_operation = Map.new(live, &{&1.operation_key, &1}),
+         {:ok, ledger_items} <- ledger_items_complete(ledger, live_by_operation) do
+      ledger_by_operation = Map.new(ledger_items, &{&1.operation_key, &1})
 
       # Ledger recovery state overrides the live view when both exist: a
       # dispatched key that looks pending live must still read as unknown —
       # the recovery table forbids blind re-dispatch of dispatched work.
       merged_live =
         Enum.map(live, fn item ->
-          Map.get(
-            ledger_by_key,
-            Map.get(item, :operation_key, item.operation),
-            Map.get(ledger_by_key, item.key, item)
-          )
+          Map.get(ledger_by_operation, item.operation_key, item)
         end)
 
       {:ok,
        merged_live ++
-         Enum.reject(ledger_only, fn item ->
-           Map.has_key?(live_by_key, item.key) or
-             Map.has_key?(live_by_key, Map.get(item, :operation_key, item.key))
-         end)}
+         Enum.reject(ledger_items, &Map.has_key?(live_by_operation, &1.operation_key))}
     end
   end
 
@@ -157,7 +140,7 @@ defmodule Alto.Ops do
            record_id: record.id,
            attempts: 0,
            safe_to_retry: false,
-           generation_id: Map.get(record, :generation_id),
+           generation_id: record.generation_id,
            operation_revision: nil,
            recovery_available: false
          }
@@ -216,7 +199,7 @@ defmodule Alto.Ops do
     end
   end
 
-  defp ledger_items_complete(ledger, live_by_key) do
+  defp ledger_items_complete(ledger, live_by_operation) do
     with :ok <- ensure_server(ledger, :ledger) do
       with {:ok, entries} <- ledger_call(fn -> Alto.OperationLog.entries(ledger) end) do
         {:ok,
@@ -224,9 +207,9 @@ defmodule Alto.Ops do
          |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
          |> Enum.sort_by(&inspection_rank/1)
          |> Enum.flat_map(fn entry ->
-           live = Map.get(live_by_key, entry.operation_key)
+           live = Map.get(live_by_operation, entry.operation_key)
 
-           ledger_rows(entry.status, entry.operation_key, entry.attempts, entry, live)
+           ledger_rows(entry, live)
          end)}
       end
     end
@@ -248,47 +231,16 @@ defmodule Alto.Ops do
     end
   end
 
-  defp add_identity(item, recovery, live) do
-    envelope = if is_map(recovery), do: Map.get(recovery, :recovery), else: nil
-    display_key = (live && live.key) || (is_map(envelope) && Map.get(envelope, :key)) || item.key
-    display_source = (live && live.source) || source_of(display_key)
-    display_operation = (live && live.operation) || display_key
-    operation_key = Map.get(item, :operation_key, item.key)
+  defp operation_of(%{operation_key: key}) when is_binary(key), do: key
+  defp operation_of(%{admission: :business, generation_id: id}), do: "business-generation:" <> id
+  defp operation_of(record), do: record.key
 
-    Map.merge(item, %{
-      key: display_key,
-      source: display_source,
-      operation: display_operation,
-      operation_key: operation_key,
-      generation_id: recovery_generation(envelope, live),
-      operation_revision: recovery && recovery.revision,
-      attempt_id: (recovery && recovery.current_attempt) || (live && live.claim_id),
-      recovery_available: is_map(envelope)
-    })
-  end
+  defp ledger_rows(%{status: {:intended}}, live) when not is_nil(live), do: []
 
-  defp recovery_generation(envelope, live) when is_map(envelope) do
-    Map.get(envelope, :generation_id) || (live && live.generation_id)
-  end
-
-  defp recovery_generation(_envelope, live), do: live && live.generation_id
-
-  defp operation_of(record) do
-    case Map.get(record, :admission) do
-      :business -> "business-generation:" <> record.generation_id
-      _other -> record.key
-    end
-  end
-
-  defp ledger_rows({:intended}, _key, _attempts, _recovery, live) when not is_nil(live), do: []
-
-  defp ledger_rows(status, key, attempts, recovery, live) do
-    case ledger_disposition(status) do
-      {state, reason, action} ->
-        [add_identity(ledger_item(key, state, attempts, reason, action, live), recovery, live)]
-
-      nil ->
-        []
+  defp ledger_rows(entry, live) do
+    case ledger_disposition(entry.status) do
+      nil -> []
+      disposition -> [ledger_item(entry, live, disposition)]
     end
   end
 
@@ -320,21 +272,30 @@ defmodule Alto.Ops do
 
   defp ledger_disposition(_status), do: nil
 
-  defp ledger_item(key, status, attempts, reason, recovery, live) do
+  defp ledger_item(entry, live, {status, reason, recovery}) do
+    envelope = entry.recovery
+    key = (live && live.key) || (is_map(envelope) && envelope[:key]) || entry.operation_key
+    generation = (is_map(envelope) && envelope[:generation_id]) || (live && live.generation_id)
+
     %{
       key: key,
       status: status,
       source: source_of(key),
       operation: key,
+      operation_key: entry.operation_key,
       record_id: live && live.record_id,
       claim_id: live && live.claim_id,
       claimed_by: live && live.claimed_by,
       lease_until_ms: live && live.lease_until_ms,
       stale: live && live.stale,
-      attempts: attempts,
+      attempts: entry.attempts,
       reason: reason,
       safe_to_retry: false,
-      recovery: recovery
+      recovery: recovery,
+      generation_id: generation,
+      operation_revision: entry.revision,
+      attempt_id: entry.current_attempt || (live && live.claim_id),
+      recovery_available: is_map(envelope)
     }
   end
 
