@@ -157,7 +157,7 @@ defmodule Alto.Runner.Execution.Setup do
         Keyword.get(opts, :parent_workspaces) ||
           settings.child_limits.workspaces,
       tool_specs: Keyword.get(opts, :tools, []),
-      prompt_config: Keyword.take(opts, [:prompt, :system_prompt, :project_instructions])
+      prompt_config: Keyword.take(opts, [:prompt, :project_instructions])
     }
 
     with {:ok, _} <- normalize_agent_identity(agent_identity),
@@ -272,11 +272,7 @@ defmodule Alto.Runner.Execution.Setup do
   # provider-less runs carry no prompt configuration; requesting one is a
   # configuration error rather than silently ignored input.
   defp resolve_prompt_state(opts, _cwd, _tools, nil, _project_instructions) do
-    system_prompt = Keyword.get(opts, :system_prompt, :absent)
-    prompt = Keyword.get(opts, :prompt, :absent)
-
-    if (is_binary(system_prompt) and system_prompt != "") or
-         (prompt != :absent and not is_nil(prompt)) do
+    if Keyword.get(opts, :prompt) not in [nil, ""] do
       {:error, :prompt_options_require_provider}
     else
       {:ok, :generic}
@@ -309,29 +305,11 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp resolve_system_prompt(opts, cwd, tools, project_instructions) do
-    case {Keyword.fetch(opts, :system_prompt), Keyword.fetch(opts, :prompt)} do
-      {{:ok, _system_prompt}, {:ok, _builder}} ->
-        {:error, :conflicting_prompt_options}
-
-      {{:ok, prompt}, :error} when is_binary(prompt) and prompt != "" ->
-        {:ok, prompt}
-
-      {{:ok, prompt}, :error} when prompt in [nil, ""] ->
-        {:ok, nil}
-
-      {{:ok, invalid}, :error} ->
-        {:error, {:invalid_system_prompt, invalid}}
-
-      {:error, {:ok, builder}} ->
-        Alto.Prompt.build(builder, %{
-          cwd: cwd,
-          tools: tools,
-          project_instructions: project_instructions
-        })
-
-      {:error, :error} ->
-        {:ok, nil}
-    end
+    Alto.Prompt.build(Keyword.get(opts, :prompt), %{
+      cwd: cwd,
+      tools: tools,
+      project_instructions: project_instructions
+    })
   end
 
   defp validate_spec(%Alto.Loop.Spec{}), do: :ok

@@ -355,13 +355,11 @@ defmodule Alto.Runner.Execution.Children do
   defp child_prompt(spec, prompt_config) do
     prompt_opts =
       prompt_config
-      |> Keyword.take([:prompt, :system_prompt, :project_instructions])
+      |> Keyword.take([:prompt, :project_instructions])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
     if spec.system_prompt do
-      prompt_opts
-      |> Keyword.drop([:prompt, :system_prompt])
-      |> Keyword.put(:system_prompt, spec.system_prompt)
+      Keyword.put(prompt_opts, :prompt, spec.system_prompt)
     else
       prompt_opts
     end

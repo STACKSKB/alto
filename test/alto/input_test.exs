@@ -84,7 +84,7 @@ defmodule Alto.InputTest do
                input: input,
                provider: {Provider, owner: self()},
                max_transcript_bytes: 500,
-               system_prompt: "system"
+               prompt: "system"
              )
 
     assert length(Alto.Input.list(input)) == 1

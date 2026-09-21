@@ -5,6 +5,14 @@ around lifecycle events, configure trusted commands, transform model supplied
 tool input, select an optional renderer or front end, and choose provider
 adapters without changing the runner.
 
+## System prompts
+
+The `:prompt` run option accepts literal text, `nil` to omit the system message,
+a builder module, `{module, options}`, or a function receiving the prompt context.
+For example, use `prompt: "Answer concisely"` or `prompt: Alto.Prompts.Coding`.
+The CLI's `--system-prompt` and `--no-system-prompt` flags set this same option.
+A resumed conversation retains its stored system message.
+
 ## Request diagnostics by composition
 
 The executor emits `model_started` with the step number only. Request diagnostics

@@ -2,10 +2,19 @@ defmodule Alto.Prompt do
   @moduledoc "Construction and rendering for replaceable system-prompt builders."
 
   @type fragment :: binary()
-  @type builder :: module() | {module(), keyword()} | (Alto.Prompt.Builder.context() -> binary())
+  @type builder ::
+          binary()
+          | nil
+          | module()
+          | {module(), keyword()}
+          | (Alto.Prompt.Builder.context() -> binary())
 
-  @doc "Build a prompt with a module, configured module, or function."
-  @spec build(builder(), Alto.Prompt.Builder.context()) :: {:ok, binary()} | {:error, term()}
+  @doc "Resolve literal text, nil, a module, a configured module, or a function."
+  @spec build(builder(), Alto.Prompt.Builder.context()) ::
+          {:ok, binary() | nil} | {:error, term()}
+  def build(value, _context) when value in [nil, ""], do: {:ok, nil}
+  def build(value, _context) when is_binary(value), do: {:ok, value}
+
   def build({module, opts}, context) when is_atom(module) and is_list(opts) do
     validate(fn -> module.build(context, opts) end)
   end

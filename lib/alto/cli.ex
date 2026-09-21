@@ -649,18 +649,9 @@ defmodule Alto.CLI do
   end
 
   defp configure_prompt(run_options, options) do
-    if prompt_flags?(options) do
-      run_options
-      |> Keyword.drop([:prompt, :system_prompt])
-      |> Keyword.merge(prompt_options(options))
-    else
-      if Keyword.has_key?(run_options, :prompt) or
-           Keyword.has_key?(run_options, :system_prompt) do
-        run_options
-      else
-        Keyword.put(run_options, :prompt, Alto.Prompts.Coding)
-      end
-    end
+    if prompt_flags?(options),
+      do: Keyword.merge(run_options, prompt_options(options)),
+      else: Keyword.put_new(run_options, :prompt, Alto.Prompts.Coding)
   end
 
   defp prompt_flags?(options) do
@@ -769,8 +760,8 @@ defmodule Alto.CLI do
 
   defp prompt_options(options) do
     cond do
-      Keyword.get(options, :no_system_prompt, false) -> [system_prompt: nil]
-      prompt = Keyword.get(options, :system_prompt) -> [system_prompt: prompt]
+      Keyword.get(options, :no_system_prompt, false) -> [prompt: nil]
+      prompt = Keyword.get(options, :system_prompt) -> [prompt: prompt]
       true -> []
     end
   end

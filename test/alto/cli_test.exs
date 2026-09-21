@@ -139,7 +139,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -163,7 +163,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.NoToolsProvider,
         tools: [Alto.Tools.ListFiles],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -181,7 +181,7 @@ defmodule Alto.CLITest do
       """
       Alto.Config.new(
         provider: Alto.CLITest.DefaultToolsProvider,
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -200,7 +200,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.StreamingProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -219,7 +219,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -239,7 +239,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -261,7 +261,7 @@ defmodule Alto.CLITest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["providerless_echo"]),
         tools: [Alto.CLITest.ProviderlessTool],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -331,7 +331,7 @@ defmodule Alto.CLITest do
       """
       Alto.Config.new(
         provider: nil,
-        system_prompt: nil,
+        prompt: nil,
         listeners: [],
         runs: %{
           "rule" => [
@@ -365,7 +365,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.ModelReportingProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -408,7 +408,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )

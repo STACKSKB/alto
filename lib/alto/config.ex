@@ -22,7 +22,6 @@ defmodule Alto.Config do
     :checkpoint_version,
     :continuation_store,
     :prompt,
-    :system_prompt,
     :project_instructions,
     :max_steps,
     :max_effects,

@@ -128,18 +128,20 @@ defmodule Alto.PromptTest do
     assert prompt =~ "project instructions truncated"
   end
 
-  test "accepts a prompt function and rejects ambiguous configuration" do
+  test "accepts literal text, disabled prompts, and prompt functions" do
     assert {:ok, "cwd=/tmp\n"} =
              Alto.Prompt.build(fn context -> "cwd=#{context.cwd}\n" end, %{
                cwd: "/tmp",
                tools: []
              })
 
-    assert {:error, :conflicting_prompt_options, _result} =
-             Alto.run("hello",
-               provider: AnswerProvider,
-               prompt: Alto.Prompts.Chat,
-               system_prompt: "other"
-             )
+    assert {:ok, "literal"} = Alto.Prompt.build("literal", %{})
+    assert {:ok, nil} = Alto.Prompt.build(nil, %{})
+    assert {:ok, nil} = Alto.Prompt.build("", %{})
+
+    assert {:ok, _} =
+             Alto.run("hello", provider: {AnswerProvider, test_pid: self()}, prompt: "literal")
+
+    assert_receive {:request, %{messages: [%{"role" => "system", "content" => "literal"} | _]}}
   end
 end

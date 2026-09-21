@@ -24,7 +24,7 @@ defmodule Alto.Runner.RequestContextTest do
     options = [
       loop: Alto.loop(Loop),
       provider: {Provider, test_pid: self()},
-      system_prompt: "system"
+      prompt: "system"
     ]
 
     assert {:ok, _} = Alto.run("stage: planning", options)
@@ -42,7 +42,7 @@ defmodule Alto.Runner.RequestContextTest do
     options = [
       loop: Alto.loop(Loop),
       provider: {Provider, test_pid: self()},
-      system_prompt: "system",
+      prompt: "system",
       max_transcript_bytes: 500
     ]
 
