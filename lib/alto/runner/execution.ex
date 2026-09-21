@@ -584,7 +584,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp interpret(%Effect{kind: :compact_context, data: options}, run) do
-    compact_context(run,
+    RunTranscript.reduce(run,
       reason: :manual,
       required_headroom: Map.get(options, :required_headroom, 0)
     )
@@ -665,34 +665,31 @@ defmodule Alto.Runner.Execution do
 
   defp prepare_model_context(effect_request, run) do
     with {:ok, request} <- model_request(effect_request, run) do
-      case check_context(request, run) do
+      checked = check_context(request, run)
+
+      case checked do
         {:ok, %{context_pressure: true} = request} ->
-          case compact_context(run, reason: :model_context_pressure) do
-            {:ok, next} -> prepare_model_context(effect_request, next)
-            {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
-            {:error, _, next} -> {:ok, Map.delete(request, :context_pressure), next}
-          end
+          compact_model_context(
+            effect_request,
+            run,
+            {:ok, Map.delete(request, :context_pressure)}
+          )
 
-        {:ok, request} ->
-          {:ok, request, run}
+        {:error, {:context_limit, _}} ->
+          compact_model_context(effect_request, run, checked)
 
-        {:error, {:context_limit, _} = original} ->
-          case compact_context(run, reason: :model_context_pressure) do
-            {:ok, next} -> prepare_model_context(effect_request, next)
-            {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
-            {:error, _reason, next} -> {:error, original, next}
-          end
-
-        {:error, reason} ->
-          {:error, reason, run}
+        {status, value} ->
+          {status, value, run}
       end
     end
   end
 
-  defp compact_context(run, opts) do
-    alias Alto.Runner.Execution.Transcript, as: History
-
-    History.reduce(run, opts)
+  defp compact_model_context(effect_request, run, {status, fallback}) do
+    case RunTranscript.reduce(run, reason: :model_context_pressure) do
+      {:ok, next} -> prepare_model_context(effect_request, next)
+      {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
+      {:error, _, next} -> {status, fallback, next}
+    end
   end
 
   defp request_model(request, run) do
