@@ -139,20 +139,14 @@ defmodule Alto.Loops.Default do
   end
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) do
-    with :ok <- validate_checkpoint_state(state) do
-      {:ok, Map.from_struct(state)}
-    end
-  end
-
-  @impl true
-  def load_checkpoint(%{task: _, phase: _, step: _, observations: _} = checkpoint, %Spec{})
-      when map_size(checkpoint) == 4 do
-    state = struct!(__MODULE__, checkpoint)
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) when map_size(state) == 5 do
     with :ok <- validate_checkpoint_state(state), do: {:ok, state}
   end
 
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
+
+  @impl true
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
   defp validate_checkpoint_state(state) do
     with :ok <- validate_phase(state.phase),

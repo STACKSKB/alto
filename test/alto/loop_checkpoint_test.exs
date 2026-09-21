@@ -15,7 +15,8 @@ defmodule Alto.LoopCheckpointTest do
       observations: [Alto.Event.durable(:tool_completed, %{})]
     }
 
-    assert {:ok, checkpoint} = Default.dump_checkpoint(state, spec)
+    assert {:ok, ^state} = Default.dump_checkpoint(state, spec)
+    checkpoint = state
     refute Map.has_key?(checkpoint, :context)
     refute Map.has_key?(checkpoint, :subagents)
     assert {:ok, restored} = Default.load_checkpoint(checkpoint, spec)
@@ -50,7 +51,9 @@ defmodule Alto.LoopCheckpointTest do
       results: []
     }
 
-    assert {:ok, checkpoint} = Rule.dump_checkpoint(state, spec)
+    assert {:ok, ^state} = Rule.dump_checkpoint(state, spec)
+    assert {:ok, encoded} = Alto.Persistence.Codec.encode(state)
+    assert {:ok, checkpoint} = Alto.Persistence.Codec.decode(encoded)
     refute Map.has_key?(checkpoint, :steps)
     assert {:ok, restored} = Rule.load_checkpoint(checkpoint, spec)
     assert restored == state
@@ -63,9 +66,9 @@ defmodule Alto.LoopCheckpointTest do
     spec = Spec.new(Rule, steps: ["one", "two"])
 
     assert {:error, :invalid_checkpoint} =
-             Rule.load_checkpoint(%{arguments: %{}, index: 3, results: []}, spec)
+             Rule.load_checkpoint(%Rule{arguments: %{}, index: 3, results: []}, spec)
 
     assert {:error, :invalid_checkpoint} =
-             Rule.load_checkpoint(%{arguments: [], index: 1, results: []}, spec)
+             Rule.load_checkpoint(%Rule{arguments: [], index: 1, results: []}, spec)
   end
 end

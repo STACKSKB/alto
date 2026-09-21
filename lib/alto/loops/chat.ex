@@ -45,16 +45,12 @@ defmodule Alto.Loops.Chat do
   end
 
   @impl true
-  def dump_checkpoint(%__MODULE__{task: task, phase: phase}, %Spec{})
-      when phase in [:awaiting_model, :complete],
-      do: {:ok, %{task: task, phase: phase}}
+  def dump_checkpoint(%__MODULE__{phase: phase} = state, %Spec{})
+      when map_size(state) == 3 and phase in [:awaiting_model, :complete],
+      do: {:ok, state}
 
   def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
   @impl true
-  def load_checkpoint(%{task: task, phase: phase} = checkpoint, %Spec{})
-      when map_size(checkpoint) == 2 and phase in [:awaiting_model, :complete],
-      do: {:ok, %__MODULE__{task: task, phase: phase}}
-
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 end

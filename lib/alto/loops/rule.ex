@@ -89,24 +89,20 @@ defmodule Alto.Loops.Rule do
   def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: Transition.continue(state)
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) do
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) when map_size(state) == 4 do
     with {:ok, steps} <- steps(spec),
          true <- is_integer(state.index) and state.index >= 1 and state.index <= length(steps),
          true <- is_map(state.arguments) and is_list(state.results) do
-      {:ok, Map.from_struct(state)}
+      {:ok, state}
     else
       _ -> {:error, :invalid_checkpoint}
     end
   end
 
-  @impl true
-  def load_checkpoint(%{arguments: _, index: _, results: _} = checkpoint, %Spec{} = spec)
-      when map_size(checkpoint) == 3 do
-    state = struct!(__MODULE__, checkpoint)
-    with {:ok, _} <- dump_checkpoint(state, spec), do: {:ok, state}
-  end
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+  @impl true
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
   ## Internals
 
