@@ -76,7 +76,10 @@ defmodule Alto.Codex.AppServer.ClientTest do
     opts = [command: server, args: [], cwd: root, startup_timeout: 5_000, request_timeout: 5_000]
 
     assert {:ok, client} = Client.ensure_started(opts)
-    assert {:ok, ^client} = Client.ensure_started(opts)
+    assert {:ok, ^client} = Client.ensure_started(Enum.reverse(opts))
+    assert {:ok, isolated} = Client.ensure_started(Keyword.put(opts, :instance, :isolated))
+    refute isolated == client
+    GenServer.stop(isolated)
     assert :ok = Client.subscribe(client)
 
     assert {:ok, %{"account" => %{"type" => "chatgpt", "planType" => "pro"}}} =

@@ -31,7 +31,10 @@ defmodule Alto.External.JSONRPC do
     }
   end
 
-  def ensure_started(module, opts, key) do
+  def ensure_started(module, opts) do
+    # Keyword lookup uses the first occurrence; option order is not client identity.
+    identity = opts |> Enum.reverse() |> Map.new() |> :erlang.term_to_binary([:deterministic])
+    key = {module, :crypto.hash(:sha256, identity)}
     name = {:via, Registry, {Alto.External.Registry, key}}
     child = {module, Keyword.put(opts, :name, name)}
 
@@ -55,8 +58,8 @@ defmodule Alto.External.JSONRPC do
     :exit, reason -> {:error, {:external_client_failed, module, :ready, reason}}
   end
 
-  defp call_timeout(:infinity), do: :infinity
-  defp call_timeout(timeout) when is_integer(timeout), do: timeout + 100
+  def call_timeout(:infinity), do: :infinity
+  def call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
 
   def open(state, opener, initialize) do
     case opener.(state.opts) do

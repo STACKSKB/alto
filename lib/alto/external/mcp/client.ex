@@ -24,14 +24,14 @@ defmodule Alto.External.MCP.Client do
   @spec ensure_started(server_options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts) when is_list(opts) do
     with {:ok, opts} <- normalize_options(opts) do
-      JSONRPC.ensure_started(__MODULE__, opts, client_key(opts))
+      JSONRPC.ensure_started(__MODULE__, opts)
     end
   end
 
   @doc "List the external server's tools, using its cached catalog after the first call."
   @spec list_tools(pid(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_tools(pid, timeout \\ @default_timeout) do
-    GenServer.call(pid, {:list_tools, JSONRPC.deadline(timeout)}, call_timeout(timeout))
+    GenServer.call(pid, {:list_tools, JSONRPC.deadline(timeout)}, JSONRPC.call_timeout(timeout))
   catch
     :exit, reason -> {:error, {:mcp_client_unavailable, reason}}
   end
@@ -41,8 +41,11 @@ defmodule Alto.External.MCP.Client do
           {:ok, term()} | {:error, term()} | {:unknown, term()}
   def call_tool(pid, name, arguments, timeout \\ @default_timeout)
       when is_binary(name) and is_map(arguments) do
-    call_timeout = call_timeout(timeout)
-    GenServer.call(pid, {:call_tool, name, arguments, JSONRPC.deadline(timeout)}, call_timeout)
+    GenServer.call(
+      pid,
+      {:call_tool, name, arguments, JSONRPC.deadline(timeout)},
+      JSONRPC.call_timeout(timeout)
+    )
   catch
     :exit, {:noproc, _} = reason -> {:error, {:mcp_client_unavailable, reason}}
     :exit, reason -> {:unknown, {:mcp_client_unavailable, reason}}
@@ -249,29 +252,6 @@ defmodule Alto.External.MCP.Client do
     end
   end
 
-  defp client_key(opts) do
-    identity =
-      Keyword.take(opts, [
-        :command,
-        :args,
-        :cwd,
-        :env,
-        :executor,
-        :protocol_version,
-        :startup_timeout,
-        :request_timeout,
-        :max_message_bytes,
-        :max_pending_requests,
-        :max_ready_waiters
-      ])
-
-    "mcp:" <>
-      Base.url_encode64(
-        :crypto.hash(:sha256, :erlang.term_to_binary(identity, [:deterministic])),
-        padding: false
-      )
-  end
-
   defp open_port(opts) do
     command = Keyword.fetch!(opts, :command)
     executable = System.find_executable(command) || if(File.regular?(command), do: command)
@@ -439,8 +419,4 @@ defmodule Alto.External.MCP.Client do
     do: GenServer.reply(from, {:unknown, reason})
 
   defp reply_error({_kind, from}, reason, _class), do: GenServer.reply(from, {:error, reason})
-
-  defp call_timeout(:infinity), do: :infinity
-  defp call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
-  defp call_timeout(_timeout), do: @default_timeout
 end

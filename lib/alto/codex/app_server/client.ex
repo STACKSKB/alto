@@ -25,7 +25,7 @@ defmodule Alto.Codex.AppServer.Client do
   @spec ensure_started(options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts \\ []) when is_list(opts) do
     with {:ok, opts} <- normalize_options(opts) do
-      JSONRPC.ensure_started(__MODULE__, opts, client_key(opts))
+      JSONRPC.ensure_started(__MODULE__, opts)
     end
   end
 
@@ -44,7 +44,7 @@ defmodule Alto.Codex.AppServer.Client do
     GenServer.call(
       client,
       {:request, method, params, JSONRPC.deadline(timeout)},
-      call_timeout(timeout)
+      JSONRPC.call_timeout(timeout)
     )
   catch
     :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
@@ -305,29 +305,6 @@ defmodule Alto.Codex.AppServer.Client do
     end
   end
 
-  defp client_key(opts) do
-    identity =
-      Keyword.take(opts, [
-        :command,
-        :args,
-        :cwd,
-        :env,
-        :instance,
-        :startup_timeout,
-        :request_timeout,
-        :max_message_bytes,
-        :max_pending_requests,
-        :max_ready_waiters,
-        :max_subscribers
-      ])
-
-    "codex-app-server:" <>
-      Base.url_encode64(
-        :crypto.hash(:sha256, :erlang.term_to_binary(identity, [:deterministic])),
-        padding: false
-      )
-  end
-
   defp open_port(opts) do
     command = Keyword.fetch!(opts, :command)
 
@@ -460,8 +437,4 @@ defmodule Alto.Codex.AppServer.Client do
 
   defp reply_error(:initialize, _reason), do: :ok
   defp reply_error({:request, from, _method}, reason), do: GenServer.reply(from, {:error, reason})
-
-  defp call_timeout(:infinity), do: :infinity
-  defp call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
-  defp call_timeout(_timeout), do: @default_turn_timeout
 end

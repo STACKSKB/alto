@@ -75,7 +75,7 @@ defmodule Alto.External.MCP.ClientTest do
 
     assert {:ok, client} = Client.ensure_started(opts)
     on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
-    assert {:ok, same_client} = Client.ensure_started(opts)
+    assert {:ok, same_client} = Client.ensure_started(Enum.reverse(opts))
     assert client == same_client
 
     assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client, 5_000)
