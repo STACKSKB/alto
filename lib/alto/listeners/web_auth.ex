@@ -21,10 +21,9 @@ defmodule Alto.Listeners.WebAuth do
   def normalize(:none), do: {:ok, {:none, nil}}
 
   def normalize({module, opts}) when is_atom(module) and is_list(opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :authorize, 2),
-       do: {:ok, {{module, opts}, nil}},
-       else: {:error, :invalid_web_auth}
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, __MODULE__),
+      do: {:ok, {{module, opts}, nil}},
+      else: {:error, :invalid_web_auth}
   end
 
   def normalize(_), do: {:error, :invalid_web_auth}

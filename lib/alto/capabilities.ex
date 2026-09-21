@@ -1,6 +1,19 @@
 defmodule Alto.Capabilities do
   @moduledoc "Inspect configured extension points without resolving credentials or starting a provider."
 
+  @doc "Whether a module implements every required callback of a behaviour."
+  def implements?(module, contract) when is_atom(module) do
+    Code.ensure_loaded?(module) and
+      Enum.all?(
+        contract.behaviour_info(:callbacks) -- contract.behaviour_info(:optional_callbacks),
+        fn
+          {name, arity} -> function_exported?(module, name, arity)
+        end
+      )
+  end
+
+  def implements?(_, _), do: false
+
   @defaults [
     max_steps: 32,
     max_effects: 10_000,

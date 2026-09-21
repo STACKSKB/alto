@@ -72,11 +72,7 @@ defmodule Alto.Command do
   defp normalize(other, _kind), do: {:error, {:invalid_command_component, other}}
 
   defp validate_component(module, opts, kind) do
-    contract = Map.fetch!(@contracts, kind)
-    required = contract.behaviour_info(:callbacks) -- contract.behaviour_info(:optional_callbacks)
-
-    if Code.ensure_loaded?(module) and
-         Enum.all?(required, fn {name, arity} -> function_exported?(module, name, arity) end) do
+    if Alto.Capabilities.implements?(module, Map.fetch!(@contracts, kind)) do
       {:ok, {module, opts}}
     else
       {:error, {:invalid_command_component, kind, module}}

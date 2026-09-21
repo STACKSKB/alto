@@ -25,10 +25,8 @@ defmodule Alto.Workspaces do
     backend = Keyword.get(opts, :backend, Alto.Workspaces.Git)
     backend_options = Keyword.get(opts, :backend_options, [])
 
-    unless is_atom(backend) and Code.ensure_loaded?(backend) and
-             Enum.all?([snapshot: 2, checkout: 3, diff: 3], fn {f, a} ->
-               function_exported?(backend, f, a)
-             end) and Keyword.keyword?(backend_options),
+    unless Alto.Capabilities.implements?(backend, Alto.Workspaces.Backend) and
+             Keyword.keyword?(backend_options),
            do: raise(ArgumentError, "invalid workspace backend")
 
     %__MODULE__{

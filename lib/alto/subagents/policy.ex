@@ -17,12 +17,7 @@ defmodule Alto.Subagents.Policy do
     journal: [type: :any, default: nil]
   ]
 
-  def implementation?(module) when is_atom(module),
-    do:
-      Code.ensure_loaded?(module) and function_exported?(module, :limits, 1) and
-        function_exported?(module, :admit, 3)
-
-  def implementation?(_), do: false
+  def implementation?(module), do: Alto.Capabilities.implements?(module, __MODULE__)
 
   def validate(policy) do
     case resolve(policy) do

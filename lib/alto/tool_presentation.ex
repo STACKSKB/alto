@@ -8,10 +8,9 @@ defmodule Alto.ToolPresentation do
   def validate(nil), do: :ok
 
   def validate({module, opts}) when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and Keyword.keyword?(opts) and
-         function_exported?(module, :summary, 3),
-       do: :ok,
-       else: {:error, :invalid_tool_presenter}
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, __MODULE__),
+      do: :ok,
+      else: {:error, :invalid_tool_presenter}
   end
 
   def validate(_), do: {:error, :invalid_tool_presenter}

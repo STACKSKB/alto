@@ -14,8 +14,7 @@ defmodule Alto.Context.Reducer do
   def resolve(:handoff), do: {:ok, {Alto.Context.Reducers.Handoff, []}}
 
   def resolve({module, opts}) when is_atom(module) and is_list(opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :compact, 3) do
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, __MODULE__) do
       {:ok, {module, opts}}
     else
       {:error, {:invalid_strategy, module}}

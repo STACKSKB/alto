@@ -177,10 +177,9 @@ defmodule Alto.Runner.Execution.Setup do
   def normalize_provider(other, _opts), do: {:error, {:invalid_provider, other}}
 
   defp provider_contract(module, opts) do
-    if module != nil and Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :stream, 3) and function_exported?(module, :describe, 1),
-       do: {:ok, {module, opts}},
-       else: {:error, {:invalid_provider, module}}
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, Alto.Provider),
+      do: {:ok, {module, opts}},
+      else: {:error, {:invalid_provider, module}}
   end
 
   defp resolve_child_policy(nil, _budget, _timeout, _cancel_ref),
