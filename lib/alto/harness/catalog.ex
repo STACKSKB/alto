@@ -91,12 +91,7 @@ defmodule Alto.Harness.Catalog do
                   do: Map.delete(updated, "closed"),
                   else: updated
 
-              catalog =
-                Map.update!(catalog, "projects", fn projects ->
-                  Enum.map(projects, &if(&1["id"] == project["id"], do: updated, else: &1))
-                end)
-
-              {:ok, catalog, updated}
+              replace(catalog, "projects", updated)
           end
         end)
     end
@@ -105,18 +100,7 @@ defmodule Alto.Harness.Catalog do
   @doc "Close a workspace in navigation without deleting its tasks, sessions, or files."
   def close_project(project_id, opts \\ []) when is_binary(project_id) do
     transact(opts, fn catalog ->
-      case Enum.find(catalog["projects"], &(&1["id"] == project_id)) do
-        nil ->
-          {:error, {:unknown_project, project_id}}
-
-        project ->
-          closed = Map.put(project, "closed", true)
-
-          projects =
-            Enum.map(catalog["projects"], &if(&1["id"] == project_id, do: closed, else: &1))
-
-          {:ok, Map.put(catalog, "projects", projects), closed}
-      end
+      update(catalog, "projects", project_id, &Map.put(&1, "closed", true))
     end)
   end
 
@@ -165,20 +149,9 @@ defmodule Alto.Harness.Catalog do
   def update_task(task_id, changes, opts \\ []) when is_binary(task_id) do
     with {:ok, changes} <- validate_changes(changes) do
       transact(opts, fn catalog ->
-        case Enum.find(catalog["tasks"], &(&1["id"] == task_id)) do
-          nil ->
-            {:error, {:unknown_task, task_id}}
-
-          task ->
-            updated = task |> Map.merge(changes) |> Map.put("updated_at_ms", now_ms())
-
-            catalog =
-              Map.update!(catalog, "tasks", fn tasks ->
-                Enum.map(tasks, &if(&1["id"] == task_id, do: updated, else: &1))
-              end)
-
-            {:ok, catalog, updated}
-        end
+        update(catalog, "tasks", task_id, fn task ->
+          task |> Map.merge(changes) |> Map.put("updated_at_ms", now_ms())
+        end)
       end)
     end
   end
@@ -205,6 +178,22 @@ defmodule Alto.Harness.Catalog do
 
       {:ok, tasks}
     end
+  end
+
+  defp update(catalog, collection, id, fun) do
+    case Enum.find(catalog[collection], &(&1["id"] == id)) do
+      nil ->
+        reason = if collection == "projects", do: :unknown_project, else: :unknown_task
+        {:error, {reason, id}}
+
+      record ->
+        replace(catalog, collection, fun.(record))
+    end
+  end
+
+  defp replace(catalog, collection, updated) do
+    records = Enum.map(catalog[collection], &if(&1["id"] == updated["id"], do: updated, else: &1))
+    {:ok, Map.put(catalog, collection, records), updated}
   end
 
   defp transact(opts, fun) do
