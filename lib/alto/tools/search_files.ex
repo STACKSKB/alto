@@ -136,8 +136,7 @@ defmodule Alto.Tools.SearchFiles do
   defp normalize_backend(backend), do: {:error, {:invalid_search_backend, backend}}
 
   defp validate_backend(module, opts) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :search, 3) and
-         Keyword.keyword?(opts) do
+    if Alto.Capabilities.implements?(module, Alto.Search.Backend) and Keyword.keyword?(opts) do
       {:ok, module, opts}
     else
       {:error, {:invalid_search_backend, {module, opts}}}
@@ -171,20 +170,14 @@ defmodule Alto.Tools.SearchFiles do
   defp validate_case_sensitive(value) when value in [true, false], do: :ok
   defp validate_case_sensitive(_value), do: {:error, :case_sensitive_must_be_boolean}
 
-  defp search(path, :regular, query, case_sensitive?, cwd, limits) do
-    walk([path], initial_state(), query, case_sensitive?, cwd, limits)
-  end
-
-  defp search(path, :directory, query, case_sensitive?, cwd, limits) do
-    walk([path], initial_state(), query, case_sensitive?, cwd, limits)
+  defp search(path, type, query, case_sensitive?, cwd, limits)
+       when type in [:regular, :directory] do
+    state = %{matches: [], scanned_files: 0, visited_entries: 0, truncated: false}
+    walk([path], state, query, case_sensitive?, cwd, limits)
   end
 
   defp search(_path, type, _query, _case_sensitive?, _cwd, _limits),
     do: {:error, {:unsupported_file_type, type}}
-
-  defp initial_state do
-    %{matches: [], scanned_files: 0, visited_entries: 0, truncated: false}
-  end
 
   defp walk([], state, _query, _case_sensitive?, _cwd, _limits), do: {:ok, state}
 
@@ -240,7 +233,7 @@ defmodule Alto.Tools.SearchFiles do
   defp search_file(path, state, query, case_sensitive?, cwd, limits) do
     state = %{state | scanned_files: state.scanned_files + 1}
 
-    case File.read(path) do
+    case Alto.BoundedFile.read(path, limits.max_file_bytes) do
       {:ok, content} when is_binary(content) ->
         if String.valid?(content) do
           add_line_matches(content, path, state, query, case_sensitive?, cwd, limits)
