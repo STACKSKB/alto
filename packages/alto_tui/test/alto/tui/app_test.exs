@@ -579,6 +579,37 @@ defmodule Alto.TUI.AppTest do
     assert View.activity_widgets(idle, frame) == []
   end
 
+  test "menu filtering renders and selects the visible item and recovers from no matches",
+       context do
+    menu = App.open_overlay(state!(context), :approval)
+
+    type = fn state, code ->
+      {:noreply, next} = App.handle_event(%Key{code: code}, state)
+      next
+    end
+
+    filtered = Enum.reduce(String.graphemes("read"), menu, &type.(&2, &1))
+
+    popup =
+      Enum.find_value(View.widgets(filtered, %{width: 120, height: 36}), fn
+        {%ExRatatui.Widgets.Popup{} = popup, _rect} -> popup
+        _ -> nil
+      end)
+
+    assert popup.block.title =~ "filter: read"
+    assert popup.content.items == ["READ · deny prepared mutations"]
+    {:noreply, selected} = App.handle_event(%Key{code: "enter"}, filtered)
+    assert selected.approval_level == :read_only
+    assert selected.overlay == nil
+
+    empty = menu |> type.("z") |> type.("z")
+    {:noreply, empty} = App.handle_event(%Key{code: "down"}, empty)
+    {:noreply, unchanged} = App.handle_event(%Key{code: "enter"}, empty)
+    assert unchanged.overlay == empty.overlay
+    restored = empty |> type.("backspace") |> type.("backspace")
+    assert restored.overlay == %{menu.overlay | index: 0}
+  end
+
   test "effort picker offers only supported choices and remembers them per model", context do
     state = state!(context)
 

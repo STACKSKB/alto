@@ -6,7 +6,7 @@ defmodule Alto.TUI.App do
   alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Backend, Selection, State, TextForm, View, WorkspaceForm}
+  alias Alto.TUI.{Menu, Backend, Selection, State, TextForm, View, WorkspaceForm}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -965,31 +965,15 @@ defmodule Alto.TUI.App do
           )
         end)
 
-        overlay = %{
-          kind: kind,
-          title: "models · loading #{profile.label}…",
-          index: 0,
-          filter: "",
-          all_items: [%{label: "Loading model catalog…", value: nil}],
-          items: [%{label: "Loading model catalog…", value: nil}]
-        }
+        overlay =
+          Menu.new(kind, "models · loading #{profile.label}…", [
+            %{label: "Loading model catalog…", value: nil}
+          ])
 
         %{state | overlay: overlay, model_loading: MapSet.put(state.model_loading, profile.id)}
 
       {:ok, title, items, selected} ->
-        index = Enum.find_index(items, &(&1.value == selected)) || 0
-
-        %{
-          state
-          | overlay: %{
-              kind: kind,
-              title: title,
-              index: index,
-              filter: "",
-              all_items: items,
-              items: items
-            }
-        }
+        %{state | overlay: Menu.new(kind, title, items, selected)}
 
       {:error, reason} ->
         %{state | notice: reason}
@@ -1131,29 +1115,16 @@ defmodule Alto.TUI.App do
 
   defp overlay_key(state, _key), do: state
 
-  defp filter_overlay(state, filter) do
-    normalized = String.downcase(filter)
+  defp filter_overlay(state, filter),
+    do: %{state | overlay: Menu.filter(state.overlay, filter)}
 
-    items =
-      Enum.filter(
-        state.overlay.all_items,
-        &String.contains?(String.downcase(&1.label), normalized)
-      )
+  defp move_overlay(state, delta),
+    do: %{state | overlay: Menu.move(state.overlay, delta)}
 
-    title = state.overlay.title |> String.split(" · filter:", parts: 2) |> hd()
-    title = if filter == "", do: title, else: title <> " · filter: " <> filter
-    %{state | overlay: %{state.overlay | filter: filter, items: items, index: 0, title: title}}
-  end
+  defp select_overlay(%{overlay: overlay} = state) do
+    items = Menu.items(overlay)
+    index = overlay.index
 
-  defp move_overlay(%{overlay: %{items: []}} = state, _delta), do: state
-
-  defp move_overlay(state, delta) do
-    count = length(state.overlay.items)
-    index = rem(state.overlay.index + delta + count, count)
-    %{state | overlay: %{state.overlay | index: index}}
-  end
-
-  defp select_overlay(%{overlay: %{items: items, index: index}} = state) do
     case Enum.at(items, index) do
       nil ->
         state
@@ -1500,7 +1471,7 @@ defmodule Alto.TUI.App do
   end
 
   defp put_overlay_index(state, row) do
-    index = row |> max(0) |> min(max(length(state.overlay.items) - 1, 0))
+    index = row |> max(0) |> min(max(length(Menu.items(state.overlay)) - 1, 0))
     %{state | overlay: %{state.overlay | index: index}}
   end
 
@@ -1534,15 +1505,8 @@ defmodule Alto.TUI.App do
 
     %{
       state
-      | overlay: %{
-          kind: :model_error,
-          title: "model catalog unavailable",
-          message: message,
-          index: 0,
-          filter: "",
-          all_items: items,
-          items: items
-        },
+      | overlay:
+          Menu.new(:model_error, "model catalog unavailable", items) |> Map.put(:message, message),
         notice: "model catalog needs attention"
     }
   end

@@ -555,17 +555,8 @@ defmodule Alto.TUI.Backends.Codex do
     |> Enum.map(&%{label: "Use " <> &1.label, value: {:select_backend, &1.value}})
   end
 
-  defp list_overlay(kind, title, message, items) do
-    %{
-      kind: kind,
-      title: title,
-      message: message,
-      index: 0,
-      filter: "",
-      all_items: items,
-      items: items
-    }
-  end
+  defp list_overlay(kind, title, message, items),
+    do: Alto.TUI.Menu.new(kind, title, items) |> Map.put(:message, message)
 
   defp ingest_codex_notification(state, "account/login/completed", %{"success" => true}) do
     reconnect_codex_account(state)

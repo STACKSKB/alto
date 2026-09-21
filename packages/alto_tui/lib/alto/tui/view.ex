@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{State, TextForm, WorkspaceForm}
+  alias Alto.TUI.{Menu, State, TextForm, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -539,10 +539,11 @@ defmodule Alto.TUI.View do
         )
 
   defp add_overlay(widgets, overlay, root) do
-    selected = safe_selected(overlay.index, overlay.items)
+    items = Menu.items(overlay)
+    selected = safe_selected(overlay.index, items)
 
     list = %List{
-      items: Enum.map(overlay.items, & &1.label),
+      items: Enum.map(items, & &1.label),
       selected: selected,
       highlight_symbol: "› ",
       highlight_style: style(fg: :black, bg: @accent, modifiers: [:bold]),
@@ -556,7 +557,7 @@ defmodule Alto.TUI.View do
             overlay_message_prefix(overlay) <>
               overlay.message <>
               "\n\n" <>
-              (overlay.items
+              (items
                |> Enum.with_index()
                |> Enum.map_join("\n", fn {item, index} ->
                  if index == selected, do: "› " <> item.label, else: "  " <> item.label
@@ -571,7 +572,7 @@ defmodule Alto.TUI.View do
     popup = %Popup{
       content: content,
       block: %Block{
-        title: " #{overlay.title} │ ↑↓ · Enter · Esc ",
+        title: " #{Menu.title(overlay)} │ ↑↓ · Enter · Esc ",
         borders: [:all],
         border_type: :rounded,
         border_style: style(fg: @accent),
