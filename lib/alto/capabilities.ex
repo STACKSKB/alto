@@ -14,6 +14,17 @@ defmodule Alto.Capabilities do
 
   def implements?(_, _), do: false
 
+  @doc "Normalize a module or configured module and validate its callback contract."
+  def resolve(module, contract) when is_atom(module), do: resolve({module, []}, contract)
+
+  def resolve({module, options} = spec, contract) do
+    if Keyword.keyword?(options) and implements?(module, contract),
+      do: {:ok, spec},
+      else: {:error, {:invalid_capability, contract, spec}}
+  end
+
+  def resolve(spec, contract), do: {:error, {:invalid_capability, contract, spec}}
+
   @defaults [
     max_steps: 32,
     max_effects: 10_000,

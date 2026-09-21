@@ -114,19 +114,9 @@ defmodule Alto.Tools.SearchFiles do
   defp query_limits(%{max_query_bytes: _} = limits), do: limits
   defp query_limits(_), do: %{max_query_bytes: @max_query_bytes}
 
-  defp normalize_backend({module, opts}) when is_atom(module) and is_list(opts) do
-    validate_backend(module, opts)
-  end
-
-  defp normalize_backend(module) when is_atom(module), do: validate_backend(module, [])
-  defp normalize_backend(backend), do: {:error, {:invalid_search_backend, backend}}
-
-  defp validate_backend(module, opts) do
-    if Alto.Capabilities.implements?(module, Alto.Search.Backend) and Keyword.keyword?(opts) do
-      {:ok, module, opts}
-    else
-      {:error, {:invalid_search_backend, {module, opts}}}
-    end
+  defp normalize_backend(spec) do
+    with {:ok, {module, options}} <- Alto.Capabilities.resolve(spec, Alto.Search.Backend),
+         do: {:ok, module, options}
   end
 
   defp normalize_backend_result({:ok, result}, _backend) when is_map(result),

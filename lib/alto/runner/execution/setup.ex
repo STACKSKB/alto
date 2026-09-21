@@ -167,18 +167,7 @@ defmodule Alto.Runner.Execution.Setup do
   # without one and fail closed only if a model effect is requested.
   def normalize_provider(nil), do: {:ok, nil}
 
-  def normalize_provider({module, opts}) when is_atom(module) and is_list(opts),
-    do: provider_contract(module, opts)
-
-  def normalize_provider(module) when is_atom(module), do: provider_contract(module, [])
-
-  def normalize_provider(other), do: {:error, {:invalid_provider, other}}
-
-  defp provider_contract(module, opts) do
-    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, Alto.Provider),
-      do: {:ok, {module, opts}},
-      else: {:error, {:invalid_provider, module}}
-  end
+  def normalize_provider(spec), do: Alto.Capabilities.resolve(spec, Alto.Provider)
 
   defp resolve_child_policy(nil, _budget, _timeout, _cancel_ref),
     do: Alto.Subagents.Policy.resolve(nil)

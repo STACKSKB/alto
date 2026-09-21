@@ -8,14 +8,17 @@ defmodule Alto.Command do
   alias Alto.Tool.Context
 
   @type component :: module() | {module(), keyword()}
-  @contracts %{policy: Alto.Command.Policy, executor: Alto.Command.Executor}
 
   @spec prepare(map(), Context.t(), keyword()) :: {:ok, Prepared.t()} | {:error, term()}
   def prepare(arguments, %Context{} = context, opts \\ []) do
     with {:ok, {policy, policy_opts}} <-
-           opts |> Keyword.get(:policy, Unrestricted) |> normalize(:policy),
+           opts
+           |> Keyword.get(:policy, Unrestricted)
+           |> Alto.Capabilities.resolve(Alto.Command.Policy),
          {:ok, {executor, executor_opts}} <-
-           opts |> Keyword.get(:executor, Unsandboxed) |> normalize(:executor),
+           opts
+           |> Keyword.get(:executor, Unsandboxed)
+           |> Alto.Capabilities.resolve(Alto.Command.Executor),
          {:ok, invocation} <- prepare_invocation(policy, arguments, context, policy_opts),
          {:ok, execution, executor_details} <-
            prepare_execution(executor, invocation, executor_opts) do
@@ -62,20 +65,6 @@ defmodule Alto.Command do
       {:ok, _execution, details} -> {:error, {:invalid_executor_approval_details, details}}
       {:error, reason} -> {:error, reason}
       other -> {:error, {:invalid_command_executor_return, other}}
-    end
-  end
-
-  defp normalize({module, opts}, kind) when is_atom(module) and is_list(opts),
-    do: validate_component(module, opts, kind)
-
-  defp normalize(module, kind) when is_atom(module), do: validate_component(module, [], kind)
-  defp normalize(other, _kind), do: {:error, {:invalid_command_component, other}}
-
-  defp validate_component(module, opts, kind) do
-    if Alto.Capabilities.implements?(module, Map.fetch!(@contracts, kind)) do
-      {:ok, {module, opts}}
-    else
-      {:error, {:invalid_command_component, kind, module}}
     end
   end
 end

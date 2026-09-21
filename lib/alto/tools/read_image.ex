@@ -98,20 +98,7 @@ defmodule Alto.Tools.ReadImage do
 
   defp normalize_processor(nil), do: {:ok, nil}
 
-  defp normalize_processor({module, opts}) when is_atom(module) and is_list(opts) do
-    validate_processor(module, opts)
-  end
-
-  defp normalize_processor(module) when is_atom(module), do: validate_processor(module, [])
-  defp normalize_processor(processor), do: {:error, {:invalid_image_processor, processor}}
-
-  defp validate_processor(module, opts) do
-    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, Alto.Image.Processor) do
-      {:ok, {module, opts}}
-    else
-      {:error, {:invalid_image_processor, {module, opts}}}
-    end
-  end
+  defp normalize_processor(spec), do: Alto.Capabilities.resolve(spec, Alto.Image.Processor)
 
   defp validate_requested_dimensions(width, height) do
     if valid_optional_dimension?(width) and valid_optional_dimension?(height),

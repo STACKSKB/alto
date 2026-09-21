@@ -292,7 +292,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   end
 
   test "search rejects invalid backends before invocation", %{context: context} do
-    assert {:error, {:invalid_search_backend, {String, []}}} =
+    assert {:error, {:invalid_capability, Alto.Search.Backend, {String, []}}} =
              SearchFiles.run(%{"query" => "needle"}, context, backend: String)
   end
 

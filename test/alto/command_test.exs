@@ -176,7 +176,7 @@ defmodule Alto.CommandTest do
           {NoPolicyCallbacks, NoPolicyCallbacks},
           {{NoPolicyCallbacks, []}, NoPolicyCallbacks}
         ] do
-      assert {:error, {:invalid_command_component, :policy, ^module}} =
+      assert {:error, {:invalid_capability, Alto.Command.Policy, {^module, []}}} =
                Alto.Command.prepare(%{"program" => "printf"}, context, policy: spec)
     end
   end
@@ -188,7 +188,7 @@ defmodule Alto.CommandTest do
           {NoExecutorExecute, NoExecutorExecute},
           {{NoExecutorCallbacks, []}, NoExecutorCallbacks}
         ] do
-      assert {:error, {:invalid_command_component, :executor, ^module}} =
+      assert {:error, {:invalid_capability, Alto.Command.Executor, {^module, []}}} =
                Alto.Command.prepare(%{"program" => "printf"}, context, executor: spec)
     end
   end
