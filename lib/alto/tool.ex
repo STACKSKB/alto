@@ -53,4 +53,22 @@ defmodule Alto.Tool do
   def requirement(module, opts) do
     if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
   end
+
+  @doc "Validate the execution callbacks and select the preparation boundary."
+  def preparation(module) do
+    Code.ensure_loaded!(module)
+
+    case {function_exported?(module, :prepare, 3), function_exported?(module, :run_prepared, 3)} do
+      {true, true} ->
+        {:ok, :prepared}
+
+      {false, false} ->
+        if function_exported?(module, :run, 3),
+          do: {:ok, :none},
+          else: {:error, {:invalid_tool, module}}
+
+      _ ->
+        {:error, {:incomplete_tool_preparation_callbacks, module}}
+    end
+  end
 end

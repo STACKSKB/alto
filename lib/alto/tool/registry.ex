@@ -6,8 +6,7 @@ defmodule Alto.Tool.Registry do
       with {:ok, module, tool_opts} <- normalize_tool(tool_spec),
            name when is_atom(name) <- Alto.Tool.callback(module, :name, tool_opts),
            schema when is_map(schema) <- Alto.Tool.callback(module, :schema, tool_opts),
-           {:ok, preparation} <- tool_preparation(module),
-           :ok <- validate_tool_execution(module, preparation) do
+           {:ok, preparation} <- Alto.Tool.preparation(module) do
         string_name = Atom.to_string(name)
 
         if Map.has_key?(tools, string_name) do
@@ -115,31 +114,4 @@ defmodule Alto.Tool.Registry do
 
   defp normalize_tool(module) when is_atom(module), do: {:ok, module, []}
   defp normalize_tool(other), do: {:error, {:invalid_tool, other}}
-
-  defp tool_preparation(module) do
-    prepare3? = function_exported?(module, :prepare, 3)
-    prepared3? = function_exported?(module, :run_prepared, 3)
-
-    cond do
-      prepare3? != prepared3? ->
-        {:error, {:incomplete_tool_preparation_callbacks, module}}
-
-      prepare3? and prepared3? ->
-        {:ok, :prepared}
-
-      true ->
-        {:ok, :none}
-    end
-  end
-
-  defp validate_tool_execution(module, :none) do
-    if function_exported?(module, :run, 3) do
-      :ok
-    else
-      {:error, {:invalid_tool, module}}
-    end
-  end
-
-  defp validate_tool_execution(_module, :prepared),
-    do: :ok
 end

@@ -33,6 +33,17 @@ defmodule Alto.Tools.TransformTest do
     def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
+  defmodule IncompleteTool do
+    def prepare(_, _, _), do: raise("must reject incomplete callbacks before preparation")
+  end
+
+  test "transforms reject incomplete inner execution contracts before preparation" do
+    {_module, opts} = Transform.wrap(IncompleteTool, fn args, _ -> args end)
+
+    assert {:error, {:incomplete_tool_preparation_callbacks, IncompleteTool}} =
+             Transform.prepare(%{}, context(), opts)
+  end
+
   defmodule CaptureApproval do
     @behaviour Alto.Approval
 

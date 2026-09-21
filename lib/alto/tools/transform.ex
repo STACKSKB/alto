@@ -51,17 +51,10 @@ defmodule Alto.Tools.Transform do
   end
 
   @impl true
-  def run_prepared({__MODULE__, :prepared, prepared}, context, opts) do
+  def run_prepared({__MODULE__, callback, value}, context, opts)
+      when callback in [:run, :run_prepared] do
     {module, inner_opts} = inner_tool(opts)
-
-    if prepared?(module),
-      do: module.run_prepared(prepared, context, inner_opts),
-      else: {:error, :invalid_transformed_prepared}
-  end
-
-  def run_prepared({__MODULE__, :raw, arguments}, context, opts) do
-    {module, inner_opts} = inner_tool(opts)
-    module.run(arguments, context, inner_opts)
+    apply(module, callback, [value, context, inner_opts])
   end
 
   def run_prepared(_other, _context, _opts), do: {:error, :invalid_transformed_prepared}
@@ -90,11 +83,11 @@ defmodule Alto.Tools.Transform do
   defp prepare_inner(arguments, context, opts) do
     {module, inner_opts} = inner_tool(opts)
 
-    case prepared?(module) do
-      true ->
+    case Alto.Tool.preparation(module) do
+      {:ok, :prepared} ->
         case module.prepare(arguments, context, inner_opts) do
           {:ok, prepared, details} ->
-            {:ok, {__MODULE__, :prepared, prepared}, details}
+            {:ok, {__MODULE__, :run_prepared, prepared}, details}
 
           {:error, _reason} = error ->
             error
@@ -103,18 +96,12 @@ defmodule Alto.Tools.Transform do
             {:error, {:invalid_tool_prepare_return, other}}
         end
 
-      false ->
-        {:ok, {__MODULE__, :raw, arguments}, %{}}
+      {:ok, :none} ->
+        {:ok, {__MODULE__, :run, arguments}, %{}}
+
+      {:error, _} = error ->
+        error
     end
-  end
-
-  defp prepared?(module) do
-    prepare3? = function_exported?(module, :prepare, 3)
-    prepared3? = function_exported?(module, :run_prepared, 3)
-
-    if prepare3? == prepared3?,
-      do: prepare3?,
-      else: raise(ArgumentError, "wrapped tool has incomplete preparation callbacks")
   end
 
   defp inner_tool(opts), do: normalize(Keyword.fetch!(opts, :tool))

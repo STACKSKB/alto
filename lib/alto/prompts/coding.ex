@@ -42,10 +42,10 @@ defmodule Alto.Prompts.Coding do
   end
 
   defp tool_name({module, opts}) when is_atom(module) and is_list(opts) do
-    if function_exported?(module, :name, 1), do: module.name(opts), else: module.name()
+    module.name(opts)
   end
 
-  defp tool_name(module) when is_atom(module), do: module.name()
+  defp tool_name(module) when is_atom(module), do: module.name([])
 
   defp workspace_capability(names) do
     cond do
