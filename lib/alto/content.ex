@@ -12,35 +12,7 @@ defmodule Alto.Content do
 
   alias Alto.Image.Metadata
 
-  defmodule Text do
-    @moduledoc false
-    @enforce_keys [:text]
-    defstruct [:text]
-
-    @type t :: %__MODULE__{text: binary()}
-  end
-
-  defmodule Image do
-    @moduledoc false
-    @enforce_keys [:media_type, :data, :width, :height]
-    defstruct [:media_type, :data, :width, :height]
-
-    @type t :: %__MODULE__{
-            media_type: binary(),
-            data: binary(),
-            width: pos_integer(),
-            height: pos_integer()
-          }
-  end
-
-  @type block ::
-          %Text{text: binary()}
-          | %Image{
-              media_type: binary(),
-              data: binary(),
-              width: pos_integer(),
-              height: pos_integer()
-            }
+  @type block :: %{required(String.t()) => String.t() | pos_integer()}
   @type t :: %__MODULE__{blocks: [block()]}
 
   @media_types ["image/png", "image/jpeg"]
@@ -51,12 +23,18 @@ defmodule Alto.Content do
   @spec new([block()]) :: t()
   def new([_ | _] = blocks), do: %__MODULE__{blocks: blocks}
 
-  @spec text(binary()) :: Text.t()
-  def text(text) when is_binary(text), do: %Text{text: text}
+  @spec text(binary()) :: block()
+  def text(text) when is_binary(text), do: %{"type" => "text", "text" => text}
 
-  @spec image(binary(), binary(), pos_integer(), pos_integer()) :: Image.t()
+  @spec image(binary(), binary(), pos_integer(), pos_integer()) :: block()
   def image(media_type, data, width, height),
-    do: %Image{media_type: media_type, data: data, width: width, height: height}
+    do: %{
+      "type" => "image",
+      "media_type" => media_type,
+      "data" => data,
+      "width" => width,
+      "height" => height
+    }
 
   @doc """
   Normalize typed tool content for the provider-neutral transcript.
@@ -72,7 +50,7 @@ defmodule Alto.Content do
 
   def normalize_tool_result(%__MODULE__{blocks: blocks}, limit)
       when is_integer(limit) and limit > 0 do
-    with {:ok, normalized} <- normalize_blocks(blocks),
+    with {:ok, normalized} <- validate_blocks(blocks),
          encoded <- JSON.encode!(normalized),
          true <-
            byte_size(encoded) <= limit or {:error, {:content_too_large, limit}} do
@@ -87,59 +65,36 @@ defmodule Alto.Content do
 
   def normalize_tool_result(_value, _limit), do: :not_content
 
-  @doc "Rehydrate and validate provider-neutral content blocks from a transcript."
+  @doc "Validate and wrap provider-neutral content blocks from a transcript."
   @spec decode_transcript(term()) :: :not_content | {:ok, t()} | {:error, term()}
   def decode_transcript([_ | _] = blocks) do
-    with {:ok, typed} <- map_blocks(blocks, &decode_block/1) do
-      {:ok, %__MODULE__{blocks: typed}}
+    with {:ok, validated} <- validate_blocks(blocks) do
+      {:ok, %__MODULE__{blocks: validated}}
     end
   end
 
   def decode_transcript(value) when is_list(value), do: {:error, :empty_content}
   def decode_transcript(_value), do: :not_content
 
-  defp normalize_blocks([_ | _] = blocks), do: map_blocks(blocks, &normalize_block/1)
-
-  defp normalize_blocks(_blocks), do: {:error, :empty_content}
-
-  defp normalize_block(%Text{text: text}) when is_binary(text) do
-    if String.valid?(text),
-      do: {:ok, %{"type" => "text", "text" => text}},
-      else: {:error, :text_must_be_utf8}
-  end
-
-  defp normalize_block(%Image{} = image) do
-    with :ok <- validate_image(image) do
-      {:ok,
-       %{
-         "type" => "image",
-         "media_type" => image.media_type,
-         "data" => image.data,
-         "width" => image.width,
-         "height" => image.height
-       }}
-    end
-  end
-
-  defp normalize_block(_block), do: {:error, :unsupported_block}
-
-  defp map_blocks(blocks, fun) do
+  defp validate_blocks([_ | _] = blocks) do
     blocks
     |> Enum.with_index()
     |> Alto.Result.traverse(fn {block, index} ->
-      case fun.(block) do
+      case validate_block(block) do
         {:ok, _} = result -> result
         {:error, reason} -> {:error, {:invalid_content_block, index, reason}}
       end
     end)
   end
 
-  defp decode_block(%{"type" => "text", "text" => text} = block)
+  defp validate_blocks(_blocks), do: {:error, :empty_content}
+
+  defp validate_block(%{"type" => "text", "text" => text} = block)
        when map_size(block) == 2 and is_binary(text) do
-    if String.valid?(text), do: {:ok, %Text{text: text}}, else: {:error, :text_must_be_utf8}
+    if String.valid?(text), do: {:ok, block}, else: {:error, :text_must_be_utf8}
   end
 
-  defp decode_block(
+  defp validate_block(
          %{
            "type" => "image",
            "media_type" => media_type,
@@ -149,13 +104,12 @@ defmodule Alto.Content do
          } = block
        )
        when map_size(block) == 5 do
-    image = %Image{media_type: media_type, data: data, width: width, height: height}
-    with :ok <- validate_image(image), do: {:ok, image}
+    with :ok <- validate_image(media_type, data, width, height), do: {:ok, block}
   end
 
-  defp decode_block(_block), do: {:error, :unsupported_block}
+  defp validate_block(_block), do: {:error, :unsupported_block}
 
-  defp validate_image(%Image{media_type: media_type, data: data, width: width, height: height}) do
+  defp validate_image(media_type, data, width, height) do
     cond do
       media_type not in @media_types ->
         {:error, {:unsupported_media_type, media_type}}

@@ -2,6 +2,14 @@ defmodule Alto.DisplayTest do
   use ExUnit.Case, async: true
   alias Alto.Display
 
+  test "typed content displays media metadata without expanding its payload" do
+    image = Alto.Content.image("image/png", "hidden-base64-payload", 12, 8)
+    content = Alto.Content.new([Alto.Content.text("A diagram"), image])
+
+    assert Alto.Display.result(content) == "A diagram\nImage · image/png · 12 × 8"
+    assert Alto.Display.result(image) =~ "hidden-base64-payload"
+  end
+
   test "redacts known credentials in displayed text" do
     for secret <- [
           "sk-example_secret",

@@ -47,11 +47,12 @@ defmodule Alto.Tools.ReadImageTest do
     assert {:ok,
             %Content{
               blocks: [
-                %Content.Image{
-                  media_type: "image/png",
-                  data: encoded,
-                  width: 320,
-                  height: 200
+                %{
+                  "type" => "image",
+                  "media_type" => "image/png",
+                  "data" => encoded,
+                  "width" => 320,
+                  "height" => 200
                 }
               ]
             }} = ReadImage.run(%{"path" => "image.png"}, context)
@@ -64,7 +65,16 @@ defmodule Alto.Tools.ReadImageTest do
     File.write!(Path.join(root, "not-a-jpeg.bin"), jpeg)
 
     assert {:ok,
-            %Content{blocks: [%Content.Image{media_type: "image/jpeg", width: 640, height: 480}]}} =
+            %Content{
+              blocks: [
+                %{
+                  "type" => "image",
+                  "media_type" => "image/jpeg",
+                  "width" => 640,
+                  "height" => 480
+                }
+              ]
+            }} =
              ReadImage.run(%{"path" => "not-a-jpeg.bin"}, context)
   end
 
@@ -110,7 +120,7 @@ defmodule Alto.Tools.ReadImageTest do
 
     output = png(100, 50)
 
-    assert {:ok, %Content{blocks: [%Content.Image{width: 100, height: 50}]}} =
+    assert {:ok, %Content{blocks: [%{"type" => "image", "width" => 100, "height" => 50}]}} =
              ReadImage.run(
                %{"path" => "image.png", "max_width" => 100},
                context,

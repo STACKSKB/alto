@@ -202,13 +202,13 @@ defmodule Alto.Providers.Anthropic do
 
   defp anthropic_blocks(blocks, supports_images) do
     Alto.Result.traverse(blocks, fn
-      %Content.Text{text: text} ->
+      %{"type" => "text", "text" => text} ->
         {:ok, %{"type" => "text", "text" => text}}
 
-      %Content.Image{} when not supports_images ->
+      %{"type" => "image"} when not supports_images ->
         {:error, :model_does_not_support_images}
 
-      %Content.Image{media_type: media_type, data: data} ->
+      %{"type" => "image", "media_type" => media_type, "data" => data} ->
         {:ok,
          %{
            "type" => "image",

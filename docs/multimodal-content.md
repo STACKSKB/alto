@@ -13,11 +13,11 @@ content =
 ```
 
 The runner calls `Alto.Content.normalize_tool_result/2` before adding typed
-content to the transcript. The normalized form is a provider-neutral list of
-JSON objects. Sessions therefore persist the same blocks they send on a later
-turn, without persisting provider-specific data URLs or Anthropic source maps.
-`Alto.Content.decode_transcript/1` validates and rehydrates these blocks at a
-provider boundary.
+content to the transcript. The constructors return provider-neutral maps with
+string keys; the wrapper, transcript, and session all use these same blocks.
+`Alto.Content.decode_transcript/1` validates the blocks and wraps them for the
+provider adapter. Provider-specific data URLs and Anthropic source maps are
+created only when building a provider request.
 
 `Alto.Tools.ReadImage` reads workspace-confined PNG and JPEG files. It reads no
 more than the configured base64 limit permits, recognizes the format from file

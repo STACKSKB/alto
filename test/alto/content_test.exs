@@ -3,7 +3,7 @@ defmodule Alto.ContentTest do
 
   alias Alto.Content
 
-  test "typed content normalizes to generic persisted blocks and round trips" do
+  test "typed content uses the same blocks in tool results and persisted transcripts" do
     encoded = Base.encode64(png(12, 8))
 
     content =
@@ -13,6 +13,7 @@ defmodule Alto.ContentTest do
       ])
 
     assert {:ok, blocks} = Content.normalize_tool_result(content, 10_000)
+    assert blocks == content.blocks
     assert JSON.decode!(JSON.encode!(blocks)) == blocks
     assert {:ok, ^content} = Content.decode_transcript(blocks)
   end
@@ -50,6 +51,19 @@ defmodule Alto.ContentTest do
 
     assert {:error, {:invalid_content_block, 0, :unsupported_block}} =
              Content.normalize_tool_result(Content.new([%{text: "ordinary map"}]), 10_000)
+  end
+
+  test "tool and transcript boundaries enforce the same block shape and UTF-8 rules" do
+    for {block, reason} <- [
+          {%{"type" => "text", "text" => <<255>>}, :text_must_be_utf8},
+          {%{"type" => "text", "text" => "ok", "extra" => true}, :unsupported_block},
+          {Map.put(Content.image("image/png", Base.encode64(png(1, 1)), 1, 1), "extra", true),
+           :unsupported_block}
+        ] do
+      expected = {:error, {:invalid_content_block, 0, reason}}
+      assert Content.normalize_tool_result(Content.new([block]), 10_000) == expected
+      assert Content.decode_transcript([block]) == expected
+    end
   end
 
   defp png(width, height) do

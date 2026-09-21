@@ -109,7 +109,7 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok, {message, []}}
 
       {:ok, content} ->
-        images = Enum.filter(content.blocks, &match?(%Content.Image{}, &1))
+        images = Enum.filter(content.blocks, &match?(%{"type" => "image"}, &1))
 
         cond do
           images != [] and not supports_images ->
@@ -119,8 +119,8 @@ defmodule Alto.Providers.OpenAICompatible do
             text =
               content.blocks
               |> Enum.flat_map(fn
-                %Content.Text{text: text} -> [text]
-                %Content.Image{} -> []
+                %{"type" => "text", "text" => text} -> [text]
+                %{"type" => "image"} -> []
               end)
               |> Enum.join("\n")
               |> append_attachment_marker(message["tool_call_id"], images)
@@ -143,7 +143,12 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp openai_attachment_message(attachments) do
     content =
-      Enum.flat_map(attachments, fn {call_id, %Content.Image{media_type: media_type, data: data}} ->
+      Enum.flat_map(attachments, fn {call_id,
+                                     %{
+                                       "type" => "image",
+                                       "media_type" => media_type,
+                                       "data" => data
+                                     }} ->
         [
           %{"type" => "text", "text" => "Image result from tool call #{call_id}:"},
           %{
@@ -178,13 +183,13 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp openai_blocks(blocks, supports_images) do
     Alto.Result.traverse(blocks, fn
-      %Content.Text{text: text} ->
+      %{"type" => "text", "text" => text} ->
         {:ok, %{"type" => "text", "text" => text}}
 
-      %Content.Image{} when not supports_images ->
+      %{"type" => "image"} when not supports_images ->
         {:error, :model_does_not_support_images}
 
-      %Content.Image{media_type: media_type, data: data} ->
+      %{"type" => "image", "media_type" => media_type, "data" => data} ->
         {:ok,
          %{
            "type" => "image_url",
