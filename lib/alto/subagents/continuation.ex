@@ -469,24 +469,12 @@ defmodule Alto.Subagents.Continuation do
 
   defp replace(batch, snapshot, packet) do
     safe(fn ->
-      with :ok <- validate_candidate(snapshot, packet),
-           {:ok, entry} <-
+      with {:ok, entry} <-
              Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline),
            {:ok, snapshot} <- snapshot(entry, batch.generation) do
         {:ok, snapshot}
       end
     end)
-  end
-
-  defp validate_candidate(snapshot, packet) do
-    valid_packet(packet, %{
-      "kind" => @kind,
-      "version" => 1,
-      "generation" => snapshot.packet["generation"],
-      "ids" => snapshot.ids,
-      "metadata" => snapshot.metadata,
-      "parent" => snapshot.parent
-    })
   end
 
   defp active(%{state: :active}), do: :ok
