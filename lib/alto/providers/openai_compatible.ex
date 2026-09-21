@@ -15,21 +15,8 @@ defmodule Alto.Providers.OpenAICompatible do
 
   @default_base_url "https://openrouter.ai/api/v1"
   @config_schema HTTPOptions.stream_schema()
-  @config_errors [
-    model: :model_required,
-    endpoint: {:value, :invalid_endpoint},
-    timeout: {:value, :invalid_timeout},
-    max_event_bytes: {:value, :invalid_max_event_bytes},
-    max_response_bytes: {:value, :invalid_max_response_bytes},
-    supports_images: {:value, :invalid_supports_images}
-  ]
   @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
                    [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
-  @models_errors [
-    endpoint: {:value, :invalid_models_endpoint},
-    timeout: {:value, :invalid_timeout},
-    max_models_response_bytes: {:value, :invalid_max_models_response_bytes}
-  ]
   @default_max_models_response_bytes 8_000_000
   @models_state_key :alto_openai_compatible_models
 
@@ -337,8 +324,7 @@ defmodule Alto.Providers.OpenAICompatible do
     with {:ok, config} <-
            HTTPOptions.validate(
              Keyword.put(opts, :endpoint, endpoint),
-             @config_schema,
-             @config_errors
+             @config_schema
            ) do
       {:ok,
        Map.merge(config, %{
@@ -361,8 +347,7 @@ defmodule Alto.Providers.OpenAICompatible do
     with {:ok, config} <-
            HTTPOptions.validate(
              Keyword.put(opts, :endpoint, endpoint),
-             @models_schema,
-             @models_errors
+             @models_schema
            ) do
       {:ok,
        %{

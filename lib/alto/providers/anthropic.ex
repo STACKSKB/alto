@@ -23,15 +23,6 @@ defmodule Alto.Providers.Anthropic do
                    {:api_key,
                     [type: {:custom, HTTPOptions, :nonempty_string, []}, required: true]}
                  )
-  @config_errors [
-    model: :model_required,
-    api_key: :api_key_required,
-    endpoint: {:value, :invalid_endpoint},
-    timeout: {:value, :invalid_timeout},
-    max_event_bytes: {:value, :invalid_max_event_bytes},
-    max_response_bytes: :invalid_response_limit,
-    supports_images: {:value, :invalid_supports_images}
-  ]
   @options ~w(max_tokens temperature top_p top_k stop_sequences tool_choice metadata output_config thinking cache_control)
 
   @impl true
@@ -63,8 +54,7 @@ defmodule Alto.Providers.Anthropic do
     with {:ok, config} <-
            HTTPOptions.validate(
              Keyword.put(opts, :endpoint, endpoint),
-             @config_schema,
-             @config_errors
+             @config_schema
            ) do
       {:ok,
        Map.merge(config, %{

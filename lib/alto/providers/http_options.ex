@@ -12,16 +12,13 @@ defmodule Alto.Providers.HTTPOptions do
     ]
   end
 
-  def validate(opts, schema, errors) do
+  def validate(opts, schema) do
     case NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
       {:ok, values} ->
         {:ok, Map.new(values)}
 
-      {:error, error} ->
-        case Keyword.fetch!(errors, error.key) do
-          {:value, tag} -> {:error, {tag, error.value}}
-          reason -> {:error, reason}
-        end
+      {:error, _} = error ->
+        error
     end
   end
 
