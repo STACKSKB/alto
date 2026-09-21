@@ -14,7 +14,7 @@ defmodule Alto.Loops.Default do
   alias Alto.Loop.Spec
   alias Alto.Transition
 
-  defstruct [:task, :phase, :context, :subagents, step: 1, observations: []]
+  defstruct [:task, :phase, step: 1, observations: []]
 
   @type continuation :: :request_model | {:stop, term()}
   @type phase ::
@@ -24,28 +24,20 @@ defmodule Alto.Loops.Default do
   @type t :: %__MODULE__{
           task: term(),
           phase: phase(),
-          context: term(),
-          subagents: term(),
           step: pos_integer(),
           observations: [Event.t()]
         }
 
   @impl true
   def init(task, %Spec{} = spec) do
-    state = %__MODULE__{
-      task: task,
-      phase: :awaiting_model,
-      context: spec.context,
-      subagents: spec.subagents
-    }
-
-    Transition.continue(state, [model_request(state)])
+    state = %__MODULE__{task: task, phase: :awaiting_model}
+    Transition.continue(state, [model_request(state, spec)])
   end
 
   @impl true
-  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, _spec) do
+  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
     next = %{state | task: text, phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next, [model_request(next)])
+    Transition.continue(next, [model_request(next, spec)])
   end
 
   def handle_event(
@@ -109,10 +101,13 @@ defmodule Alto.Loops.Default do
   def handle_event(
         %Event{type: :step_settled},
         %__MODULE__{phase: {:settling, :request_model}} = state,
-        _spec
+        spec
       ) do
     next_state = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next_state, [model_request(next_state, Enum.reverse(state.observations))])
+
+    Transition.continue(next_state, [
+      model_request(next_state, spec, Enum.reverse(state.observations))
+    ])
   end
 
   def handle_event(
@@ -151,47 +146,18 @@ defmodule Alto.Loops.Default do
   @impl true
   def dump_checkpoint(%__MODULE__{} = state, %Spec{}) do
     with :ok <- validate_checkpoint_state(state) do
-      {:ok,
-       %{
-         task: state.task,
-         phase: state.phase,
-         step: state.step,
-         observations: state.observations
-       }}
+      {:ok, Map.from_struct(state)}
     end
   end
 
   @impl true
-  def load_checkpoint(checkpoint, %Spec{} = spec) do
-    with true <- checkpoint_keys?(checkpoint),
-         task <- Map.fetch!(checkpoint, :task),
-         phase <- Map.fetch!(checkpoint, :phase),
-         step <- Map.fetch!(checkpoint, :step),
-         observations <- Map.fetch!(checkpoint, :observations),
-         :ok <- validate_phase(phase),
-         :ok <- validate_step(step),
-         true <- is_list(observations) do
-      {:ok,
-       %__MODULE__{
-         task: task,
-         phase: phase,
-         step: step,
-         observations: observations,
-         context: spec.context,
-         subagents: spec.subagents
-       }}
-    else
-      _ -> {:error, :invalid_checkpoint}
-    end
+  def load_checkpoint(%{task: _, phase: _, step: _, observations: _} = checkpoint, %Spec{})
+      when map_size(checkpoint) == 4 do
+    state = struct!(__MODULE__, checkpoint)
+    with :ok <- validate_checkpoint_state(state), do: {:ok, state}
   end
 
   def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
-
-  defp checkpoint_keys?(checkpoint) when is_map(checkpoint) do
-    Map.keys(checkpoint) |> Enum.sort() == [:observations, :phase, :step, :task]
-  end
-
-  defp checkpoint_keys?(_checkpoint), do: false
 
   defp validate_checkpoint_state(state) do
     with :ok <- validate_phase(state.phase),
@@ -228,11 +194,11 @@ defmodule Alto.Loops.Default do
     Transition.continue(%{state | phase: {:settling, continuation}}, [Effect.emit(event)])
   end
 
-  defp model_request(state, observations \\ []) do
+  defp model_request(state, spec, observations \\ []) do
     Effect.request_model(%{
       task: state.task,
       step: state.step,
-      context: state.context,
+      context: spec.context,
       observations: observations
     })
   end

@@ -8,20 +8,20 @@ defmodule Alto.Loops.Chat do
   alias Alto.Loop.Spec
   alias Alto.Transition
 
-  defstruct [:task, :phase, :context]
+  defstruct [:task, :phase]
 
-  @type t :: %__MODULE__{task: term(), phase: :awaiting_model | :complete, context: term()}
+  @type t :: %__MODULE__{task: term(), phase: :awaiting_model | :complete}
 
   @impl true
   def init(task, %Spec{} = spec) do
-    state = %__MODULE__{task: task, phase: :awaiting_model, context: spec.context}
+    state = %__MODULE__{task: task, phase: :awaiting_model}
     Transition.continue(state, [Effect.request_model(%{task: task, context: spec.context})])
   end
 
   @impl true
-  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, _spec) do
+  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
     next = %{state | task: text, phase: :awaiting_model}
-    Transition.continue(next, [Effect.request_model(%{task: text, context: state.context})])
+    Transition.continue(next, [Effect.request_model(%{task: text, context: spec.context})])
   end
 
   @impl true
@@ -52,14 +52,9 @@ defmodule Alto.Loops.Chat do
   def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
   @impl true
-  def load_checkpoint(checkpoint, %Spec{} = spec) when is_map(checkpoint) do
-    if Map.keys(checkpoint) |> Enum.sort() == [:phase, :task] and
-         checkpoint.phase in [:awaiting_model, :complete] do
-      {:ok, %__MODULE__{task: checkpoint.task, phase: checkpoint.phase, context: spec.context}}
-    else
-      {:error, :invalid_checkpoint}
-    end
-  end
+  def load_checkpoint(%{task: task, phase: phase} = checkpoint, %Spec{})
+      when map_size(checkpoint) == 2 and phase in [:awaiting_model, :complete],
+      do: {:ok, %__MODULE__{task: task, phase: phase}}
 
   def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
 end

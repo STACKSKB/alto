@@ -5,14 +5,12 @@ defmodule Alto.LoopCheckpointTest do
   alias Alto.Loops.{Chat, Default, Rule}
   alias Alto.Runtime
 
-  test "default and chat checkpoints restore trusted spec state" do
+  test "default and chat checkpoints restore runtime state and use the current spec" do
     spec = Spec.new(Default, context: %{window: 1}, subagents: %{depth: 2})
 
     state = %Default{
       task: "task",
       phase: {:awaiting_tools, %{"call" => 2}},
-      context: :runtime_context,
-      subagents: :runtime_subagents,
       step: 4,
       observations: [Alto.Event.durable(:tool_completed, %{})]
     }
@@ -25,16 +23,21 @@ defmodule Alto.LoopCheckpointTest do
     assert restored.phase == state.phase
     assert restored.step == state.step
     assert restored.observations == state.observations
-    assert restored.context == spec.context
-    assert restored.subagents == spec.subagents
+    next = Default.handle_event(Alto.Event.live(:input_received, %{text: "next"}), restored, spec)
+    assert [%{data: %{context: %{window: 1}}}] = next.effects
 
     chat_spec = Spec.new(Chat, context: %{window: 3})
 
     assert {:ok, chat_checkpoint} =
-             Chat.dump_checkpoint(%Chat{task: "hi", phase: :complete, context: :old}, chat_spec)
+             Chat.dump_checkpoint(%Chat{task: "hi", phase: :complete}, chat_spec)
 
-    assert {:ok, %Chat{task: "hi", phase: :complete, context: %{window: 3}}} =
+    assert {:ok, %Chat{task: "hi", phase: :complete} = restored} =
              Chat.load_checkpoint(chat_checkpoint, chat_spec)
+
+    next =
+      Chat.handle_event(Alto.Event.live(:input_received, %{text: "next"}), restored, chat_spec)
+
+    assert [%{data: %{context: %{window: 3}}}] = next.effects
   end
 
   test "rule checkpoint rehydrates trusted function steps" do
