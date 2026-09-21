@@ -16,7 +16,7 @@ defmodule Alto.DurableLogTest do
              )
 
     assert File.read!(path) == "acknowledged\n"
-    assert Path.wildcard(path <> ".repair-*") == []
+    assert Path.wildcard(Path.join(dir, ".state.jsonl.alto-*.tmp")) == []
   end
 
   test "repair atomically replaces the file and removes its temporary sibling" do
@@ -25,9 +25,11 @@ defmodule Alto.DurableLogTest do
     on_exit(fn -> File.rm_rf!(dir) end)
     File.mkdir_p!(dir)
     File.write!(path, "old\n")
+    File.chmod!(path, 0o640)
 
     assert :ok = DurableLog.replace(path, ["new", "\n"])
     assert File.read!(path) == "new\n"
-    assert Path.wildcard(path <> ".repair-*") == []
+    assert Bitwise.band(File.stat!(path).mode, 0o7777) == 0o640
+    assert Path.wildcard(Path.join(dir, ".state.jsonl.alto-*.tmp")) == []
   end
 end

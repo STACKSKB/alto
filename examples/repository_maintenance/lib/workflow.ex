@@ -3,7 +3,7 @@ defmodule RepositoryMaintenance.Workflow do
 
   alias Alto.Command
   alias Alto.Tool.Context
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
   alias Alto.Tools.Git
 
   @max_report_bytes 64_000
@@ -365,7 +365,7 @@ defmodule RepositoryMaintenance.Workflow do
     dir = Path.dirname(manifest["patch_path"])
     path = Path.join(dir, ".apply-" <> random_id() <> ".patch")
 
-    case AtomicWrite.write(path, patch, 0o600) do
+    case AtomicFile.write(path, patch, mode: 0o600) do
       :ok -> {:ok, path}
       {:error, reason} -> {:error, {:patch_freeze_failed, reason}}
     end
@@ -412,7 +412,7 @@ defmodule RepositoryMaintenance.Workflow do
     content =
       JSON.encode!(%{"patch_id" => manifest["patch_id"], "status" => inspect(status)}) <> "\n"
 
-    AtomicWrite.write(path, content, 0o600)
+    AtomicFile.write(path, content, mode: 0o600)
   end
 
   defp publish_artifacts(dir, patch_path, test_path, manifest_path, diff, test_output, manifest) do
@@ -422,9 +422,11 @@ defmodule RepositoryMaintenance.Workflow do
     result =
       with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(dir), owned: true),
            :ok <- Alto.Storage.ensure_private_dir(tmp, owned: true),
-           :ok <- AtomicWrite.write(Path.join(tmp, Path.basename(patch_path)), diff, 0o600),
-           :ok <- AtomicWrite.write(Path.join(tmp, Path.basename(test_path)), test_output, 0o600),
-           :ok <- AtomicWrite.write(Path.join(tmp, Path.basename(manifest_path)), json, 0o600),
+           :ok <- AtomicFile.write(Path.join(tmp, Path.basename(patch_path)), diff, mode: 0o600),
+           :ok <-
+             AtomicFile.write(Path.join(tmp, Path.basename(test_path)), test_output, mode: 0o600),
+           :ok <-
+             AtomicFile.write(Path.join(tmp, Path.basename(manifest_path)), json, mode: 0o600),
            :ok <- File.rename(tmp, dir) do
         {:ok, Map.put(manifest, "manifest_path", manifest_path)}
       end
@@ -487,10 +489,10 @@ defmodule RepositoryMaintenance.Workflow do
       )
 
     with :ok <- Alto.Storage.ensure_private_dir(dir, owned: true) do
-      AtomicWrite.write(
+      AtomicFile.write(
         Path.join(dir, to_string(record.id) <> ".json"),
         JSON.encode!(%{"record_id" => record.id, "error" => inspect(reason)}) <> "\n",
-        0o600
+        mode: 0o600
       )
     end
   end

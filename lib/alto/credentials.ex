@@ -6,7 +6,7 @@ defmodule Alto.Credentials do
   atomically replaced with mode `0600` and bounded before decoding.
   """
 
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   @version 1
   @max_bytes 64_000
@@ -101,7 +101,7 @@ defmodule Alto.Credentials do
       {:error, {:credentials_too_large, @max_bytes}}
     else
       with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(credentials.path), owned: true),
-           :ok <- AtomicWrite.write(credentials.path, content <> "\n", 0o600) do
+           :ok <- AtomicFile.write(credentials.path, content <> "\n", mode: 0o600) do
         :ok
       else
         {:error, reason} -> {:error, {:credentials_write_failed, credentials.path, reason}}

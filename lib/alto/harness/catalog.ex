@@ -10,7 +10,7 @@ defmodule Alto.Harness.Catalog do
   """
 
   alias Alto.Session
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   @version 2
   @statuses ~w(active waiting completed failed archived)
@@ -223,7 +223,7 @@ defmodule Alto.Harness.Catalog do
     with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
          {:ok, encoded} <- encode(catalog),
          :ok <- check_catalog_size(encoded),
-         :ok <- AtomicWrite.write(path, encoded <> "\n", 0o600) do
+         :ok <- AtomicFile.write(path, encoded <> "\n", mode: 0o600) do
       :ok
     else
       {:error, reason} -> {:error, {:catalog_write_failed, reason}}

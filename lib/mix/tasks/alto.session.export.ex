@@ -32,7 +32,7 @@ defmodule Mix.Tasks.Alto.Session.Export do
           IO.write(content)
 
         path ->
-          case Alto.Tools.AtomicWrite.write(Path.expand(path), content, 0o600) do
+          case Alto.AtomicFile.write(Path.expand(path), content, mode: 0o600) do
             :ok -> Mix.shell().info("Exported #{id} to #{Path.expand(path)}")
             {:error, reason} -> Mix.raise("Export failed: #{inspect(reason)}")
           end

@@ -2,7 +2,6 @@ defmodule Alto.Workspaces.GitPatch do
   @moduledoc false
   alias Alto.Workspaces.Git
   alias Alto.Workspaces
-  alias Alto.DurableLog
 
   @max_manifest_bytes 32_000
   @max_files 256
@@ -248,7 +247,7 @@ defmodule Alto.Workspaces.GitPatch do
   end
 
   defp sync_parents(dir, root) do
-    with :ok <- if(File.dir?(dir), do: DurableLog.sync_directory(dir), else: :ok) do
+    with :ok <- if(File.dir?(dir), do: Alto.AtomicFile.sync_directory(dir), else: :ok) do
       if dir == root, do: :ok, else: sync_parents(Path.dirname(dir), root)
     end
   end

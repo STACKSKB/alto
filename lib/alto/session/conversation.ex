@@ -352,7 +352,7 @@ defmodule Alto.Session.Conversation do
   defp write_sidecar(path, record, error_tag) do
     with {:ok, encoded} <- encode_bounded(record),
          :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
-         :ok <- Alto.Tools.AtomicWrite.write(path, encoded <> "\n", 0o600) do
+         :ok <- Alto.AtomicFile.write(path, encoded <> "\n", mode: 0o600) do
       :ok
     else
       {:error, reason} -> {:error, {error_tag, reason}}

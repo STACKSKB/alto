@@ -2,7 +2,7 @@ defmodule Alto.Tools.FileChange do
   @moduledoc false
 
   alias Alto.BoundedFile
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
   alias Alto.Tools.Path, as: SafePath
 
   def original(path, max_bytes, :write) do
@@ -39,7 +39,7 @@ defmodule Alto.Tools.FileChange do
 
     with {:ok, resolved} <- SafePath.revalidate(path, expected, context.cwd),
          {:ok, mode} <- revalidate_original(original, resolved, max_bytes, kind, path) do
-      case AtomicWrite.write(resolved, content, mode) do
+      case AtomicFile.write(resolved, content, mode: mode) do
         :ok -> {:ok, result}
         {:error, {:post_rename_sync_failed, reason}} -> {:unknown, reason}
         other -> other

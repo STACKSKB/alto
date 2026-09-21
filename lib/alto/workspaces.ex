@@ -338,7 +338,7 @@ defmodule Alto.Workspaces do
              path <- Path.join(manager.root, id),
              :ok <- safe_path(path),
              {:ok, _} <- File.rm_rf(path),
-             :ok <- DurableLog.sync_directory(manager.root),
+             :ok <- Alto.AtomicFile.sync_directory(manager.root),
              :ok <-
                OperationLog.record_outcome(manager.ledger, id, attempt, :completed, %{
                  "status" => "discarded",

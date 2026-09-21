@@ -166,16 +166,16 @@ defmodule DocumentIntake do
                json <- JSON.encode!(Map.put(record, "schema_version", @schema_version)),
                csv <- csv(record, version),
                :ok <-
-                 Alto.Tools.AtomicWrite.write(
+                 Alto.AtomicFile.write(
                    Path.join(temporary_dir, "document.json"),
                    json <> "\n",
-                   0o600
+                   mode: 0o600
                  ),
                :ok <-
-                 Alto.Tools.AtomicWrite.write(
+                 Alto.AtomicFile.write(
                    Path.join(temporary_dir, "document.csv"),
                    csv,
-                   0o600
+                   mode: 0o600
                  ),
                :ok <- publish_hook(opts, temporary_dir, final_dir),
                :ok <- File.rename(temporary_dir, final_dir) do
@@ -436,7 +436,7 @@ defmodule DocumentIntake do
   defp candidate_path(dir, identity), do: Path.join(dir, ".document-#{identity}.candidate.json")
 
   defp write_private_json(path, record) do
-    Alto.Tools.AtomicWrite.write(path, JSON.encode!(record) <> "\n", 0o600)
+    Alto.AtomicFile.write(path, JSON.encode!(record) <> "\n", mode: 0o600)
   end
 
   defp bounded_read(path, max) do

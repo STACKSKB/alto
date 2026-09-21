@@ -10,7 +10,7 @@ defmodule Alto.Handoff do
   """
 
   alias Alto.Session
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   @files %{
     design: "the design contract",
@@ -157,7 +157,7 @@ defmodule Alto.Handoff do
     Enum.reduce_while(@files, :ok, fn {key, filename}, :ok ->
       content = Map.fetch!(artifact, key) <> "\n"
 
-      case AtomicWrite.write(Path.join(directory, filename), content, 0o600) do
+      case AtomicFile.write(Path.join(directory, filename), content, mode: 0o600) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end

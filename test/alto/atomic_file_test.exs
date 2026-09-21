@@ -1,7 +1,7 @@
-defmodule Alto.Tools.AtomicWriteTest do
+defmodule Alto.AtomicFileTest do
   use ExUnit.Case, async: false
 
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-atomic-#{System.unique_integer([:positive])}")
@@ -18,7 +18,7 @@ defmodule Alto.Tools.AtomicWriteTest do
 
   test "writes, renames, and leaves no temporary sibling", %{dir: dir} do
     path = Path.join(dir, "state.txt")
-    assert :ok = AtomicWrite.write(path, "new")
+    assert :ok = AtomicFile.write(path, "new")
     assert File.read!(path) == "new"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
   end
@@ -34,7 +34,7 @@ defmodule Alto.Tools.AtomicWriteTest do
     path = Path.join(dir, "state.txt")
 
     assert {:error, {:post_rename_sync_failed, {:directory_sync_failed, 42, _}}} =
-             AtomicWrite.write(path, "published")
+             AtomicFile.write(path, "published")
 
     assert File.read!(path) == "published"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
