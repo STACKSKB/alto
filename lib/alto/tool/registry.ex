@@ -6,35 +6,31 @@ defmodule Alto.Tool.Registry do
       with {:ok, module, tool_opts} <- normalize_tool(tool_spec),
            name when is_atom(name) <- Alto.Tool.callback(module, :name, tool_opts),
            schema when is_map(schema) <- Alto.Tool.callback(module, :schema, tool_opts),
-           {:ok, preparation} <- Alto.Tool.preparation(module) do
-        string_name = Atom.to_string(name)
+           {:ok, preparation} <- Alto.Tool.preparation(module),
+           string_name = Atom.to_string(name),
+           true <-
+             not Map.has_key?(tools, string_name) or {:error, {:duplicate_tool, string_name}},
+           mode when mode in [:parallel, :exclusive] <-
+             Alto.Tool.callback(module, :execution_mode, tool_opts),
+           approval when approval in [:never, :required] <-
+             Alto.Tool.requirement(module, tool_opts) do
+        definition = %{
+          "type" => "function",
+          "function" =>
+            schema
+            |> Map.new(fn {key, value} -> {to_string(key), value} end)
+            |> Map.put("name", string_name)
+        }
 
-        if Map.has_key?(tools, string_name) do
-          {:halt, {:error, {:duplicate_tool, string_name}}}
-        else
-          definition = %{
-            "type" => "function",
-            "function" =>
-              schema
-              |> Map.new(fn {key, value} -> {to_string(key), value} end)
-              |> Map.put("name", string_name)
-          }
+        tool = %{
+          module: module,
+          opts: tool_opts,
+          execution_mode: mode,
+          approval: approval,
+          preparation: preparation
+        }
 
-          tool = %{
-            module: module,
-            opts: tool_opts,
-            execution_mode: Alto.Tool.callback(module, :execution_mode, tool_opts),
-            approval: Alto.Tool.requirement(module, tool_opts),
-            preparation: preparation
-          }
-
-          if tool.execution_mode in [:parallel, :exclusive] and
-               tool.approval in [:never, :required] do
-            {:cont, {:ok, Map.put(tools, string_name, tool), [definition | definitions]}}
-          else
-            {:halt, {:error, {:invalid_tool, module}}}
-          end
-        end
+        {:cont, {:ok, Map.put(tools, string_name, tool), [definition | definitions]}}
       else
         {:error, reason} -> {:halt, {:error, reason}}
         _other -> {:halt, {:error, {:invalid_tool, tool_spec}}}
