@@ -234,6 +234,24 @@ defmodule Alto.SessionTest do
     assert {:ok, []} = Session.list(session_dir: Path.join(dir, "nope"))
   end
 
+  test "diagnostic terms retain identities while sharing strict ETF framing" do
+    data = %{process: self(), reference: make_ref(), bits: <<1::1>>}
+    encoded = Session.encode_term(data)
+    assert {:ok, ^data} = Session.decode_term(encoded)
+    assert {:error, :invalid_data} = Alto.Persistence.Codec.decode(encoded["$term"])
+
+    invalid = [
+      "not base64!",
+      Base.encode64(:erlang.term_to_binary(:ok) <> <<0>>),
+      Base.encode64(:erlang.term_to_binary(String.duplicate("x", 10_000), [:compressed])),
+      Session.encode_term(%{callback: fn -> :ok end})["$term"]
+    ]
+
+    for payload <- invalid do
+      assert {:error, :invalid_term_payload} = Session.decode_term(%{"$term" => payload})
+    end
+  end
+
   test "decode_term rejects garbage",
     do: assert({:error, _} = Session.decode_term(%{"nope" => 1}))
 end

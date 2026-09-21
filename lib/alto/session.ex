@@ -330,20 +330,15 @@ defmodule Alto.Session do
   @spec decode_term(term()) :: {:ok, term()} | {:error, term()}
   def decode_term(%{"$term" => encoded}) when is_binary(encoded) do
     with true <- byte_size(encoded) <= @max_log_bytes,
-         {:ok, binary} <- Base.decode64(encoded),
-         true <- byte_size(binary) <= @max_log_bytes,
-         false <- compressed_term?(binary),
-         {:ok, term} <- safe_binary_to_term(binary),
-         true <- :erlang.external_size(term) <= @max_log_bytes,
-         true <- safe_term?(term) do
+         {:ok, term} <-
+           Alto.Persistence.Codec.decode(encoded,
+             max_bytes: @max_log_bytes,
+             validate: &safe_term?/1
+           ) do
       {:ok, term}
     else
-      :error -> {:error, :invalid_term_encoding}
-      false -> {:error, :invalid_term_payload}
-      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_term_payload}
     end
-  rescue
-    error -> {:error, {:invalid_term_payload, Exception.message(error)}}
   end
 
   def decode_term(other), do: {:error, {:invalid_term_payload, other}}
@@ -535,17 +530,6 @@ defmodule Alto.Session do
     end
   end
 
-  defp safe_binary_to_term(binary) do
-    case :erlang.binary_to_term(binary, [:safe, :used]) do
-      {term, used} when used == byte_size(binary) -> {:ok, term}
-      {_term, _used} -> {:error, :invalid_term_payload}
-    end
-  rescue
-    error -> {:error, {:invalid_term_payload, Exception.message(error)}}
-  catch
-    kind, reason -> {:error, {:invalid_term_payload, {kind, reason}}}
-  end
-
   defp safe_term?(term) when is_function(term), do: false
   defp safe_term?(term) when is_list(term), do: Enum.all?(term, &safe_term?/1)
 
@@ -556,9 +540,6 @@ defmodule Alto.Session do
     do: term |> Map.to_list() |> Enum.all?(fn {k, v} -> safe_term?(k) and safe_term?(v) end)
 
   defp safe_term?(_term), do: true
-
-  defp compressed_term?(<<131, 80, _rest::binary>>), do: true
-  defp compressed_term?(_binary), do: false
 
   defp mtime(dir, id) do
     case File.stat(log_path(dir, id), time: :posix) do
