@@ -23,13 +23,10 @@ defmodule Alto.Runner.Execution.Session do
     # Keep their persistence failures visible instead of erasing them here.
     result = elem(outcome, tuple_size(outcome) - 1)
 
-    status =
-      case existing_persistence_errors(result) do
-        [] -> :not_requested
-        errors -> persistence_status(errors)
-      end
-
-    put_persistence(outcome, status)
+    put_persistence(
+      outcome,
+      Result.persistence_status(Result.persistence_errors(result), :not_requested)
+    )
   end
 
   def persist_outcome(state, outcome) do
@@ -40,12 +37,12 @@ defmodule Alto.Runner.Execution.Session do
       if save_transcript?, do: persist_transcript(state, result), else: {result, []}
 
     errors =
-      existing_persistence_errors(result) ++
+      Result.persistence_errors(result) ++
         transcript_errors ++
         persistence_errors(persist_completed(state, status, reason, result))
 
     outcome = put_elem(outcome, tuple_size(outcome) - 1, result)
-    put_persistence(outcome, persistence_status(errors))
+    put_persistence(outcome, Result.persistence_status(errors))
   end
 
   defp completion({:ok, _result}), do: {"ok", nil, true}
@@ -110,7 +107,7 @@ defmodule Alto.Runner.Execution.Session do
         model_requests: result.model_requests
       })
 
-    case DurableSession.append(state.session, record, session_dir_opt(state)) do
+    case DurableSession.append(state.session, record, session_dir: state.session_dir) do
       :ok ->
         :ok
 
@@ -120,19 +117,11 @@ defmodule Alto.Runner.Execution.Session do
     end
   end
 
-  defp session_dir_opt(state), do: [session_dir: state.session_dir]
-
-  defp existing_persistence_errors(%{persistence: {:degraded, errors}}), do: errors
-  defp existing_persistence_errors(_result), do: []
-
   defp persistence_errors(:ok), do: []
   defp persistence_errors({:error, reason}), do: [reason]
 
-  defp persistence_status([]), do: :ok
-  defp persistence_status(errors), do: {:degraded, errors}
-
-  defp put_persistence({:ok, result}, status), do: {:ok, %{result | persistence: status}}
-
-  defp put_persistence({:error, reason, result}, status),
-    do: {:error, reason, %{result | persistence: status}}
+  defp put_persistence(outcome, status) do
+    index = tuple_size(outcome) - 1
+    put_elem(outcome, index, %{elem(outcome, index) | persistence: status})
+  end
 end

@@ -6,7 +6,7 @@ defmodule Alto.Runner.Execution.Children do
   changed; validation helpers accept minimal maps containing the fields used.
   """
   alias Alto.{Event, Usage}
-  alias Alto.Runner.Budget
+  alias Alto.Runner.{Budget, Result}
   alias Alto.Subagents.Continuation
   alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.Events
@@ -290,10 +290,10 @@ defmodule Alto.Runner.Execution.Children do
         outcome
 
       {:error, reason} ->
-        errors = existing_persistence_errors(result) ++ [{:subagent_journal, reason}]
+        errors = Result.persistence_errors(result) ++ [{:subagent_journal, reason}]
 
         {:error, {:subagent_journal_failed, reason},
-         %{result | verdict: :unknown, persistence: persistence_status(errors)}}
+         %{result | verdict: :unknown, persistence: Result.persistence_status(errors)}}
     end
   end
 
@@ -606,7 +606,7 @@ defmodule Alto.Runner.Execution.Children do
     run = %{run | usage: Usage.merge(run.usage, struct(Usage, result.usage))}
 
     Enum.reduce(
-      existing_persistence_errors(result),
+      Result.persistence_errors(result),
       run,
       &Events.add_persistence_error(&2, {:subagent, &1})
     )
@@ -689,11 +689,6 @@ defmodule Alto.Runner.Execution.Children do
 
   defp child_agent_identity(%{root_run_id: id, path: path}, child),
     do: %{root_run_id: id, path: path ++ [child]}
-
-  defp existing_persistence_errors(%{persistence: {:degraded, errors}}), do: errors
-  defp existing_persistence_errors(_), do: []
-  defp persistence_status([]), do: :ok
-  defp persistence_status(errors), do: {:degraded, errors}
 
   defp durable_call(fun, run) do
     case Alto.Runner.Execution.Call.run(fun, Budget.remaining(run.budget), run.cancel_ref) do

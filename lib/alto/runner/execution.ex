@@ -1357,9 +1357,6 @@ defmodule Alto.Runner.Execution do
     {:error, {:cancelled, reason}, result(run, nil, :cancelled)}
   end
 
-  defp persistence_status([]), do: :ok
-  defp persistence_status(errors), do: {:degraded, errors}
-
   defp normalize_session_opt(nil), do: {:ok, nil}
   defp normalize_session_opt(:new), do: {:ok, Session.generate_id()}
 
@@ -1497,7 +1494,7 @@ defmodule Alto.Runner.Execution do
           :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic])) and
           Map.get(run, :resolved_operations, []) == [],
       usage: Usage.to_map(run.usage),
-      persistence: persistence_status(Enum.reverse(run.persistence_errors))
+      persistence: Result.persistence_status(Enum.reverse(run.persistence_errors))
     }
   end
 

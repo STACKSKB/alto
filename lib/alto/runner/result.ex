@@ -45,4 +45,13 @@ defmodule Alto.Runner.Result do
 
   @doc "An empty outcome for failures before execution starts."
   def empty(session_id \\ nil), do: %__MODULE__{session_id: session_id}
+
+  @doc "Persistence failures in occurrence order."
+  def persistence_errors(%__MODULE__{persistence: {:degraded, errors}}), do: errors
+  def persistence_errors(%__MODULE__{}), do: []
+
+  @doc "Persistence status after a requested write, or the supplied status when no errors occurred."
+  def persistence_status(errors, success \\ :ok)
+  def persistence_status([], success), do: success
+  def persistence_status(errors, _success), do: {:degraded, errors}
 end
