@@ -4,8 +4,7 @@ defmodule Alto.Tools.EditFile do
   @behaviour Alto.Tool
 
   alias Alto.Tool.Context
-  alias Alto.BoundedFile
-  alias Alto.Tools.AtomicWrite
+  alias Alto.Tools.FileChange
   alias Alto.Tools.Path, as: SafePath
   alias Alto.Tools.UnifiedDiff
 
@@ -77,50 +76,24 @@ defmodule Alto.Tools.EditFile do
   def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts \\ []),
-    do: prepare_edit(arguments, context, opts)
+  def prepare(arguments, context, opts \\ [])
+
+  def prepare(arguments, %Context{} = context, opts)
+      when is_map(arguments) and is_list(opts) do
+    with {:ok, limits} <- validate_options(opts),
+         do: prepare_edit(arguments, context, limits)
+  end
+
+  def prepare(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts \\ []) do
-    with {:ok, resolved} <- revalidate_target(prepared, context),
-         {:ok, stat, content} <-
-           read_snapshot(
-             resolved,
-             prepared.limits.max_file_bytes
-           ),
-         :ok <- validate_fingerprint(prepared, stat, content),
-         write_result <- AtomicWrite.write(resolved, prepared.updated, prepared.mode) do
-      case write_result do
-        :ok ->
-          {:ok,
-           %{
-             path: prepared.path,
-             replacements: prepared.replacements,
-             bytes_before: byte_size(content),
-             bytes_after: byte_size(prepared.updated),
-             patch: Map.get(prepared, :patch)
-           }}
-
-        {:error, {:post_rename_sync_failed, reason}} ->
-          {:unknown, reason}
-
-        other ->
-          other
-      end
-    end
-  end
+  def run_prepared(prepared, %Context{} = context, _opts \\ []),
+    do: FileChange.commit(prepared, context)
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
       run_prepared(prepared, context, opts)
-    end
-  end
-
-  defp prepare_edit(arguments, %Context{} = context, opts)
-       when is_map(arguments) and is_list(opts) do
-    with {:ok, limits} <- validate_options(opts) do
-      prepare_edit(arguments, context, limits)
     end
   end
 
@@ -130,36 +103,35 @@ defmodule Alto.Tools.EditFile do
     with {:ok, edits} <- edits(arguments),
          :ok <- validate_edits(edits, limits),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, stat, content} <- read_snapshot(resolved, limits.max_file_bytes),
+         {:ok, original} <- FileChange.original(resolved, limits.max_file_bytes, :edit),
+         content = original.content,
          :ok <- validate_utf8(content),
          {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes),
          :ok <- validate_size(byte_size(updated), limits.max_file_bytes) do
+      patch = UnifiedDiff.render(path, content, updated, limits.patch_bytes)
+
+      result = %{
+        path: path,
+        replacements: replacements,
+        bytes_before: original.bytes,
+        bytes_after: byte_size(updated),
+        patch: patch
+      }
+
       prepared = %{
         operation: :edit_file,
         path: path,
         resolved: resolved,
-        updated: updated,
-        replacements: replacements,
-        fingerprint: fingerprint(content),
-        mode: stat.mode,
-        patch: UnifiedDiff.render(path, content, updated, limits.patch_bytes),
-        limits: limits
+        content: updated,
+        original: Map.delete(original, :content),
+        result: result,
+        max_bytes: limits.max_file_bytes
       }
 
-      details = %{
-        path: path,
-        replacements: replacements,
-        bytes_before: byte_size(content),
-        bytes_after: byte_size(updated),
-        preview: bounded(content: updated, limit: limits.preview_bytes),
-        patch: prepared.patch
-      }
-
-      {:ok, prepared, details}
+      {:ok, prepared,
+       Map.put(result, :preview, FileChange.preview(updated, limits.preview_bytes))}
     end
   end
-
-  defp prepare_edit(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   defp edits(%{"edits" => edits}) when is_list(edits) and edits != [], do: {:ok, edits}
   defp edits(_arguments), do: {:error, :edits_must_be_nonempty_list}
@@ -220,39 +192,6 @@ defmodule Alto.Tools.EditFile do
 
   defp edit_error(_index, reason, 1), do: reason
   defp edit_error(index, reason, _count), do: {:invalid_edit, index, reason}
-
-  defp revalidate_target(%{operation: :edit_file, path: path, resolved: expected}, context) do
-    SafePath.revalidate(path, expected, context.cwd)
-  end
-
-  defp revalidate_target(_prepared, _context), do: {:error, :invalid_prepared_edit}
-
-  defp read_snapshot(path, max_file_bytes) do
-    case BoundedFile.snapshot(path, max_file_bytes) do
-      {:ok, %{content: nil}} -> {:error, {:file_too_large, max_file_bytes}}
-      {:ok, %{stat: stat, content: content}} -> {:ok, stat, content}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp validate_fingerprint(prepared, stat, content) do
-    cond do
-      stat.mode != prepared.mode or fingerprint(content) != prepared.fingerprint ->
-        {:error, {:stale_file, prepared.path}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp fingerprint(content), do: :crypto.hash(:sha256, content)
-
-  defp bounded(content: content, limit: limit) when byte_size(content) <= limit,
-    do: %{content: content, truncated: false}
-
-  defp bounded(content: content, limit: limit) do
-    %{content: Alto.Text.prefix(content, limit), truncated: true}
-  end
 
   defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok
   defp validate_size(_size, max_file_bytes), do: {:error, {:file_too_large, max_file_bytes}}

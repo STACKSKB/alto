@@ -354,6 +354,47 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "changed by another writer\n"
   end
 
+  test "prepared file changes reject mode changes and retargeted symlinks", %{
+    root: root,
+    context: context
+  } do
+    first = Path.join(root, "first.txt")
+    second = Path.join(root, "second.txt")
+    link = Path.join(root, "link.txt")
+    File.write!(first, "before")
+    File.write!(second, "before")
+    File.chmod!(first, 0o640)
+    File.ln_s!("first.txt", link)
+
+    changes = [
+      {WriteFile, %{"path" => "link.txt", "content" => "after"}},
+      {EditFile,
+       %{
+         "path" => "link.txt",
+         "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+       }}
+    ]
+
+    for {tool, arguments} <- changes do
+      assert {:ok, prepared, _details} = tool.prepare(arguments, context)
+      File.chmod!(first, 0o600)
+      assert {:error, {:stale_file, _path}} = tool.run_prepared(prepared, context)
+      File.chmod!(first, 0o640)
+
+      File.rm!(link)
+      File.ln_s!("second.txt", link)
+
+      assert {:error, {:prepared_path_changed, "link.txt"}} =
+               tool.run_prepared(prepared, context)
+
+      assert File.read!(first) == "before"
+      assert File.read!(second) == "before"
+
+      File.rm!(link)
+      File.ln_s!("first.txt", link)
+    end
+  end
+
   test "applies disjoint edits against one original snapshot", %{
     root: root,
     context: context

@@ -4,8 +4,7 @@ defmodule Alto.Tools.WriteFile do
   @behaviour Alto.Tool
 
   alias Alto.Tool.Context
-  alias Alto.BoundedFile
-  alias Alto.Tools.AtomicWrite
+  alias Alto.Tools.FileChange
   alias Alto.Tools.Path, as: SafePath
 
   @max_bytes 256_000
@@ -49,42 +48,19 @@ defmodule Alto.Tools.WriteFile do
   def approval(_opts \\ []), do: :required
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts \\ []),
-    do: prepare_write(arguments, context, opts)
+  def prepare(arguments, %Context{} = context, opts \\ []) when is_list(opts) do
+    with {:ok, limits} <- validate_options(opts),
+         do: prepare_write(arguments, context, limits)
+  end
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts \\ []) do
-    with {:ok, resolved} <- revalidate_target(prepared, context),
-         {:ok, mode} <- revalidate_original(prepared),
-         write_result <- AtomicWrite.write(resolved, prepared.content, mode) do
-      case write_result do
-        :ok ->
-          {:ok,
-           %{
-             path: prepared.path,
-             bytes_written: byte_size(prepared.content),
-             patch: Map.get(prepared, :patch)
-           }}
-
-        {:error, {:post_rename_sync_failed, reason}} ->
-          {:unknown, reason}
-
-        other ->
-          other
-      end
-    end
-  end
+  def run_prepared(prepared, %Context{} = context, _opts \\ []),
+    do: FileChange.commit(prepared, context)
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do
     with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
       run_prepared(prepared, context, opts)
-    end
-  end
-
-  defp prepare_write(arguments, %Context{} = context, opts) when is_list(opts) do
-    with {:ok, limits} <- validate_options(opts) do
-      prepare_write(arguments, context, limits)
     end
   end
 
@@ -98,92 +74,43 @@ defmodule Alto.Tools.WriteFile do
            byte_size(content) <= limits.max_bytes or
              {:error, {:content_too_large, limits.max_bytes}},
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, original} <- original_snapshot(resolved, limits.max_bytes) do
+         {:ok, original} <- FileChange.original(resolved, limits.max_bytes, :write) do
+      patch =
+        Alto.Tools.UnifiedDiff.render(
+          path,
+          if(is_map(original), do: original.content, else: ""),
+          content,
+          limits.diff_bytes
+        )
+
+      result = %{path: path, bytes_written: byte_size(content), patch: patch}
+
       prepared = %{
         operation: :write_file,
         path: path,
         resolved: resolved,
         content: content,
         original: if(is_map(original), do: Map.delete(original, :content), else: original),
-        patch:
-          Alto.Tools.UnifiedDiff.render(
-            path,
-            if(is_map(original), do: original.content, else: ""),
-            content,
-            limits.diff_bytes
-          )
+        result: result,
+        max_bytes: limits.max_bytes
       }
 
       details = %{
         path: path,
         bytes_before: original_bytes(original),
         bytes_after: byte_size(content),
-        preview: preview(content, limits.preview_bytes),
-        patch: prepared.patch
+        preview: FileChange.preview(content, limits.preview_bytes),
+        patch: patch
       }
 
-      {:ok, Map.put(prepared, :limits, limits), details}
+      {:ok, prepared, details}
     else
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp revalidate_target(%{operation: :write_file, path: path, resolved: expected}, context) do
-    SafePath.revalidate(path, expected, context.cwd)
-  end
-
-  defp revalidate_target(_prepared, _context), do: {:error, :invalid_prepared_write}
-
-  defp original_snapshot(path, max_bytes) do
-    case BoundedFile.fingerprint_snapshot(path, max_bytes) do
-      {:ok, %{stat: stat, content: content, fingerprint: fingerprint}} ->
-        {:ok, %{fingerprint: fingerprint, mode: stat.mode, bytes: stat.size, content: content}}
-
-      {:error, {:not_a_file, path}} ->
-        {:error, {:not_a_file, path}}
-
-      {:error, :enoent} ->
-        {:ok, :missing}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp revalidate_original(
-         %{operation: :write_file, resolved: path, original: original} = prepared
-       ) do
-    limits = Map.get(prepared, :limits, %{max_bytes: @max_bytes})
-
-    case {original, original_snapshot(path, limits.max_bytes)} do
-      {:missing, {:ok, :missing}} ->
-        {:ok, nil}
-
-      {%{fingerprint: expected, mode: mode}, {:ok, %{fingerprint: expected, mode: mode}}} ->
-        {:ok, mode}
-
-      {_expected, {:ok, _actual}} ->
-        {:error, {:stale_file, path}}
-
-      {_expected, {:error, :enoent}} ->
-        {:error, {:stale_file, path}}
-
-      {_expected, {:error, reason}} ->
-        {:error, reason}
-    end
-  end
-
-  defp revalidate_original(_prepared), do: {:error, :invalid_prepared_write}
-
   defp original_bytes(:missing), do: 0
   defp original_bytes(%{bytes: bytes}), do: bytes
-
-  defp preview(content, limit) when byte_size(content) <= limit,
-    do: %{content: content, truncated: false}
-
-  defp preview(content, limit) do
-    %{content: Alto.Text.prefix(content, limit), truncated: true}
-  end
 
   defp validate_options(opts),
     do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_write_options)

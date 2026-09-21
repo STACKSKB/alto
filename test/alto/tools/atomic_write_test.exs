@@ -38,6 +38,22 @@ defmodule Alto.Tools.AtomicWriteTest do
 
     assert File.read!(path) == "published"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
+
+    context = %Alto.Tool.Context{session_id: "test", cwd: dir}
+
+    for {tool, arguments, expected} <- [
+          {Alto.Tools.WriteFile, %{"path" => "state.txt", "content" => "written"}, "written"},
+          {Alto.Tools.EditFile,
+           %{
+             "path" => "state.txt",
+             "edits" => [%{"old_text" => "written", "new_text" => "edited"}]
+           }, "edited"}
+        ] do
+      assert {:ok, prepared, _details} = tool.prepare(arguments, context)
+      assert {:unknown, {:directory_sync_failed, 42, _}} = tool.run_prepared(prepared, context)
+      assert File.read!(path) == expected
+      assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
+    end
   end
 
   defp restore_path(nil), do: System.delete_env("PATH")
