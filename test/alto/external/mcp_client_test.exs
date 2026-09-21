@@ -67,6 +67,29 @@ defmodule Alto.External.MCP.ClientTest do
     %{root: root, server: server}
   end
 
+  test "FFF specs use MCP server options and the active workspace", %{root: root, server: server} do
+    specs = Alto.Tools.FFF.tools(command: server, startup_timeout: 5_000, request_timeout: 5_000)
+    assert {:ok, tools, _definitions} = Alto.Tool.Registry.build(specs)
+    assert Enum.sort(Map.keys(tools)) == ["fff_find_files", "fff_grep", "fff_multi_grep"]
+    context = %Alto.Tool.Context{session_id: "fff", cwd: root}
+
+    for {module, opts} <- specs do
+      arguments =
+        if opts[:remote_name] == "multi_grep",
+          do: %{"patterns" => ["needle"]},
+          else: %{"query" => "needle"}
+
+      assert {:ok, %{"content" => [%{"text" => encoded}]}} =
+               module.run(arguments, context, opts)
+
+      assert JSON.decode!(encoded) == arguments
+    end
+
+    {_module, opts} = hd(specs)
+    assert {:ok, client} = Client.ensure_started(Keyword.put(opts[:server], :cwd, root))
+    Client.stop(client)
+  end
+
   test "retains one initialized stdio server and calls its advertised tools", %{
     root: root,
     server: server

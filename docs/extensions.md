@@ -167,7 +167,7 @@ sandbox = {Alto.Command.Executors.Bubblewrap,
   network: :disabled, protected_paths: [".git"],
   env: %{"MY_TOOL_SETTING" => "value"}}
 
-Alto.Tools.FFF.tools(executable: "/usr/local/bin/fff-mcp", executor: sandbox)
+Alto.Tools.FFF.tools(command: "/usr/local/bin/fff-mcp", executor: sandbox)
 {Alto.Tools.Ripwire, executable: "/usr/local/bin/ripwire", executor: sandbox}
 ```
 

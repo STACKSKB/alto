@@ -60,23 +60,14 @@ defmodule Alto.Tools.FFF do
     }
   }
 
-  @doc "Return the three model-facing tool specs backed by one workspace-scoped FFF server."
+  @doc """
+  Return three tools backed by one workspace-scoped FFF server.
+  Options are MCP server options; `command` defaults to `fff-mcp` and `cwd`
+  is always resolved from the active workspace.
+  """
   @spec tools(keyword()) :: [Alto.Tool.spec()]
   def tools(opts \\ []) do
-    executable = Keyword.get(opts, :executable, "fff-mcp")
-    args = Keyword.get(opts, :args, [])
-
-    server = [
-      command: executable,
-      args: args,
-      cwd: :workspace,
-      executor: Keyword.get(opts, :executor, Alto.Command.Executors.Unsandboxed),
-      startup_timeout: Keyword.get(opts, :startup_timeout, 30_000),
-      request_timeout: Keyword.get(opts, :request_timeout, 30_000),
-      max_message_bytes: Keyword.get(opts, :max_message_bytes, 2_000_000),
-      max_pending_requests: Keyword.get(opts, :max_pending_requests, 128),
-      max_ready_waiters: Keyword.get(opts, :max_ready_waiters, 128)
-    ]
+    server = opts |> Keyword.put_new(:command, "fff-mcp") |> Keyword.put(:cwd, :workspace)
 
     [
       spec(:fff_find_files, "find_files", @file_schema, server),
