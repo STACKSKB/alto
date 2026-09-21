@@ -82,6 +82,10 @@ defmodule Alto.ProjectTest do
     assert {:ok, %{instructions: "a", truncated: true}} = Project.load(root, max_bytes: 2)
     File.write!(path, <<?a, 255, ?x, ?x, ?x, ?x>>)
     assert {:error, {"AGENTS.md", :instructions_not_utf8}} = Project.load(root, max_bytes: 2)
+    File.write!(path, <<?a, 0xF0, 0x9F>>)
+    assert {:error, {"AGENTS.md", :instructions_not_utf8}} = Project.load(root, max_bytes: 8)
+    File.write!(path, "")
+    assert {:ok, %{instructions: "", truncated: false}} = Project.load(root, max_bytes: 2)
     assert {:error, {_, :invalid_max_bytes}} = Project.load(root, max_bytes: 0)
   end
 end

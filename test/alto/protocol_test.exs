@@ -66,6 +66,15 @@ defmodule Alto.ProtocolTest do
       assert byte_size(text) <= 1_100
     end
 
+    test "diagnostic keys are bounded UTF-8 even across four-byte characters" do
+      encoded = Protocol.encode_term(%{[String.duplicate("🙂", 400)] => "value"})
+      [key] = Map.keys(encoded)
+      assert String.valid?(key)
+      assert byte_size(key) <= 1_000
+      assert String.ends_with?(key, "…")
+      assert {:ok, ^encoded} = encoded |> JSON.encode!() |> JSON.decode()
+    end
+
     test "inspect fallback is a string and improper lists do not crash the encoder" do
       assert Protocol.encode_term([1 | 2]) == [1, 2]
 

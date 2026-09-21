@@ -135,19 +135,7 @@ defmodule Alto.Protocol do
 
   defp bounded_inspect(term) do
     inspect(term, pretty: false, limit: 50, printable_limit: @max_inspect_bytes)
-    |> trim_valid(@max_inspect_bytes)
-  end
-
-  defp trim_valid(binary, max) when byte_size(binary) <= max, do: binary
-
-  defp trim_valid(binary, max) do
-    kept = binary_part(binary, 0, max)
-
-    if String.valid?(kept) do
-      kept <> "…"
-    else
-      trim_valid(binary_part(kept, 0, byte_size(kept) - 1), max)
-    end
+    |> Alto.Text.truncate(@max_inspect_bytes, "…")
   end
 
   ## Server → client encoding
