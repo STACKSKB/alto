@@ -8,6 +8,7 @@ defmodule Alto.Command do
   alias Alto.Tool.Context
 
   @type component :: module() | {module(), keyword()}
+  @contracts %{policy: Alto.Command.Policy, executor: Alto.Command.Executor}
 
   @spec prepare(map(), Context.t(), keyword()) :: {:ok, Prepared.t()} | {:error, term()}
   def prepare(arguments, %Context{} = context, opts \\ []) do
@@ -20,10 +21,9 @@ defmodule Alto.Command do
            prepare_execution(executor, invocation, executor_opts) do
       {:ok,
        %Prepared{
-         invocation: invocation,
          executor: executor,
          execution: execution,
-         approval_details: approval_details(invocation, executor_details)
+         approval_details: %{command: Map.from_struct(invocation), execution: executor_details}
        }}
     end
   end
@@ -45,20 +45,6 @@ defmodule Alto.Command do
     with {:ok, prepared} <- prepare(arguments, context, opts) do
       execute(prepared)
     end
-  end
-
-  defp approval_details(invocation, executor_details) do
-    %{
-      command: %{
-        requested_program: invocation.requested_program,
-        executable: invocation.executable,
-        args: invocation.args,
-        cwd: invocation.cwd,
-        timeout_ms: invocation.timeout_ms,
-        max_output_bytes: invocation.max_output_bytes
-      },
-      execution: executor_details
-    }
   end
 
   defp prepare_invocation(policy, arguments, context, opts) do
@@ -85,22 +71,12 @@ defmodule Alto.Command do
   defp normalize(module, kind) when is_atom(module), do: validate_component(module, [], kind)
   defp normalize(other, _kind), do: {:error, {:invalid_command_component, other}}
 
-  defp validate_component(module, opts, :policy) do
-    validate_callback(module, opts, :prepare, 3, :policy)
-  end
+  defp validate_component(module, opts, kind) do
+    contract = Map.fetch!(@contracts, kind)
+    required = contract.behaviour_info(:callbacks) -- contract.behaviour_info(:optional_callbacks)
 
-  defp validate_component(module, opts, :executor) do
-    with {:ok, component} <- validate_callback(module, opts, :prepare, 2, :executor),
-         true <- function_exported?(module, :execute, 1) do
-      {:ok, component}
-    else
-      false -> {:error, {:invalid_command_component, :executor, module}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp validate_callback(module, opts, function, arity, kind) do
-    if Code.ensure_loaded?(module) and function_exported?(module, function, arity) do
+    if Code.ensure_loaded?(module) and
+         Enum.all?(required, fn {name, arity} -> function_exported?(module, name, arity) end) do
       {:ok, {module, opts}}
     else
       {:error, {:invalid_command_component, kind, module}}

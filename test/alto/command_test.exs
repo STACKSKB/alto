@@ -143,7 +143,7 @@ defmodule Alto.CommandTest do
     System.put_env("PATH", first <> ":" <> inherited_path)
 
     assert {:ok, prepared} = Alto.Command.prepare(%{"program" => "alto-path-probe"}, context)
-    assert prepared.invocation.executable == Path.join(first, "alto-path-probe")
+    assert prepared.approval_details.command.executable == Path.join(first, "alto-path-probe")
 
     System.put_env("PATH", second <> ":" <> inherited_path)
 
