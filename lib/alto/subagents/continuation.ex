@@ -700,45 +700,35 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_initial(_), do: {:error, :invalid_batch}
 
-  defp valid_packet(packet, initial) when is_map(packet) do
-    case packet do
-      %{
-        "phase" => "children",
-        "generation" => generation,
-        "children" => children,
-        "join" => join
-      }
-      when map_size(packet) == 4 and is_list(children) ->
-        if generation == initial["generation"] and Enum.all?(children, &valid_child?/1) and
-             Enum.map(children, & &1["id"]) == initial["ids"] and
-             (is_nil(join) or
-                (is_nil(initial["parent"]) and is_map(join) and map_size(join) > 0 and
-                   Enum.all?(children, &(&1["state"] == "completed")))) do
-          :ok
-        else
-          {:error, :invalid_batch}
-        end
-
-      %{
-        "phase" => phase,
-        "generation" => generation,
-        "packet" => parent,
-        "children" => children
-      }
-      when map_size(packet) == 4 and phase in ["ready", "claimed"] and is_list(children) ->
-        if generation == initial["generation"] and not is_nil(initial["parent"]) and
-             Enum.all?(children, &valid_child?/1) and
-             Enum.map(children, & &1["id"]) == initial["ids"] and
-             Enum.all?(children, &(&1["state"] == "completed")),
-           do: valid_parent(parent),
-           else: {:error, :invalid_batch}
-
-      _ ->
-        {:error, :invalid_batch}
+  defp valid_packet(%{"generation" => generation, "children" => children} = packet, initial)
+       when map_size(packet) == 4 and is_list(children) do
+    if generation == initial["generation"] and Enum.all?(children, &valid_child?/1) and
+         Enum.map(children, & &1["id"]) == initial["ids"] do
+      valid_phase(packet, initial["parent"])
+    else
+      {:error, :invalid_batch}
     end
   end
 
   defp valid_packet(_, _), do: {:error, :invalid_batch}
+
+  defp valid_phase(%{"phase" => "children", "join" => nil}, _parent), do: :ok
+
+  defp valid_phase(%{"phase" => "children", "join" => join, "children" => children}, nil)
+       when is_map(join) and map_size(join) > 0 do
+    if Enum.all?(children, &(&1["state"] == "completed")),
+      do: :ok,
+      else: {:error, :invalid_batch}
+  end
+
+  defp valid_phase(%{"phase" => phase, "packet" => packet, "children" => children}, parent)
+       when phase in ["ready", "claimed"] and not is_nil(parent) do
+    if Enum.all?(children, &(&1["state"] == "completed")),
+      do: valid_parent(packet),
+      else: {:error, :invalid_batch}
+  end
+
+  defp valid_phase(_, _), do: {:error, :invalid_batch}
 
   defp valid_child?(
          %{"id" => id, "state" => state, "attempt" => attempt, "result" => result} = child
