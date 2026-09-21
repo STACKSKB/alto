@@ -389,8 +389,7 @@ defmodule Alto.TUI.State do
 
   def append_entry(%__MODULE__{} = state, task_id, entry) do
     key = task_id || :scratch
-    entries = bounded_entries(Map.get(state.entries, key, []) ++ [entry])
-    %{state | entries: Map.put(state.entries, key, entries)} |> evict_inactive_caches()
+    put_entries(state, key, Map.get(state.entries, key, []) ++ [entry])
   end
 
   def upsert_entry(%__MODULE__{} = state, task_id, key, entry) do
@@ -405,8 +404,7 @@ defmodule Alto.TUI.State do
         entries ++ [tagged]
       end
 
-    %{state | entries: Map.put(state.entries, task_key, bounded_entries(entries))}
-    |> evict_inactive_caches()
+    put_entries(state, task_key, entries)
   end
 
   def append_assistant_delta(%__MODULE__{} = state, task_id, text, kind \\ :assistant) do
@@ -419,8 +417,7 @@ defmodule Alto.TUI.State do
         {_last, _rest} -> entries ++ [%{kind: kind, text: text}]
       end
 
-    %{state | entries: Map.put(state.entries, key, bounded_entries(entries))}
-    |> evict_inactive_caches()
+    put_entries(state, key, entries)
   end
 
   def put_task(%__MODULE__{} = state, task) do
@@ -565,50 +562,30 @@ defmodule Alto.TUI.State do
   defp hydrate_selected(%__MODULE__{selected_task_id: nil} = state), do: state
 
   defp hydrate_selected(%__MODULE__{} = state) do
-    state
-    |> hydrate_selected_entries()
-    |> hydrate_selected_usage()
-  end
+    task = selected_task(state)
+    session_id = task && task["conversation_id"]
+    backend = task && task_backend(task)
 
-  defp hydrate_selected_entries(state) do
-    if Map.has_key?(state.entries, state.selected_task_id) do
-      state
-    else
-      case selected_task(state) do
-        %{"conversation_id" => conversation_id} = task when is_binary(conversation_id) ->
-          entries =
-            if Alto.TUI.Backend.runner?(state.run_options, task_backend(task)),
-              do: load_session_entries(conversation_id, state.catalog_opts),
-              else: []
+    entries =
+      Map.put_new_lazy(state.entries, state.selected_task_id, fn ->
+        if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend),
+          do: session_id |> load_session_entries(state.catalog_opts) |> bounded_entries(),
+          else: []
+      end)
 
-          put_entries(state, state.selected_task_id, entries)
+    usage =
+      Map.put_new_lazy(state.usage, state.selected_task_id, fn ->
+        if is_binary(session_id) and
+             Alto.TUI.Backend.ui(
+               %{state | selected_backend: backend, entries: entries},
+               :session_usage?
+             ) ==
+               true,
+           do: load_session_usage(session_id, state.catalog_opts),
+           else: Usage.new()
+      end)
 
-        _other ->
-          put_entries(state, state.selected_task_id, [])
-      end
-    end
-  end
-
-  defp hydrate_selected_usage(state) do
-    if Map.has_key?(state.usage, state.selected_task_id) do
-      state
-    else
-      usage =
-        case selected_task(state) do
-          %{"conversation_id" => conversation_id} = task when is_binary(conversation_id) ->
-            if Alto.TUI.Backend.ui(
-                 %{state | selected_backend: task_backend(task)},
-                 :session_usage?
-               ) == true,
-               do: load_session_usage(conversation_id, state.catalog_opts),
-               else: Usage.new()
-
-          _other ->
-            Usage.new()
-        end
-
-      put_usage(state, state.selected_task_id, usage)
-    end
+    %{state | entries: entries, usage: usage} |> evict_inactive_caches()
   end
 
   defp load_session_entries(session_id, opts) do
