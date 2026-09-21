@@ -79,51 +79,6 @@ defmodule Alto.Runner.SerialContinuationTest do
     assert {:error, :child_already_admitted} = Continuation.dispatch(batch, "first")
   end
 
-  test "a child saves its result even while the parent cannot collect it", %{
-    ledger: ledger,
-    ledger_opts: ledger_opts
-  } do
-    test_pid = self()
-
-    sink = fn
-      %Event{type: :subagents_started, data: data} -> send(test_pid, {:journal, data.journal})
-      _ -> :ok
-    end
-
-    assert {:ok, parent} =
-             Alto.start(%{agents: [%{id: "worker", task: "work"}]},
-               loop: loop(1),
-               continuation_store: ledger,
-               provider: {BlockingProvider, test_pid: self()},
-               event_sink: sink
-             )
-
-    on_exit(fn ->
-      if Process.alive?(Alto.Test.Runner.worker(parent)),
-        do: Process.exit(Alto.Test.Runner.worker(parent), :kill)
-    end)
-
-    assert_receive {:journal, identity}, 2_000
-    assert_receive {:child_entered, provider, worker}, 2_000
-    monitor = Process.monitor(worker)
-    assert :erlang.suspend_process(Alto.Test.Runner.worker(parent))
-    send(provider, :release)
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 2_000
-    assert {:ok, batch} = Continuation.restore(ledger, identity)
-    assert {:ok, %{results: [{"worker", saved}]}} = Continuation.join(batch)
-    assert saved.output == "retained child output"
-    assert saved.model_requests == 1
-
-    parent_monitor = Process.monitor(Alto.Test.Runner.worker(parent))
-    Process.exit(Alto.Test.Runner.worker(parent), :kill)
-    assert_receive {:DOWN, ^parent_monitor, :process, _, :killed}, 2_000
-    stop_supervised!(OperationLog)
-    restarted = start_supervised!({OperationLog, ledger_opts})
-    assert {:ok, restored} = Continuation.restore(restarted, identity)
-    assert {:ok, %{results: [{"worker", ^saved}]}} = Continuation.join(restored)
-    assert {:error, :child_already_admitted} = Continuation.dispatch(restored, "worker")
-  end
-
   test "cancellation retains queued non-dispatch and the active child's outcome", %{
     ledger: ledger
   } do

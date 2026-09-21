@@ -248,6 +248,7 @@ defmodule Alto.Runner.ParentContinuationTest do
     assert {:ok, %{phase: :children}} = Continuation.read(cell)
     {:ok, journal} = Continuation.restore(ledgers.parent, journal_identity)
     assert {:ok, %{results: [{"worker", ^saved}]}} = Continuation.join(journal)
+    assert {:error, :child_already_admitted} = Continuation.dispatch(journal, "worker")
 
     assert {:ok, result} = Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
     assert [%{id: "worker", output: "retained output"}] = result.output.results
