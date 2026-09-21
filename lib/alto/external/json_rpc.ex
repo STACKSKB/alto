@@ -3,6 +3,21 @@ defmodule Alto.External.JSONRPC do
 
   alias Alto.External.Process, as: ExternalProcess
 
+  def normalize_options(opts, schema) do
+    opts = Keyword.put_new(opts, :cwd, File.cwd!())
+
+    with {:ok, opts} <- NimbleOptions.validate(opts, schema),
+         true <- opts[:command] != "" or {:error, :empty_external_command},
+         true <- File.dir?(opts[:cwd]) or {:error, {:invalid_working_directory, opts[:cwd]}},
+         executable when is_binary(executable) <-
+           ExternalProcess.resolve_executable(opts[:command]) ||
+             {:error, {:external_executable_not_found, opts[:command]}} do
+      {:ok, Keyword.put(opts, :command, executable)}
+    else
+      {:error, _} = error -> error
+    end
+  end
+
   def state(opts, protocol_state) when is_map(protocol_state) do
     Map.merge(
       %{

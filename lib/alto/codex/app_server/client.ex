@@ -253,57 +253,21 @@ defmodule Alto.Codex.AppServer.Client do
   @impl true
   def terminate(_reason, state), do: JSONRPC.close(state)
 
-  defp normalize_options(opts) do
-    defaults = [
-      command: "codex",
-      args: ["app-server", "--stdio"],
-      cwd: File.cwd!(),
-      env: %{},
-      instance: :shared,
-      startup_timeout: @default_timeout,
-      request_timeout: @default_turn_timeout,
-      max_message_bytes: @default_max_message_bytes,
-      max_pending_requests: @default_max_pending_requests,
-      max_ready_waiters: @default_max_ready_waiters,
-      max_subscribers: @default_max_subscribers
-    ]
+  @options_schema [
+    command: [type: :string, default: "codex"],
+    args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
+    cwd: [type: :string],
+    env: [type: {:map, :any, :any}, default: %{}],
+    instance: [type: :any, default: :shared],
+    startup_timeout: [type: :pos_integer, default: @default_timeout],
+    request_timeout: [type: :pos_integer, default: @default_turn_timeout],
+    max_message_bytes: [type: :pos_integer, default: @default_max_message_bytes],
+    max_pending_requests: [type: :pos_integer, default: @default_max_pending_requests],
+    max_ready_waiters: [type: :pos_integer, default: @default_max_ready_waiters],
+    max_subscribers: [type: :pos_integer, default: @default_max_subscribers]
+  ]
 
-    with {:ok, opts} <- Keyword.validate(opts, defaults),
-         command when is_binary(command) and command != "" <- Keyword.fetch!(opts, :command),
-         executable when is_binary(executable) <- ExternalProcess.resolve_executable(command),
-         args when is_list(args) <- Keyword.fetch!(opts, :args),
-         true <- Enum.all?(args, &is_binary/1),
-         cwd when is_binary(cwd) <- Keyword.fetch!(opts, :cwd),
-         true <- File.dir?(cwd),
-         env when is_map(env) <- Keyword.fetch!(opts, :env),
-         :ok <- positive_options(opts) do
-      {:ok, Keyword.put(opts, :command, executable)}
-    else
-      {:error, reason} -> {:error, {:invalid_codex_app_server_options, reason}}
-      nil -> {:error, {:codex_executable_not_found, Keyword.get(opts, :command)}}
-      _other -> {:error, {:invalid_codex_app_server_options, opts}}
-    end
-  end
-
-  defp positive_options(opts) do
-    keys = [
-      :startup_timeout,
-      :request_timeout,
-      :max_message_bytes,
-      :max_pending_requests,
-      :max_ready_waiters,
-      :max_subscribers
-    ]
-
-    if Enum.all?(keys, fn key ->
-         value = Keyword.fetch!(opts, key)
-         is_integer(value) and value > 0
-       end) do
-      :ok
-    else
-      {:error, :bounds_must_be_positive}
-    end
-  end
+  defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   defp open_port(opts) do
     command = Keyword.fetch!(opts, :command)

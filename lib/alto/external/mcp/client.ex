@@ -10,7 +10,6 @@ defmodule Alto.External.MCP.Client do
 
   use GenServer
   alias Alto.External.JSONRPC
-  alias Alto.External.Process, as: ExternalProcess
 
   @protocol_version "2025-11-25"
   @default_timeout 30_000
@@ -201,83 +200,44 @@ defmodule Alto.External.MCP.Client do
   @impl true
   def terminate(_reason, state), do: JSONRPC.close(state)
 
-  defp normalize_options(opts) do
-    defaults = [
-      command: nil,
-      args: [],
-      cwd: File.cwd!(),
-      env: %{},
-      executor: Alto.Command.Executors.Unsandboxed,
-      protocol_version: @protocol_version,
-      startup_timeout: @default_timeout,
-      request_timeout: @default_timeout,
-      max_message_bytes: @default_max_message_bytes,
-      max_pending_requests: @default_max_pending_requests,
-      max_ready_waiters: @default_max_ready_waiters
-    ]
+  @options_schema [
+    command: [type: :string, required: true],
+    args: [type: {:list, :string}, default: []],
+    cwd: [type: :string],
+    env: [type: {:map, :any, :any}, default: %{}],
+    executor: [type: :any, default: Alto.Command.Executors.Unsandboxed],
+    protocol_version: [type: :any, default: @protocol_version],
+    startup_timeout: [type: :pos_integer, default: @default_timeout],
+    request_timeout: [type: :pos_integer, default: @default_timeout],
+    max_message_bytes: [type: :pos_integer, default: @default_max_message_bytes],
+    max_pending_requests: [type: :pos_integer, default: @default_max_pending_requests],
+    max_ready_waiters: [type: :pos_integer, default: @default_max_ready_waiters]
+  ]
 
-    with {:ok, opts} <- Keyword.validate(opts, defaults),
-         command when is_binary(command) and command != "" <- Keyword.get(opts, :command),
-         executable when is_binary(executable) <- ExternalProcess.resolve_executable(command),
-         args when is_list(args) <- Keyword.fetch!(opts, :args),
-         true <- Enum.all?(args, &is_binary/1),
-         cwd when is_binary(cwd) <- Keyword.fetch!(opts, :cwd),
-         true <- File.dir?(cwd),
-         env when is_map(env) <- Keyword.fetch!(opts, :env),
-         :ok <- positive_options(opts) do
-      {:ok, Keyword.put(opts, :command, executable)}
-    else
-      {:error, reason} -> {:error, {:invalid_mcp_options, reason}}
-      nil -> {:error, {:mcp_executable_not_found, Keyword.get(opts, :command)}}
-      _other -> {:error, {:invalid_mcp_options, opts}}
-    end
-  end
-
-  defp positive_options(opts) do
-    keys = [
-      :startup_timeout,
-      :request_timeout,
-      :max_message_bytes,
-      :max_pending_requests,
-      :max_ready_waiters
-    ]
-
-    if Enum.all?(keys, fn key ->
-         value = Keyword.fetch!(opts, key)
-         is_integer(value) and value > 0
-       end) do
-      :ok
-    else
-      {:error, :bounds_must_be_positive}
-    end
-  end
+  defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   defp open_port(opts) do
-    command = Keyword.fetch!(opts, :command)
-    executable = System.find_executable(command) || if(File.regular?(command), do: command)
+    context = %Alto.Tool.Context{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
 
-    if executable do
-      context = %Alto.Tool.Context{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
-
-      result =
-        with {:ok, prepared} <-
-               Alto.Command.prepare(
-                 %{"program" => executable, "args" => Keyword.fetch!(opts, :args)},
-                 context,
-                 executor: Keyword.fetch!(opts, :executor)
-               ) do
-          Alto.Command.open(prepared,
-            env: Keyword.fetch!(opts, :env),
-            startup_timeout: Keyword.fetch!(opts, :startup_timeout)
-          )
-        end
-
-      case result do
-        {:ok, _process} = ok -> ok
-        {:error, reason} -> {:error, {:mcp_port_open_failed, reason}}
+    result =
+      with {:ok, prepared} <-
+             Alto.Command.prepare(
+               %{
+                 "program" => Keyword.fetch!(opts, :command),
+                 "args" => Keyword.fetch!(opts, :args)
+               },
+               context,
+               executor: Keyword.fetch!(opts, :executor)
+             ) do
+        Alto.Command.open(prepared,
+          env: Keyword.fetch!(opts, :env),
+          startup_timeout: Keyword.fetch!(opts, :startup_timeout)
+        )
       end
-    else
-      {:error, {:mcp_executable_not_found, command}}
+
+    case result do
+      {:ok, _process} = ok -> ok
+      {:error, reason} -> {:error, {:mcp_port_open_failed, reason}}
     end
   rescue
     error in ArgumentError -> {:error, {:mcp_port_open_failed, Exception.message(error)}}
