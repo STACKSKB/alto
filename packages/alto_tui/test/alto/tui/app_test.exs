@@ -1504,7 +1504,11 @@ defmodule Alto.TUI.AppTest do
 
     assert saved.overlay == nil
     assert saved.selected_provider_id == "acme"
-    assert Enum.find(saved.profiles, &(&1.id == "acme")).options[:api_key] == nil
+
+    %{provider: {Alto.Providers.OpenAICompatible, options}} =
+      Enum.find(saved.profiles, &(&1.id == "acme"))
+
+    refute Keyword.has_key?(options, :api_key)
     assert {:ok, credentials} = Alto.Credentials.load(context.credentials)
     assert Alto.Credentials.get(credentials, "acme", "api_key") == "super-secret-key"
     assert {:ok, %{mode: mode}} = File.stat(context.credentials)

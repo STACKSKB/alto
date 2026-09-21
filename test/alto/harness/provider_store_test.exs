@@ -25,13 +25,15 @@ defmodule Alto.Harness.ProviderStoreTest do
                credentials_path: path
              )
 
-    refute Keyword.has_key?(saved.options, :api_key)
-    assert saved.options[:base_url] == "https://api.acme.test/v1"
+    refute Keyword.has_key?(elem(saved.provider, 1), :api_key)
+    assert elem(saved.provider, 1)[:base_url] == "https://api.acme.test/v1"
     assert ProviderStore.api_key_saved?(saved, credentials_path: path)
 
     assert [profile] = elem(ProviderStore.profiles([], credentials_path: path), 1)
     refute inspect(profile) =~ "secret"
-    assert ProviderStore.runtime_options(profile, credentials_path: path)[:api_key] == "secret"
+
+    assert elem(ProviderStore.resolve(profile, credentials_path: path), 1)[:api_key] ==
+             "secret"
   end
 
   test "decorates configured profiles without putting credentials in them", %{path: path} do
@@ -50,8 +52,7 @@ defmodule Alto.Harness.ProviderStoreTest do
     configured = %ProviderProfile{
       id: "openrouter",
       label: "OpenRouter",
-      module: Alto.Providers.OpenAICompatible,
-      options: [timeout: 1_000],
+      provider: {Alto.Providers.OpenAICompatible, [timeout: 1_000]},
       models: :discover,
       credential_id: "openrouter"
     }
@@ -59,6 +60,6 @@ defmodule Alto.Harness.ProviderStoreTest do
     assert {:ok, [profile]} = ProviderStore.profiles([configured], credentials_path: path)
     assert profile.label == "My OpenRouter"
     assert profile.default_model == "vendor/model"
-    refute Keyword.has_key?(profile.options, :api_key)
+    refute Keyword.has_key?(elem(profile.provider, 1), :api_key)
   end
 end

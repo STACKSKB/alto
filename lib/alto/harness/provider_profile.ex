@@ -7,14 +7,13 @@ defmodule Alto.Harness.ProviderProfile do
   only `id`, `label`, and model names.
   """
 
-  @enforce_keys [:id, :label, :module, :options]
-  defstruct [:id, :label, :module, :options, :default_model, :credential_id, models: :discover]
+  @enforce_keys [:id, :label, :provider]
+  defstruct [:id, :label, :provider, :default_model, :credential_id, models: :discover]
 
   @type t :: %__MODULE__{
           id: String.t(),
           label: String.t(),
-          module: module(),
-          options: keyword(),
+          provider: {module(), keyword()},
           models: :discover | [Alto.Provider.model()],
           default_model: String.t() | nil,
           credential_id: String.t()
@@ -33,18 +32,12 @@ defmodule Alto.Harness.ProviderProfile do
     end
   end
 
-  @doc "Return the Alto provider spec for a selected model."
-  @spec provider(t(), String.t()) :: {module(), keyword()}
-  def provider(%__MODULE__{} = profile, model) when is_binary(model) and model != "" do
-    {profile.module, Keyword.put(profile.options, :model, model)}
-  end
-
   @doc "Return a provider spec with credentials resolved at the execution boundary."
   @spec runtime_provider(t(), String.t(), keyword()) :: {module(), keyword()}
   def runtime_provider(%__MODULE__{} = profile, model, opts \\ [])
       when is_binary(model) and model != "" do
-    options = Alto.Harness.ProviderStore.runtime_options(profile, opts)
-    {profile.module, Keyword.put(options, :model, model)}
+    {module, options} = Alto.Harness.ProviderStore.resolve(profile, opts)
+    {module, Keyword.put(options, :model, model)}
   end
 
   @doc "Fetch or return the profile's bounded model catalog."
@@ -53,9 +46,10 @@ defmodule Alto.Harness.ProviderProfile do
 
   def models(%__MODULE__{models: models}, _opts) when is_list(models), do: {:ok, models}
 
-  def models(%__MODULE__{models: :discover, module: module} = profile, opts) do
+  def models(%__MODULE__{models: :discover, provider: {module, _options}} = profile, opts) do
     if Code.ensure_loaded?(module) and function_exported?(module, :list_models, 1) do
-      module.list_models(Alto.Harness.ProviderStore.runtime_options(profile, opts))
+      {^module, options} = Alto.Harness.ProviderStore.resolve(profile, opts)
+      module.list_models(options)
     else
       {:error, {:model_discovery_not_supported, module}}
     end
@@ -102,10 +96,9 @@ defmodule Alto.Harness.ProviderProfile do
     validate(%__MODULE__{
       id: id,
       label: Map.get(profile, :label) || id,
-      module: module,
-      options: options,
+      provider: {module, options},
       models: normalize_models(Map.get(profile, :models, :discover)),
-      default_model: Map.get(profile, :default_model) || Keyword.get(options, :model),
+      default_model: Map.get(profile, :default_model),
       credential_id: Map.get(profile, :credential_id) || id
     })
   end
@@ -120,11 +113,8 @@ defmodule Alto.Harness.ProviderProfile do
       not valid_name?(profile.label) ->
         {:error, {:invalid_profile_label, profile.label}}
 
-      not is_atom(profile.module) ->
-        {:error, {:invalid_profile_module, profile.module}}
-
-      not Keyword.keyword?(profile.options) ->
-        {:error, {:invalid_profile_options, profile.id}}
+      not valid_provider?(profile.provider) ->
+        {:error, {:invalid_profile_provider, profile.id}}
 
       not valid_name?(profile.credential_id) ->
         {:error, {:invalid_profile_credential_id, profile.credential_id}}
@@ -133,9 +123,15 @@ defmodule Alto.Harness.ProviderProfile do
         {:error, {:invalid_profile_models, profile.id}}
 
       true ->
-        {:ok, profile}
+        {_module, options} = profile.provider
+        {:ok, %{profile | default_model: profile.default_model || Keyword.get(options, :model)}}
     end
   end
+
+  defp valid_provider?({module, options}),
+    do: is_atom(module) and not is_nil(module) and Keyword.keyword?(options)
+
+  defp valid_provider?(_other), do: false
 
   defp normalize_models(:discover), do: :discover
 

@@ -1470,7 +1470,7 @@ defmodule Alto.TUI.App do
     profile = Enum.find(state.profiles, &(&1.id == profile_id))
 
     configure =
-      if profile && profile.module == Alto.Providers.OpenAICompatible do
+      if match?(%{provider: {Alto.Providers.OpenAICompatible, _}}, profile) do
         [
           %{
             label: "Configure #{profile.label} credentials…",
@@ -1527,7 +1527,7 @@ defmodule Alto.TUI.App do
     fields = [
       {:id, "ID", profile && profile.id, [locked?: not new?]},
       {:label, "Name", profile && profile.label, []},
-      {:base_url, "Base URL", profile && Keyword.get(profile.options, :base_url), []},
+      {:base_url, "Base URL", profile && Keyword.get(elem(profile.provider, 1), :base_url), []},
       {:api_key, "API key", "", [secret?: true, placeholder: key_placeholder]},
       {:model, "Default model", profile && profile.default_model, []}
     ]

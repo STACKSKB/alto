@@ -25,9 +25,18 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert {:ok, [profile]} = ProviderProfile.from_run_options(opts)
     assert profile.id == "local"
     assert {:ok, [%{id: "large"}]} = ProviderProfile.models(profile)
-    assert {Provider, provider_opts} = ProviderProfile.provider(profile, "large")
+    assert {Provider, provider_opts} = ProviderProfile.runtime_provider(profile, "large")
     assert provider_opts[:base_url] == "http://local"
     assert provider_opts[:model] == "large"
+  end
+
+  test "rejects malformed provider options before reading model defaults" do
+    for options <- [[123], [{"model", "large"}], [:model]] do
+      assert {:error, {:invalid_profile_provider, "invalid"}} =
+               ProviderProfile.from_run_options(
+                 provider_profiles: [%{id: "invalid", provider: {Provider, options}}]
+               )
+    end
   end
 
   test "module and tuple specs share defaults without losing provider options" do
@@ -41,10 +50,10 @@ defmodule Alto.Harness.ProviderProfileTest do
 
     assert plain.label == "plain"
     assert plain.credential_id == "plain"
-    assert plain.options == []
+    assert plain.provider == {Provider, []}
     assert {:ok, [%{id: "small", name: "small"}]} = ProviderProfile.models(plain)
     assert configured.default_model == "large"
-    assert configured.options == [model: "large", timeout: 500]
+    assert configured.provider == {Provider, [model: "large", timeout: 500]}
 
     assert {:error, :profile_options_belong_in_provider_spec} =
              ProviderProfile.from_run_options(
@@ -92,9 +101,8 @@ defmodule Alto.Harness.ProviderProfileTest do
     profile = %ProviderProfile{
       id: "cold",
       label: "Cold",
-      module: module,
-      models: :discover,
-      options: []
+      provider: {module, []},
+      models: :discover
     }
 
     assert {:ok, [%{id: "first-run"}]} = ProviderProfile.models(profile)
