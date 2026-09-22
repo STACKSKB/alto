@@ -737,7 +737,7 @@ defmodule Alto.TUI.App do
         credentials_path: state.credentials_path
       )
 
-    options = maybe_context_window(options, selected_model_metadata(state, profile))
+    options = maybe_context_window(options, State.model_metadata(state))
 
     options =
       if effort = State.selected_effort(state),
@@ -746,22 +746,6 @@ defmodule Alto.TUI.App do
 
     {module, options}
   end
-
-  defp selected_model_metadata(state, profile) do
-    state.models
-    |> Map.get(profile.id, profile.models)
-    |> case do
-      models when is_list(models) ->
-        Enum.find(models, &model_id_matches?(&1, state.selected_model))
-
-      _other ->
-        nil
-    end
-  end
-
-  defp model_id_matches?(%{id: id}, selected), do: id == selected
-  defp model_id_matches?(%{"id" => id}, selected), do: id == selected
-  defp model_id_matches?(_, _), do: false
 
   defp maybe_context_window(options, %{context_window: value})
        when is_integer(value) and value > 0,

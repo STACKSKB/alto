@@ -169,11 +169,16 @@ defmodule Alto.TUI.State do
   def model_metadata(state) do
     models =
       case Alto.TUI.Backend.ui(state, :models) do
-        :pass -> Map.get(state.models, state.selected_provider_id, [])
-        models -> models
+        :pass ->
+          profile = selected_profile(state)
+          Map.get(state.models, state.selected_provider_id, (profile && profile.models) || [])
+
+        models ->
+          models
       end
 
-    Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
+    if is_list(models),
+      do: Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
   end
 
   def effort_choices(state), do: Alto.Reasoning.efforts(model_metadata(state))

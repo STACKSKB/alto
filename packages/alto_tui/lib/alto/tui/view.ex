@@ -832,15 +832,8 @@ defmodule Alto.TUI.View do
   end
 
   defp native_context_consumption(state, usage) do
-    with model when is_binary(model) <- state.selected_model,
-         models when is_list(models) <- Map.get(state.models, state.selected_provider_id),
-         model_info when not is_nil(model_info) <- Enum.find(models, &(model_id(&1) == model)),
-         context when is_integer(context) and context > 0 <- model_context(model_info) do
-      percent = min(usage.last_input_tokens / context * 100.0, 999.9)
-      "#{Float.round(percent, 1)}%"
-    else
-      _other -> "—"
-    end
+    model = State.model_metadata(state) || %{}
+    context_percent(usage, model[:context_length] || model["context_length"])
   end
 
   defp context_percent(usage, context) when is_integer(context) and context > 0 do
@@ -889,12 +882,6 @@ defmodule Alto.TUI.View do
 
   defp overlay_message_prefix(%{kind: :codex_error}), do: "Codex App Server reported:\n"
   defp overlay_message_prefix(_overlay), do: ""
-
-  defp model_id(%{id: id}), do: id
-  defp model_id(%{"id" => id}), do: id
-
-  defp model_context(model),
-    do: Map.get(model, :context_length) || Map.get(model, "context_length")
 
   defp approval_label(:ask), do: "ASK"
   defp approval_label(:read_only), do: "READ"
