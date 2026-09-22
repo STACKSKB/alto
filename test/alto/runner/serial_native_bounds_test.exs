@@ -2,8 +2,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   @moduledoc """
   Bounded native tool results and provider-facing encodings.
 
-  `output` is the provider-facing encoding (bounded string, truncated
-  with a marker). `value` is the native term, bounded by
+  Provider transcripts contain bounded encodings. Completion events retain
+  `value`, the native term, bounded by
   `max_tool_result_bytes` via `:erlang.external_size/1` before event
   retention, fanout, or session persistence. Oversize natives become a bounded
   `tool_failed` (`{:tool_result_too_large, %{limit:, size:}}`); the tool ran
@@ -61,7 +61,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     @impl true
     def approval(_opts), do: :never
     @impl true
-    def run(_args, _ctx, _opts), do: {:ok, {:tuple_ok, 1, 2}}
+    def run(_args, _ctx, opts), do: {:ok, Keyword.get(opts, :value, {:tuple_ok, 1, 2})}
   end
 
   defmodule MalformedTool do
@@ -191,6 +191,18 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
              )
 
     assert {:completed, %{value: {:tuple_ok, 1, 2}}} = result.output
+  end
+
+  test "providerless tools return bounded binary data without model serialization" do
+    value = %{bytes: <<255, 0, 128>>}
+
+    assert {:ok, result} =
+             Alto.run("go",
+               loop: Alto.loop(SingleToolLoop, call_id: "binary", tool: "tup"),
+               tools: [{TupleTool, value: value}]
+             )
+
+    assert {:completed, %{value: ^value}} = result.output
   end
 
   test "hybrid loop: oversize provider tool becomes bounded failure in transcript" do

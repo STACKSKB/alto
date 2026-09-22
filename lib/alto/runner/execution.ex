@@ -1357,6 +1357,8 @@ defmodule Alto.Runner.Execution do
     end
   end
 
+  defp model_result_content(_value, %{provider: nil}), do: {:ok, nil}
+
   defp model_result_content(value, run) do
     case Alto.Content.normalize_tool_result(value, run.max_tool_result_bytes) do
       :not_content -> {:ok, encode_tool_result(value, run.max_tool_result_bytes)}
