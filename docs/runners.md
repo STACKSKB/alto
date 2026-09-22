@@ -70,7 +70,8 @@ The lower-level components can also be used independently:
 
 | Component | Responsibility |
 | --- | --- |
-| `Execution.Tool` | Exact preparation, approval, and bounded invocation |
+| `Execution.Tool` | Exact preparation, approval, and direct invocation inside supervised workers |
+| `ToolBatch` | Bounded worker invocation for single calls and concurrent groups |
 | `Execution.Model` | Provider context checks, streaming, and bounded retries |
 | `Execution.Transcript` | Bounded history and optional compaction |
 | `Execution.Events` | Event retention, persistence, and outcome accounting |
