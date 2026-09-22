@@ -41,12 +41,10 @@ defmodule Alto.Loops.Default do
   end
 
   def handle_event(
-        %Event{type: :model_completed, data: data},
+        %Event{type: :model_completed, data: %{message: output} = data},
         %__MODULE__{phase: :awaiting_model} = state,
         spec
       ) do
-    output = Map.get(data, :message, Map.get(data, :output))
-
     case Map.get(data, :tool_calls, []) do
       [] ->
         settle(state, {:stop, output}, :completed)

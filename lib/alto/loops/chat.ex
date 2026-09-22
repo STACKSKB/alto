@@ -26,13 +26,12 @@ defmodule Alto.Loops.Chat do
 
   @impl true
   def handle_event(
-        %Event{type: :model_completed, data: data},
+        %Event{type: :model_completed, data: %{message: output} = data},
         %__MODULE__{phase: :awaiting_model} = state,
         _spec
       ) do
     case Map.get(data, :tool_calls, []) do
       [] ->
-        output = Map.get(data, :message, Map.get(data, :output))
         Transition.stop(%{state | phase: :complete}, output)
 
       calls when is_list(calls) ->
