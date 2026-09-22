@@ -79,28 +79,15 @@ defmodule Alto.Persistence.Retained do
     end
   end
 
-  def resume(ledger, key, expected_revision, decision, deadline \\ :infinity) do
+  @doc "Retire a checkpoint atomically after validating its viewed revision."
+  def retire(ledger, key, revision, decision, attempt, evidence, deadline \\ :infinity) do
     with :ok <- deadline_ok(deadline) do
-      OperationLog.resume_checkpoint(
+      OperationLog.retire_checkpoint(
         ledger,
         key,
-        expected_revision,
+        revision,
         decision,
-        call_timeout(deadline)
-      )
-    end
-  end
-
-  @doc "Finish an internal lifecycle transition using its deterministic attempt."
-  def finish(ledger, key, attempt, evidence, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         :ok <- OperationLog.record_attempt(ledger, key, attempt, call_timeout(deadline)),
-         :ok <- deadline_ok(deadline) do
-      OperationLog.record_outcome(
-        ledger,
-        key,
         attempt,
-        :completed,
         evidence,
         call_timeout(deadline)
       )

@@ -191,34 +191,38 @@ defmodule Alto.Subagents.ContinuationTest do
     assert {:error, :ledger_full} = Continuation.open(full, "overflow", ["child-a"])
   end
 
-  test "interrupted retirement resumes from the exact retire decision after restart", %{
+  test "failed retirement append leaves the acknowledged batch intact across restart", %{
     dir: dir,
     id: id
   } do
     %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
-    batch = open!(ledger, "batch-interrupted-retire", ["child-a"])
+    batch = open!(ledger, "batch-atomic-retire", ["child-a"])
     {:ok, ticket} = Continuation.dispatch(batch, "child-a")
     assert {:ok, _} = Continuation.complete(ticket, :done)
     {:ok, joined} = Continuation.join(batch)
     {:ok, acknowledged} = Continuation.acknowledge(batch, joined.revision, %{"saved" => true})
 
-    {:ok, resumed} =
-      OperationLog.resume_checkpoint(ledger, "batch-interrupted-retire", acknowledged.revision, %{
-        "action" => "retire-continuation",
-        "generation" => batch.generation
-      })
+    attempts = OperationLog.attempts(ledger, batch.key)
+    size = File.stat!(Path.join(dir, id <> ".jsonl")).size
+    :sys.replace_state(ledger, fn state -> %{state | max_log_bytes: size + 1} end)
+
+    assert {:error, {:ledger_log_too_large, _, _}} =
+             Continuation.retire(batch, acknowledged.revision)
+
+    assert Continuation.read(batch) == {:ok, acknowledged}
+    assert OperationLog.attempts(ledger, batch.key) == attempts
 
     stop_supervised!(child_id)
     %{ledger: restarted} = start_ledger!(dir, id)
     {:ok, restored} = Continuation.restore(restarted, Continuation.identity(batch))
-    assert {:ok, %{state: :retiring, revision: revision}} = Continuation.read(restored)
-    assert revision == resumed.revision
-    assert :ok = Continuation.retire(restored, revision)
-    assert {:ok, %{state: :retired}} = Continuation.read(restored)
-    assert 2 == OperationLog.attempts(restarted, "batch-interrupted-retire")
+    assert Continuation.read(restored) == {:ok, acknowledged}
+    assert :ok = Continuation.retire(restored, acknowledged.revision)
+    assert {:ok, %{state: :retired, revision: revision}} = Continuation.read(restored)
+    assert revision == acknowledged.revision + 1
+    assert OperationLog.attempts(restarted, batch.key) == attempts + 1
   end
 
-  test "concurrent finishers converge after an interrupted retirement", %{dir: dir, id: id} do
+  test "concurrent retirement calls converge on one terminal record", %{dir: dir, id: id} do
     %{ledger: ledger} = start_ledger!(dir, id)
     batch = open!(ledger, "batch-retire-race", ["child-a"])
     {:ok, ticket} = Continuation.dispatch(batch, "child-a")
@@ -226,18 +230,21 @@ defmodule Alto.Subagents.ContinuationTest do
     {:ok, joined} = Continuation.join(batch)
     {:ok, acknowledged} = Continuation.acknowledge(batch, joined.revision, %{"saved" => true})
 
-    {:ok, resumed} =
-      OperationLog.resume_checkpoint(ledger, "batch-retire-race", acknowledged.revision, %{
-        "action" => "retire-continuation",
-        "generation" => batch.generation
-      })
+    tasks =
+      for _ <- 1..2,
+          do: Task.async(fn -> Continuation.retire(batch, acknowledged.revision) end)
 
-    tasks = for _ <- 1..2, do: Task.async(fn -> Continuation.retire(batch, resumed.revision) end)
     results = Enum.map(tasks, &Task.await(&1, 1_000))
     assert :ok in results
-    refute Enum.any?(results, &match?({:error, :already_decided}, &1))
-    assert Enum.all?(results, &(&1 in [:ok, {:error, :invalid_or_stale_join}]))
-    assert {:ok, %{state: :retired}} = Continuation.read(batch)
+
+    assert Enum.all?(
+             results,
+             &(&1 in [:ok, {:error, :invalid_or_stale_join}, {:error, :stale_revision}])
+           )
+
+    assert {:ok, %{state: :retired, revision: revision}} = Continuation.read(batch)
+    assert revision == acknowledged.revision + 1
+    assert OperationLog.attempts(ledger, batch.key) == 2
   end
 
   test "nonportable and oversized results never replace the dispatched state", %{dir: dir, id: id} do

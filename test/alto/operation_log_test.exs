@@ -107,6 +107,47 @@ defmodule Alto.OperationLogTest do
     assert {:ok, ^original} = OperationLog.recovery(replayed, "cell")
   end
 
+  test "checkpoint retirement publishes all transitions or none", %{dir: dir, id: id} do
+    %{name: name, pid: pid} = start_ledger!(id: id, dir: dir)
+    assert :ok = OperationLog.retain(name, "cell", "counter", %{}, "init", %{count: 2})
+    {:ok, before} = OperationLog.recovery(name, "cell")
+    path = Path.join(dir, id <> ".jsonl")
+    bytes = File.read!(path)
+    decision = %{action: :close}
+    evidence = %{count: 2}
+
+    assert {:error, {:invalid_attempt, ""}} =
+             OperationLog.retire_checkpoint(name, "cell", 1, decision, "", evidence)
+
+    assert {:ok, ^before} = OperationLog.recovery(name, "cell")
+    assert File.read!(path) == bytes
+
+    max_bytes = :sys.get_state(name).max_log_bytes
+    :sys.replace_state(name, &%{&1 | max_log_bytes: byte_size(bytes) + 1})
+
+    assert {:error, {:ledger_log_too_large, _, _}} =
+             OperationLog.retire_checkpoint(name, "cell", 1, decision, "close", evidence)
+
+    assert {:ok, ^before} = OperationLog.recovery(name, "cell")
+    assert File.read!(path) == bytes
+
+    :sys.replace_state(name, &%{&1 | max_log_bytes: max_bytes})
+    assert :ok = OperationLog.retire_checkpoint(name, "cell", 1, decision, "close", evidence)
+
+    assert {:ok, %{revision: 2, attempts: 2, checkpoint_decision: ^decision} = closed} =
+             OperationLog.recovery(name, "cell")
+
+    assert closed.status == {:decided, :completed, evidence}
+    assert length(String.split(File.read!(path), "\n", trim: true)) == 2
+
+    assert {:error, :stale_revision} =
+             OperationLog.retire_checkpoint(name, "cell", 1, decision, "close", evidence)
+
+    GenServer.stop(pid)
+    %{name: restarted} = start_ledger!(id: id, dir: dir)
+    assert {:ok, ^closed} = OperationLog.recovery(restarted, "cell")
+  end
+
   defp unique_id, do: String.to_atom("ledger_test_#{System.unique_integer([:positive])}")
 
   describe "lifecycle" do

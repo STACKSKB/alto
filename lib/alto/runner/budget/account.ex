@@ -142,10 +142,8 @@ defmodule Alto.Runner.Budget.Account do
     if is_integer(expected_revision) and expected_revision >= 1 do
       safe(fn ->
         with {:ok, snapshot} <- read(account),
-             true <- snapshot.revision == expected_revision,
-             :ok <- begin_close(account, snapshot),
-             :ok <- finish_close(account) do
-          :ok
+             true <- snapshot.revision == expected_revision do
+          close_snapshot(account, snapshot)
         else
           false -> {:error, :stale_revision}
           {:error, _} = error -> error
@@ -156,41 +154,17 @@ defmodule Alto.Runner.Budget.Account do
     end
   end
 
-  defp begin_close(account, %{state: :active, revision: revision}) do
-    with {:ok, _} <-
-           Retained.resume(
-             account.ledger,
-             account.key,
-             revision,
-             %{"action" => "close_budget", "generation" => account.generation},
-             :infinity
-           ),
-         do: :ok
-  end
+  defp close_snapshot(_, %{state: :closed}), do: :ok
 
-  defp begin_close(_, %{state: state}) when state in [:closing, :closed], do: :ok
-
-  defp finish_close(account) do
-    with {:ok, snapshot} <- read(account) do
-      if snapshot.state == :closed do
-        :ok
-      else
-        evidence = Map.take(snapshot.packet, @limits ++ @counters)
-
-        case Retained.finish(account.ledger, account.key, @close, evidence) do
-          {:error, :already_decided} -> closed_after_race(account)
-          result -> result
-        end
-      end
-    end
-  end
-
-  defp closed_after_race(account) do
-    case read(account) do
-      {:ok, %{state: :closed}} -> :ok
-      {:ok, _} -> {:error, :budget_account_not_closed}
-      error -> error
-    end
+  defp close_snapshot(account, %{state: :active} = snapshot) do
+    Retained.retire(
+      account.ledger,
+      account.key,
+      snapshot.revision,
+      %{"action" => "close_budget", "generation" => account.generation},
+      @close,
+      Map.take(snapshot.packet, @limits ++ @counters)
+    )
   end
 
   defp update(account, fun, deadline) do
@@ -249,28 +223,15 @@ defmodule Alto.Runner.Budget.Account do
 
   defp lifecycle(%{status: {:checkpointed, _, @attempt}}), do: {:ok, :active}
 
-  defp lifecycle(
-         %{
-           checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
-           recovery: %{"generation" => generation},
-           checkpoint: packet
-         } = entry
-       ) do
-    case entry.status do
-      {:intended} ->
-        {:ok, :closing}
-
-      {:dispatched, @close} ->
-        {:ok, :closing}
-
-      {:decided, :completed, evidence} ->
-        if evidence == Map.take(packet, @limits ++ @counters),
-          do: {:ok, :closed},
-          else: {:error, :invalid_budget_account}
-
-      _ ->
-        {:error, :invalid_budget_account}
-    end
+  defp lifecycle(%{
+         checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
+         recovery: %{"generation" => generation},
+         checkpoint: packet,
+         status: {:decided, :completed, evidence}
+       }) do
+    if evidence == Map.take(packet, @limits ++ @counters),
+      do: {:ok, :closed},
+      else: {:error, :invalid_budget_account}
   end
 
   defp lifecycle(_), do: {:error, :invalid_budget_account}

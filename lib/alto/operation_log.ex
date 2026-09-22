@@ -84,6 +84,19 @@ defmodule Alto.OperationLog do
     call(server, {:retain, op_key, tool, recovery, attempt, checkpoint}, timeout)
   end
 
+  @doc "Retire an internal checkpoint at an exact revision in one durable write."
+  def retire_checkpoint(
+        server \\ __MODULE__,
+        op_key,
+        revision,
+        decision,
+        attempt,
+        evidence,
+        timeout \\ 5_000
+      ) do
+    call(server, {:retire_checkpoint, op_key, revision, decision, attempt, evidence}, timeout)
+  end
+
   @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_attempt(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
     call(server, {:attempt, op_key, attempt_id}, timeout)
@@ -199,6 +212,7 @@ defmodule Alto.OperationLog do
   @commands %{
     intent: 5,
     retain: 6,
+    retire_checkpoint: 6,
     attempt: 3,
     release: 3,
     outcome: 5,
@@ -219,7 +233,8 @@ defmodule Alto.OperationLog do
 
   defp command?(_), do: false
 
-  defp scrub_command(command) when elem(command, 0) in [:outcome, :reject_intended, :reconcile] do
+  defp scrub_command(command)
+       when elem(command, 0) in [:outcome, :reject_intended, :reconcile, :retire_checkpoint] do
     index = tuple_size(command) - 1
     evidence = elem(command, index)
     if is_map(evidence), do: put_elem(command, index, scrub(evidence)), else: command
@@ -737,6 +752,12 @@ defmodule Alto.OperationLog do
            }}
       end
     end
+  end
+
+  defp log_apply(record, {:retire_checkpoint, op, revision, decision, attempt, evidence}, state) do
+    with {:ok, record} <- log_apply(record, {:resume_checkpoint, op, revision, decision}, state),
+         {:ok, record} <- log_apply(record, {:attempt, op, attempt}, state),
+         do: log_apply(record, {:outcome, op, attempt, :completed, evidence}, state)
   end
 
   defp log_apply(_record, _command, _state), do: {:error, :bad_entry}

@@ -434,10 +434,8 @@ defmodule Alto.Subagents.Continuation do
     safe(fn ->
       with {:ok, snapshot} <- read(batch),
            true <- snapshot.revision == expected_revision,
-           true <- retireable?(snapshot),
-           :ok <- begin_retirement(batch, snapshot),
-           :ok <- finish_retirement(batch) do
-        :ok
+           true <- retireable?(snapshot) do
+        retire_snapshot(batch, snapshot)
       else
         false -> {:error, :invalid_or_stale_join}
         {:error, _} = error -> error
@@ -513,46 +511,18 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  defp begin_retirement(batch, %{state: :active} = snapshot) do
-    with {:ok, _} <-
-           Retained.resume(
-             batch.ledger,
-             batch.key,
-             snapshot.revision,
-             %{
-               "action" => @retire,
-               "generation" => batch.generation
-             },
-             batch.deadline
-           ),
-         do: :ok
-  end
+  defp retire_snapshot(_, %{state: :retired}), do: :ok
 
-  defp begin_retirement(_, %{state: state}) when state in [:retiring, :retired], do: :ok
-
-  # No external work occurs during retirement. A crash can finish these same
-  # deterministic ledger records without replaying or releasing a child.
-  defp finish_retirement(batch) do
-    with {:ok, snapshot} <- read(batch) do
-      if snapshot.state == :retired do
-        :ok
-      else
-        evidence = %{"generation" => batch.generation, "joined" => true}
-
-        case Retained.finish(batch.ledger, batch.key, @retire, evidence, batch.deadline) do
-          {:error, :already_decided} -> retired_after_race(batch)
-          result -> result
-        end
-      end
-    end
-  end
-
-  defp retired_after_race(batch) do
-    case read(batch) do
-      {:ok, %{state: :retired}} -> :ok
-      {:ok, _} -> {:error, :batch_not_retired}
-      error -> error
-    end
+  defp retire_snapshot(batch, %{state: :active} = snapshot) do
+    Retained.retire(
+      batch.ledger,
+      batch.key,
+      snapshot.revision,
+      %{"action" => @retire, "generation" => batch.generation},
+      @retire,
+      %{"generation" => batch.generation, "joined" => true},
+      batch.deadline
+    )
   end
 
   defp snapshot_read(batch) do
@@ -600,30 +570,15 @@ defmodule Alto.Subagents.Continuation do
 
   defp lifecycle(%{status: {:checkpointed, _, @initialize}}), do: {:ok, :active}
 
-  defp lifecycle(
-         %{
-           checkpoint_decision: %{"action" => @retire, "generation" => generation},
-           recovery: %{"generation" => generation}
-         } = entry
-       ) do
-    if (entry.checkpoint["phase"] == "children" and is_map(entry.checkpoint["join"])) or
-         entry.checkpoint["phase"] == "claimed" do
-      case entry.status do
-        {:intended} ->
-          {:ok, :retiring}
-
-        {:dispatched, @retire} ->
-          {:ok, :retiring}
-
-        {:decided, :completed, %{"generation" => ^generation, "joined" => true}} ->
-          {:ok, :retired}
-
-        _ ->
-          {:error, :invalid_batch_state}
-      end
-    else
-      {:error, :invalid_batch_state}
-    end
+  defp lifecycle(%{
+         checkpoint_decision: %{"action" => @retire, "generation" => generation},
+         recovery: %{"generation" => generation},
+         status: {:decided, :completed, %{"generation" => generation, "joined" => true}},
+         checkpoint: packet
+       }) do
+    if (packet["phase"] == "children" and is_map(packet["join"])) or packet["phase"] == "claimed",
+      do: {:ok, :retired},
+      else: {:error, :invalid_batch_state}
   end
 
   defp lifecycle(_), do: {:error, :invalid_batch_state}
