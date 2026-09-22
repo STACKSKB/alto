@@ -13,15 +13,7 @@ defmodule Alto.Context.Reducer do
   def resolve(:summary), do: {:ok, {Alto.Context.Reducers.Summary, []}}
   def resolve(:handoff), do: {:ok, {Alto.Context.Reducers.Handoff, []}}
 
-  def resolve({module, opts}) when is_atom(module) and is_list(opts) do
-    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, __MODULE__) do
-      {:ok, {module, opts}}
-    else
-      {:error, {:invalid_strategy, module}}
-    end
-  end
-
-  def resolve(other), do: {:error, {:invalid_strategy, other}}
+  def resolve(spec), do: Alto.Capabilities.resolve(spec, __MODULE__)
 
   def request(input, isolated, transcript) do
     messages =

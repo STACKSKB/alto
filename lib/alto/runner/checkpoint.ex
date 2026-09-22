@@ -554,16 +554,12 @@ defmodule Alto.Runner.Checkpoint do
     end
   end
 
-  def decode(encoded) when is_binary(encoded) and byte_size(encoded) <= div(@limit * 4, 3) + 4 do
+  def decode(encoded) do
     case Codec.decode(encoded, max_bytes: @limit) do
       {:ok, term} -> {:ok, term}
       {:error, _} -> {:error, :invalid_checkpoint_data}
     end
-  rescue
-    _ -> {:error, :invalid_checkpoint_data}
   end
-
-  def decode(_), do: {:error, :invalid_checkpoint_data}
 
   defp stable_subagents(nil), do: nil
 
