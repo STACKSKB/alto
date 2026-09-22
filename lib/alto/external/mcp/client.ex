@@ -230,21 +230,12 @@ defmodule Alto.External.MCP.Client do
   end
 
   defp send_notification(state, method) do
-    payload = JSON.encode!(%{"jsonrpc" => "2.0", "method" => method})
-
-    case port_command(state.process.port, payload <> "\n") do
-      :ok -> {:ok, state}
-      {:error, reason} -> {:error, reason}
-    end
+    with :ok <- send_payload(state, %{"jsonrpc" => "2.0", "method" => method}),
+         do: {:ok, state}
   end
 
-  defp port_command(port, payload) do
-    if Port.command(port, payload, [:nosuspend]),
-      do: :ok,
-      else: {:error, {:mcp_transport_lost, :closed}}
-  rescue
-    ArgumentError -> {:error, {:mcp_transport_lost, :closed}}
-  end
+  defp send_payload(state, payload),
+    do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
   defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_message/2)
 
@@ -312,7 +303,7 @@ defmodule Alto.External.MCP.Client do
       "error" => %{"code" => -32601, "message" => "Alto MCP client supports tools only"}
     }
 
-    _ = port_command(state.process.port, JSON.encode!(response) <> "\n")
+    _ = send_payload(state, response)
     {:ok, state}
   end
 
@@ -325,14 +316,13 @@ defmodule Alto.External.MCP.Client do
       end)
 
   defp cancel_request(state, id, reason) do
-    payload =
-      JSON.encode!(%{
+    _ =
+      send_payload(state, %{
         "jsonrpc" => "2.0",
         "method" => "notifications/cancelled",
         "params" => %{"requestId" => id, "reason" => reason}
       })
 
-    _ = port_command(state.process.port, payload <> "\n")
     :ok
   end
 
