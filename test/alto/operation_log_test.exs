@@ -1,17 +1,12 @@
 defmodule Alto.OperationLogTest do
   @moduledoc """
-  conformance: the bounded operation ledger.
-
-  Intent precedes attempt precedes outcome by store enforcement; crash
-  injection at every point leaves the ledger either actionable (intended),
-  parked-for-reconciliation (dispatched without outcome), or decided —
-  never an invented success.
+  Operation fencing, atomic retained transitions, bounds, and durable replay.
+  Consumer crash recovery is exercised through real workers in ConsumerTest.
   """
 
   use ExUnit.Case, async: true
 
   alias Alto.OperationLog
-  alias Alto.Queue
 
   defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
 
@@ -54,12 +49,6 @@ defmodule Alto.OperationLogTest do
   defp start_ledger!(opts) do
     name = :"ledger_#{System.unique_integer([:positive])}"
     {:ok, pid} = OperationLog.start_link(Keyword.put(opts, :name, name))
-    %{pid: pid, name: name}
-  end
-
-  defp start_queue!(opts) do
-    name = :"ledger_queue_#{System.unique_integer([:positive])}"
-    {:ok, pid} = Queue.start_link(Keyword.put(opts, :name, name))
     %{pid: pid, name: name}
   end
 
@@ -231,7 +220,10 @@ defmodule Alto.OperationLogTest do
                OperationLog.record_outcome(name, "op-1", "clm-a", :completed, %{})
     end
 
-    test "intent and attempt are idempotent; decisions are immutable", %{dir: dir, id: id} do
+    test "intent and attempt are idempotent; unknown outcomes can only escalate", %{
+      dir: dir,
+      id: id
+    } do
       %{name: name} = start_ledger!(id: id, dir: dir)
 
       assert :ok = OperationLog.record_intent(name, "op-1", "print", nil)
@@ -248,6 +240,8 @@ defmodule Alto.OperationLogTest do
                OperationLog.record_outcome(name, "op-1", "clm-a", :completed, %{note: "op"})
 
       assert {:decided, :unknown, %{}} = OperationLog.status(name, "op-1")
+      assert :ok = OperationLog.record_outcome(name, "op-1", "clm-a", :requires_operator, %{})
+      assert {:decided, :requires_operator, %{}} = OperationLog.status(name, "op-1")
     end
 
     test "an operation identity cannot be rebound to different accepted work", %{dir: dir, id: id} do
@@ -549,83 +543,6 @@ defmodule Alto.OperationLogTest do
       assert :ok = OperationLog.record_attempt(name, "op-1", "clm-a")
       assert :ok = OperationLog.record_outcome(name, "op-1", "clm-a", :completed, %{})
       assert :ok = OperationLog.record_intent(name, "op-2", "t", nil)
-    end
-  end
-
-  describe "crash injection against the inbox" do
-    test "before intent: nothing recorded, recovery may start fresh", %{dir: dir, id: id} do
-      %{name: q} = start_queue!(id: "q" <> id, dir: Path.join(dir, "q"))
-      %{name: log} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      {:ok, _} = Queue.admit(q, "src:del-1", %{"body" => "x"})
-      # Crash before any ledger write.
-      assert :no_intent = OperationLog.status(log, "src:del-1")
-
-      # Recovery starts fresh under the same semantic identity.
-      assert :ok = OperationLog.record_intent(log, "src:del-1", "pack", "src:del-1")
-      assert {:intended} = OperationLog.status(log, "src:del-1")
-    end
-
-    test "after intent: recovery may dispatch", %{dir: dir, id: id} do
-      %{name: log} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      :ok = OperationLog.record_intent(log, "src:del-1", "pack", "src:del-1")
-      # Crash after intent, before dispatch.
-      assert {:intended} = OperationLog.status(log, "src:del-1")
-
-      assert :ok = OperationLog.record_attempt(log, "src:del-1", "clm-a")
-      assert {:dispatched, "clm-a"} = OperationLog.status(log, "src:del-1")
-    end
-
-    test "after remote commit with no recorded result: never decided, never rerun blindly", %{
-      dir: dir,
-      id: id
-    } do
-      %{name: log} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      :ok = OperationLog.record_intent(log, "src:del-1", "print", "src:del-1")
-      :ok = OperationLog.record_attempt(log, "src:del-1", "clm-a")
-      # The participant committed, then the response was lost: no outcome line.
-      status = OperationLog.status(log, "src:del-1")
-
-      assert {:dispatched, "clm-a"} = status
-      refute match?({:decided, _, _}, status)
-
-      # Recovery parks for reconciliation under the same identity.
-      assert :ok = OperationLog.record_outcome(log, "src:del-1", "clm-a", :unknown, %{})
-      assert :ok = OperationLog.record_outcome(log, "src:del-1", "clm-a", :requires_operator, %{})
-      assert {:decided, :requires_operator, _} = OperationLog.status(log, "src:del-1")
-    end
-
-    test "before inbox ack: decided outcome acks without re-running", %{dir: dir, id: id} do
-      %{name: q} = start_queue!(id: "q" <> id, dir: Path.join(dir, "q"))
-      %{name: log} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      {:ok, _} = Queue.admit(q, "src:del-1", %{"body" => "x"})
-      {:ok, [claimed]} = Queue.claim(q, 1, "worker-1")
-
-      :ok = OperationLog.record_intent(log, "src:del-1", "pack", "src:del-1")
-      :ok = OperationLog.record_attempt(log, "src:del-1", claimed.claim_id)
-      # Work done, outcome recorded — crash before the ack.
-      :ok = OperationLog.record_outcome(log, "src:del-1", claimed.claim_id, :completed, %{})
-
-      # Recovery reads the decision and acks; no second dispatch exists.
-      assert {:decided, :completed, _} = OperationLog.status(log, "src:del-1")
-      assert :ok = Queue.ack(q, claimed.claim_id)
-      assert %{pending: 0, claimed: 0} = Queue.count(q)
-      # And the delivery stays deduped afterwards.
-      assert {:error, :duplicate} = Queue.admit(q, "src:del-1", %{"body" => "x"})
-    end
-
-    test "no path invents success from a transcript-less dispatch", %{dir: dir, id: id} do
-      %{name: log} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      :ok = OperationLog.record_intent(log, "src:del-1", "print", "src:del-1")
-      :ok = OperationLog.record_attempt(log, "src:del-1", "clm-a")
-
-      # Whatever the recovery reads, it is not a decision.
-      refute match?({:decided, :completed, _}, OperationLog.status(log, "src:del-1"))
-      assert ["src:del-1"] = entry_keys(OperationLog.entries(log, :open))
     end
   end
 
