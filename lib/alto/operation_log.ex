@@ -65,28 +65,26 @@ defmodule Alto.OperationLog do
 
   @spec record_intent(GenServer.server(), op_key(), binary(), binary() | nil, map() | nil) ::
           :ok | {:error, term()}
-  def record_intent(server \\ __MODULE__, op_key, tool, inbox_key, recovery \\ nil) do
-    call(server, {:intent, op_key, tool, inbox_key, recovery})
+  def record_intent(
+        server \\ __MODULE__,
+        op_key,
+        tool,
+        inbox_key,
+        recovery \\ nil,
+        timeout \\ 5_000
+      ) do
+    call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
   end
-
-  def record_intent(server, op_key, tool, inbox_key, recovery, timeout),
-    do: call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
 
   @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
-  def record_attempt(server \\ __MODULE__, op_key, attempt_id) do
-    call(server, {:attempt, op_key, attempt_id})
+  def record_attempt(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
+    call(server, {:attempt, op_key, attempt_id}, timeout)
   end
-
-  def record_attempt(server, op_key, attempt_id, timeout),
-    do: call(server, {:attempt, op_key, attempt_id}, timeout)
 
   @spec record_release(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
-  def record_release(server \\ __MODULE__, op_key, attempt_id) do
-    call(server, {:release, op_key, attempt_id})
+  def record_release(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
+    call(server, {:release, op_key, attempt_id}, timeout)
   end
-
-  def record_release(server, op_key, attempt_id, timeout),
-    do: call(server, {:release, op_key, attempt_id}, timeout)
 
   @spec record_outcome(
           GenServer.server(),
@@ -96,33 +94,40 @@ defmodule Alto.OperationLog do
           map()
         ) ::
           :ok | {:error, term()}
-  def record_outcome(server \\ __MODULE__, op_key, attempt_id, class, evidence \\ %{}) do
-    call(server, {:outcome, op_key, attempt_id, class, evidence})
+  def record_outcome(
+        server \\ __MODULE__,
+        op_key,
+        attempt_id,
+        class,
+        evidence \\ %{},
+        timeout \\ 5_000
+      ) do
+    call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
   end
 
-  def record_outcome(server, op_key, attempt_id, class, evidence, timeout),
-    do: call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
-
-  def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint) do
-    call(server, {:checkpoint, op_key, attempt_id, checkpoint})
+  def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint, timeout \\ 5_000) do
+    call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
   end
 
-  def record_checkpoint(server, op_key, attempt_id, checkpoint, timeout),
-    do: call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
-
-  def update_checkpoint(server \\ __MODULE__, op_key, expected_revision, checkpoint) do
-    call(server, {:checkpoint_update, op_key, expected_revision, checkpoint})
+  def update_checkpoint(
+        server \\ __MODULE__,
+        op_key,
+        expected_revision,
+        checkpoint,
+        timeout \\ 5_000
+      ) do
+    call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
   end
 
-  def update_checkpoint(server, op_key, expected_revision, checkpoint, timeout),
-    do: call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
-
-  def resume_checkpoint(server \\ __MODULE__, op_key, expected_revision, decision) do
-    call(server, {:resume_checkpoint, op_key, expected_revision, decision})
+  def resume_checkpoint(
+        server \\ __MODULE__,
+        op_key,
+        expected_revision,
+        decision,
+        timeout \\ 5_000
+      ) do
+    call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
   end
-
-  def resume_checkpoint(server, op_key, expected_revision, decision, timeout),
-    do: call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
 
   @spec status(GenServer.server(), op_key()) :: status()
   def status(server \\ __MODULE__, op_key) do
@@ -140,13 +145,8 @@ defmodule Alto.OperationLog do
     call(server, {:reject_intended, op_key, expected_revision, evidence})
   end
 
-  @spec keys(GenServer.server()) :: [op_key()]
-  def keys(server \\ __MODULE__) do
-    call(server, :keys)
-  end
-
   @spec keys(GenServer.server(), timeout()) :: [op_key()]
-  def keys(server, timeout), do: call(server, :keys, timeout)
+  def keys(server \\ __MODULE__, timeout \\ 5_000), do: call(server, :keys, timeout)
 
   @doc "Bounded canonical operation views, oldest first."
   @spec entries(GenServer.server(), :all | :open | :parked, timeout()) :: [map()]
@@ -223,6 +223,10 @@ defmodule Alto.OperationLog do
 
   defp encode_field({"recovery", value}), do: {"recovery", encode_recovery(value)}
   defp encode_field({"evidence", value}) when is_map(value), do: {"evidence", scrub(value)}
+
+  defp encode_field({key, value}) when key in ["class", "resolution"] and is_atom(value),
+    do: {key, Atom.to_string(value)}
+
   defp encode_field(field), do: field
 
   defp event(type, op, fields),
@@ -451,24 +455,6 @@ defmodule Alto.OperationLog do
 
   defp validate_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
   defp validate_revision(revision), do: {:error, {:invalid_revision, revision}}
-
-  defp validate_resolution(resolution)
-       when resolution in [:confirmed_committed, :confirmed_failed, :retry_permitted],
-       do: :ok
-
-  defp validate_resolution(resolution), do: {:error, {:invalid_resolution, resolution}}
-
-  defp validate_class(class)
-       when class in [
-              :completed,
-              :rejected_before_dispatch,
-              :failed_known,
-              :unknown,
-              :requires_operator
-            ],
-       do: :ok
-
-  defp validate_class(class), do: {:error, {:invalid_outcome_class, class}}
 
   defp validate_evidence(evidence, state) when is_map(evidence) do
     if :erlang.external_size(scrub(evidence)) <= state.max_evidence_bytes,
@@ -802,21 +788,11 @@ defmodule Alto.OperationLog do
   defp outcome_class("failed_known"), do: {:ok, :failed_known}
   defp outcome_class("unknown"), do: {:ok, :unknown}
   defp outcome_class("requires_operator"), do: {:ok, :requires_operator}
-
-  defp outcome_class(class) when is_atom(class) do
-    with :ok <- validate_class(class), do: {:ok, class}
-  end
-
   defp outcome_class(other), do: {:error, {:invalid_outcome_class, other}}
 
   defp reconciliation_resolution("confirmed_committed"), do: {:ok, :confirmed_committed}
   defp reconciliation_resolution("confirmed_failed"), do: {:ok, :confirmed_failed}
   defp reconciliation_resolution("retry_permitted"), do: {:ok, :retry_permitted}
-
-  defp reconciliation_resolution(resolution) when is_atom(resolution) do
-    with :ok <- validate_resolution(resolution), do: {:ok, resolution}
-  end
-
   defp reconciliation_resolution(other), do: {:error, {:invalid_resolution, other}}
 
   defp append(state, record) do

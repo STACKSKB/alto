@@ -201,7 +201,7 @@ defmodule Alto.OperationLogTest do
       %{name: name} = start_ledger!(id: id, dir: dir)
       :ok = OperationLog.record_intent(name, "op-1", "t", nil)
 
-      assert {:error, {:invalid_outcome_class, :bogus}} =
+      assert {:error, {:invalid_outcome_class, "bogus"}} =
                OperationLog.record_outcome(name, "op-1", "clm-a", :bogus, %{})
 
       assert {:error, {:invalid_evidence, []}} =
