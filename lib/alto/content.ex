@@ -76,6 +76,20 @@ defmodule Alto.Content do
   def decode_transcript(value) when is_list(value), do: {:error, :empty_content}
   def decode_transcript(_value), do: :not_content
 
+  @doc "Translate validated image blocks while preserving text and block order."
+  def map_images(%__MODULE__{blocks: blocks}, supports_images, encode) do
+    Alto.Result.traverse(blocks, fn
+      %{"type" => "image"} when not supports_images ->
+        {:error, :model_does_not_support_images}
+
+      %{"type" => "image"} = image ->
+        {:ok, encode.(image)}
+
+      text ->
+        {:ok, text}
+    end)
+  end
+
   defp validate_blocks([_ | _] = blocks) do
     blocks
     |> Enum.with_index()

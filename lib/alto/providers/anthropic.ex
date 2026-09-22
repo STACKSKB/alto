@@ -190,7 +190,7 @@ defmodule Alto.Providers.Anthropic do
         {:ok, [%{"type" => "text", "text" => value}]}
 
       {:ok, content} ->
-        anthropic_blocks(content.blocks, supports_images)
+        Content.map_images(content, supports_images, &anthropic_image/1)
 
       {:error, reason} ->
         {:error, {:invalid_multimodal_content, reason}}
@@ -200,25 +200,11 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp anthropic_blocks(blocks, supports_images) do
-    Alto.Result.traverse(blocks, fn
-      %{"type" => "text", "text" => text} ->
-        {:ok, %{"type" => "text", "text" => text}}
-
-      %{"type" => "image"} when not supports_images ->
-        {:error, :model_does_not_support_images}
-
-      %{"type" => "image", "media_type" => media_type, "data" => data} ->
-        {:ok,
-         %{
-           "type" => "image",
-           "source" => %{
-             "type" => "base64",
-             "media_type" => media_type,
-             "data" => data
-           }
-         }}
-    end)
+  defp anthropic_image(%{"media_type" => media_type, "data" => data}) do
+    %{
+      "type" => "image",
+      "source" => %{"type" => "base64", "media_type" => media_type, "data" => data}
+    }
   end
 
   defp send_request(body, config, sink) do

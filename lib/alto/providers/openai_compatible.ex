@@ -142,18 +142,10 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp openai_attachment_message(attachments) do
     content =
-      Enum.flat_map(attachments, fn {call_id,
-                                     %{
-                                       "type" => "image",
-                                       "media_type" => media_type,
-                                       "data" => data
-                                     }} ->
+      Enum.flat_map(attachments, fn {call_id, image} ->
         [
-          %{"type" => "text", "text" => "Image result from tool call #{call_id}:"},
-          %{
-            "type" => "image_url",
-            "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-          }
+          Content.text("Image result from tool call #{call_id}:"),
+          openai_image(image)
         ]
       end)
 
@@ -168,7 +160,7 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok, message}
 
       {:ok, content} ->
-        with {:ok, blocks} <- openai_blocks(content.blocks, supports_images) do
+        with {:ok, blocks} <- Content.map_images(content, supports_images, &openai_image/1) do
           {:ok, Map.put(message, "content", blocks)}
         end
 
@@ -180,21 +172,11 @@ defmodule Alto.Providers.OpenAICompatible do
   defp provider_message(message, _supports_images),
     do: {:error, {:invalid_provider_message, message}}
 
-  defp openai_blocks(blocks, supports_images) do
-    Alto.Result.traverse(blocks, fn
-      %{"type" => "text", "text" => text} ->
-        {:ok, %{"type" => "text", "text" => text}}
-
-      %{"type" => "image"} when not supports_images ->
-        {:error, :model_does_not_support_images}
-
-      %{"type" => "image", "media_type" => media_type, "data" => data} ->
-        {:ok,
-         %{
-           "type" => "image_url",
-           "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-         }}
-    end)
+  defp openai_image(%{"media_type" => media_type, "data" => data}) do
+    %{
+      "type" => "image_url",
+      "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
+    }
   end
 
   defp models_request(config) do

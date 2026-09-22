@@ -104,16 +104,20 @@ defmodule Alto.Providers.OpenAICompatibleTest do
       %{"role" => "tool", "tool_call_id" => "call-text", "content" => "ordinary text"}
     ]
 
+    messages = [%{"role" => "user", "content" => Enum.at(messages, 1)["content"]} | messages]
+
     opts = [
       model: "vision-model",
       base_url: "https://unit.test/v1",
       req_options: [adapter: Adapter]
     ]
 
-    assert {:error, :model_does_not_support_images} =
-             OpenAICompatible.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
+    for input <- [messages, tl(messages)] do
+      assert {:error, :model_does_not_support_images} =
+               OpenAICompatible.stream(%{messages: input, tools: []}, fn _ -> :ok end, opts)
 
-    refute_received {:http_request, _}
+      refute_received {:http_request, _}
+    end
 
     assert {:ok, _completion} =
              OpenAICompatible.stream(
@@ -123,7 +127,12 @@ defmodule Alto.Providers.OpenAICompatibleTest do
              )
 
     assert_receive {:http_request, request}
-    [_assistant, image_tool, text_tool, attachment] = JSON.decode!(request.body)["messages"]
+    [user, _assistant, image_tool, text_tool, attachment] = JSON.decode!(request.body)["messages"]
+
+    assert user["content"] == [
+             %{"type" => "text", "text" => "workspace image"},
+             %{"type" => "image_url", "image_url" => %{"url" => "data:image/png;base64,#{image}"}}
+           ]
 
     assert image_tool["content"] ==
              "workspace image\n[Image attachment follows for tool call call-image.]"
