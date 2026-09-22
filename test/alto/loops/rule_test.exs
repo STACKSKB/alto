@@ -14,38 +14,20 @@ defmodule Alto.Loops.RuleTest do
   alias Alto.Tool.Context
 
   defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, _context, _opts), do: {:ok, %{echoed: arguments}}
   end
 
   defmodule BoomTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :boom
+    use Alto.Tool, name: :boom, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(_arguments, _context, _opts), do: {:error, :detonated}

@@ -11,15 +11,9 @@ defmodule Alto.Conformance.FakeTool do
 
   defmodule CommitThenTimeout do
     @moduledoc "Commits, then sleeps past the tool deadline (unknown outcome)."
-    @behaviour Alto.Tool
-    @impl true
-    def name(_), do: :commit_then_timeout
+    use Alto.Tool, name: :commit_then_timeout, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_), do: :exclusive
-    @impl true
-    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
@@ -37,15 +31,9 @@ defmodule Alto.Conformance.FakeTool do
 
   defmodule CommitThenCrash do
     @moduledoc "Commits, then crashes (unknown outcome)."
-    @behaviour Alto.Tool
-    @impl true
-    def name(_), do: :commit_then_crash
+    use Alto.Tool, name: :commit_then_crash, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_), do: :exclusive
-    @impl true
-    def approval(_), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)

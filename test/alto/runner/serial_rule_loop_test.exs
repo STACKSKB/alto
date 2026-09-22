@@ -22,10 +22,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   alias Alto.Transition
 
   defmodule RuleEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts) do
@@ -38,12 +35,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
         }
       }
     end
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
@@ -152,10 +143,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   defmodule ArgsEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo_args
+    use Alto.Tool, name: :echo_args, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts) do
@@ -168,12 +156,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
         }
       }
     end
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, _context, _opts) when is_map(arguments) do
@@ -464,15 +446,9 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     defmodule HiddenTool do
-      @behaviour Alto.Tool
-      @impl true
-      def name(_opts), do: :hidden
+      use Alto.Tool, name: :hidden, execution_mode: :parallel, approval: :never
       @impl true
       def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-      @impl true
-      def execution_mode(_opts), do: :parallel
-      @impl true
-      def approval(_opts), do: :never
       @impl true
       def run(_args, _ctx, _opts), do: {:ok, %{hid: true}}
     end

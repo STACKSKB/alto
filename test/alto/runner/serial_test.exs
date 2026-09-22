@@ -105,19 +105,10 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule SafeEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, context, _opts), do: EchoTool.run(arguments, context, [])
@@ -147,38 +138,20 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule BlockingTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(_arguments, _context, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
   defmodule ConfiguredEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(%{"value" => value}, _context, opts) do

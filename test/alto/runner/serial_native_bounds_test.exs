@@ -17,15 +17,9 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   alias Alto.Session
 
   defmodule BigTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :big
+    use Alto.Tool, name: :big, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts), do: %{description: "Big.", parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, _opts) do
       {:ok, String.duplicate("x", 100_000)}
@@ -33,17 +27,11 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   defmodule NestedBigTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :nested
+    use Alto.Tool, name: :nested, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts),
       do: %{description: "Nested.", parameters: %{type: "object", properties: %{}}}
 
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, _opts) do
       {:ok, %{level1: %{level2: [%{payload: String.duplicate("y", 100_000)}]}}}
@@ -51,45 +39,27 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   defmodule TupleTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :tup
+    use Alto.Tool, name: :tup, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts), do: %{description: "Tup.", parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, opts), do: {:ok, Keyword.get(opts, :value, {:tuple_ok, 1, 2})}
   end
 
   defmodule MalformedTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :malformed
+    use Alto.Tool, name: :malformed, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts),
       do: %{description: "Malformed.", parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
-    @impl true
     def run(_args, _ctx, _opts), do: {:unexpected, %{nested: String.duplicate("m", 100_000)}}
   end
 
   defmodule GuardedBigTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :big
+    use Alto.Tool, name: :big, execution_mode: :exclusive, approval: :required
     @impl true
     def schema(_opts), do: BigTool.schema([])
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-    @impl true
-    def approval(_opts), do: :required
     @impl true
     def run(_args, ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:tool_ran, ctx.session_id})

@@ -18,9 +18,7 @@ defmodule Alto.Runner.SerialExposureTest do
   alias Alto.Transition
 
   defmodule EchoTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts),
       do: %{
@@ -29,39 +27,23 @@ defmodule Alto.Runner.SerialExposureTest do
       }
 
     @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
-    @impl true
     def run(%{"value" => v}, _ctx, _opts), do: {:ok, %{echo: v}}
   end
 
   defmodule HiddenTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :hidden
+    use Alto.Tool, name: :hidden, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts),
       do: %{description: "Hidden.", parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
-    @impl true
     def run(_args, _ctx, _opts), do: {:ok, %{hid: true}}
   end
 
   defmodule GuardedHiddenTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :hidden
+    use Alto.Tool, name: :hidden, execution_mode: :parallel, approval: :required
     @impl true
     def schema(_opts), do: HiddenTool.schema([])
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :required
     @impl true
     def run(_args, ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:hidden_ran, ctx.session_id})
@@ -299,15 +281,9 @@ defmodule Alto.Runner.SerialExposureTest do
     test_pid = self()
 
     defmodule GuardedEcho do
-      @behaviour Alto.Tool
-      @impl true
-      def name(_opts), do: :echo
+      use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :required
       @impl true
       def schema(_opts), do: EchoTool.schema([])
-      @impl true
-      def execution_mode(_opts), do: :parallel
-      @impl true
-      def approval(_opts), do: :required
       @impl true
       def run(%{"value" => v}, ctx, opts) do
         send(Keyword.fetch!(opts, :test_pid), {:echo_ran, v, ctx.session_id})

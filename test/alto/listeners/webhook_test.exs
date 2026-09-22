@@ -15,19 +15,10 @@ defmodule Alto.Listeners.WebhookTest do
   @secret "event-webhook-secret"
 
   defmodule TaskTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :task_tool
+    use Alto.Tool, name: :task_tool, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, _context, opts) do

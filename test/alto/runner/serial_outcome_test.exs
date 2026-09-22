@@ -38,15 +38,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule OkTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :ok_tool
+    use Alto.Tool, name: :ok_tool, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, _opts), do: {:ok, %{done: true}}
   end
@@ -64,29 +58,17 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule FlakyTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :flaky
+    use Alto.Tool, name: :flaky, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, _opts), do: {:error, :boom}
   end
 
   defmodule CommitThenTimeoutTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :committer
+    use Alto.Tool, name: :committer, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -96,15 +78,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule CommitThenCrashTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :crasher
+    use Alto.Tool, name: :crasher, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -113,15 +89,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule BlockingTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :blocker
+    use Alto.Tool, name: :blocker, execution_mode: :exclusive, approval: :never
     @impl true
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(_args, _ctx, _opts), do: receive(do: (:never -> {:ok, :done}))
   end

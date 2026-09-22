@@ -10,10 +10,7 @@ defmodule Alto.Runner.SerialCompactionTest do
   alias Alto.Session
 
   defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts) do
@@ -26,12 +23,6 @@ defmodule Alto.Runner.SerialCompactionTest do
         }
       }
     end
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}

@@ -100,15 +100,9 @@ defmodule Alto.ConsumerTest do
 
   test "unknown short-run outcomes park before any repeat", %{queue: q, ledger: l} do
     defmodule SleepyTool do
-      @behaviour Alto.Tool
-      @impl true
-      def name(_opts), do: :sleepy
+      use Alto.Tool, name: :sleepy, execution_mode: :exclusive, approval: :never
       @impl true
       def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-      @impl true
-      def execution_mode(_opts), do: :exclusive
-      @impl true
-      def approval(_opts), do: :never
       @impl true
       def run(_args, _ctx, _opts) do
         Process.sleep(5_000)

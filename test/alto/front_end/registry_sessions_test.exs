@@ -17,9 +17,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
   @receive_timeout 5_000
 
   defmodule EchoTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts) do
       %{
@@ -33,23 +31,13 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     end
 
     @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
-    @impl true
     def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule CountingTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name(_opts), do: :echo
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
     @impl true
     def schema(_opts), do: EchoTool.schema([])
-    @impl true
-    def execution_mode(_opts), do: :parallel
-    @impl true
-    def approval(_opts), do: :never
     @impl true
     def run(%{"value" => value}, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:tool_ran, value})

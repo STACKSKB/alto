@@ -6,21 +6,12 @@ defmodule Alto.Runner.ConformanceTest do
   alias Alto.Transition
 
   defmodule PreparedTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :prepared
+    use Alto.Tool, name: :prepared, execution_mode: :exclusive, approval: :required
 
     @impl true
     def schema(_opts) do
       %{description: "A conformance tool.", parameters: %{type: "object", properties: %{}}}
     end
-
-    @impl true
-    def execution_mode(_opts), do: :exclusive
-
-    @impl true
-    def approval(_opts), do: :required
 
     @impl true
     def prepare(_arguments, _context, _opts), do: {:ok, %{value: "prepared"}, %{display: "safe"}}
@@ -120,20 +111,11 @@ defmodule Alto.Runner.ConformanceTest do
   end
 
   defmodule RegistryTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :registry_echo
+    use Alto.Tool, name: :registry_echo, execution_mode: :parallel, approval: :never
 
     @impl true
     def schema(_opts),
       do: %{description: "Registry tool.", parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(_arguments, context, _opts) do
