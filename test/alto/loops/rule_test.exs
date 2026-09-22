@@ -33,18 +33,6 @@ defmodule Alto.Loops.RuleTest do
     def run(_arguments, _context, _opts), do: {:error, :detonated}
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-rule-test-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-    name = :"rule_queue_#{System.unique_integer([:positive])}"
-    {:ok, _queue} = Alto.Queue.start_link(id: "rule-queue", dir: dir, name: name)
-
-    %{queue: name}
-  end
-
-  # Normalize atom keys only for the legacy shape assertions below.
-  defp decode(outputs), do: outputs |> JSON.encode!() |> JSON.decode!()
-
   describe "step script" do
     test "runs steps in order and stops after the last tool result" do
       assert {:ok, result} =
@@ -59,8 +47,8 @@ defmodule Alto.Loops.RuleTest do
                  tools: [EchoTool]
                )
 
-      assert [%{"echoed" => %{"value" => "a"}}, %{"echoed" => %{"value" => "b"}}] =
-               decode(result.output)
+      assert [%{echoed: %{"value" => "a"}}, %{echoed: %{"value" => "b"}}] =
+               result.output
 
       assert result.model_requests == 0
     end
@@ -74,8 +62,8 @@ defmodule Alto.Loops.RuleTest do
                  tools: [EchoTool]
                )
 
-      assert [%{"echoed" => %{"key" => "job-1", "payload" => %{"total" => 10}}}] =
-               decode(result.output)
+      assert [%{echoed: %{"key" => "job-1", "payload" => %{"total" => 10}}}] =
+               result.output
     end
 
     test "the :task marker passes the decoded task; a map passes as-is" do
@@ -91,8 +79,8 @@ defmodule Alto.Loops.RuleTest do
                  tools: [EchoTool]
                )
 
-      assert [%{"echoed" => %{"n" => 1}}, %{"echoed" => %{"static" => true}}] =
-               decode(result.output)
+      assert [%{echoed: %{"n" => 1}}, %{echoed: %{"static" => true}}] =
+               result.output
     end
 
     test "a map task is accepted without JSON decoding" do
@@ -102,7 +90,7 @@ defmodule Alto.Loops.RuleTest do
                  tools: [EchoTool]
                )
 
-      assert [%{"echoed" => %{"n" => 2}}] = decode(result.output)
+      assert [%{echoed: %{"n" => 2}}] = result.output
     end
   end
 
@@ -140,6 +128,15 @@ defmodule Alto.Loops.RuleTest do
   end
 
   describe "queue tools end to end" do
+    setup do
+      dir = Path.join(System.tmp_dir!(), "alto-rule-test-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(dir) end)
+      name = :"rule_queue_#{System.unique_integer([:positive])}"
+      {:ok, _queue} = Alto.Queue.start_link(id: "rule-queue", dir: dir, name: name)
+
+      %{queue: name}
+    end
+
     test "queue_put keyed by the webhook task, then queue_cancel", %{queue: queue} do
       task = ~s({"key": "job-1", "payload": {"lines": 3}})
 
@@ -149,8 +146,8 @@ defmodule Alto.Loops.RuleTest do
                  tools: [{Alto.Tools.QueuePut, queue: queue}]
                )
 
-      assert [%{"id" => record_id, "revision" => 1, "status" => "pending"}] =
-               decode(result.output)
+      assert [%{id: record_id, revision: 1, status: :pending}] =
+               result.output
 
       assert is_binary(record_id)
 
@@ -162,39 +159,31 @@ defmodule Alto.Loops.RuleTest do
                  tools: [{Alto.Tools.QueueCancel, queue: queue}]
                )
 
-      assert [%{"cancelled" => true}] = decode(result.output)
+      assert [%{cancelled: true}] = result.output
       assert %{pending: 0} = Alto.Queue.count(queue)
     end
 
-    test "queue_put updates a pending key in place (revision bumps)" do
+    test "queue_put updates a pending key in place (revision bumps)", %{queue: queue} do
       context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
-      dir = Path.join(System.tmp_dir!(), "alto-put-test-#{System.unique_integer([:positive])}")
-      on_exit(fn -> File.rm_rf!(dir) end)
-      name = :"put_queue_#{System.unique_integer([:positive])}"
-      {:ok, _} = Alto.Queue.start_link(id: "put-queue", dir: dir, name: name)
 
       assert {:ok, %{id: id, revision: 1}} =
                Alto.Tools.QueuePut.run(%{"key" => "k", "payload" => %{v: 1}}, context,
-                 queue: name
+                 queue: queue
                )
 
       assert {:ok, %{id: ^id, revision: 2}} =
                Alto.Tools.QueuePut.run(%{"key" => "k", "payload" => %{v: 2}}, context,
-                 queue: name
+                 queue: queue
                )
 
-      assert %{pending: 1} = Alto.Queue.count(name)
+      assert %{pending: 1} = Alto.Queue.count(queue)
     end
 
-    test "queue_cancel of an unknown key is a no-op success" do
+    test "queue_cancel of an unknown key is a no-op success", %{queue: queue} do
       context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
-      dir = Path.join(System.tmp_dir!(), "alto-cancel-test-#{System.unique_integer([:positive])}")
-      on_exit(fn -> File.rm_rf!(dir) end)
-      name = :"cancel_queue_#{System.unique_integer([:positive])}"
-      {:ok, _} = Alto.Queue.start_link(id: "cancel-queue", dir: dir, name: name)
 
       assert {:ok, %{cancelled: false}} =
-               Alto.Tools.QueueCancel.run(%{"key" => "ghost"}, context, queue: name)
+               Alto.Tools.QueueCancel.run(%{"key" => "ghost"}, context, queue: queue)
     end
   end
 end
