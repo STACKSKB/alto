@@ -2,17 +2,20 @@ defmodule Alto.OperationLog do
   @moduledoc """
   A bounded, durable operation ledger.
 
-  One pure transition function handles live commands and replay. Accepted
-  events are appended before their state is published, so failed writes
-  cannot expose invented progress. Open work is never evicted.
+  One native command representation serves live execution and replay. Accepted
+  commands are appended before their state is published, so failed writes
+  cannot expose invented progress. Open work is never evicted. Commands use
+  bounded portable-term encoding inside a versioned JSONL envelope; evidence
+  and checkpoints retain their exact keys and values across restarts. As with
+  other portable stores, atoms must already be loaded when decoding.
   """
 
   use GenServer
 
-  alias Alto.Session, as: SessionStore
+  alias Alto.Persistence.Codec
   alias Alto.DurableLog
 
-  @version 1
+  @version 2
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @max_key_bytes 256
   @limits [
@@ -188,69 +191,51 @@ defmodule Alto.OperationLog do
   @impl true
   def init(state), do: {:ok, state}
 
-  @impl true
-  def handle_call(request, _from, state) do
-    case to_event(request) do
-      {:ok, event} -> commit(state, event)
-      :read -> read(request, state)
-    end
-  end
-
   @commands %{
-    intent: {"intent", ~w(tool inbox recovery)},
-    attempt: {"attempt", ~w(attempt)},
-    release: {"release", ~w(attempt)},
-    outcome: {"outcome", ~w(attempt class evidence)},
-    checkpoint: {"checkpoint", ~w(attempt checkpoint)},
-    checkpoint_update: {"checkpoint_update", ~w(expected_revision checkpoint)},
-    resume_checkpoint: {"checkpoint_resume", ~w(expected_revision decision)},
-    reject_intended: {"reject", ~w(expected_revision evidence)},
-    reconcile: {"reconcile", ~w(expected_revision resolution evidence)}
+    intent: 5,
+    attempt: 3,
+    release: 3,
+    outcome: 5,
+    checkpoint: 4,
+    checkpoint_update: 4,
+    resume_checkpoint: 4,
+    reject_intended: 4,
+    reconcile: 5
   }
 
-  defp to_event(request) when is_tuple(request) do
-    with [command, op | values] <- Tuple.to_list(request),
-         {:ok, {type, fields}} <- Map.fetch(@commands, command),
-         true <- length(values) == length(fields) do
-      fields = Map.new(Enum.zip(fields, values), &encode_field/1)
-      {:ok, event(type, op, fields)}
-    else
-      _ -> :read
-    end
+  @impl true
+  def handle_call(request, _from, state) do
+    if command?(request), do: commit(state, scrub_command(request)), else: read(request, state)
   end
 
-  defp to_event(_), do: :read
+  defp command?(request) when is_tuple(request) and tuple_size(request) > 0,
+    do: Map.get(@commands, elem(request, 0)) == tuple_size(request)
 
-  defp encode_field({"recovery", value}), do: {"recovery", encode_recovery(value)}
-  defp encode_field({"evidence", value}) when is_map(value), do: {"evidence", scrub(value)}
+  defp command?(_), do: false
 
-  defp encode_field({key, value}) when key in ["class", "resolution"] and is_atom(value),
-    do: {key, Atom.to_string(value)}
+  defp scrub_command(command) when elem(command, 0) in [:outcome, :reject_intended, :reconcile] do
+    index = tuple_size(command) - 1
+    evidence = elem(command, index)
+    if is_map(evidence), do: put_elem(command, index, scrub(evidence)), else: command
+  end
 
-  defp encode_field(field), do: field
-
-  defp event(type, op, fields),
-    do:
-      Map.merge(
-        %{"v" => @version, "t" => type, "op" => op, "at_ms" => System.system_time(:millisecond)},
-        fields
-      )
+  defp scrub_command(command), do: command
 
   # Derive the transition, durably append it, then publish it.
-  defp commit(state, event) do
-    with {:ok, planned} <- plan(state, event),
-         do: persist(state, planned, event),
+  defp commit(state, command) do
+    with {:ok, planned} <- plan(state, command),
+         do: persist(state, planned, command),
          else: ({:error, reason} -> {:reply, {:error, reason}, state})
   end
 
-  defp persist(original, planned, event) do
-    case transition(planned, event) do
+  defp persist(original, planned, command) do
+    case transition(planned, command) do
       {:ok, ^planned, :noop} ->
         {:reply, :ok, original}
 
       {:ok, next, response} ->
-        case append(original, event) do
-          :ok -> {:reply, response(response, event, next), next}
+        case append(original, command) do
+          :ok -> {:reply, response(response, command, next), next}
           {:error, reason} -> {:reply, {:error, reason}, original}
         end
 
@@ -261,8 +246,10 @@ defmodule Alto.OperationLog do
 
   defp response(:ok, _, _), do: :ok
 
-  defp response(:view, %{"op" => op}, state),
-    do: {:ok, recovery_view(op, Map.fetch!(state.ops, op))}
+  defp response(:view, command, state) do
+    op = elem(command, 1)
+    {:ok, recovery_view(op, Map.fetch!(state.ops, op))}
+  end
 
   defp read({:status, op}, state), do: {:reply, read_status(state, op), state}
 
@@ -475,28 +462,12 @@ defmodule Alto.OperationLog do
   defp validate_recovery(recovery, _state), do: {:error, {:invalid_recovery, recovery}}
 
   defp validate_checkpoint(value, state) when is_map(value) do
-    if :erlang.external_size(value) <= state.max_recovery_bytes do
-      try do
-        json = JSON.encode!(value)
-
-        case JSON.decode(json) do
-          {:ok, ^value} -> :ok
-          _ -> {:error, :invalid_checkpoint}
-        end
-      rescue
-        _ -> {:error, :invalid_checkpoint}
-      end
-    else
-      {:error, :invalid_checkpoint}
-    end
+    if :erlang.external_size(value) <= state.max_recovery_bytes,
+      do: :ok,
+      else: {:error, :invalid_checkpoint}
   end
 
   defp validate_checkpoint(_value, _state), do: {:error, :invalid_checkpoint}
-  defp encode_recovery(nil), do: nil
-  defp encode_recovery(recovery), do: SessionStore.encode_term(recovery)
-
-  defp decode_recovery(nil), do: {:ok, nil}
-  defp decode_recovery(recovery), do: SessionStore.decode_term(recovery)
 
   defp validate_id!(id) do
     if is_binary(id) and Regex.match?(@id_pattern, id) do
@@ -529,11 +500,15 @@ defmodule Alto.OperationLog do
   defp apply_logged(state, line, number) do
     with :ok <- validate_record_bytes(line, state) do
       case JSON.decode(line) do
-        {:ok, %{"v" => @version, "t" => type, "op" => op} = entry}
-        when is_binary(type) and is_binary(op) ->
-          with {:ok, planned} <- replay_plan(state, entry),
-               {:ok, state, _reply} <- transition(planned, entry),
-               do: {:ok, state}
+        {:ok, %{"v" => @version, "command" => encoded}} ->
+          with {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
+               true <- command?(command) do
+            with {:ok, planned} <- replay_plan(state, command),
+                 {:ok, state, _reply} <- transition(planned, command),
+                 do: {:ok, state}
+          else
+            _ -> {:error, {:ledger_corrupt, state.id, number}}
+          end
 
         _other ->
           {:error, {:ledger_corrupt, state.id, number}}
@@ -541,8 +516,8 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp replay_plan(state, event) do
-    case plan(state, event) do
+  defp replay_plan(state, command) do
+    case plan(state, command) do
       {:error, :ledger_full} ->
         {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
 
@@ -551,21 +526,23 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp plan(state, %{"t" => "intent", "op" => op}) do
+  defp plan(state, {:intent, op, _tool, _inbox, _recovery}) do
     if Map.has_key?(state.ops, op), do: {:ok, state}, else: ensure_room(state)
   end
 
   defp plan(state, _event), do: {:ok, state}
 
   # The same pure state transition serves live commands and durable replay.
-  defp transition(state, %{"t" => type, "op" => op} = entry) do
+  defp transition(state, command) do
+    op = elem(command, 1)
+
     with :ok <- validate_key(op),
          current <- Map.get(state.ops, op),
-         {:ok, record} <- log_apply(current, type, entry, state) do
+         {:ok, record} <- log_apply(current, command, state) do
       record = Map.put(record, :revision, if(current, do: current.revision + 1, else: 1))
       order = if is_nil(current), do: state.order ++ [op], else: state.order
       next = %{state | ops: Map.put(state.ops, op, record), order: order}
-      {:ok, next, transition_reply(type)}
+      {:ok, next, transition_reply(elem(command, 0))}
     else
       :noop -> {:ok, state, :noop}
       error -> error
@@ -573,23 +550,23 @@ defmodule Alto.OperationLog do
   end
 
   defp transition_reply(type)
-       when type in ["checkpoint_update", "checkpoint_resume", "reconcile"],
+       when type in [:checkpoint_update, :resume_checkpoint, :reconcile],
        do: :view
 
   defp transition_reply(_type), do: :ok
 
-  defp log_apply(nil, type, _entry, _state) when type != "intent", do: {:error, :no_intent}
+  defp log_apply(nil, command, _state) when elem(command, 0) != :intent,
+    do: {:error, :no_intent}
 
-  defp log_apply(record, "intent", entry, state) do
-    with {:ok, recovery} <- decode_recovery(entry["recovery"]),
-         :ok <- validate_tool(entry["tool"], state),
-         :ok <- validate_inbox(entry["inbox"], state),
+  defp log_apply(record, {:intent, _op, tool, inbox, recovery}, state) do
+    with :ok <- validate_tool(tool, state),
+         :ok <- validate_inbox(inbox, state),
          :ok <- validate_recovery(recovery, state) do
       if is_nil(record) do
         {:ok,
          %{
-           tool: entry["tool"],
-           inbox: entry["inbox"],
+           tool: tool,
+           inbox: inbox,
            recovery: recovery,
            attempts: [],
            phase: :intended,
@@ -599,17 +576,15 @@ defmodule Alto.OperationLog do
            checkpoint_grant_revision: nil
          }}
       else
-        if same_intent?(record, entry["tool"], entry["inbox"], recovery),
+        if same_intent?(record, tool, inbox, recovery),
           do: :noop,
           else: {:error, :intent_conflict}
       end
     end
   end
 
-  defp log_apply(record, "attempt", entry, state) do
-    with :ok <- validate_attempt(entry["attempt"], state) do
-      attempt = entry["attempt"]
-
+  defp log_apply(record, {:attempt, _op, attempt}, state) do
+    with :ok <- validate_attempt(attempt, state) do
       cond do
         match?({:decided, _, _, _}, record.phase) ->
           {:error, :already_decided}
@@ -634,10 +609,8 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp log_apply(record, "release", entry, state) do
-    with :ok <- validate_attempt(entry["attempt"], state) do
-      attempt = entry["attempt"]
-
+  defp log_apply(record, {:release, _op, attempt}, state) do
+    with :ok <- validate_attempt(attempt, state) do
       cond do
         attempt not in record.attempts -> {:error, :no_attempt}
         match?({:decided, _, _, _}, record.phase) -> {:error, :already_decided}
@@ -649,12 +622,10 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp log_apply(record, "outcome", entry, state) do
-    with :ok <- validate_attempt(entry["attempt"], state),
-         :ok <- validate_evidence(entry["evidence"], state),
-         {:ok, class} <- outcome_class(entry["class"]) do
-      attempt = entry["attempt"]
-
+  defp log_apply(record, {:outcome, _op, attempt, class, evidence}, state) do
+    with :ok <- validate_attempt(attempt, state),
+         :ok <- validate_evidence(evidence, state),
+         {:ok, class} <- outcome_class(class) do
       cond do
         record.attempts == [] ->
           {:error, :no_attempt}
@@ -671,40 +642,38 @@ defmodule Alto.OperationLog do
           {:error, :stale_attempt}
 
         true ->
-          {:ok, %{record | phase: {:decided, class, entry["evidence"], attempt}}}
+          {:ok, %{record | phase: {:decided, class, evidence, attempt}}}
       end
     end
   end
 
-  defp log_apply(record, "reject", entry, state), do: apply_rejection(record, entry, state)
-
-  defp log_apply(record, "checkpoint", entry, state) do
-    with :ok <- validate_attempt(entry["attempt"], state),
-         :ok <- validate_checkpoint(entry["checkpoint"], state),
-         do: checkpoint_transition(record, entry)
+  defp log_apply(record, {:checkpoint, _op, attempt, checkpoint}, state) do
+    with :ok <- validate_attempt(attempt, state),
+         :ok <- validate_checkpoint(checkpoint, state),
+         do: checkpoint_transition(record, attempt, checkpoint)
   end
 
-  defp log_apply(record, "checkpoint_update", entry, state) do
-    with :ok <- validate_revision(entry["expected_revision"]),
-         :ok <- validate_checkpoint(entry["checkpoint"], state),
-         :ok <- expect_revision(record, entry["expected_revision"]) do
+  defp log_apply(record, {:checkpoint_update, _op, expected_revision, checkpoint}, state) do
+    with :ok <- validate_revision(expected_revision),
+         :ok <- validate_checkpoint(checkpoint, state),
+         :ok <- expect_revision(record, expected_revision) do
       if record.phase == :checkpointed do
-        {:ok, %{record | checkpoint: entry["checkpoint"]}}
+        {:ok, %{record | checkpoint: checkpoint}}
       else
         {:error, :not_checkpointed}
       end
     end
   end
 
-  defp log_apply(record, "checkpoint_resume", entry, state) do
-    with :ok <- validate_revision(entry["expected_revision"]),
-         :ok <- validate_checkpoint(entry["decision"], state),
-         :ok <- expect_revision(record, entry["expected_revision"]) do
+  defp log_apply(record, {:resume_checkpoint, _op, expected_revision, decision}, state) do
+    with :ok <- validate_revision(expected_revision),
+         :ok <- validate_checkpoint(decision, state),
+         :ok <- expect_revision(record, expected_revision) do
       if record.phase == :checkpointed do
         {:ok,
          %{
            record
-           | checkpoint_decision: entry["decision"],
+           | checkpoint_decision: decision,
              phase: :intended,
              checkpoint_grant_revision: record.revision + 1
          }}
@@ -714,51 +683,24 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp log_apply(record, "reconcile", entry, state) do
-    with :ok <- validate_revision(entry["expected_revision"]),
-         {:ok, resolution} <- reconciliation_resolution(entry["resolution"]),
-         :ok <- validate_evidence(entry["evidence"] || %{}, state),
-         :ok <- expect_revision(record, entry["expected_revision"]),
+  defp log_apply(record, {:reconcile, _op, expected_revision, resolution, evidence}, state) do
+    with :ok <- validate_revision(expected_revision),
+         {:ok, resolution} <- reconciliation_resolution(resolution),
+         :ok <- validate_evidence(evidence, state),
+         :ok <- expect_revision(record, expected_revision),
          :ok <- ensure_reconcilable(record),
          :ok <- ensure_retry_recoverable(record, resolution) do
-      {:ok, apply_reconciliation(record, resolution, entry["evidence"] || %{})}
+      {:ok, apply_reconciliation(record, resolution, evidence)}
     end
   end
 
-  defp log_apply(_record, _type, _entry, _state), do: {:error, :bad_entry}
+  defp log_apply(record, {:reject_intended, op, expected_revision, evidence}, state) do
+    attempt = rejection_attempt(op)
 
-  defp checkpoint_transition(record, entry) do
-    attempt = entry["attempt"]
-
-    cond do
-      match?({:decided, _, _, _}, record.phase) ->
-        {:error, :already_decided}
-
-      record.phase == :checkpointed ->
-        {:error, :checkpoint_active}
-
-      attempt != current_attempt(record) or record.phase != :dispatched ->
-        {:error, :stale_attempt}
-
-      true ->
-        {:ok,
-         %{
-           record
-           | checkpoint: entry["checkpoint"],
-             phase: :checkpointed,
-             checkpoint_decision: nil,
-             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
-         }}
-    end
-  end
-
-  defp apply_rejection(record, entry, state) do
-    attempt = entry["attempt"] || rejection_attempt(entry["op"])
-
-    with :ok <- validate_revision(entry["expected_revision"]),
+    with :ok <- validate_revision(expected_revision),
          :ok <- validate_attempt(attempt, state),
-         :ok <- validate_evidence(entry["evidence"] || %{}, state),
-         :ok <- expect_revision(record, entry["expected_revision"]) do
+         :ok <- validate_evidence(evidence, state),
+         :ok <- expect_revision(record, expected_revision) do
       cond do
         match?({:decided, _, _, _}, record.phase) ->
           {:error, :already_decided}
@@ -777,36 +719,72 @@ defmodule Alto.OperationLog do
            %{
              record
              | attempts: record.attempts ++ [attempt],
-               phase: {:decided, :rejected_before_dispatch, entry["evidence"], attempt}
+               phase: {:decided, :rejected_before_dispatch, evidence, attempt}
            }}
       end
     end
   end
 
-  defp outcome_class("completed"), do: {:ok, :completed}
-  defp outcome_class("rejected_before_dispatch"), do: {:ok, :rejected_before_dispatch}
-  defp outcome_class("failed_known"), do: {:ok, :failed_known}
-  defp outcome_class("unknown"), do: {:ok, :unknown}
-  defp outcome_class("requires_operator"), do: {:ok, :requires_operator}
+  defp log_apply(_record, _command, _state), do: {:error, :bad_entry}
+
+  defp checkpoint_transition(record, attempt, checkpoint) do
+    cond do
+      match?({:decided, _, _, _}, record.phase) ->
+        {:error, :already_decided}
+
+      record.phase == :checkpointed ->
+        {:error, :checkpoint_active}
+
+      attempt != current_attempt(record) or record.phase != :dispatched ->
+        {:error, :stale_attempt}
+
+      true ->
+        {:ok,
+         %{
+           record
+           | checkpoint: checkpoint,
+             phase: :checkpointed,
+             checkpoint_decision: nil,
+             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
+         }}
+    end
+  end
+
+  defp outcome_class(class)
+       when class in [
+              :completed,
+              :rejected_before_dispatch,
+              :failed_known,
+              :unknown,
+              :requires_operator
+            ],
+       do: {:ok, class}
+
   defp outcome_class(other), do: {:error, {:invalid_outcome_class, other}}
 
-  defp reconciliation_resolution("confirmed_committed"), do: {:ok, :confirmed_committed}
-  defp reconciliation_resolution("confirmed_failed"), do: {:ok, :confirmed_failed}
-  defp reconciliation_resolution("retry_permitted"), do: {:ok, :retry_permitted}
+  defp reconciliation_resolution(resolution)
+       when resolution in [:confirmed_committed, :confirmed_failed, :retry_permitted],
+       do: {:ok, resolution}
+
   defp reconciliation_resolution(other), do: {:error, {:invalid_resolution, other}}
 
-  defp append(state, record) do
-    encoded = JSON.encode!(record)
-    append_bytes = byte_size(encoded) + 1
-
-    with :ok <- validate_record_bytes(encoded, state),
-         :ok <- ensure_log_room(state, append_bytes) do
+  defp append(state, command) do
+    with {:ok, payload} <- Codec.encode(command, max_bytes: :erlang.external_size(command)),
+         encoded <-
+           JSON.encode!(%{
+             "v" => @version,
+             "command" => payload,
+             "at_ms" => System.system_time(:millisecond)
+           }),
+         :ok <- validate_record_bytes(encoded, state),
+         :ok <- ensure_log_room(state, byte_size(encoded) + 1) do
       case DurableLog.append(state.path, [encoded, "\n"]) do
         :ok -> :ok
         {:error, reason} -> {:error, {:ledger_write_failed, reason}}
       end
     else
-      {:error, _reason} = error -> error
+      {:error, :not_portable_or_too_large} -> {:error, {:ledger_unencodable, :not_portable}}
+      error -> error
     end
   rescue
     error -> {:error, {:ledger_unencodable, Exception.message(error)}}

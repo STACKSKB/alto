@@ -201,7 +201,7 @@ defmodule Alto.OperationLogTest do
       %{name: name} = start_ledger!(id: id, dir: dir)
       :ok = OperationLog.record_intent(name, "op-1", "t", nil)
 
-      assert {:error, {:invalid_outcome_class, "bogus"}} =
+      assert {:error, {:invalid_outcome_class, :bogus}} =
                OperationLog.record_outcome(name, "op-1", "clm-a", :bogus, %{})
 
       assert {:error, {:invalid_evidence, []}} =
@@ -376,6 +376,16 @@ defmodule Alto.OperationLogTest do
       assert :no_intent = OperationLog.status(small_record, "op-2")
     end
 
+    test "runtime capabilities cannot enter the durable command stream", %{dir: dir, id: id} do
+      %{name: name} = start_ledger!(id: id, dir: dir)
+
+      assert {:error, {:ledger_unencodable, :not_portable}} =
+               OperationLog.record_intent(name, "op", "tool", nil, %{callback: fn -> :ok end})
+
+      assert :no_intent = OperationLog.status(name, "op")
+      assert File.read!(Path.join(dir, id <> ".jsonl")) == ""
+    end
+
     test "identifier and attempt-history limits are enforced and replayed", %{dir: dir, id: id} do
       %{name: name, pid: pid} =
         start_ledger!(id: id, dir: dir, max_identifier_bytes: 8, max_attempts: 1)
@@ -428,6 +438,12 @@ defmodule Alto.OperationLogTest do
       {:ok, bytes} = File.read(Path.join(dir, id <> ".jsonl"))
       refute bytes =~ "sk-live-123"
       refute bytes =~ "hunter2"
+
+      %{"command" => encoded} =
+        bytes |> String.split("\n", trim: true) |> List.last() |> JSON.decode!()
+
+      assert {:ok, {:outcome, "op-1", "clm-a", :completed, ^evidence}} =
+               Alto.Persistence.Codec.decode(encoded)
     end
 
     test "raw arguments are not stored: intent keeps identity only", %{dir: dir, id: id} do
@@ -435,9 +451,10 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.record_intent(name, "op-1", "print", "inbox:del-1")
 
       {:ok, bytes} = File.read(Path.join(dir, id <> ".jsonl"))
-      assert bytes =~ "op-1"
-      assert bytes =~ "print"
-      refute bytes =~ "arguments"
+      assert %{"v" => 2, "command" => encoded} = JSON.decode!(bytes)
+
+      assert {:ok, {:intent, "op-1", "print", "inbox:del-1", nil}} =
+               Alto.Persistence.Codec.decode(encoded)
     end
 
     test "a full ledger of undecided work fails closed instead of forgetting", %{
@@ -577,7 +594,10 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.record_attempt(name, "op", "first")
       :ok = OperationLog.record_release(name, "op", "first")
       :ok = OperationLog.record_attempt(name, "op", "second")
-      :ok = OperationLog.record_outcome(name, "op", "second", :unknown, %{"code" => 503})
+
+      :ok =
+        OperationLog.record_outcome(name, "op", "second", :unknown, %{"code" => 502, code: 503})
+
       assert {:ok, live} = OperationLog.recovery(name, "op")
       GenServer.stop(pid)
 
@@ -604,14 +624,20 @@ defmodule Alto.OperationLogTest do
       assert :no_intent = OperationLog.status(name3, "op-torn")
     end
 
-    test "malformed records and untagged recovery payloads fail startup", %{dir: dir, id: id} do
+    test "malformed records and obsolete formats fail startup", %{dir: dir, id: id} do
       path = Path.join([dir, "l", id <> ".jsonl"])
       File.mkdir_p!(Path.dirname(path))
       untagged = %{"v" => 1, "t" => "intent", "op" => "op", "tool" => "tool", "recovery" => %{}}
 
+      {:ok, unknown} = Alto.Persistence.Codec.encode({:unknown, "op"})
+      {:ok, incomplete} = Alto.Persistence.Codec.encode({:intent, "op"})
+
       for {line, reason} <- [
+            {JSON.encode!(%{"v" => 2, "command" => "invalid"}), {:ledger_corrupt, id, 1}},
+            {JSON.encode!(%{"v" => 2, "command" => unknown}), {:ledger_corrupt, id, 1}},
+            {JSON.encode!(%{"v" => 2, "command" => incomplete}), {:ledger_corrupt, id, 1}},
             {"not json", {:ledger_corrupt, id, 1}},
-            {JSON.encode!(untagged), {:invalid_term_payload, %{}}}
+            {JSON.encode!(untagged), {:ledger_corrupt, id, 1}}
           ] do
         File.write!(path, line <> "\n")
 

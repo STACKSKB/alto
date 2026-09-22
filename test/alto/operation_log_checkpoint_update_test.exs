@@ -83,14 +83,10 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     GenServer.stop(name)
     path = Path.join(dir, "ledger.jsonl")
 
-    line =
-      JSON.encode!(%{
-        "v" => 1,
-        "t" => "checkpoint_update",
-        "op" => "bank",
-        "expected_revision" => 3,
-        "checkpoint" => %{"used" => 2}
-      })
+    {:ok, command} =
+      Alto.Persistence.Codec.encode({:checkpoint_update, "bank", 3, %{"used" => 2}})
+
+    line = JSON.encode!(%{"v" => 2, "command" => command})
 
     File.write!(path, line <> "\n" <> line <> "\n", [:append])
 
