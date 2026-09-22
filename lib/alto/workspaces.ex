@@ -219,8 +219,9 @@ defmodule Alto.Workspaces do
          :ok <- integration_supported(manager),
          {:ok, _patch} <- patch(manager, id),
          {:ok, integration} <-
-           backend_prepare_apply(
+           backend_integration(
              manager,
+             :prepare_apply,
              info.workspace["source"],
              info.workspace["patch_path"],
              info.workspace["patch_sha256"]
@@ -268,8 +269,9 @@ defmodule Alto.Workspaces do
         target_locked(manager, info.workspace["source"], fn ->
           with {:ok, _} <- patch(manager, id),
                :ok <-
-                 backend_verify_apply(
+                 backend_integration(
                    manager,
+                   :verify_apply,
                    info.workspace["source"],
                    integration,
                    info.workspace["patch_path"]
@@ -299,11 +301,11 @@ defmodule Alto.Workspaces do
 
   defp apply_dispatched(manager, info, attempt, integration) do
     with {:ok, evidence} <-
-           backend_apply(
-             manager,
+           manager.backend.apply(
              info.workspace["source"],
              integration,
-             info.workspace["patch_path"]
+             info.workspace["patch_path"],
+             manager.backend_options
            ),
          {:ok, updated} <-
            checkpoint(
@@ -482,33 +484,12 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp backend_prepare_apply(manager, source, patch_path, patch_sha256) do
-    manager.backend.prepare_apply(
-      source,
-      patch_path,
-      patch_sha256,
-      manager.backend_options
-    )
+  defp backend_integration(manager, callback, source, input, binding) do
+    Kernel.apply(manager.backend, callback, [source, input, binding, manager.backend_options])
   rescue
     error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
   catch
     kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
-  end
-
-  defp backend_verify_apply(manager, source, integration, patch_path) do
-    manager.backend.verify_apply(source, integration, patch_path, manager.backend_options)
-  rescue
-    error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
-  catch
-    kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
-  end
-
-  defp backend_apply(manager, source, integration, patch_path) do
-    manager.backend.apply(source, integration, patch_path, manager.backend_options)
-  rescue
-    error -> {:unknown, {:workspace_application_failed, Exception.message(error)}}
-  catch
-    kind, reason -> {:unknown, {:workspace_application_failed, kind, reason}}
   end
 
   @doc false
