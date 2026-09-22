@@ -188,30 +188,6 @@ defmodule Alto.Codex.AppServer.Client do
     do: {:reply, {:error, {:codex_app_server_not_ready, state.phase}}, state}
 
   @impl true
-  def handle_info({port, {:data, data}}, %{process: %{port: port}} = state) do
-    case JSONRPC.ingest(state, data, :codex_app_server_message_limit, &consume_lines/1) do
-      {:ok, next} -> {:noreply, next}
-      {:error, reason, next} -> {:stop, reason, fail_all(next, reason)}
-    end
-  end
-
-  def handle_info({port, {:exit_status, status}}, %{process: %{port: port}} = state) do
-    reason = {:codex_app_server_exit, status}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info({:EXIT, port, reason}, %{process: %{port: port}} = state) do
-    failure = {:codex_app_server_exit, reason}
-    {:stop, failure, fail_all(state, failure)}
-  end
-
-  def handle_info(:initialize_timeout, %{phase: :starting} = state) do
-    reason = {:codex_app_server_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info(:initialize_timeout, state), do: {:noreply, state}
-
   def handle_info({:request_timeout, id}, state) do
     JSONRPC.expire(state, id, fn reply ->
       cancel_request(state, id)
@@ -225,7 +201,8 @@ defmodule Alto.Codex.AppServer.Client do
     {:noreply, %{state | subscribers: subscribers}}
   end
 
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_info(message, state),
+    do: JSONRPC.handle_transport(message, state, &handle_message/2, &fail_all/2)
 
   @impl true
   def terminate(_reason, state), do: JSONRPC.close(state)
@@ -282,8 +259,6 @@ defmodule Alto.Codex.AppServer.Client do
 
   defp send_payload(state, payload),
     do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
-
-  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_message/2)
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.

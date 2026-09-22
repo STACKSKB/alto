@@ -136,6 +136,27 @@ defmodule Alto.External.JSONRPC do
     %{state | initialize_timer: timer}
   end
 
+  def handle_transport(message, state, handle_message, fail_all) do
+    case transport_event(message, state, handle_message) do
+      {:ok, state} -> {:noreply, state}
+      {:error, reason, state} -> {:stop, reason, fail_all.(state, reason)}
+    end
+  end
+
+  defp transport_event({port, {:data, data}}, %{process: %{port: port}} = state, handler),
+    do: ingest(state, data, :json_rpc_message_limit, &consume_lines(&1, handler))
+
+  defp transport_event({port, {:exit_status, status}}, %{process: %{port: port}} = state, _),
+    do: {:error, {:json_rpc_process_exit, status}, state}
+
+  defp transport_event({:EXIT, port, reason}, %{process: %{port: port}} = state, _),
+    do: {:error, {:json_rpc_process_exit, reason}, state}
+
+  defp transport_event(:initialize_timeout, %{phase: :starting} = state, _),
+    do: {:error, {:json_rpc_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}, state}
+
+  defp transport_event(_, state, _), do: {:ok, state}
+
   def ingest(state, data, limit_error, consume)
       when is_binary(data) and is_function(consume, 1) do
     buffer = state.buffer <> data

@@ -134,29 +134,6 @@ defmodule Alto.External.MCP.Client do
     do: {:reply, {:error, {:mcp_not_ready, state.phase}}, state}
 
   @impl true
-  def handle_info({port, {:data, data}}, %{process: %{port: port}} = state) do
-    case JSONRPC.ingest(state, data, :mcp_message_limit, &consume_lines/1) do
-      {:ok, state} -> {:noreply, state}
-      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
-    end
-  end
-
-  def handle_info({port, {:exit_status, status}}, %{process: %{port: port}} = state) do
-    reason = {:mcp_server_exit, status}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info({:EXIT, port, reason}, %{process: %{port: port}} = state) do
-    {:stop, {:mcp_server_exit, reason}, fail_all(state, {:mcp_server_exit, reason})}
-  end
-
-  def handle_info(:initialize_timeout, %{phase: :starting} = state) do
-    reason = {:mcp_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info(:initialize_timeout, state), do: {:noreply, state}
-
   def handle_info({:request_timeout, id}, state) do
     JSONRPC.expire(state, id, fn reply ->
       cancel_request(state, id, "timeout")
@@ -169,7 +146,8 @@ defmodule Alto.External.MCP.Client do
      JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1, "owner_disconnected"))}
   end
 
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_info(message, state),
+    do: JSONRPC.handle_transport(message, state, &handle_message/2, &fail_all/2)
 
   @impl true
   def terminate(_reason, state), do: JSONRPC.close(state)
@@ -229,8 +207,6 @@ defmodule Alto.External.MCP.Client do
 
   defp send_payload(state, payload),
     do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
-
-  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_message/2)
 
   # A server request has both `method` and `id`; inspect that shape before
   # looking up pending responses so it cannot consume an outgoing id.
