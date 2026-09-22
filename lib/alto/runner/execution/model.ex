@@ -166,19 +166,10 @@ defmodule Alto.Runner.Execution.Model do
   end
 
   defp sleep_backoff(delay, cancel_ref, budget) do
-    sleep_until(System.monotonic_time(:millisecond) + Budget.timeout(budget, delay), cancel_ref)
-  end
-
-  defp sleep_until(deadline, cancel_ref) do
-    if System.monotonic_time(:millisecond) >= deadline do
-      :ok
-    else
-      Process.sleep(50)
-
-      case Call.cancellation(cancel_ref) do
-        {:cancelled, reason} -> {:cancelled, reason}
-        :continue -> sleep_until(deadline, cancel_ref)
-      end
+    receive do
+      {:alto_cancel, ^cancel_ref, reason} when not is_nil(cancel_ref) -> {:cancelled, reason}
+    after
+      Budget.timeout(budget, delay) -> :ok
     end
   end
 end

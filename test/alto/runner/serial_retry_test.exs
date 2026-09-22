@@ -186,17 +186,21 @@ defmodule Alto.Runner.SerialRetryTest do
 
   test "cancellation wins during backoff", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :down}} end
+    owner = self()
 
     {:ok, handle} =
       Alto.start("retry me",
         provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
         tools: [],
-        provider_retries: 100
+        provider_retries: 100,
+        retry_policy: {Alto.Retry.Transient, base_delay: 5_000, jitter: false},
+        event_sink: fn event -> send(owner, {:evt, event}) end
       )
 
-    assert_receive {:attempt, 0}, 2_000
+    assert_receive {:evt, %Event{type: :model_retry}}, 2_000
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, _} = Alto.await(handle, 10_000)
+    assert {:error, {:cancelled, :operator_stop}, _} = Alto.await(handle, 2_000)
+    assert attempts(agent) == 1
   end
 
   test "tool effects are never retried" do
