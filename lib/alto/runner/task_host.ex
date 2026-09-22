@@ -9,6 +9,7 @@ defmodule Alto.Runner.TaskHost do
   """
   use GenServer
   alias Alto.Runner.Result
+  alias Alto.Runner.Execution.Call
 
   defmodule Handle do
     @moduledoc false
@@ -91,7 +92,7 @@ defmodule Alto.Runner.TaskHost do
   @impl true
   def init({fun, owner}) do
     cancel_ref = make_ref()
-    task = Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn -> fun.(cancel_ref) end)
+    task = Call.start(fn -> fun.(cancel_ref) end)
 
     {:ok,
      %{

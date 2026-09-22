@@ -1,23 +1,25 @@
 defmodule Alto.Runner.Execution.Call do
   @moduledoc "Bounded, cancellable participant invocation used by runner hosts."
 
+  @doc "Start a supervised participant that is terminated if its calling process dies."
+  def start(fun) when is_function(fun, 0) do
+    owner = self()
+
+    Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
+      guard_owner(owner)
+      fun.()
+    end)
+  end
+
   @doc "Run a participant under the task supervisor with a deadline and cancellation."
   def run(_fun, timeout, _cancel_ref) when timeout <= 0, do: {:error, :timeout}
 
   def run(fun, timeout, cancel_ref) when is_function(fun, 0) do
-    owner = self()
-
-    task =
-      Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
-        guard_owner(owner)
-        fun.()
-      end)
-
+    task = start(fun)
     await(task, System.monotonic_time(:millisecond) + max(timeout, 0), cancel_ref)
   end
 
-  @doc false
-  def guard_owner(owner) when is_pid(owner) do
+  defp guard_owner(owner) when is_pid(owner) do
     worker = self()
     guardian = spawn_link(fn -> owner_guard(owner, worker) end)
 

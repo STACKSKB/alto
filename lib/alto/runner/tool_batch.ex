@@ -9,19 +9,13 @@ defmodule Alto.Runner.ToolBatch do
   alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
-    owner = self()
     context = caps.tool_context
     limit = caps.max_tool_result_bytes
 
     tasks =
       Enum.map(jobs, fn {tool, prepared} ->
         task =
-          Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
-            # Establish ownership before entering participant code. Doing
-            # this from the coordinator after `async_nolink/2` would leave a
-            # hard-death window with an unowned worker.
-            Call.guard_owner(owner)
-
+          Call.start(fn ->
             tool
             |> Tool.invoke_tool(prepared, context)
             |> bound_result(limit)
