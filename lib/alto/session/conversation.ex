@@ -79,30 +79,21 @@ defmodule Alto.Session.Conversation do
   @doc "Read the latest safe branch head for ordinary resume."
   @spec resume(Session.session_id(), keyword()) :: {:ok, snapshot()} | {:error, term()}
   def resume(id, opts \\ []) do
-    with :ok <- Session.validate_id(id) do
-      path = transcript_path(opts, id)
-
-      Storage.with_lock(lock_path(path), fn ->
-        with {:ok, snapshot} <- read_snapshot(id, opts),
-             :ok <- resume_safety(snapshot, Keyword.get(opts, :allow_unsettled, false)),
-             do: {:ok, snapshot}
-      end)
-    end
+    with_snapshot(id, opts, fn snapshot ->
+      with :ok <- resume_safety(snapshot, Keyword.get(opts, :allow_unsettled, false)),
+           do: {:ok, snapshot}
+    end)
   end
 
   @doc "Read one retained revision without recursively materializing its ancestry."
   @spec fetch(Session.session_id(), :latest | revision(), keyword()) ::
           {:ok, snapshot()} | {:error, term()}
   def fetch(id, revision \\ :latest, opts \\ []) do
-    with :ok <- Session.validate_id(id),
-         {:ok, revision} <- requested_revision(revision) do
-      path = transcript_path(opts, id)
-
-      Storage.with_lock(lock_path(path), fn ->
-        with {:ok, head} <- read_snapshot(id, opts),
-             :ok <- check_expected(id, Keyword.get(opts, :expected_revision, :any), head.revision) do
-          select_revision(id, revision, head, opts)
-        end
+    with {:ok, revision} <- requested_revision(revision) do
+      with_snapshot(id, opts, fn head ->
+        with :ok <-
+               check_expected(id, Keyword.get(opts, :expected_revision, :any), head.revision),
+             do: select_revision(id, revision, head, opts)
       end)
     end
   end
@@ -111,24 +102,27 @@ defmodule Alto.Session.Conversation do
   @spec mark_dispatched(Session.session_id(), [String.t()], keyword()) ::
           {:ok, map()} | {:error, term()}
   def mark_dispatched(id, tool_call_ids, opts \\ []) do
-    with :ok <- Session.validate_id(id),
-         {:ok, ids} <- validate_tool_call_ids(tool_call_ids),
+    with {:ok, ids} <- validate_tool_call_ids(tool_call_ids),
          {:ok, expected} <- expected_revision(Keyword.get(opts, :expected_revision, :any)) do
-      path = transcript_path(opts, id)
+      with_snapshot(id, opts, fn snapshot ->
+        with :ok <- check_expected(id, expected, snapshot.revision) do
+          fence = %{
+            revision: snapshot.revision,
+            tool_call_ids: ids,
+            run_id: Keyword.get(opts, :run_id),
+            at_ms: System.system_time(:millisecond)
+          }
 
-      Storage.with_lock(lock_path(path), fn ->
-        with {:ok, snapshot} <- read_snapshot(id, opts),
-             :ok <- check_expected(id, expected, snapshot.revision),
-             current <- Map.get(snapshot, :unsettled),
-             requested_fence <- %{
-               revision: snapshot.revision,
-               tool_call_ids: ids,
-               run_id: Keyword.get(opts, :run_id),
-               at_ms: System.system_time(:millisecond)
-             },
-             {:ok, fence} <- put_dispatch_fence(id, requested_fence, current, opts) do
-          {:ok, fence}
+          put_dispatch_fence(id, fence, Map.get(snapshot, :unsettled), opts)
         end
+      end)
+    end
+  end
+
+  defp with_snapshot(id, opts, fun) do
+    with :ok <- Session.validate_id(id) do
+      Storage.with_lock(lock_path(transcript_path(opts, id)), fn ->
+        with {:ok, snapshot} <- read_snapshot(id, opts), do: fun.(snapshot)
       end)
     end
   end
