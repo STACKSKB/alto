@@ -46,7 +46,7 @@ defmodule Alto.Subagents.Continuation do
     with :ok <- valid_key(key), :ok <- valid_plan(ids, metadata, parent) do
       initial = %{
         "kind" => @kind,
-        "version" => 2,
+        "version" => 3,
         "generation" => nonce(),
         "ids" => ids,
         "metadata" => metadata,
@@ -56,8 +56,7 @@ defmodule Alto.Subagents.Continuation do
       packet = %{
         "phase" => "children",
         "generation" => initial["generation"],
-        "children" =>
-          Map.new(ids, &{&1, %{"state" => "planned", "attempt" => nil, "result" => nil}}),
+        "children" => Map.new(ids, &{&1, {:planned}}),
         "join" => nil
       }
 
@@ -188,7 +187,7 @@ defmodule Alto.Subagents.Continuation do
          true <- snapshot.revision == expected_revision,
          child when not is_nil(child) <-
            Map.get(snapshot.packet["children"], child_id),
-         true <- child["state"] in ["suspended", "decided"] do
+         true <- elem(child, 0) in [:suspended, :decided] do
       {:ok, Map.put(approval_view(batch, child_id, child), :revision, snapshot.revision)}
     else
       false -> {:error, :stale_child_approval}
@@ -203,8 +202,8 @@ defmodule Alto.Subagents.Continuation do
 
     with {:ok, _} <-
            change_child(batch, id, fn
-             %{"state" => "planned"} = child ->
-               {:ok, %{child | "state" => "dispatched", "attempt" => attempt}}
+             {:planned} ->
+               {:ok, {:dispatched, attempt}}
 
              _ ->
                {:error, :child_already_admitted}
@@ -219,13 +218,9 @@ defmodule Alto.Subagents.Continuation do
       change_child(ticket.batch, ticket.id, fn child ->
         cond do
           owns_dispatch?(child, ticket) ->
-            {:ok,
-             child
-             |> Map.drop(["suspension"])
-             |> Map.merge(%{"state" => "completed", "result" => result})}
+            {:ok, {:completed, ticket.attempt, result}}
 
-          child["state"] == "completed" and child["attempt"] == ticket.attempt and
-              child["result"] === result ->
+          child === {:completed, ticket.attempt, result} ->
             {:ok, child}
 
           true ->
@@ -242,16 +237,7 @@ defmodule Alto.Subagents.Continuation do
     if valid_suspension?(saved) do
       change_child(ticket.batch, ticket.id, fn child ->
         if owns_dispatch?(child, ticket) do
-          {:ok,
-           Map.merge(child, %{
-             "state" => "suspended",
-             "suspension" => %{
-               "token" => nonce(),
-               "checkpoint" => saved,
-               "decision" => nil,
-               "grant" => nil
-             }
-           })}
+          {:ok, {:suspended, ticket.attempt, nonce(), saved}}
         else
           {:error, :child_result_conflict}
         end
@@ -265,7 +251,7 @@ defmodule Alto.Subagents.Continuation do
   def suspended(%__MODULE__{} = batch) do
     with {:ok, snapshot} <- read(batch) do
       snapshot.ids
-      |> Enum.filter(&(snapshot.packet["children"][&1]["state"] in ["suspended", "decided"]))
+      |> Enum.filter(&(elem(snapshot.packet["children"][&1], 0) in [:suspended, :decided]))
       |> Enum.map(&approval_view(batch, &1, snapshot.packet["children"][&1]))
       |> then(&{:ok, &1})
     end
@@ -277,20 +263,15 @@ defmodule Alto.Subagents.Continuation do
     with {:ok, snapshot} <- read(batch),
          :ok <- active(snapshot),
          true <- snapshot.revision == revision,
-         child when not is_nil(child) <-
+         {:suspended, attempt, token, saved} <-
            Map.get(snapshot.packet["children"], identity["id"]),
-         true <- child_identity(batch, identity["id"], child) == identity,
-         true <- child["state"] == "suspended" and is_nil(snapshot.packet["join"]) do
-      child =
-        child
-        |> Map.put("state", "decided")
-        |> put_in(["suspension", "decision"], Atom.to_string(decision))
-
+         true <- child_identity(batch, identity["id"], attempt, token) == identity,
+         true <- is_nil(snapshot.packet["join"]) do
+      child = {:decided, attempt, token, saved, decision}
       replace(batch, snapshot, put_in(snapshot.packet, ["children", identity["id"]], child))
     else
-      false -> {:error, :stale_child_decision}
-      nil -> {:error, :stale_child_decision}
       {:error, _} = error -> error
+      _ -> {:error, :stale_child_decision}
     end
   end
 
@@ -304,13 +285,14 @@ defmodule Alto.Subagents.Continuation do
 
   def claim_child(%Ticket{batch: batch, grant: grant} = ticket, identity, decision)
       when decision in [:approve, :deny] do
-    change_child(batch, ticket.id, fn child ->
-      if child_identity(batch, ticket.id, child) == identity and child["state"] == "decided" and
-           child["suspension"]["decision"] == Atom.to_string(decision) and nonce?(grant) do
-        {:ok, child |> Map.put("state", "resuming") |> put_in(["suspension", "grant"], grant)}
-      else
+    change_child(batch, ticket.id, fn
+      {:decided, attempt, token, saved, ^decision} ->
+        if child_identity(batch, ticket.id, attempt, token) == identity and nonce?(grant),
+          do: {:ok, {:resuming, attempt, token, saved, decision, grant}},
+          else: {:error, :child_resume_not_granted}
+
+      _ ->
         {:error, :child_resume_not_granted}
-      end
     end)
   end
 
@@ -325,27 +307,20 @@ defmodule Alto.Subagents.Continuation do
     }
   end
 
-  defp child_identity(batch, id, child) do
+  defp child_identity(batch, id, attempt, token) do
     %{
       "journal" => identity(batch),
       "id" => id,
-      "attempt" => child["attempt"],
-      "suspension" => get_in(child, ["suspension", "token"])
+      "attempt" => attempt,
+      "suspension" => token
     }
   end
 
-  defp owns_dispatch?(%{"state" => "dispatched", "attempt" => attempt}, %Ticket{
-         attempt: attempt,
-         suspension: nil
-       }),
-       do: true
+  defp owns_dispatch?({:dispatched, attempt}, %Ticket{attempt: attempt, suspension: nil}),
+    do: true
 
   defp owns_dispatch?(
-         %{
-           "state" => "resuming",
-           "attempt" => attempt,
-           "suspension" => %{"token" => token, "grant" => grant}
-         },
+         {:resuming, attempt, token, _saved, _decision, grant},
          %Ticket{attempt: attempt, suspension: token, grant: grant}
        ),
        do: true
@@ -356,10 +331,10 @@ defmodule Alto.Subagents.Continuation do
   def skip(%__MODULE__{} = batch, id, result) do
     with :ok <- validate_result(result) do
       change_child(batch, id, fn
-        %{"state" => "planned"} = child ->
-          {:ok, %{child | "state" => "completed", "result" => result}}
+        {:planned} ->
+          {:ok, {:completed, nil, result}}
 
-        %{"state" => "completed", "attempt" => nil, "result" => ^result} = child ->
+        {:completed, nil, ^result} = child ->
           {:ok, child}
 
         _ ->
@@ -492,11 +467,11 @@ defmodule Alto.Subagents.Continuation do
   defp ordered_results(ids, children) do
     Alto.Result.traverse(ids, fn id ->
       case children[id] do
-        %{"state" => "completed", "result" => result} ->
+        {:completed, _attempt, result} ->
           {:ok, {id, result}}
 
-        %{"state" => state} ->
-          {:error, {:child_pending, id, state}}
+        child ->
+          {:error, {:child_pending, id, Atom.to_string(elem(child, 0))}}
       end
     end)
   end
@@ -555,16 +530,17 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  defp approval_view(batch, id, child) do
-    saved = child["suspension"]["checkpoint"]
+  defp approval_view(batch, id, {:suspended, attempt, token, saved}),
+    do: approval_view(batch, id, {:decided, attempt, token, saved, nil})
 
+  defp approval_view(batch, id, {:decided, attempt, token, saved, decision}) do
     %{
       checkpoint: saved["checkpoint"],
       workspace: saved["workspace"],
       id: id,
-      state: if(child["state"] == "suspended", do: :suspended, else: :decided),
-      identity: child_identity(batch, id, child),
-      decision: child["suspension"]["decision"]
+      state: if(is_nil(decision), do: :suspended, else: :decided),
+      identity: child_identity(batch, id, attempt, token),
+      decision: if(decision, do: Atom.to_string(decision))
     }
   end
 
@@ -585,7 +561,7 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
     if Enum.sort(Map.keys(initial)) == Enum.sort(~w(kind version generation ids metadata parent)) and
-         initial["kind"] == @kind and initial["version"] == 2 and nonce?(initial["generation"]) do
+         initial["kind"] == @kind and initial["version"] == 3 and nonce?(initial["generation"]) do
       valid_plan(initial["ids"], initial["metadata"], initial["parent"])
     else
       {:error, :invalid_batch}
@@ -610,57 +586,37 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_phase(%{"phase" => "children", "join" => join, "children" => children}, nil)
        when is_map(join) and map_size(join) > 0 do
-    if Enum.all?(Map.values(children), &(&1["state"] == "completed")),
+    if Enum.all?(Map.values(children), &match?({:completed, _, _}, &1)),
       do: :ok,
       else: {:error, :invalid_batch}
   end
 
   defp valid_phase(%{"phase" => phase, "packet" => packet, "children" => children}, parent)
        when phase in ["ready", "claimed"] and not is_nil(parent) do
-    if Enum.all?(Map.values(children), &(&1["state"] == "completed")),
+    if Enum.all?(Map.values(children), &match?({:completed, _, _}, &1)),
       do: valid_parent(packet),
       else: {:error, :invalid_batch}
   end
 
   defp valid_phase(_, _), do: {:error, :invalid_batch}
 
-  defp valid_child?(%{"state" => state, "attempt" => attempt, "result" => result} = child)
-       when map_size(child) == 3 do
-    case state do
-      "planned" ->
-        is_nil(attempt) and is_nil(result)
+  # Tagged states carry only the data valid at that transition. Decisions and
+  # grants cannot appear on planned/dispatched/completed children.
+  defp valid_child?({:planned}), do: true
+  defp valid_child?({:dispatched, attempt}), do: nonce?(attempt)
 
-      "dispatched" ->
-        nonce?(attempt) and is_nil(result)
+  defp valid_child?({:completed, attempt, result}),
+    do:
+      (is_nil(attempt) or nonce?(attempt)) and Codec.valid?(result, max_bytes: @max_result_bytes)
 
-      "completed" ->
-        (is_nil(attempt) or nonce?(attempt)) and
-          Codec.valid?(result, max_bytes: @max_result_bytes)
+  defp valid_child?({:suspended, attempt, token, saved}),
+    do: nonce?(attempt) and nonce?(token) and valid_suspension?(saved)
 
-      _ ->
-        false
-    end
-  end
+  defp valid_child?({:decided, attempt, token, saved, decision}),
+    do: decision in [:approve, :deny] and valid_child?({:suspended, attempt, token, saved})
 
-  defp valid_child?(
-         %{
-           "state" => state,
-           "attempt" => attempt,
-           "result" => nil,
-           "suspension" => suspension
-         } = child
-       )
-       when map_size(child) == 4 and state in ["suspended", "decided", "resuming"] do
-    nonce?(attempt) and is_map(suspension) and
-      Enum.sort(Map.keys(suspension)) == Enum.sort(~w(token checkpoint decision grant)) and
-      nonce?(suspension["token"]) and
-      if(state == "resuming", do: nonce?(suspension["grant"]), else: is_nil(suspension["grant"])) and
-      valid_suspension?(suspension["checkpoint"]) and
-      if(state == "suspended",
-        do: is_nil(suspension["decision"]),
-        else: suspension["decision"] in ["approve", "deny"]
-      )
-  end
+  defp valid_child?({:resuming, attempt, token, saved, decision, grant}),
+    do: nonce?(grant) and valid_child?({:decided, attempt, token, saved, decision})
 
   defp valid_child?(_), do: false
 

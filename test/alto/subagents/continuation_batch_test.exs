@@ -63,7 +63,7 @@ defmodule Alto.Subagents.ContinuationTest do
     assert {:ok, _} = Continuation.complete(second, nil)
     assert {:ok, _} = Continuation.complete(first, %{value: 1})
     assert {:ok, snapshot} = Continuation.read(batch)
-    assert snapshot.packet["children"]["z-first"]["result"] == %{value: 1}
+    assert {:completed, _, %{value: 1}} = snapshot.packet["children"]["z-first"]
     stop_supervised!(child_id)
 
     %{ledger: restarted} = start_ledger!(dir, id)
@@ -110,7 +110,7 @@ defmodule Alto.Subagents.ContinuationTest do
     {:ok, restored} = Continuation.restore(restarted, identity)
     assert {:error, :child_already_admitted} = Continuation.dispatch(restored, "child-a")
 
-    assert {:ok, %{packet: %{"children" => %{"child-a" => %{"state" => "dispatched"}}}}} =
+    assert {:ok, %{packet: %{"children" => %{"child-a" => {:dispatched, _}}}}} =
              Continuation.read(restored)
   end
 

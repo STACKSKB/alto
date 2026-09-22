@@ -136,7 +136,7 @@ defmodule Alto.Runner.SerialContinuationTest do
     [key] = OperationLog.keys(ledger)
     assert {:ok, entry} = OperationLog.recovery(ledger, key)
 
-    assert %{"worker" => %{"state" => "dispatched", "result" => nil}} =
+    assert %{"worker" => {:dispatched, _}} =
              entry.checkpoint["children"]
   end
 

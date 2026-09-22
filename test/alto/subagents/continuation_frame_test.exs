@@ -86,14 +86,23 @@ defmodule Alto.Subagents.ContinuationFrameTest do
   end
 
   test "retained children must exactly match the plan and contain valid state", %{ledger: ledger} do
-    child = %{"state" => "planned", "attempt" => nil, "result" => nil}
+    child = {:planned}
+    attempt = String.duplicate("a", 32)
+    token = String.duplicate("b", 32)
+    saved = %{"checkpoint" => %{}, "workspace" => nil}
 
     invalid = [
       [child],
       %{},
       %{"other" => child},
       %{"worker" => 1},
-      %{"worker" => Map.put(child, "id", "worker")}
+      %{"worker" => {:planned, "worker"}},
+      %{"worker" => {:dispatched, nil}},
+      %{"worker" => {:completed, "invalid-attempt", :done}},
+      %{"worker" => {:suspended, attempt, nil, saved}},
+      %{"worker" => {:suspended, attempt, token, %{}}},
+      %{"worker" => {:decided, attempt, token, saved, nil}},
+      %{"worker" => {:resuming, attempt, token, saved, :approve, nil}}
     ]
 
     for {children, index} <- Enum.with_index(invalid) do
