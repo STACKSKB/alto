@@ -213,17 +213,10 @@ defmodule Alto.Codex.AppServer.Client do
   def handle_info(:initialize_timeout, state), do: {:noreply, state}
 
   def handle_info({:request_timeout, id}, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
-        {:noreply, state}
-
-      {%{reply: reply, timer: timer, owner: owner, monitor: monitor}, pending} ->
-        JSONRPC.cancel_timer(timer)
-        cancel_request(state, id)
-        JSONRPC.demonitor(owner, monitor)
-        reply_error(reply, {:codex_app_server_request_timeout, id})
-        {:noreply, %{state | pending: pending}}
-    end
+    JSONRPC.expire(state, id, fn reply ->
+      cancel_request(state, id)
+      reply_error(reply, {:codex_app_server_request_timeout, id})
+    end)
   end
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do

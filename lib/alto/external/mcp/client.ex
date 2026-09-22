@@ -158,17 +158,10 @@ defmodule Alto.External.MCP.Client do
   def handle_info(:initialize_timeout, state), do: {:noreply, state}
 
   def handle_info({:request_timeout, id}, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
-        {:noreply, state}
-
-      {%{reply: reply, owner: owner, monitor: monitor}, pending} ->
-        reason = {:mcp_request_timeout, id}
-        cancel_request(state, id, "timeout")
-        JSONRPC.demonitor(owner, monitor)
-        reply_error(reply, reason, :unknown)
-        {:noreply, %{state | pending: pending}}
-    end
+    JSONRPC.expire(state, id, fn reply ->
+      cancel_request(state, id, "timeout")
+      reply_error(reply, {:mcp_request_timeout, id}, :unknown)
+    end)
   end
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do

@@ -220,6 +220,16 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
+  def expire(state, id, reply_timeout) do
+    {:ok, state} =
+      settle(state, id, nil, fn reply, _, state ->
+        reply_timeout.(reply)
+        {:ok, state}
+      end)
+
+    {:noreply, state}
+  end
+
   def drop_owner(state, monitor, owner, cancel) do
     {owned, pending} =
       Enum.split_with(state.pending, fn {_id, entry} ->
