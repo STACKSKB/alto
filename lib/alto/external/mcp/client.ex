@@ -180,12 +180,9 @@ defmodule Alto.External.MCP.Client do
   end
 
   defp send_notification(state, method) do
-    with :ok <- send_payload(state, %{"jsonrpc" => "2.0", "method" => method}),
+    with :ok <- JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "method" => method}),
          do: {:ok, state}
   end
-
-  defp send_payload(state, payload),
-    do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
   # A server request has both `method` and `id`; inspect that shape before
   # looking up pending responses so it cannot consume an outgoing id.
@@ -251,7 +248,7 @@ defmodule Alto.External.MCP.Client do
       "error" => %{"code" => -32601, "message" => "Alto MCP client supports tools only"}
     }
 
-    _ = send_payload(state, response)
+    _ = JSONRPC.send_payload(state, response)
     {:ok, state}
   end
 
@@ -265,7 +262,7 @@ defmodule Alto.External.MCP.Client do
 
   defp cancel_request(state, id, reason) do
     _ =
-      send_payload(state, %{
+      JSONRPC.send_payload(state, %{
         "jsonrpc" => "2.0",
         "method" => "notifications/cancelled",
         "params" => %{"requestId" => id, "reason" => reason}

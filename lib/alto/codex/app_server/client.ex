@@ -166,7 +166,8 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_call({:respond, id, result}, _from, %{phase: :ready} = state) do
-    {:reply, send_payload(state, %{"jsonrpc" => "2.0", "id" => id, "result" => result}), state}
+    {:reply, JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "id" => id, "result" => result}),
+     state}
   end
 
   def handle_call({:reject, id, code, message}, _from, %{phase: :ready} = state) do
@@ -176,7 +177,7 @@ defmodule Alto.Codex.AppServer.Client do
       "error" => %{"code" => code, "message" => message}
     }
 
-    {:reply, send_payload(state, payload), state}
+    {:reply, JSONRPC.send_payload(state, payload), state}
   end
 
   def handle_call(_request, _from, state),
@@ -249,11 +250,8 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   defp send_notification(state, method, params \\ %{}) do
-    send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
+    JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
   end
-
-  defp send_payload(state, payload),
-    do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.
@@ -315,7 +313,7 @@ defmodule Alto.Codex.AppServer.Client do
 
   defp cancel_request(state, id) do
     _ =
-      send_payload(state, %{
+      JSONRPC.send_payload(state, %{
         "jsonrpc" => "2.0",
         "method" => "$/cancelRequest",
         "params" => %{"id" => id}

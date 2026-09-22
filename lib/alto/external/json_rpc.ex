@@ -191,7 +191,7 @@ defmodule Alto.External.JSONRPC do
         payload = %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
 
         with :ok <-
-               send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes)) do
+               send_payload(state, payload) do
           pending = %{
             reply: reply,
             owner: owner,
@@ -309,12 +309,13 @@ defmodule Alto.External.JSONRPC do
   def remaining(:infinity), do: :infinity
   def remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
-  def send(port, payload, max_bytes) do
+  def send_payload(state, payload) do
+    max_bytes = Keyword.fetch!(state.opts, :max_message_bytes)
     data = JSON.encode!(payload) <> "\n"
 
     cond do
       byte_size(data) > max_bytes -> {:error, {:json_rpc_message_limit, max_bytes}}
-      Port.command(port, data, [:nosuspend]) -> :ok
+      Port.command(state.process.port, data, [:nosuspend]) -> :ok
       true -> {:error, :transport_busy}
     end
   rescue
