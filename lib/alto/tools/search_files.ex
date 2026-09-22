@@ -14,6 +14,7 @@ defmodule Alto.Tools.SearchFiles do
   @max_matches 100
   @max_line_graphemes 300
   @options_schema [
+    backend: [type: :any, default: __MODULE__],
     max_query_bytes: [type: :pos_integer, default: @max_query_bytes],
     max_files: [type: :pos_integer, default: @max_files],
     max_entries: [type: :pos_integer, default: @max_entries],
@@ -59,13 +60,14 @@ defmodule Alto.Tools.SearchFiles do
     case_sensitive? = Map.get(arguments, "case_sensitive", true)
 
     with :ok <- validate_case_sensitive(case_sensitive?),
-         {:ok, backend, backend_opts} <- resolve_backend(opts),
-         :ok <- validate_query(query, query_limits(backend_opts)),
+         {:ok, limits} <- validate_options(opts),
+         {backend, backend_opts} <- limits.backend,
+         :ok <- validate_query(query, limits),
          result <-
            backend.search(
              %{query: query, path: path, case_sensitive: case_sensitive?},
              context,
-             backend_opts
+             if(backend == __MODULE__ and backend_opts == [], do: limits, else: backend_opts)
            ),
          {:ok, output} <- normalize_backend_result(result, backend) do
       {:ok, output |> Map.put(:path, path) |> Map.put(:query, query)}
@@ -93,30 +95,6 @@ defmodule Alto.Tools.SearchFiles do
          truncated: state.truncated
        }}
     end
-  end
-
-  defp resolve_backend(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      {backend, unknown} = Keyword.pop(opts, :backend, __MODULE__)
-
-      if backend == __MODULE__ do
-        with {:ok, limits} <- validate_options(unknown), do: {:ok, backend, limits}
-      else
-        normalize_backend(backend)
-      end
-    else
-      {:error, {:invalid_search_options, opts}}
-    end
-  end
-
-  defp resolve_backend(opts), do: {:error, {:invalid_search_options, opts}}
-
-  defp query_limits(%{max_query_bytes: _} = limits), do: limits
-  defp query_limits(_), do: %{max_query_bytes: @max_query_bytes}
-
-  defp normalize_backend(spec) do
-    with {:ok, {module, options}} <- Alto.Capabilities.resolve(spec, Alto.Search.Backend),
-         do: {:ok, module, options}
   end
 
   defp normalize_backend_result({:ok, result}, _backend) when is_map(result),
@@ -253,7 +231,10 @@ defmodule Alto.Tools.SearchFiles do
   defp validate_options(opts) do
     with {:ok, limits} <-
            Alto.Tool.Options.validate(opts, @options_schema, :invalid_search_options),
-         do: {:ok, Map.update!(limits, :excluded_directories, &MapSet.new/1)}
+         {:ok, backend} <- Alto.Capabilities.resolve(limits.backend, Alto.Search.Backend) do
+      {:ok,
+       %{limits | backend: backend, excluded_directories: MapSet.new(limits.excluded_directories)}}
+    end
   end
 
   defp validate_options!(opts) do

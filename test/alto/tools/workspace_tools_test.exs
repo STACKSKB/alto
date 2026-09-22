@@ -289,6 +289,22 @@ defmodule Alto.Tools.WorkspaceToolsTest do
            ]
 
     assert result.scanned_files == 7
+
+    options = [backend: {SearchBackend, label: "index"}, max_query_bytes: 6]
+    assert {:ok, _tools, [definition]} = Alto.Tool.Registry.build([{SearchFiles, options}])
+    assert definition["function"]["parameters"][:properties][:query][:maxLength] == 6
+
+    assert {:error, {:query_too_large, 6}} =
+             SearchFiles.run(%{"query" => "too long"}, context, options)
+
+    assert {:ok, run} =
+             Alto.run(%{"query" => "needle"},
+               loop: Alto.rule_loop(steps: ["search_files"]),
+               tools: [{SearchFiles, options}],
+               cwd: context.cwd
+             )
+
+    assert [%{matches: [%{path: "index"}]}] = run.output
   end
 
   test "search rejects invalid backends before invocation", %{context: context} do
