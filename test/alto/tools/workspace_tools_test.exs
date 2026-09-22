@@ -434,6 +434,32 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "b c b\n"
   end
 
+  test "bounds the final edit result after both growth and deletion", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "aXYZ")
+
+    arguments = %{
+      "path" => "sample.txt",
+      "edits" => [
+        %{"old_text" => "XYZ", "new_text" => ""},
+        %{"old_text" => "a", "new_text" => "123456"}
+      ]
+    }
+
+    assert {:error, {:file_too_large, 5}} =
+             EditFile.prepare(arguments, context, max_file_bytes: 5)
+
+    assert File.read!(path) == "aXYZ"
+
+    assert {:ok, %{bytes_after: 6, replacements: 2}} =
+             EditFile.run(arguments, context, max_file_bytes: 6)
+
+    assert File.read!(path) == "123456"
+  end
+
   test "rejects overlapping multi-edit requests without writing", %{
     root: root,
     context: context

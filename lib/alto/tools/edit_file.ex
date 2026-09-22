@@ -90,8 +90,7 @@ defmodule Alto.Tools.EditFile do
          {:ok, original} <- FileChange.original(resolved, limits.max_file_bytes, :edit),
          content = original.content,
          :ok <- validate_utf8(content),
-         {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes),
-         :ok <- validate_size(byte_size(updated), limits.max_file_bytes) do
+         {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes) do
       patch = UnifiedDiff.render(path, content, updated, limits.patch_bytes)
 
       result = %{
@@ -186,9 +185,9 @@ defmodule Alto.Tools.EditFile do
 
   defp apply_edits(content, edits, max_file_bytes) do
     with {:ok, replacements} <- collect_replacements(content, edits),
-         :ok <- reject_overlaps(replacements),
-         :ok <- validate_updated_size(content, replacements, max_file_bytes) do
-      {:ok, replace_ranges(content, replacements), length(replacements)}
+         {:ok, chunks} <- replace_ranges(content, replacements),
+         :ok <- validate_size(IO.iodata_length(chunks), max_file_bytes) do
+      {:ok, IO.iodata_to_binary(chunks), length(replacements)}
     end
   end
 
@@ -214,36 +213,19 @@ defmodule Alto.Tools.EditFile do
   defp select_matches([match | _], false), do: {:ok, [match]}
   defp select_matches(matches, true), do: {:ok, matches}
 
-  defp reject_overlaps(replacements) do
-    Enum.reduce_while(replacements, 0, fn {start, size, _text}, previous_end ->
-      if start < previous_end,
-        do: {:halt, {:error, :overlapping_edits}},
-        else: {:cont, start + size}
-    end)
-    |> case do
-      {:error, _} = error -> error
-      _end -> :ok
-    end
-  end
-
-  defp validate_updated_size(content, replacements, max_file_bytes) do
-    size =
-      Enum.reduce(replacements, byte_size(content), fn {_start, size, text}, total ->
-        total - size + byte_size(text)
-      end)
-
-    validate_size(size, max_file_bytes)
-  end
-
   defp replace_ranges(content, replacements) do
-    {chunks, offset} =
-      Enum.reduce(replacements, {[], 0}, fn {start, size, text}, {chunks, offset} ->
-        unchanged = binary_part(content, offset, start - offset)
-        {[text, unchanged | chunks], start + size}
-      end)
-
-    tail = binary_part(content, offset, byte_size(content) - offset)
-    [tail | chunks] |> Enum.reverse() |> IO.iodata_to_binary()
+    with {:ok, {chunks, offset}} <-
+           Alto.Result.reduce(replacements, {[], 0}, fn {start, size, text}, {chunks, offset} ->
+             if start < offset do
+               {:error, :overlapping_edits}
+             else
+               unchanged = binary_part(content, offset, start - offset)
+               {:ok, {[text, unchanged | chunks], start + size}}
+             end
+           end) do
+      tail = binary_part(content, offset, byte_size(content) - offset)
+      {:ok, Enum.reverse([tail | chunks])}
+    end
   end
 
   defp validate_options(opts),
