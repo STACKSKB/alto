@@ -416,7 +416,7 @@ defmodule Alto.CLI do
        |> Keyword.put(:provider, provider)
        |> configure_provider_timeout(provider_timeout)
        |> configure_tools(options, command_mode)
-       |> configure_max_steps(options)
+       |> Keyword.merge(Keyword.take(options, [:max_steps]))
        |> configure_prompt(options)
        |> configure_project_instructions(options)}
     end
@@ -556,19 +556,6 @@ defmodule Alto.CLI do
       Keyword.get(options, :approve_all, false) -> Keyword.put(run_options, :approval, AllowAll)
       Keyword.has_key?(run_options, :approval) -> run_options
       true -> Keyword.put(run_options, :approval, Interactive)
-    end
-  end
-
-  defp configure_max_steps(run_options, options) do
-    cond do
-      Keyword.has_key?(options, :max_steps) ->
-        Keyword.put(run_options, :max_steps, Keyword.fetch!(options, :max_steps))
-
-      Keyword.has_key?(run_options, :max_steps) ->
-        run_options
-
-      true ->
-        Keyword.put(run_options, :max_steps, 32)
     end
   end
 
