@@ -236,64 +236,40 @@ defmodule Alto.OperationLog do
 
   @impl true
   def handle_call(request, _from, state) do
-    case to_event(request, state) do
+    case to_event(request) do
       {:ok, event} -> commit(state, event)
       :read -> read(request, state)
     end
   end
 
-  defp to_event({:intent, op, tool, inbox, recovery}, _state) do
-    {:ok,
-     event("intent", op, %{
-       "tool" => tool,
-       "inbox" => inbox,
-       "recovery" => encode_recovery(recovery)
-     })}
+  @commands %{
+    intent: {"intent", ~w(tool inbox recovery)},
+    attempt: {"attempt", ~w(attempt)},
+    release: {"release", ~w(attempt)},
+    outcome: {"outcome", ~w(attempt class evidence)},
+    checkpoint: {"checkpoint", ~w(attempt checkpoint)},
+    checkpoint_update: {"checkpoint_update", ~w(expected_revision checkpoint)},
+    resume_checkpoint: {"checkpoint_resume", ~w(expected_revision decision)},
+    reject_intended: {"reject", ~w(expected_revision evidence)},
+    reconcile: {"reconcile", ~w(expected_revision resolution evidence)}
+  }
+
+  defp to_event(request) when is_tuple(request) do
+    with [command, op | values] <- Tuple.to_list(request),
+         {:ok, {type, fields}} <- Map.fetch(@commands, command),
+         true <- length(values) == length(fields) do
+      fields = Map.new(Enum.zip(fields, values), &encode_field/1)
+      {:ok, event(type, op, fields)}
+    else
+      _ -> :read
+    end
   end
 
-  defp to_event({type, op, attempt}, _state) when type in [:attempt, :release],
-    do: {:ok, event(Atom.to_string(type), op, %{"attempt" => attempt})}
+  defp to_event(_), do: :read
 
-  defp to_event({:outcome, op, attempt, class, evidence}, _state),
-    do:
-      {:ok,
-       event("outcome", op, %{
-         "attempt" => attempt,
-         "class" => class,
-         "evidence" => if(is_map(evidence), do: scrub(evidence), else: evidence)
-       })}
-
-  defp to_event({:checkpoint, op, attempt, checkpoint}, _state),
-    do: {:ok, event("checkpoint", op, %{"attempt" => attempt, "checkpoint" => checkpoint})}
-
-  defp to_event({type, op, revision, value}, _state)
-       when type in [:checkpoint_update, :resume_checkpoint] do
-    {name, field} =
-      if type == :checkpoint_update,
-        do: {"checkpoint_update", "checkpoint"},
-        else: {"checkpoint_resume", "decision"}
-
-    {:ok, event(name, op, %{"expected_revision" => revision, field => value})}
-  end
-
-  defp to_event({:reject_intended, op, revision, evidence}, _state),
-    do:
-      {:ok,
-       event("reject", op, %{
-         "expected_revision" => revision,
-         "evidence" => if(is_map(evidence), do: scrub(evidence), else: evidence)
-       })}
-
-  defp to_event({:reconcile, op, revision, resolution, evidence}, _state),
-    do:
-      {:ok,
-       event("reconcile", op, %{
-         "expected_revision" => revision,
-         "resolution" => resolution,
-         "evidence" => if(is_map(evidence), do: scrub(evidence), else: evidence)
-       })}
-
-  defp to_event(_, _), do: :read
+  defp encode_field({"recovery", value}), do: {"recovery", encode_recovery(value)}
+  defp encode_field({"evidence", value}) when is_map(value), do: {"evidence", scrub(value)}
+  defp encode_field(field), do: field
 
   defp event(type, op, fields),
     do:
