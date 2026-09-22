@@ -47,7 +47,9 @@ defmodule Alto.Runner.ExecutionComponentsTest do
     caps = tool_caps()
 
     assert {:ok, prepared, %{resolved: true}} = Tool.prepare(tool, %{"x" => 1}, caps)
-    assert {:ok, {:ok, %{"x" => 1}}} = Tool.invoke(tool, prepared, caps)
+
+    assert {:ok, [{:ok, {:ok, %{"x" => 1}}}]} =
+             Alto.Runner.ToolBatch.run([{tool, prepared}], caps)
   end
 
   test "tool approval uses the operation id and emits the boundary events" do

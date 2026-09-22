@@ -324,23 +324,10 @@ defmodule Alto.Runner.Execution do
         execute(rest, next_run, terminal)
 
       {:event, event, next_run} ->
-        next_run = Events.record(next_run, event)
+        finish_effect({:events, [event], Events.record(next_run, event)}, rest, run, terminal)
 
-        case call_policy(
-               fn ->
-                 Runtime.dispatch(
-                   next_run.spec,
-                   event,
-                   next_run.loop_state,
-                   runtime_context(next_run)
-                 )
-               end,
-               next_run
-             ) do
-          {:ok, transition} -> drive(transition, next_run, rest)
-          {:cancelled, reason} -> {:done, cancelled(reason, next_run)}
-          {:error, reason} -> {:done, {:error, reason, result(next_run, nil, :error)}}
-        end
+      {:events, events, next_run} ->
+        dispatch_batch(events, next_run, [], rest, :continue)
 
       {:error, {:cancelled, reason}, next_run} ->
         {:done, cancelled(reason, next_run)}
@@ -919,8 +906,23 @@ defmodule Alto.Runner.Execution do
   defp parallel_call?(_, _), do: false
 
   defp run_batch(calls, run, rest, terminal) do
-    with {:ok, jobs, run} <- prepare_batch(calls, run),
-         ready <- Enum.filter(jobs, &Map.has_key?(&1, :prepared)),
+    interpreted =
+      with {:ok, jobs, run} <- prepare_batch(calls, run),
+           do: dispatch_tool_jobs(jobs, run)
+
+    case interpreted do
+      {:events, events, run} ->
+        dispatch_batch(events, run, [], rest, terminal)
+
+      other ->
+        finish_effect(other, rest, run, terminal)
+    end
+  end
+
+  defp dispatch_tool_jobs(jobs, run) do
+    ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
+
+    with :continue <- Call.cancellation(run.cancel_ref),
          {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
       Enum.each(ready, fn job ->
         Alto.Events.notify(
@@ -935,11 +937,7 @@ defmodule Alto.Runner.Execution do
         )
       end)
 
-      response =
-        Alto.Runner.ToolBatch.run(
-          Enum.map(ready, &{&1.tool, &1.prepared}),
-          run
-        )
+      response = Alto.Runner.ToolBatch.run(Enum.map(ready, &{&1.tool, &1.prepared}), run)
 
       {outcomes, stopped} =
         case response do
@@ -949,17 +947,11 @@ defmodule Alto.Runner.Execution do
         end
 
       indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
-
-      outcomes =
-        Enum.map(jobs, fn job ->
-          if Map.has_key?(job, :prepared),
-            do: Map.fetch!(indexed, job.op_id),
-            else: {:rejected, job.error}
-        end)
-
-      finish_batch(jobs, outcomes, run, rest, terminal, stopped)
+      outcomes = Enum.map(jobs, &Map.get(indexed, &1.op_id, {:rejected, &1[:error]}))
+      finish_tool_jobs(jobs, outcomes, run, stopped)
     else
-      {:error, reason, run} -> {:done, {:error, reason, result(run, nil, :error)}}
+      {:cancelled, reason} -> {:cancelled, reason, run}
+      error -> error
     end
   end
 
@@ -993,7 +985,7 @@ defmodule Alto.Runner.Execution do
     end)
   end
 
-  defp finish_batch(jobs, outcomes, run, rest, terminal, stopped) do
+  defp finish_tool_jobs(jobs, outcomes, run, stopped) do
     # All worker outcomes are folded before any middleware-generated effect
     # executes. Each invocation is correlated and accounted exactly once.
     {run, events, failure} =
@@ -1008,9 +1000,11 @@ defmodule Alto.Runner.Execution do
       end)
 
     case stopped || failure do
-      nil -> dispatch_batch(events, run, [], rest, terminal)
-      {:cancelled, reason} -> {:done, cancelled(reason, run)}
-      reason -> {:done, {:error, reason, result(run, nil, :error)}}
+      nil ->
+        {:events, events, run}
+
+      reason ->
+        {:error, reason, run}
     end
   end
 
@@ -1047,48 +1041,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp dispatch_tool_job(job, run) do
-    case Call.cancellation(run.cancel_ref) do
-      {:cancelled, reason} ->
-        {:cancelled, reason, run}
-
-      :continue ->
-        with {:ok, run} <- History.dispatch(run, [job.op_id]) do
-          Alto.Events.notify(
-            run.event_sink,
-            Event.live(:tool_started, %{
-              call_id: job.id,
-              operation_id: job.op_id,
-              run_id: run.tool_context.session_id,
-              name: job.name,
-              summary: job.summary
-            })
-          )
-
-          # : remember the dispatched operation so a later cancellation
-          # can record uncertainty instead of silence. Cleared on every
-          # supervised return; only a cancellation leaves it behind.
-          run =
-            Map.put(run, :in_flight, %{
-              call_id: job.id,
-              operation_id: job.op_id,
-              name: job.name,
-              origin: job.origin
-            })
-
-          case Alto.Runner.Execution.Tool.invoke(job.tool, job.prepared, run) do
-            {:ok, outcome} ->
-              finish_tool_job(job, {:participant, outcome}, Map.delete(run, :in_flight))
-
-            {:error, reason} ->
-              finish_tool_job(job, {:uncertain, reason}, Map.delete(run, :in_flight))
-
-            {:cancelled, reason} ->
-              {:cancelled, reason, run}
-          end
-        end
-    end
-  end
+  defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([job], run)
 
   defp finish_tool_job(job, {:participant, outcome}, run) do
     tool_outcome(job, outcome, run)
@@ -1274,38 +1227,7 @@ defmodule Alto.Runner.Execution do
   defp fetch_tool(_tools, name), do: {:error, {:invalid_tool_name, name}}
 
   defp cancelled(reason, run) do
-    run =
-      case Map.get(run, :in_flight) do
-        %{call_id: id, operation_id: op_id, name: name, origin: origin} ->
-          case tool_failure(
-                 %{id: id, name: name, op_id: op_id, origin: origin},
-                 {:cancelled, reason},
-                 :unknown,
-                 Map.delete(run, :in_flight)
-               ) do
-            {:event, event, next} ->
-              Events.record(next, event) |> Map.put(:in_flight, run.in_flight)
-
-            {:error, _, next} ->
-              next |> Map.put(:in_flight, run.in_flight)
-          end
-
-        _ ->
-          run
-      end
-
-    in_flight =
-      case Map.get(run, :in_flight) do
-        nil ->
-          nil
-
-        %{call_id: call_id, operation_id: op_id, name: name} ->
-          %{call_id: call_id, operation_id: op_id, name: name, outcome: :unknown}
-      end
-
-    run =
-      Events.record(run, Event.durable(:run_cancelled, %{reason: reason, in_flight: in_flight}))
-
+    run = Events.record(run, Event.durable(:run_cancelled, %{reason: reason}))
     {:error, {:cancelled, reason}, result(run, nil, :cancelled)}
   end
 

@@ -5,8 +5,7 @@ defmodule Alto.Runner.SerialOutcomeTest do
   The runner tags `tool_completed` (`:completed`) and `tool_failed`
   (`:rejected_before_dispatch` / `:failed_known` / `:unknown`) without
   changing event types, loop behavior, or tool return values. Cancellation
-  after dispatch preserves uncertainty in the `run_cancelled` event's
-  `in_flight` evidence; the runner never retries a tool.
+  after dispatch preserves uncertainty in the operation's `tool_failed` event; the runner never retries a tool.
   """
 
   use ExUnit.Case, async: true
@@ -240,16 +239,11 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
 
-      assert %{
-               reason: :operator_stop,
-               in_flight: %{
-                 call_id: "op-1",
-                 name: "blocker",
-                 outcome: :unknown
-               }
-             } = cancelled.data
+      assert %{reason: :operator_stop} = cancelled.data
+      assert [failed] = Enum.filter(result.events, &(&1.type == :tool_failed))
+      assert %{call_id: "op-1", name: "blocker", outcome: :unknown} = failed.data
+      assert is_binary(failed.data.operation_id)
 
-      assert is_binary(cancelled.data.in_flight.operation_id)
       assert result.verdict == :unknown
     end
 
@@ -266,7 +260,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
       assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle, 5_000)
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
-      assert %{reason: :operator_stop, in_flight: nil} = cancelled.data
+      assert %{reason: :operator_stop} = cancelled.data
+      refute Enum.any?(result.events, &(&1.type == :tool_failed))
     end
   end
 

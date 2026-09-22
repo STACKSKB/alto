@@ -111,7 +111,9 @@ defmodule Alto.Tools.TransformTest do
     assert request.arguments == original
     assert request.details["alto_transformed_arguments"] == %{"path" => "/tmp/file.txt"}
 
-    assert {:ok, {:ok, %{"path" => "/tmp/file.txt"}}} = ExecutionTool.invoke(tool, prepared, caps)
+    assert {:ok, [{:ok, {:ok, %{"path" => "/tmp/file.txt"}}}]} =
+             Alto.Runner.ToolBatch.run([{tool, prepared}], caps)
+
     refute_received {:transformed, _, _}
   end
 

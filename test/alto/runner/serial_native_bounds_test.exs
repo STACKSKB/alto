@@ -146,7 +146,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
                max_tool_result_bytes: 100
              )
 
-    assert {:failed, %{error: {:tool_failure_too_large, %{limit: 100}}}} = result.output
+    assert {:failed, %{error: {:tool_result_too_large, %{limit: 100}}}} = result.output
     failed = Enum.find(result.events, &(&1.type == :tool_failed))
     assert failed.data.outcome == :unknown
     assert failed.data.operation_id

@@ -56,10 +56,6 @@ defmodule Alto.Runner.Execution.Events do
     merge_verdict(run, Map.get(data, :outcome, :empty))
   end
 
-  defp merge_event_verdict(run, %{type: :run_cancelled, data: %{in_flight: in_flight}})
-       when not is_nil(in_flight),
-       do: merge_verdict(run, :unknown)
-
   defp merge_event_verdict(run, _event), do: run
 
   def add_persistence_error(run, reason) do

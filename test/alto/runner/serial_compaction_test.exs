@@ -194,6 +194,54 @@ defmodule Alto.Runner.SerialCompactionTest do
     end
   end
 
+  defmodule NativeBatchLoop do
+    @behaviour Alto.Loop
+
+    def init(_task, _spec) do
+      calls =
+        for id <- ["first", "second"],
+            do: %{
+              id: id,
+              name: "echo",
+              arguments_json: JSON.encode!(%{value: String.duplicate("x", 300)})
+            }
+
+      Alto.Transition.continue(0, [Alto.Effect.run_tools(calls, 2)])
+    end
+
+    def handle_event(%Event{type: :tool_completed}, count, _) do
+      if count == 1,
+        do: Alto.Transition.stop(2, :done),
+        else: Alto.Transition.continue(1)
+    end
+  end
+
+  test "batch settlement records earlier tool outcomes before later compaction", %{dir: dir} do
+    assert {:ok, result} =
+             Alto.run(
+               String.duplicate("t", 800),
+               base_opts(
+                 loop: Alto.loop(NativeBatchLoop),
+                 prompt: nil,
+                 session: :new,
+                 session_dir: dir,
+                 max_transcript_bytes: 1500,
+                 compaction: [
+                   strategy: {DeterministicReducer, owner: self()},
+                   keep_recent_messages: 1
+                 ]
+               )
+             )
+
+    assert result.output == :done
+
+    assert Enum.filter(
+             Enum.map(result.events, & &1.type),
+             &(&1 in [:tool_completed, :context_compacted])
+           ) ==
+             [:tool_completed, :context_compacted, :tool_completed]
+  end
+
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-compact-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)

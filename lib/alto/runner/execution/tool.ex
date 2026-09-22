@@ -92,27 +92,6 @@ defmodule Alto.Runner.Execution.Tool do
     decision
   end
 
-  @doc "Invoke a prepared value exactly once under the tool bound.
-
-  The supervision envelope is retained so hosts can distinguish a
-  participant-reported failure from a crashed or timed out participant.
-  "
-  def invoke(tool, prepared, caps) do
-    context = caps.tool_context
-
-    case Call.cancellation(caps.cancel_ref) do
-      {:cancelled, reason} ->
-        {:cancelled, reason}
-
-      :continue ->
-        Call.run(
-          fn -> invoke_tool(tool, prepared, context) end,
-          Budget.timeout(caps.budget, caps.tool_timeout),
-          caps.cancel_ref
-        )
-    end
-  end
-
   @doc "Check native result size before event retention or persistence."
   def check_native_result(value, limit) when is_integer(limit) and limit > 0 do
     size = :erlang.external_size(value)
