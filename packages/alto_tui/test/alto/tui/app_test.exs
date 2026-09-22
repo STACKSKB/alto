@@ -700,10 +700,16 @@ defmodule Alto.TUI.AppTest do
     state = App.attach_run(%{state | selected_task_id: "task"}, "run", run, "hello", "starting")
     params = %{"threadId" => "thread", "turnId" => "turn", "delta" => "Thinking"}
 
+    other_turn =
+      {:notification, "turn/completed",
+       %{"threadId" => "thread", "turn" => %{"id" => "other", "status" => "completed"}}}
+
     pending = [
+      other_turn,
       {:notification, "item/reasoning/textDelta", params},
       {:notification, "item/agentMessage/delta", %{params | "delta" => "Answer"}},
-      {:notification, "turn/completed", Map.put(params, "turn", %{"status" => "completed"})}
+      {:notification, "turn/completed",
+       %{"threadId" => "thread", "turn" => %{"id" => "turn", "status" => "completed"}}}
     ]
 
     state = put_in(state.backend_state[Codex].pending_messages, pending)
@@ -715,7 +721,7 @@ defmodule Alto.TUI.AppTest do
              )
 
     assert state.runs == %{}
-    assert state.backend_state[Codex].pending_messages == []
+    assert state.backend_state[Codex].pending_messages == [other_turn]
     assert state.notice == "Codex run completed"
 
     assert Enum.any?(

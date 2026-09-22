@@ -589,14 +589,15 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp reconnect_codex_account(state), do: state
 
-  defp find_codex_run(state, params) do
+  defp find_codex_run(state, params),
+    do: Enum.find(state.runs, fn {_id, run} -> matches_codex_run?(run, params) end)
+
+  defp matches_codex_run?(run, params) do
     thread_id = Map.get(params, "threadId") || Map.get(params, "conversationId")
     turn_id = Map.get(params, "turnId") || get_in(params, ["turn", "id"])
 
-    Enum.find(state.runs, fn {_id, run} ->
-      run.kind == :codex and run.thread_id == thread_id and
-        (is_nil(turn_id) or is_nil(run.turn_id) or run.turn_id == turn_id)
-    end)
+    run.kind == :codex and run.thread_id == thread_id and
+      (is_nil(turn_id) or is_nil(run.turn_id) or run.turn_id == turn_id)
   end
 
   defp maybe_buffer_codex_event(state, method, params) do
@@ -610,10 +611,7 @@ defmodule Alto.TUI.Backends.Codex do
   defp replay_codex_messages(state, run) do
     {matching, rest} =
       Enum.split_with(data(state).pending_messages, fn message ->
-        params = elem(message, tuple_size(message) - 1)
-
-        (params["threadId"] || params["conversationId"]) == run.thread_id and
-          (is_nil(params["turnId"]) or params["turnId"] == run.turn_id)
+        matches_codex_run?(run, elem(message, tuple_size(message) - 1))
       end)
 
     state = put_in(state.backend_state[__MODULE__].pending_messages, rest)
