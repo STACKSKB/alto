@@ -17,13 +17,7 @@ defmodule Alto.Workspaces.GitPatch do
          {:ok, reverse} <-
            Git.command(target, ["apply", "--reverse", "--numstat", "-z", "--", patch_path], opts),
          {:ok, paths} <- paths(forward <> reverse),
-         {:ok, files} <- snapshots(target, paths),
-         {:ok, _} <-
-           Git.command(
-             target,
-             ["apply", "--check", "--whitespace=nowarn", "--", patch_path],
-             opts
-           ) do
+         {:ok, files} <- snapshots(target, paths) do
       prepared = %{
         "version" => 1,
         "engine" => engine(),
@@ -32,9 +26,7 @@ defmodule Alto.Workspaces.GitPatch do
         "files" => files
       }
 
-      with :ok <- manifest_bound(prepared),
-           :ok <- verify(prepared, patch_path, opts),
-           do: {:ok, prepared}
+      with :ok <- verify(prepared, patch_path, opts), do: {:ok, prepared}
     end
   end
 
