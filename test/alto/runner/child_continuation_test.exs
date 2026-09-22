@@ -98,14 +98,10 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   defmodule Integrate do
-    @behaviour Alto.Tool
-    def name(_opts), do: :integrate
+    use Alto.Tool, name: :integrate, execution_mode: :exclusive, approval: :never
 
     def schema(_opts),
       do: %{description: "Integrate", parameters: %{type: "object", properties: %{}}}
-
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :never
 
     def run(_, context, _opts) do
       File.write!(Path.join(context.cwd, "integration"), "1", [:append])
@@ -114,11 +110,8 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   defmodule First do
-    @behaviour Alto.Tool
-    def name(_opts), do: :first
+    use Alto.Tool, name: :first, execution_mode: :exclusive, approval: :never
     def schema(_opts), do: %{description: "First", parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :never
 
     def run(%{"id" => id}, context, _opts) do
       File.write!(Path.join(context.cwd, "first-" <> id), "1", [:append])
@@ -127,14 +120,10 @@ defmodule Alto.Runner.ChildContinuationTest do
   end
 
   defmodule Guarded do
-    @behaviour Alto.Tool
-    def name(_opts), do: :guarded
+    use Alto.Tool, name: :guarded, execution_mode: :exclusive, approval: :required
 
     def schema(_opts),
       do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
-
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :required
 
     def prepare(%{"id" => id}, context, _opts) do
       File.write!(Path.join(context.cwd, "prepared-" <> id), "1", [:append])

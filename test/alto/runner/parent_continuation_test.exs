@@ -46,8 +46,7 @@ defmodule Alto.Runner.ParentContinuationTest do
   end
 
   defmodule IntegrateTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :integrate
+    use Alto.Tool, name: :integrate, execution_mode: :exclusive, approval: :never
 
     def schema(_opts),
       do: %{
@@ -58,9 +57,6 @@ defmodule Alto.Runner.ParentContinuationTest do
           required: ["value"]
         }
       }
-
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :never
 
     def run(%{"value" => value}, _context, _opts) do
       send(:persistent_term.get({__MODULE__, :observer}), {:integrated, value})

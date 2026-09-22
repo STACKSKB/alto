@@ -2,11 +2,8 @@ defmodule Alto.Runner.ToolBatchTest do
   use ExUnit.Case, async: true
 
   defmodule Read do
-    @behaviour Alto.Tool
-    def name(_), do: :read
+    use Alto.Tool, name: :read, execution_mode: :parallel, approval: :never
     def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_), do: :parallel
-    def approval(_), do: :never
 
     def prepare(args, _context, opts) do
       send(opts[:test_pid], {:prepared, args["value"]})
@@ -27,11 +24,8 @@ defmodule Alto.Runner.ToolBatchTest do
   end
 
   defmodule Write do
-    @behaviour Alto.Tool
-    def name(_), do: :write
+    use Alto.Tool, name: :write, execution_mode: :exclusive, approval: :required
     def schema(_), do: Read.schema([])
-    def execution_mode(_), do: :exclusive
-    def approval(_), do: :required
 
     def run(args, _context, opts) do
       send(opts[:test_pid], {:write, args["value"]})

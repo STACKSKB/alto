@@ -4,11 +4,8 @@ defmodule Alto.Runner.MultimodalTest do
   @png "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCFcAAAAASUVORK5CYII="
 
   defmodule Tool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :picture
+    use Alto.Tool, name: :picture, execution_mode: :parallel, approval: :never
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    def approval(_opts), do: :never
-    def execution_mode(_opts), do: :parallel
     def run(_, _, opts), do: {:ok, opts[:value]}
   end
 

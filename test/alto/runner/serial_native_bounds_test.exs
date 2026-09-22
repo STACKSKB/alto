@@ -245,11 +245,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
 
   test "native failure reasons are bounded before event retention" do
     defmodule HugeFailureTool do
-      @behaviour Alto.Tool
-      def name(_opts), do: :huge_failure
+      use Alto.Tool, name: :huge_failure, execution_mode: :exclusive, approval: :never
       def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-      def execution_mode(_opts), do: :exclusive
-      def approval(_opts), do: :never
       def run(_args, _ctx, _opts), do: {:error, String.duplicate("x", 100_000)}
     end
 

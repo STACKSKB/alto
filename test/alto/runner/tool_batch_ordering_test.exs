@@ -6,12 +6,9 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
   alias Alto.Transition
 
   defmodule Read do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :ordered_read, execution_mode: :parallel, approval: :never
 
-    def name(_), do: :ordered_read
     def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_), do: :parallel
-    def approval(_), do: :never
 
     def prepare(args, _context, opts) do
       send(opts[:owner], {:prepared, args["id"]})
@@ -32,12 +29,9 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
   end
 
   defmodule Probe do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :batch_probe, execution_mode: :exclusive, approval: :never
 
-    def name(_), do: :batch_probe
     def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_), do: :exclusive
-    def approval(_), do: :never
 
     def run(%{"source" => source}, _context, opts) do
       send(opts[:owner], {:probe_started, source})

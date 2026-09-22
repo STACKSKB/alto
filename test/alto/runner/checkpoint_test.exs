@@ -3,11 +3,8 @@ defmodule Alto.Runner.CheckpointTest do
   alias Alto.Runner.{Checkpoint, Serial}
 
   defmodule First do
-    @behaviour Alto.Tool
-    def name(_opts), do: :first
+    use Alto.Tool, name: :first, execution_mode: :exclusive, approval: :never
     def schema(_opts), do: %{description: "First", parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :never
 
     def run(_, context, _opts) do
       File.write!(Path.join(context.cwd, "first"), "1", [:append])
@@ -16,14 +13,10 @@ defmodule Alto.Runner.CheckpointTest do
   end
 
   defmodule Guarded do
-    @behaviour Alto.Tool
-    def name(_opts), do: :guarded
+    use Alto.Tool, name: :guarded, execution_mode: :exclusive, approval: :required
 
     def schema(_opts),
       do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
-
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :required
 
     def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "preparations"), "1", [:append])

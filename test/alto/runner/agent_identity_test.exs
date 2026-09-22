@@ -6,11 +6,8 @@ defmodule Alto.Runner.AgentIdentityTest do
   alias Alto.Transition
 
   defmodule CaptureTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :capture
+    use Alto.Tool, name: :capture, execution_mode: :parallel, approval: :never
     def schema(_opts), do: %{description: "capture", parameters: %{type: "object"}}
-    def execution_mode(_opts), do: :parallel
-    def approval(_opts), do: :never
 
     def run(_arguments, context, opts) do
       send(Keyword.fetch!(opts, :owner), {:identity, context.agent_identity})

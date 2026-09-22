@@ -7,12 +7,9 @@ defmodule Alto.Tools.TransformTest do
   alias Alto.Tools.Transform
 
   defmodule PreparedTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :freeze, execution_mode: :exclusive, approval: :required
 
-    def name(_), do: :freeze
     def schema(_), do: %{description: "Freeze input.", parameters: %{type: "object"}}
-    def execution_mode(_), do: :exclusive
-    def approval(_), do: :required
 
     def prepare(arguments, _context, _opts) do
       {:ok, {:prepared, arguments}, %{approved: arguments}}
@@ -24,12 +21,9 @@ defmodule Alto.Tools.TransformTest do
   end
 
   defmodule RawTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :raw, execution_mode: :parallel, approval: :never
 
-    def name(_), do: :raw
     def schema(_), do: %{description: "Run transformed input.", parameters: %{type: "object"}}
-    def execution_mode(_), do: :parallel
-    def approval(_), do: :never
     def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 

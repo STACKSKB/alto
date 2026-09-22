@@ -3,14 +3,10 @@ defmodule Alto.Runner.DurableBudgetTest do
   alias Alto.{OperationLog, Runner.Budget, Runner.Budget.Account}
 
   defmodule Guarded do
-    @behaviour Alto.Tool
-    def name(_opts), do: :guarded_budget
+    use Alto.Tool, name: :guarded_budget, execution_mode: :exclusive, approval: :required
 
     def schema(_opts),
       do: %{description: "Record prepared value", parameters: %{type: "object", properties: %{}}}
-
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :required
 
     def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "prepared"), "1", [:append])

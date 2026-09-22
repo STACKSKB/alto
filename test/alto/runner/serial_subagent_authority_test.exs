@@ -74,41 +74,29 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
   end
 
   defmodule SafeTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :safe
+    use Alto.Tool, name: :safe, execution_mode: :parallel, approval: :never
     def schema(_opts), do: %{description: "safe", parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_opts), do: :parallel
-    def approval(_opts), do: :never
     def run(_, _context, _opts), do: {:ok, :safe}
   end
 
   defmodule ExtraTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :extra
+    use Alto.Tool, name: :extra, execution_mode: :parallel, approval: :never
     def schema(_opts), do: %{description: "extra", parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_opts), do: :parallel
-    def approval(_opts), do: :never
     def run(_, _context, _opts), do: raise("extra tool dispatched")
   end
 
   defmodule ReplacementSafeTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :safe
+    use Alto.Tool, name: :safe, execution_mode: :parallel, approval: :never
     def schema(_opts), do: SafeTool.schema([])
-    def execution_mode(_opts), do: :parallel
-    def approval(_opts), do: :never
     def run(_, _context, _opts), do: raise("replacement tool dispatched")
   end
 
   defmodule UnknownTool do
-    @behaviour Alto.Tool
-    def name(_opts), do: :unknown_tool
+    use Alto.Tool, name: :unknown_tool, execution_mode: :parallel, approval: :never
 
     def schema(_opts),
       do: %{description: "unknown", parameters: %{type: "object", properties: %{}}}
 
-    def execution_mode(_opts), do: :parallel
-    def approval(_opts), do: :never
     def run(_, _, _opts), do: {:unknown, :transport_lost}
   end
 

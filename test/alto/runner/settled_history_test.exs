@@ -2,11 +2,8 @@ defmodule Alto.Runner.SettledHistoryTest do
   use ExUnit.Case, async: true
 
   defmodule Change do
-    @behaviour Alto.Tool
-    def name(_opts), do: :change
+    use Alto.Tool, name: :change, execution_mode: :exclusive, approval: :required
     def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode(_opts), do: :exclusive
-    def approval(_opts), do: :required
 
     def run(_, context, opts) do
       File.write!(Path.join(context.cwd, "changed"), "yes")
