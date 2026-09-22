@@ -13,8 +13,7 @@ defmodule Alto.Subagents.Policy do
     max_children: [type: :pos_integer, required: true],
     max_concurrency: [type: :pos_integer, required: true],
     sessions: [type: {:in, [:shared, :separate]}, default: :shared],
-    workspaces: [type: :any, default: nil],
-    journal: [type: :any, default: nil]
+    workspaces: [type: :any, default: nil]
   ]
 
   def implementation?(module), do: Alto.Capabilities.implements?(module, __MODULE__)
@@ -40,8 +39,7 @@ defmodule Alto.Subagents.Policy do
       max_children: 1,
       max_concurrency: 1,
       sessions: :shared,
-      workspaces: nil,
-      journal: nil
+      workspaces: nil
     }
 
   def limits!(policy) do
@@ -76,18 +74,18 @@ defmodule Alto.Subagents.Policy do
     state =
       cond do
         is_map(state) ->
-          Map.drop(state, [:workspaces, :journal])
+          Map.delete(state, :workspaces)
 
         is_list(state) ->
           if Keyword.keyword?(state),
-            do: Keyword.drop(state, [:workspaces, :journal]),
+            do: Keyword.delete(state, :workspaces),
             else: state
 
         true ->
           state
       end
 
-    limits = limits |> Map.update!(:workspaces, resource) |> Map.update!(:journal, resource)
+    limits = Map.update!(limits, :workspaces, resource)
     %{module: module, code: module.module_info(:md5), state: state, limits: limits}
   end
 

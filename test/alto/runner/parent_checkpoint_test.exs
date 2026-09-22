@@ -176,19 +176,19 @@ defmodule Alto.Runner.ParentCheckpointTest do
     ref = Process.monitor(dead)
     assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
 
-    for nested <- [{HostChildPolicy, journal: dead}] do
-      nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
+    manager = Alto.Workspaces.new(root: Path.join(context.dir, "workers"), ledger: dead)
+    nested = {HostChildPolicy, workspaces: manager}
+    nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
 
-      assert {:error, {:durable_identity_unavailable, _}} =
-               Checkpoint.capture_parent(nested_options, pending, [], :continue)
-    end
+    assert {:error, {:durable_identity_unavailable, _}} =
+             Checkpoint.capture_parent(nested_options, pending, [], :continue)
   end
 
   test "keyword policy state normalizes resource identity just like a built-in struct" do
     resource = fn _ -> %{id: "stable-ledger"} end
 
-    assert Alto.Subagents.Policy.fingerprint({HostChildPolicy, journal: :first}, resource) ==
-             Alto.Subagents.Policy.fingerprint({HostChildPolicy, journal: :second}, resource)
+    assert Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :first}, resource) ==
+             Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :second}, resource)
   end
 
   test "restored authority is the intersection of saved and current ceilings", context do
