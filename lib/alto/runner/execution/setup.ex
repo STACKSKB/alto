@@ -216,15 +216,20 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_approval(module) when is_atom(module), do: {:ok, {module, []}}
   defp normalize_approval(other), do: {:error, {:invalid_approval, other}}
 
-  # Resume reuses stored history verbatim; prompt options are only evaluated
-  # for fresh runs, since the history already carries its system message.
+  # Continuations restore their exact transcript after capabilities are opened.
+  # Conversation resumes reuse history; only fresh runs build a system prompt.
   defp init_transcript(task, opts, cwd, tools, provider, max_transcript_bytes) do
-    if Keyword.has_key?(opts, :resume) do
-      with {:ok, history} <- resume_history(Keyword.fetch!(opts, :resume)) do
-        prepend_task(task, history, max_transcript_bytes)
-      end
-    else
-      fresh_transcript(task, opts, cwd, tools, provider, max_transcript_bytes)
+    cond do
+      opts[:checkpoint] || opts[:continuation] ->
+        {:ok, [], 0}
+
+      Keyword.has_key?(opts, :resume) ->
+        with {:ok, history} <- resume_history(Keyword.fetch!(opts, :resume)) do
+          prepend_task(task, history, max_transcript_bytes)
+        end
+
+      true ->
+        fresh_transcript(task, opts, cwd, tools, provider, max_transcript_bytes)
     end
   end
 

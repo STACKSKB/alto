@@ -120,13 +120,20 @@ defmodule Alto.Runner.CheckpointTest do
     dir: dir,
     opts: opts
   } do
+    owner = self()
+
     opts =
       opts
       |> Keyword.put(:loop, Alto.default_loop())
       |> Keyword.put(:provider, {Provider, owner: self()})
+      |> Keyword.put(:prompt, fn _context ->
+        send(owner, :prompt_built)
+        "Saved system prompt"
+      end)
 
     assert {:error, :approval_suspended, suspended} = Serial.run("do the work", opts)
     assert_receive {:model_request, _}
+    assert_receive :prompt_built
     assert suspended.checkpoint["request"]["call_id"] == "guarded-call"
 
     assert {:ok, completed} =
@@ -139,6 +146,8 @@ defmodule Alto.Runner.CheckpointTest do
     assert completed.model_requests == 2
     assert completed.usage.total_tokens == 11
     assert_receive {:model_request, messages}
+    assert hd(messages) == %{"role" => "system", "content" => "Saved system prompt"}
+    refute_receive :prompt_built, 50
     assert Enum.count(messages, &(&1["role"] == "tool")) == 2
     assert File.read!(Path.join(dir, "first")) == "1"
     refute_receive {:model_request, _}, 50
