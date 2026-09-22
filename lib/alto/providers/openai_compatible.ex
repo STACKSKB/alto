@@ -17,7 +17,6 @@ defmodule Alto.Providers.OpenAICompatible do
   @config_schema HTTPOptions.stream_schema()
   @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
                    [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
-  @default_max_models_response_bytes 8_000_000
   @models_state_key :alto_openai_compatible_models
 
   @impl true
@@ -36,8 +35,8 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, response} <- models_request(config),
-         {:ok, models} <- models_result(response) do
+         {:ok, status, state} <- models_request(config),
+         {:ok, models} <- models_result(status, state) do
       {:ok, models}
     end
   rescue
@@ -222,14 +221,15 @@ defmodule Alto.Providers.OpenAICompatible do
       ] ++ config.req_options
 
     case Req.get(options) do
-      {:ok, response} -> {:ok, response}
-      {:error, error} -> {:error, {:transport_error, error}}
+      {:ok, response} ->
+        {:ok, response.status, Req.Response.get_private(response, @models_state_key, state)}
+
+      {:error, error} ->
+        {:error, {:transport_error, error}}
     end
   end
 
-  defp models_result(%Req.Response{status: status} = response) when status in 200..299 do
-    state = models_state(response)
-
+  defp models_result(status, state) when status in 200..299 do
     with nil <- state.error,
          body <- state.chunks |> Enum.reverse() |> IO.iodata_to_binary(),
          {:ok, decoded} <- JSON.decode(body),
@@ -244,20 +244,10 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp models_result(%Req.Response{status: status} = response) do
-    state = models_state(response)
+  defp models_result(status, state) do
     body = state.chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
     {:error, {:http_error, status, StreamEnvelope.decode_error_body(body)}}
-  end
-
-  defp models_state(response) do
-    Req.Response.get_private(response, @models_state_key, %{
-      chunks: [],
-      bytes: 0,
-      error: nil,
-      limit: @default_max_models_response_bytes
-    })
   end
 
   defp consume_models_chunk(state, status, data) do
