@@ -220,6 +220,24 @@ defmodule Alto.QueueAdmissionTest do
       assert %{pending: 1, claimed: 4} = Queue.count(name)
     end
 
+    test "a fitting prefix does not inspect records beyond the first oversized record", %{
+      dir: dir,
+      id: id
+    } do
+      %{name: name} = start_queue!(id: id, dir: dir)
+      {:ok, _} = Queue.put(name, "small", %{text: "deliverable"})
+      {:ok, _} = Queue.put(name, "big", %{text: String.duplicate("x", 5_000)})
+      {:ok, invalid} = Queue.put(name, "invalid", %{text: <<255>>})
+
+      assert {:ok, [%{key: "small"} = claimed]} = Queue.claim_bounded(name, 3, nil, 1_000)
+      assert %{pending: 2, claimed: 1} = Queue.count(name)
+      assert :ok = Queue.ack(name, claimed.claim_id)
+      assert :ok = Queue.cancel(name, "big")
+      assert {:error, {:queue_unencodable, id}} = Queue.claim_bounded(name, 1, nil, 1_000)
+      assert id == invalid.id
+      assert %{pending: 1, claimed: 0} = Queue.count(name)
+    end
+
     test "a lone oversized head leases nothing and names the record", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
       {:ok, _} = Queue.put(name, "big", %{pad: String.duplicate("x", 5_000)})

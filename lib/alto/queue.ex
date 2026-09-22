@@ -724,12 +724,25 @@ defmodule Alto.Queue do
   # record is deliverable and an encoding failure never strands a lease.
   defp select_fitting(records, :infinity), do: {:ok, records}
 
-  defp select_fitting([], _budget), do: {:ok, []}
+  defp select_fitting(records, budget) when is_integer(budget),
+    do: fitting_prefix(records, budget - 2, [])
 
-  defp select_fitting([head | _] = records, budget) when is_integer(budget) do
-    case Alto.Result.traverse(records, &wire_size/1) do
-      {:ok, sizes} -> fitting_prefix(records, sizes, budget)
-      {:error, _reason} -> {:error, {:queue_unencodable, head.id}}
+  # Reserve array brackets up front and the next separator after each record.
+  defp fitting_prefix([], _remaining, kept), do: {:ok, Enum.reverse(kept)}
+
+  defp fitting_prefix([record | rest], remaining, kept) do
+    case wire_size(record) do
+      {:ok, size} when size <= remaining ->
+        fitting_prefix(rest, remaining - size - 1, [record | kept])
+
+      {:ok, size} when kept == [] ->
+        {:error, {:record_too_large, %{id: record.id, key: record.key, size: size}}}
+
+      {:ok, _size} ->
+        {:ok, Enum.reverse(kept)}
+
+      {:error, _reason} ->
+        {:error, {:queue_unencodable, record.id}}
     end
   end
 
@@ -745,31 +758,6 @@ defmodule Alto.Queue do
     {:ok, size}
   rescue
     error -> {:error, Exception.message(error)}
-  end
-
-  # Encoded JSON-array bytes of the claimed views: brackets plus commas.
-  defp fitting_prefix(records, sizes, budget) do
-    {fitting, _} =
-      Enum.zip(records, sizes)
-      |> Enum.reduce_while({[], 2}, fn {record, size}, {kept, total} ->
-        total = total + size + if(kept == [], do: 0, else: 1)
-
-        if total <= budget do
-          {:cont, {[record | kept], total}}
-        else
-          {:halt, {kept, total}}
-        end
-      end)
-
-    case Enum.reverse(fitting) do
-      [] ->
-        [head | _] = records
-        [size | _] = sizes
-        {:error, {:record_too_large, %{id: head.id, key: head.key, size: size}}}
-
-      fitting ->
-        {:ok, fitting}
-    end
   end
 
   # Expired leases revert lazily: no timer, no scheduler — a claim dies
