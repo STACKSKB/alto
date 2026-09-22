@@ -6,8 +6,7 @@ defmodule Alto.Tools.ListFiles do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @max_entries 500
-  @options_schema [max_entries: [type: :pos_integer, default: @max_entries]]
+  @options_schema [max_entries: [type: :pos_integer, default: 500]]
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
@@ -16,12 +15,12 @@ defmodule Alto.Tools.ListFiles do
     Alto.Tool.object_schema(
       "List one directory inside the workspace (non-recursive and bounded).",
       %{
-        path: %{type: "string", description: "Directory path; defaults to the workspace root."}
+        path: %{
+          type: "string",
+          description:
+            "Directory path; defaults to the workspace root (up to #{limits.max_entries} entries)."
+        }
       }
-    )
-    |> put_in(
-      [:parameters, :properties, :path, :description],
-      "Directory path; defaults to the workspace root (up to #{limits.max_entries} entries)."
     )
   end
 

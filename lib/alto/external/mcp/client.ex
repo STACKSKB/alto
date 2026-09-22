@@ -13,9 +13,6 @@ defmodule Alto.External.MCP.Client do
 
   @protocol_version "2025-11-25"
   @default_timeout 30_000
-  @default_max_message_bytes 2_000_000
-  @default_max_pending_requests 128
-  @default_max_ready_waiters 128
 
   @type server_options :: keyword()
 
@@ -143,9 +140,9 @@ defmodule Alto.External.MCP.Client do
     protocol_version: [type: :any, default: @protocol_version],
     startup_timeout: [type: :pos_integer, default: @default_timeout],
     request_timeout: [type: :pos_integer, default: @default_timeout],
-    max_message_bytes: [type: :pos_integer, default: @default_max_message_bytes],
-    max_pending_requests: [type: :pos_integer, default: @default_max_pending_requests],
-    max_ready_waiters: [type: :pos_integer, default: @default_max_ready_waiters]
+    max_message_bytes: [type: :pos_integer, default: 2_000_000],
+    max_pending_requests: [type: :pos_integer, default: 128],
+    max_ready_waiters: [type: :pos_integer, default: 128]
   ]
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)

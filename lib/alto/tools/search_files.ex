@@ -7,20 +7,14 @@ defmodule Alto.Tools.SearchFiles do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @max_query_bytes 1_024
-  @max_files 2_000
-  @max_entries 10_000
-  @max_file_bytes 1_000_000
-  @max_matches 100
-  @max_line_graphemes 300
   @options_schema [
     backend: [type: :any, default: __MODULE__],
-    max_query_bytes: [type: :pos_integer, default: @max_query_bytes],
-    max_files: [type: :pos_integer, default: @max_files],
-    max_entries: [type: :pos_integer, default: @max_entries],
-    max_file_bytes: [type: :pos_integer, default: @max_file_bytes],
-    max_matches: [type: :pos_integer, default: @max_matches],
-    max_line_graphemes: [type: :pos_integer, default: @max_line_graphemes],
+    max_query_bytes: [type: :pos_integer, default: 1_024],
+    max_files: [type: :pos_integer, default: 2_000],
+    max_entries: [type: :pos_integer, default: 10_000],
+    max_file_bytes: [type: :pos_integer, default: 1_000_000],
+    max_matches: [type: :pos_integer, default: 100],
+    max_line_graphemes: [type: :pos_integer, default: 300],
     excluded_directories: [
       type: {:list, :string},
       default: [".git", "_build", "deps", "node_modules"]

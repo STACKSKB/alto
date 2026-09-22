@@ -12,12 +12,7 @@ defmodule Alto.Codex.AppServer.Client do
   alias Alto.External.JSONRPC
   alias Alto.External.Process, as: ExternalProcess
 
-  @default_timeout 30_000
   @default_turn_timeout 120_000
-  @default_max_message_bytes 8_000_000
-  @default_max_pending_requests 128
-  @default_max_ready_waiters 128
-  @default_max_subscribers 128
 
   @type options :: keyword()
 
@@ -213,12 +208,12 @@ defmodule Alto.Codex.AppServer.Client do
     cwd: [type: :string],
     env: [type: {:map, :any, :any}, default: %{}],
     instance: [type: :any, default: :shared],
-    startup_timeout: [type: :pos_integer, default: @default_timeout],
+    startup_timeout: [type: :pos_integer, default: 30_000],
     request_timeout: [type: :pos_integer, default: @default_turn_timeout],
-    max_message_bytes: [type: :pos_integer, default: @default_max_message_bytes],
-    max_pending_requests: [type: :pos_integer, default: @default_max_pending_requests],
-    max_ready_waiters: [type: :pos_integer, default: @default_max_ready_waiters],
-    max_subscribers: [type: :pos_integer, default: @default_max_subscribers]
+    max_message_bytes: [type: :pos_integer, default: 8_000_000],
+    max_pending_requests: [type: :pos_integer, default: 128],
+    max_ready_waiters: [type: :pos_integer, default: 128],
+    max_subscribers: [type: :pos_integer, default: 128]
   ]
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)

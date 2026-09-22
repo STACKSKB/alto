@@ -11,13 +11,12 @@ defmodule Alto.Tools.EditFile do
   @max_file_bytes 1_000_000
   @max_replacement_bytes 256_000
   @max_edit_input_bytes @max_file_bytes + @max_replacement_bytes
-  @max_edits 100
   @preview_bytes 4_096
   @patch_bytes 16_384
   @options_schema [
     max_file_bytes: [type: :pos_integer, default: @max_file_bytes],
     max_replacement_bytes: [type: :pos_integer, default: @max_replacement_bytes],
-    max_edits: [type: :pos_integer, default: @max_edits],
+    max_edits: [type: :pos_integer, default: 100],
     max_input_bytes: [type: :pos_integer, default: @max_edit_input_bytes],
     preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
     patch_bytes: [type: :non_neg_integer, default: @patch_bytes]

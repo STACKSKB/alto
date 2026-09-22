@@ -10,8 +10,7 @@ defmodule Alto.Tools.ReadFile do
   # expanded. Leave enough headroom for the runner's default native result
   # bound instead of advertising a content limit that can be rejected after
   # the read has already completed.
-  @max_bytes 47_000
-  @options_schema [max_bytes: [type: :pos_integer, default: @max_bytes]]
+  @options_schema [max_bytes: [type: :pos_integer, default: 47_000]]
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do

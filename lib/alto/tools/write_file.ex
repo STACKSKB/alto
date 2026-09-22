@@ -7,10 +7,9 @@ defmodule Alto.Tools.WriteFile do
   alias Alto.Tools.FileChange
   alias Alto.Tools.Path, as: SafePath
 
-  @max_bytes 256_000
   @preview_bytes 4_096
   @options_schema [
-    max_bytes: [type: :pos_integer, default: @max_bytes],
+    max_bytes: [type: :pos_integer, default: 256_000],
     preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
     diff_bytes: [type: :non_neg_integer, default: 16_384]
   ]

@@ -9,20 +9,17 @@ defmodule Alto.Tools.ReadImage do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @default_max_encoded_bytes 1_000_000
   @hard_max_encoded_bytes 8_000_000
-  @default_max_dimension 8_192
   @hard_max_dimension 16_384
-  @default_max_pixels 20_000_000
   @hard_max_pixels 40_000_000
 
   @options_schema [
     max_encoded_bytes: [
       type: {:in, 1..@hard_max_encoded_bytes},
-      default: @default_max_encoded_bytes
+      default: 1_000_000
     ],
-    max_dimension: [type: {:in, 1..@hard_max_dimension}, default: @default_max_dimension],
-    max_pixels: [type: {:in, 1..@hard_max_pixels}, default: @default_max_pixels],
+    max_dimension: [type: {:in, 1..@hard_max_dimension}, default: 8_192],
+    max_pixels: [type: {:in, 1..@hard_max_pixels}, default: 20_000_000],
     processor: [type: :any, default: nil]
   ]
 
