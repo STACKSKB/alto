@@ -13,7 +13,7 @@ defmodule Alto.Runner.Checkpoint do
   alias Alto.Persistence.Codec
   alias Alto.OperationLog
   @limit 1_000_000
-  @continuation_format 1
+  @continuation_format 2
   @fields [
     :messages_rev,
     :transcript_bytes,
@@ -31,7 +31,7 @@ defmodule Alto.Runner.Checkpoint do
 
   def capture(run, pending, remaining, terminal) do
     driver = run.spec.driver
-    frame = %{pending: pending, remaining: remaining, terminal: terminal}
+    frame = %{pending: pending.job, remaining: remaining, terminal: terminal}
 
     with true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
          true <- function_exported?(driver, :dump_checkpoint, 2),

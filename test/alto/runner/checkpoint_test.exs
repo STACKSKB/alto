@@ -21,7 +21,7 @@ defmodule Alto.Runner.CheckpointTest do
     def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "preparations"), "1", [:append])
       value = File.read!(Path.join(context.cwd, "input"))
-      {:ok, %{value: value}, %{value: value}}
+      {:ok, %{value: value}, %{value: value, prepared_by: self()}}
     end
 
     def run_prepared(prepared, context, _opts) do
@@ -104,6 +104,7 @@ defmodule Alto.Runner.CheckpointTest do
   } do
     assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
     assert suspended.checkpoint["request"]["tool"] == "guarded"
+    assert %{"$inspect" => _} = suspended.checkpoint["request"]["details"]["prepared_by"]
     assert File.read!(Path.join(dir, "first")) == "1"
     refute File.exists?(Path.join(dir, "guarded"))
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
@@ -175,6 +176,13 @@ defmodule Alto.Runner.CheckpointTest do
       |> Keyword.put(:checkpoint, {result.checkpoint, :approve})
 
     assert {:error, :checkpoint_mismatch, _} = Serial.run("{}", changed)
+    refute File.exists?(Path.join(dir, "guarded"))
+
+    obsolete = Map.put(result.checkpoint, "continuation_format", 1)
+
+    assert {:error, :invalid_checkpoint, _} =
+             Serial.run("{}", Keyword.put(opts, :checkpoint, {obsolete, :approve}))
+
     refute File.exists?(Path.join(dir, "guarded"))
 
     for value <- [self(), make_ref(), fn -> :ok end] do

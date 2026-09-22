@@ -356,7 +356,7 @@ defmodule Alto.Runner.Execution do
              run
            ),
          :ok <- Budget.check(restored.budget),
-         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.request.tool) do
+         {:ok, tool} <- fetch_tool(restored.tools, frame.pending.name) do
       resume_validated(restored, frame, tool, decision, opts)
     else
       {:error, reason} -> ungranted_checkpoint(run, reason)
@@ -398,34 +398,14 @@ defmodule Alto.Runner.Execution do
   end
 
   defp execute_checkpoint(run, frame, tool, decision) do
-    pending = frame.pending
+    job = frame.pending
 
     interpreted =
       if decision == :approve do
-        dispatch_tool_job(
-          %{
-            id: pending.request.call_id,
-            name: pending.request.tool,
-            arguments: pending.request.arguments,
-            prepared: pending.prepared,
-            tool: tool,
-            op_id: pending.request.operation_id,
-            origin: pending.origin,
-            summary: tool_summary(run, pending.request.tool, pending.request.arguments)
-          },
-          run
-        )
+        job = Map.merge(job, %{tool: tool, summary: tool_summary(run, job.name, job.arguments)})
+        dispatch_tool_job(job, run)
       else
-        finish_tool_job(
-          %{
-            id: pending.request.call_id,
-            name: pending.request.tool,
-            op_id: pending.request.operation_id,
-            origin: pending.origin
-          },
-          {:rejected, {:approval_denied, :user}},
-          run
-        )
+        finish_tool_job(job, {:rejected, {:approval_denied, :user}}, run)
       end
 
     finish_effect(interpreted, frame.remaining, run, frame.terminal)
@@ -828,7 +808,7 @@ defmodule Alto.Runner.Execution do
             dispatch_tool_job(job, run)
 
           {:suspend, request} ->
-            {:suspend, %{request: request, prepared: job.prepared, origin: origin}, run}
+            {:suspend, %{request: request, job: Map.drop(job, [:tool, :summary])}, run}
 
           {:deny, reason} ->
             finish_tool_job(job, {:rejected, {:approval_denied, reason}}, run)
