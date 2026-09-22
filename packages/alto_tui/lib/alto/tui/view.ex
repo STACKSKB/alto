@@ -661,54 +661,43 @@ defmodule Alto.TUI.View do
       cond do
         settings_width < 48 ->
           [
-            %{target: {:setting, :backend}, text: " B:#{String.first(backend_label(state))} "},
-            %{target: {:setting, :approval}, text: " A:#{mini_approval_label(state)} "},
-            %{target: {:setting, :entry_mode}, text: " E:#{mini_entry_label(state)} "},
-            %{target: {:setting, :details}, text: " D:#{mini_context_label(state)} "},
-            %{target: {:setting, :provider}, text: " P:… "},
-            %{target: {:setting, :model}, text: " M:… "}
+            {:backend, " B:#{String.first(backend_label(state))} "},
+            {:approval, " A:#{mini_approval_label(state)} "},
+            {:entry_mode, " E:#{mini_entry_label(state)} "},
+            {:details, " D:#{mini_context_label(state)} "},
+            {:provider, " P:… "},
+            {:model, " M:… "}
           ]
 
         settings_width < 112 ->
           label_width = settings_width |> Kernel.-(39) |> div(2) |> max(1) |> min(13)
 
           [
-            %{target: {:setting, :backend}, text: " B:#{backend_label(state)} "},
-            %{target: {:setting, :approval}, text: " A:#{approval_label(state.approval_level)} "},
-            %{target: {:setting, :entry_mode}, text: " E:#{entry_mode_label(state)} "},
-            %{target: {:setting, :details}, text: " D:#{context_label(state)} "},
-            %{target: {:setting, :provider}, text: " P:#{short(provider, label_width)} "},
-            %{
-              target: {:setting, :model},
-              text: " M:#{short(state.selected_model || "choose…", label_width)} "
-            }
+            {:backend, " B:#{backend_label(state)} "},
+            {:approval, " A:#{approval_label(state.approval_level)} "},
+            {:entry_mode, " E:#{entry_mode_label(state)} "},
+            {:details, " D:#{context_label(state)} "},
+            {:provider, " P:#{short(provider, label_width)} "},
+            {:model, " M:#{short(state.selected_model || "choose…", label_width)} "}
           ]
 
         true ->
           [
-            %{target: {:setting, :backend}, text: " backend #{backend_label(state)} "},
-            %{
-              target: {:setting, :approval},
-              text: " approval #{approval_label(state.approval_level)} "
-            },
-            %{target: {:setting, :details}, text: " context #{context_label(state)} "},
-            %{target: {:setting, :provider}, text: " provider #{short(provider, 16)} "},
-            %{
-              target: {:setting, :model},
-              text: " model #{short(state.selected_model || "choose…", 20)} "
-            },
-            %{target: {:setting, :entry_mode}, text: " entry #{entry_mode_label(state)} "}
+            {:backend, " backend #{backend_label(state)} "},
+            {:approval, " approval #{approval_label(state.approval_level)} "},
+            {:details, " context #{context_label(state)} "},
+            {:provider, " provider #{short(provider, 16)} "},
+            {:model, " model #{short(state.selected_model || "choose…", 20)} "},
+            {:entry_mode, " entry #{entry_mode_label(state)} "}
           ]
       end
 
-    if State.effort_choices(state) == [] do
-      segments
-    else
-      [
-        %{target: {:setting, :effort}, text: " R:#{State.selected_effort(state) || "auto"} "}
-        | segments
-      ]
-    end
+    segments =
+      if State.effort_choices(state) == [],
+        do: segments,
+        else: [{:effort, " R:#{State.selected_effort(state) || "auto"} "} | segments]
+
+    Enum.map(segments, fn {key, text} -> %{target: {:setting, key}, text: text} end)
   end
 
   defp settings_target(state, rect, x) do
