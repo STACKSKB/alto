@@ -54,45 +54,29 @@ defmodule Alto.Queue do
 
   @version 4
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
-  @default_max_records 10_000
-  @default_max_completed 10_000
-  @default_max_payload_bytes 64_000
-  @default_max_key_bytes 256
-  @default_max_log_bytes 64_000_000
-  @default_lease_ms 300_000
+  @options [
+    max_records: [type: :non_neg_integer, default: 10_000],
+    max_completed: [type: :non_neg_integer, default: 10_000],
+    max_payload_bytes: [type: :pos_integer, default: 64_000],
+    max_key_bytes: [type: :pos_integer, default: 256],
+    max_log_bytes: [type: :pos_integer, default: 64_000_000],
+    lease_ms: [type: :pos_integer, default: 300_000],
+    auto_compact: [type: :boolean, default: false],
+    clock: [type: {:fun, 0}]
+  ]
+  @options_schema NimbleOptions.new!(@options)
   @max_claim_count 1_000
   @max_list_records 100
 
-  @enforce_keys [
-    :id,
-    :dir,
-    :path,
-    :max_records,
-    :max_completed,
-    :max_payload_bytes,
-    :max_key_bytes,
-    :max_log_bytes,
-    :lease_ms,
-    :clock
-  ]
-  defstruct [
-    :id,
-    :dir,
-    :path,
-    :lock,
-    :max_records,
-    :max_completed,
-    :max_payload_bytes,
-    :max_key_bytes,
-    :max_log_bytes,
-    :lease_ms,
-    :clock,
-    auto_compact: false,
-    records: :gb_trees.empty(),
-    next_id: 1,
-    completed: [],
-    completed_set: MapSet.new()
-  ]
+  @enforce_keys [:id, :dir, :path] ++ Keyword.keys(@options)
+  defstruct @enforce_keys ++
+              [
+                :lock,
+                records: :gb_trees.empty(),
+                next_id: 1,
+                completed: [],
+                completed_set: MapSet.new()
+              ]
 
   defmodule Record do
     @enforce_keys [:id, :key, :payload, :revision, :at_ms, :generation_id]
@@ -143,43 +127,17 @@ defmodule Alto.Queue do
     id = Keyword.fetch!(opts, :id)
     :ok = validate_id!(id)
 
-    dir = Keyword.get(opts, :dir, dir(opts))
+    with {:ok, settings} <-
+           NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@options)), @options_schema) do
+      directory = dir(opts)
+      settings = Keyword.put_new(settings, :clock, fn -> System.system_time(:millisecond) end)
 
-    max_completed = Keyword.get(opts, :max_completed, @default_max_completed)
-
-    clock = Keyword.get(opts, :clock, fn -> System.system_time(:millisecond) end)
-
-    auto_compact = Keyword.get(opts, :auto_compact, false)
-
-    with :ok <- validate_auto_compact(auto_compact),
-         :ok <- validate_max_completed(max_completed),
-         :ok <- validate_clock(clock) do
-      state = %__MODULE__{
-        id: id,
-        dir: dir,
-        path: log_path(dir, id),
-        max_records: Keyword.get(opts, :max_records, @default_max_records),
-        max_completed: max_completed,
-        auto_compact: auto_compact,
-        max_payload_bytes: Keyword.get(opts, :max_payload_bytes, @default_max_payload_bytes),
-        max_key_bytes: Keyword.get(opts, :max_key_bytes, @default_max_key_bytes),
-        max_log_bytes: Keyword.get(opts, :max_log_bytes, @default_max_log_bytes),
-        lease_ms: Keyword.get(opts, :lease_ms, @default_lease_ms),
-        clock: clock
-      }
+      state =
+        struct!(__MODULE__, [id: id, dir: directory, path: log_path(directory, id)] ++ settings)
 
       Alto.Storage.start_server(__MODULE__, state, &load/1, opts)
     end
   end
-
-  defp validate_auto_compact(value) when is_boolean(value), do: :ok
-  defp validate_auto_compact(value), do: {:error, {:invalid_auto_compact, value}}
-
-  defp validate_max_completed(n) when is_integer(n) and n >= 0, do: :ok
-  defp validate_max_completed(n), do: {:error, {:invalid_max_completed, n}}
-
-  defp validate_clock(clock) when is_function(clock, 0), do: :ok
-  defp validate_clock(clock), do: {:error, {:invalid_clock, clock}}
 
   @doc "Storage directory for queue logs, honouring an explicit override."
   @spec dir(keyword()) :: Path.t()

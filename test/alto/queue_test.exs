@@ -18,6 +18,24 @@ defmodule Alto.QueueTest do
     %{dir: dir, id: unique_id()}
   end
 
+  test "invalid queue bounds fail before storage opens", %{dir: dir, id: id} do
+    for {key, value} <- [
+          max_records: -1,
+          max_completed: -1,
+          max_payload_bytes: 0,
+          max_key_bytes: 0,
+          max_log_bytes: "large",
+          lease_ms: 0,
+          auto_compact: :yes,
+          clock: fn _ -> 0 end
+        ] do
+      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
+               Queue.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])
+
+      refute File.exists?(dir)
+    end
+  end
+
   defp tmp_root do
     Path.join(System.tmp_dir!(), "alto-queue-test-#{System.unique_integer([:positive])}")
   end
@@ -537,7 +555,7 @@ defmodule Alto.QueueTest do
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, unknown: 1)
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, [:delay_ms])
 
-      assert {:error, {:invalid_clock, :bad}} =
+      assert {:error, %NimbleOptions.ValidationError{key: :clock}} =
                Queue.start_link(id: unique_id(), dir: dir, name: unique_id(), clock: :bad)
 
       assert {:ok, _} = Queue.put(name, "good", %{})
