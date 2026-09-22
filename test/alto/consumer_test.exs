@@ -356,7 +356,7 @@ defmodule Alto.ConsumerTest do
     test_pid = self()
 
     blocker = fn _payload, _ctx ->
-      send(test_pid, :work_started)
+      send(test_pid, {:work_started, self()})
       Process.sleep(5_000)
       :done
     end
@@ -371,12 +371,14 @@ defmodule Alto.ConsumerTest do
       )
 
     poller = spawn(fn -> Consumer.poll(c1) end)
-    assert_receive :work_started, 2_000
+    assert_receive {:work_started, handler}, 2_000
+    monitor = Process.monitor(handler)
     # A true crash: unlike GenServer.stop/3 (which politely waits out the
     # in-flight call), :kill preempts it mid-dispatch.
     Process.unlink(c1)
     Process.exit(c1, :kill)
     Process.exit(poller, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^handler, _}, 2_000
 
     # The lease expires; the next owner finds dispatched-without-outcome
     # and parks instead of re-running.
@@ -397,6 +399,25 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
     assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
+  end
+
+  test "a timed-out handler is terminated before work is parked", %{queue: q, ledger: l} do
+    {:ok, _} = Queue.admit(q, "src:timeout", %{})
+    parent = self()
+
+    handler = fn _, _ ->
+      send(parent, {:handler, self()})
+      Process.sleep(:infinity)
+    end
+
+    consumer = start_consumer!(queue: q, ledger: l, handler: handler, handle_timeout: 50)
+    assert {:handled, [:parked]} = Consumer.poll(consumer)
+    assert_received {:handler, pid}
+    refute Process.alive?(pid)
+    assert Process.alive?(consumer)
+
+    assert {:decided, :requires_operator, %{park_reason: :handler_timeout}} =
+             OperationLog.status(l, "src:timeout")
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do

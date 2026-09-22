@@ -238,49 +238,32 @@ defmodule Alto.Consumer do
     end)
   end
 
-  # The handler is linked to its owning consumer. A consumer crash therefore
-  # cannot leave the handler alive with authority to commit after ownership
-  # has moved. Timeout deliberately unlinks before killing the child so the
-  # consumer can record the bounded uncertainty outcome.
+  # The shared invocation boundary kills handlers on timeout or owner death.
+  # A participant crash is uncertainty to persist, not a consumer crash.
   defp run_handler(op, claim_id, attempt_n, payload, state) do
-    caller = self()
-    ref = make_ref()
-    handler = state.handler
+    outcome =
+      Alto.Runner.Execution.Call.run(
+        fn ->
+          state.handler.(payload, %{
+            key: op,
+            operation_key: op,
+            claim_id: claim_id,
+            attempt: attempt_n
+          })
+        end,
+        state.handle_timeout,
+        nil
+      )
 
-    pid =
-      spawn_link(fn ->
-        outcome =
-          try do
-            {:verdict,
-             handler.(payload, %{
-               key: op,
-               operation_key: op,
-               claim_id: claim_id,
-               attempt: attempt_n
-             })}
-          rescue
-            error -> {:raised, Exception.message(error)}
-          catch
-            kind, reason -> {:caught, kind, inspect(reason, limit: 3)}
-          end
-
-        send(caller, {ref, outcome})
-      end)
-
-    receive do
-      {^ref, {:verdict, verdict}} ->
+    case outcome do
+      {:ok, verdict} ->
         apply_verdict(op, claim_id, verdict, state)
 
-      {^ref, {:raised, message}} ->
-        park(op, claim_id, :handler_crashed, %{error: message}, state)
-
-      {^ref, {:caught, kind, reason}} ->
-        park(op, claim_id, :handler_crashed, %{caught: kind, reason: reason}, state)
-    after
-      state.handle_timeout ->
-        Process.unlink(pid)
-        Process.exit(pid, :kill)
+      {:error, :timeout} ->
         park(op, claim_id, :handler_timeout, %{timeout_ms: state.handle_timeout}, state)
+
+      {:error, reason} ->
+        park(op, claim_id, :handler_crashed, %{error: inspect(reason, limit: 3)}, state)
     end
   end
 
