@@ -293,14 +293,9 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp config(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
-
-    endpoint =
-      Keyword.get(opts, :endpoint, String.trim_trailing(base_url, "/") <> "/chat/completions")
-
     with {:ok, config} <-
            HTTPOptions.validate(
-             Keyword.put(opts, :endpoint, endpoint),
+             HTTPOptions.endpoint_options(opts, @default_base_url, "/chat/completions"),
              @config_schema
            ) do
       {:ok,
@@ -316,14 +311,9 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp models_config(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
-
-    endpoint =
-      Keyword.get(opts, :models_endpoint, String.trim_trailing(base_url, "/") <> "/models")
-
     with {:ok, config} <-
            HTTPOptions.validate(
-             Keyword.put(opts, :endpoint, endpoint),
+             HTTPOptions.endpoint_options(opts, @default_base_url, "/models", :models_endpoint),
              @models_schema
            ) do
       {:ok,

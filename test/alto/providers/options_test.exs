@@ -22,6 +22,13 @@ defmodule Alto.Providers.OptionsTest do
                  )
       end
 
+      assert {:error, %NimbleOptions.ValidationError{key: :endpoint}} =
+               provider.stream(
+                 %{},
+                 fn _ -> flunk("unexpected delivery") end,
+                 Keyword.merge(valid, endpoint: "invalid", base_url: nil)
+               )
+
       assert {:error, %NimbleOptions.ValidationError{key: :model}} =
                provider.stream(%{}, fn _ -> :ok end, [])
     end
@@ -42,7 +49,7 @@ defmodule Alto.Providers.OptionsTest do
 
   test "model discovery validates its endpoint and independent response limit" do
     assert {:error, %NimbleOptions.ValidationError{key: :endpoint, value: "invalid"}} =
-             OpenAICompatible.list_models(models_endpoint: "invalid")
+             OpenAICompatible.list_models(models_endpoint: "invalid", base_url: nil)
 
     assert {:error, %NimbleOptions.ValidationError{key: :max_models_response_bytes, value: 0}} =
              OpenAICompatible.list_models(max_models_response_bytes: 0)

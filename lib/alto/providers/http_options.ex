@@ -12,6 +12,15 @@ defmodule Alto.Providers.HTTPOptions do
     ]
   end
 
+  def endpoint_options(opts, base_url, path, key \\ :endpoint) do
+    endpoint =
+      Keyword.get_lazy(opts, key, fn ->
+        String.trim_trailing(Keyword.get(opts, :base_url, base_url), "/") <> path
+      end)
+
+    Keyword.put(opts, :endpoint, endpoint)
+  end
+
   def validate(opts, schema) do
     case NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
       {:ok, values} ->

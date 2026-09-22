@@ -48,12 +48,9 @@ defmodule Alto.Providers.Anthropic do
   end
 
   defp config(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
-    endpoint = Keyword.get(opts, :endpoint, String.trim_trailing(base_url, "/") <> "/messages")
-
     with {:ok, config} <-
            HTTPOptions.validate(
-             Keyword.put(opts, :endpoint, endpoint),
+             HTTPOptions.endpoint_options(opts, @default_base_url, "/messages"),
              @config_schema
            ) do
       {:ok,
