@@ -30,7 +30,11 @@ defmodule Alto.External.MCP.Client do
   @doc "List the external server's tools, using its cached catalog after the first call."
   @spec list_tools(pid(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_tools(pid, timeout \\ @default_timeout) do
-    GenServer.call(pid, {:list_tools, JSONRPC.deadline(timeout)}, JSONRPC.call_timeout(timeout))
+    GenServer.call(
+      pid,
+      {:list_tools, %{}, JSONRPC.deadline(timeout)},
+      JSONRPC.call_timeout(timeout)
+    )
   catch
     :exit, reason -> {:error, {:mcp_client_unavailable, reason}}
   end
@@ -42,7 +46,7 @@ defmodule Alto.External.MCP.Client do
       when is_binary(name) and is_map(arguments) do
     GenServer.call(
       pid,
-      {:call_tool, name, arguments, JSONRPC.deadline(timeout)},
+      {:call_tool, %{"name" => name, "arguments" => arguments}, JSONRPC.deadline(timeout)},
       JSONRPC.call_timeout(timeout)
     )
   catch
@@ -92,37 +96,15 @@ defmodule Alto.External.MCP.Client do
   def handle_call(:await_ready, from, state),
     do: JSONRPC.await_ready(state, from, :mcp_ready_waiter_limit)
 
-  def handle_call({:list_tools, _timeout}, _from, %{phase: :ready, tools: tools} = state)
+  def handle_call({:list_tools, _params, _timeout}, _from, %{phase: :ready, tools: tools} = state)
       when is_list(tools),
       do: {:reply, {:ok, tools}, state}
 
-  def handle_call({:list_tools, deadline}, from, %{phase: :ready} = state) do
-    case send_request(
-           state,
-           "tools/list",
-           %{},
-           {:list_tools, from},
-           true,
-           JSONRPC.remaining(deadline)
-         ) do
-      {:ok, state} -> {:noreply, state}
-      {:error, :request_expired} -> {:reply, {:error, :request_expired}, state}
-      {:error, {:mcp_pending_request_limit, _} = reason} -> {:reply, {:error, reason}, state}
-      {:error, reason} -> {:stop, reason, {:error, reason}, fail_all(state, reason)}
-    end
-  end
+  def handle_call({kind, params, deadline}, from, %{phase: :ready} = state)
+      when kind in [:list_tools, :call_tool] do
+    method = if kind == :list_tools, do: "tools/list", else: "tools/call"
 
-  def handle_call({:call_tool, name, arguments, deadline}, from, %{phase: :ready} = state) do
-    params = %{"name" => name, "arguments" => arguments}
-
-    case send_request(
-           state,
-           "tools/call",
-           params,
-           {:call_tool, from},
-           true,
-           JSONRPC.remaining(deadline)
-         ) do
+    case send_request(state, method, params, {kind, from}, true, JSONRPC.remaining(deadline)) do
       {:ok, state} -> {:noreply, state}
       {:error, :request_expired} -> {:reply, {:error, :request_expired}, state}
       {:error, {:mcp_pending_request_limit, _} = reason} -> {:reply, {:error, reason}, state}
