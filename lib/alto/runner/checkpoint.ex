@@ -459,7 +459,6 @@ defmodule Alto.Runner.Checkpoint do
             :compact_context,
             :run_tool,
             :run_tools,
-            :parallel_tools,
             :invoke_tool,
             :spawn_agents
           ] and

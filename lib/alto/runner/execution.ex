@@ -232,87 +232,29 @@ defmodule Alto.Runner.Execution do
   defp do_execute([], run, :continue),
     do: {:done, {:error, :loop_stalled, result(run, nil, :error)}}
 
-  defp do_execute([%Effect{kind: :run_tools, data: data} | rest], run, terminal) do
-    case data do
-      %{calls: calls, max_concurrency: limit}
-      when is_list(calls) and calls != [] and limit in 1..32 ->
-        # Partition only explicitly batched calls. Approval and exclusive tools
-        # remain ordinary effects, so suspended approvals retain exact continuations.
-        groups =
-          calls
-          |> Enum.chunk_by(&parallel_call?(&1, run))
-          |> Enum.flat_map(fn group ->
-            if parallel_call?(hd(group), run) do
-              Enum.map(Enum.chunk_every(group, limit), fn calls ->
-                %Effect{kind: :parallel_tools, data: %{calls: calls}}
-              end)
-            else
-              Enum.map(group, &Effect.run_tool/1)
-            end
-          end)
+  defp do_execute(
+         [
+           %Effect{kind: :run_tools, data: %{calls: [_ | _] = calls, max_concurrency: limit}}
+           | rest
+         ],
+         run,
+         terminal
+       )
+       when is_list(calls) and limit in 1..32 do
+    group = calls |> Enum.take(limit) |> Enum.take_while(&parallel_call?(&1, run))
+    pending = Enum.drop(calls, max(1, length(group)))
+    rest = if pending == [], do: rest, else: [Effect.run_tools(pending, limit) | rest]
 
-        execute(groups ++ rest, run, terminal)
-
-      _ ->
-        {:done, {:error, :invalid_tool_batch, result(run, nil, :error)}}
+    # Approval and exclusive calls remain ordinary effects. The remaining batch
+    # stays in its public representation even when an approval suspends execution.
+    case group do
+      [] -> do_execute([Effect.run_tool(hd(calls)) | rest], run, terminal)
+      group -> run_batch(group, run, rest, terminal)
     end
   end
 
-  defp do_execute([%Effect{kind: :parallel_tools, data: %{calls: calls}} | rest], run, terminal)
-       when is_list(calls) and length(calls) in 1..32 do
-    if Enum.all?(calls, &parallel_call?(&1, run)) do
-      case prepare_batch(calls, run) do
-        {:ok, jobs, run} ->
-          ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
-
-          with {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
-            Enum.each(ready, fn job ->
-              Alto.Events.notify(
-                run.event_sink,
-                Event.live(:tool_started, %{
-                  call_id: job.id,
-                  operation_id: job.op_id,
-                  run_id: run.tool_context.session_id,
-                  name: job.name,
-                  summary: job.summary
-                })
-              )
-            end)
-
-            response =
-              Alto.Runner.ToolBatch.run(
-                Enum.map(ready, &{&1.tool, &1.prepared}),
-                run
-              )
-
-            {outcomes, stopped} =
-              case response do
-                {:ok, outcomes} -> {outcomes, nil}
-                {:cancelled, reason, outcomes} -> {outcomes, {:cancelled, reason}}
-                {:error, reason, outcomes} -> {outcomes, reason}
-              end
-
-            indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
-
-            outcomes =
-              Enum.map(jobs, fn job ->
-                if Map.has_key?(job, :prepared),
-                  do: Map.fetch!(indexed, job.op_id),
-                  else: {:rejected, job.error}
-              end)
-
-            finish_batch(jobs, outcomes, run, rest, terminal, stopped)
-          else
-            {:error, reason, run} -> {:done, {:error, reason, result(run, nil, :error)}}
-          end
-
-        {:error, reason, run} ->
-          {:done, {:error, reason, result(run, nil, :error)}}
-      end
-    else
-      {:done, {:error, :invalid_parallel_tools, result(run, nil, :error)}}
-    end
-  end
+  defp do_execute([%Effect{kind: :run_tools} | _], run, _terminal),
+    do: {:done, {:error, :invalid_tool_batch, result(run, nil, :error)}}
 
   defp do_execute(
          [%Effect{kind: :spawn_agents, data: data} | rest],
@@ -982,6 +924,51 @@ defmodule Alto.Runner.Execution do
   end
 
   defp parallel_call?(_, _), do: false
+
+  defp run_batch(calls, run, rest, terminal) do
+    with {:ok, jobs, run} <- prepare_batch(calls, run),
+         ready <- Enum.filter(jobs, &Map.has_key?(&1, :prepared)),
+         {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
+      Enum.each(ready, fn job ->
+        Alto.Events.notify(
+          run.event_sink,
+          Event.live(:tool_started, %{
+            call_id: job.id,
+            operation_id: job.op_id,
+            run_id: run.tool_context.session_id,
+            name: job.name,
+            summary: job.summary
+          })
+        )
+      end)
+
+      response =
+        Alto.Runner.ToolBatch.run(
+          Enum.map(ready, &{&1.tool, &1.prepared}),
+          run
+        )
+
+      {outcomes, stopped} =
+        case response do
+          {:ok, outcomes} -> {outcomes, nil}
+          {:cancelled, reason, outcomes} -> {outcomes, {:cancelled, reason}}
+          {:error, reason, outcomes} -> {outcomes, reason}
+        end
+
+      indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
+
+      outcomes =
+        Enum.map(jobs, fn job ->
+          if Map.has_key?(job, :prepared),
+            do: Map.fetch!(indexed, job.op_id),
+            else: {:rejected, job.error}
+        end)
+
+      finish_batch(jobs, outcomes, run, rest, terminal, stopped)
+    else
+      {:error, reason, run} -> {:done, {:error, reason, result(run, nil, :error)}}
+    end
+  end
 
   defp prepare_batch(calls, run) do
     Enum.reduce_while(calls, {:ok, [], run}, fn call, {:ok, jobs, run} ->
