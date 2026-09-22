@@ -179,5 +179,4 @@ provides the shared approval controls.
 Adapters are trusted host code with access to UI state. They must preserve their
 protocol's approval and runtime controls. Native durable-input support is a
 capability supplied by the adapter, not a special case for the `:alto` identifier.
-The legacy `codex_backend` options remain accepted by the Codex adapter; options
-on its `tui_backends` entry take precedence.
+Configure the Codex connection with options on its `tui_backends` entry.

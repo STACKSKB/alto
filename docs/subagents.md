@@ -90,9 +90,10 @@ must reopen and supply that same account through `budget_account:`. Restore
 uses the current durable counts, including charges made after the snapshot;
 it never clones the snapshot's remaining allowance. Missing/replaced accounts,
 an observed counter rollback or ledger failure reject restoration/reservation.
-The legacy in-memory counter path remains the default. Separate child
-checkpoints are still disabled: durable counts alone do not recover child
-dispatch, active execution time, or parent joins.
+In-memory counters remain the default. Durable counts alone do not recover child
+dispatch, active execution time, or parent joins. Independent child approval
+checkpoints also require a continuation store, a checkpoint version, and a
+checkpoint-capable loop; see [child continuations](child-continuations.md).
 
 This account persists count limits only. The existing monotonic run deadline
 and root checkpoint's remaining active time keep their current semantics;

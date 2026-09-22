@@ -1,10 +1,10 @@
 # Conversation revisions and branches
 
-Alto sessions keep two forms of conversation state. The existing
-`<session>.transcript.json` sidecar is the fast resume head. Each update also
-creates an immutable revision under `conversations/<session>/`, linked to the
-revision it followed. Legacy transcript sidecars remain readable and become an
-ordinary parent the next time the session advances.
+The `<session>.transcript.json` head stores the current revision and its dispatch
+fence in one atomic record. Each transcript update first writes an immutable
+revision under `conversations/<session>/`, linked to the revision it followed,
+then advances the head and clears the resolved fence. An interrupted head update
+leaves the prior fence intact. Obsolete head formats are rejected.
 
 `Alto.Session.persist_settled/4` records a complete provider-history boundary.
 It rejects unanswered assistant tool calls, orphan tool replies, stale

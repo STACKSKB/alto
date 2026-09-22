@@ -1594,16 +1594,21 @@ defmodule Alto.TUI.AppTest do
 
     config =
       Alto.Test.TUI.config(
-        codex_backend: [
-          command: context.codex_server,
-          args: [],
-          cwd: context.root,
-          request_timeout: 5_000,
-          startup_timeout: 5_000,
-          open_url: fn url ->
-            send(test_owner, {:opened_oauth, url})
-            :ok
-          end
+        tui_backends: [
+          alto: {Alto.TUI.Backends.Native, label: "Alto native"},
+          codex:
+            {Codex,
+             [
+               command: context.codex_server,
+               args: [],
+               cwd: context.root,
+               request_timeout: 5_000,
+               startup_timeout: 5_000,
+               open_url: fn url ->
+                 send(test_owner, {:opened_oauth, url})
+                 :ok
+               end
+             ]}
         ],
         provider_profiles: [
           [id: "test", label: "Test Provider", provider: Provider, models: ["test/model"]]

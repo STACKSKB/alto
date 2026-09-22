@@ -14,7 +14,6 @@ defmodule Alto.Config do
     :loop,
     :provider,
     :provider_profiles,
-    :codex_backend,
     :tools,
     :model_tools,
     :approval,

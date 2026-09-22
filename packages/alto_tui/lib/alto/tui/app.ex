@@ -687,7 +687,6 @@ defmodule Alto.TUI.App do
         state.run_options
         |> Keyword.drop([
           :provider_profiles,
-          :codex_backend,
           :tui,
           :listeners,
           :queue,

@@ -14,11 +14,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   @impl true
   def ui(:init, state, options) do
-    codex_options =
-      Keyword.merge(
-        Keyword.get(state.run_options, :codex_backend, []),
-        Keyword.delete(options, :label)
-      )
+    codex_options = Keyword.delete(options, :label)
 
     codex = %{
       options: codex_options,
