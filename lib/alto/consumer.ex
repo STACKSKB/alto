@@ -58,12 +58,20 @@ defmodule Alto.Consumer do
 
   require Logger
 
-  @default_max_attempts 3
-  @default_poll_ms 250
-  @default_claim_bytes 262_144
-  @default_handle_timeout 60_000
-  @default_batch 1
-  @default_tool "consumer_handler"
+  @options [
+    queue: [type: :any, required: true],
+    ledger: [type: :any, required: true],
+    handler: [type: {:fun, 2}, required: true],
+    by: [type: :any, default: "consumer"],
+    tool: [type: :string, default: "consumer_handler"],
+    max_attempts: [type: :non_neg_integer, default: 3],
+    poll_ms: [type: :non_neg_integer, default: 250],
+    claim_bytes: [type: :pos_integer, default: 262_144],
+    handle_timeout: [type: :pos_integer, default: 60_000],
+    batch: [type: :pos_integer, default: 1],
+    autostart: [type: :boolean, default: true]
+  ]
+  @options_schema NimbleOptions.new!(@options)
 
   ## Client API
 
@@ -98,40 +106,24 @@ defmodule Alto.Consumer do
 
   @impl true
   def init(opts) do
-    with {:ok, queue} <- Keyword.fetch(opts, :queue),
-         {:ok, ledger} <- Keyword.fetch(opts, :ledger),
-         {:ok, handler} <- Keyword.fetch(opts, :handler),
-         true <- is_function(handler, 2) do
-      state = %{
-        queue: queue,
-        ledger: ledger,
-        handler: handler,
-        by: Keyword.get(opts, :by, "consumer"),
-        tool: Keyword.get(opts, :tool, @default_tool),
-        max_attempts: Keyword.get(opts, :max_attempts, @default_max_attempts),
-        poll_ms: Keyword.get(opts, :poll_ms, @default_poll_ms),
-        claim_bytes: Keyword.get(opts, :claim_bytes, @default_claim_bytes),
-        handle_timeout: Keyword.get(opts, :handle_timeout, @default_handle_timeout),
-        batch: Keyword.get(opts, :batch, @default_batch)
-      }
+    case NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@options)), @options_schema) do
+      {:ok, settings} ->
+        {autostart, settings} = Keyword.pop!(settings, :autostart)
+        state = Map.new(settings)
+        if autostart, do: schedule_tick(state.poll_ms)
+        {:ok, state}
 
-      if Keyword.get(opts, :autostart, true), do: schedule_tick(state.poll_ms)
-      {:ok, state}
-    else
-      :error -> {:stop, :missing_consumer_option}
-      false -> {:stop, :invalid_handler}
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
   @impl true
-  def handle_call(:poll, _from, state) do
-    {reply, state} = cycle(state)
-    {:reply, reply, state}
-  end
+  def handle_call(:poll, _from, state), do: {:reply, cycle(state), state}
 
   @impl true
   def handle_info(:tick, state) do
-    {_reply, state} = cycle(state)
+    cycle(state)
     schedule_tick(state.poll_ms)
     {:noreply, state}
   end
@@ -144,14 +136,13 @@ defmodule Alto.Consumer do
     case guarded_claim(state) do
       {:error, reason} ->
         Logger.warning("alto consumer: claim failed: #{inspect(reason, limit: 3)}")
-        {{:error, reason}, state}
+        {:error, reason}
 
       {:ok, []} ->
-        {:idle, state}
+        :idle
 
       {:ok, records} ->
-        actions = Enum.map(records, &handle_record(&1, state))
-        {{:handled, actions}, state}
+        {:handled, Enum.map(records, &handle_record(&1, state))}
     end
   end
 
