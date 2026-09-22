@@ -570,23 +570,9 @@ defmodule Alto.Queue do
      state}
   end
 
-  def handle_call({:records, max}, _from, state) do
-    state = reclaim_expired(state)
-
-    views =
-      ordered_records(state)
-      |> Enum.take(max)
-      |> Enum.map(&view/1)
-
-    {:reply, views, state}
-  end
-
-  def handle_call({:snapshot, max}, _from, state) do
-    views =
-      ordered_records(state)
-      |> Enum.take(max)
-      |> Enum.map(&view/1)
-
+  def handle_call({operation, max}, _from, state) when operation in [:records, :snapshot] do
+    state = if operation == :records, do: reclaim_expired(state), else: state
+    views = state |> ordered_records() |> Enum.take(max) |> Enum.map(&view/1)
     {:reply, views, state}
   end
 
