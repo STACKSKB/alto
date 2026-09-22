@@ -134,9 +134,9 @@ defmodule Alto.Runner.AgentIdentityTest do
     ]
 
     assert {:error, :approval_suspended, suspended} = Alto.run(%{}, opts)
-    summary = suspended.checkpoint["agent_identity"]
-    assert summary["root_run_id"] == suspended.agent_identity.root_run_id
-    assert summary["path"] == []
+    {:ok, saved} = Alto.Runner.Checkpoint.decode(suspended.checkpoint["state"])
+    assert saved.run.agent_identity == suspended.agent_identity
+    assert saved.run.agent_identity.path == []
 
     assert {:ok, resumed} =
              Alto.run(%{}, Keyword.put(opts, :checkpoint, {suspended.checkpoint, :approve}))

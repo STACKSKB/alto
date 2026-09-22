@@ -89,7 +89,7 @@ defmodule Alto.Runner.Checkpoint do
     :tool_timeout,
     :approval_timeout
   ]
-  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget usage agent_identity session_id transcript_revision expires_at_ms)
+  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget session_id transcript_revision expires_at_ms)
 
   @doc """
   Capture a root parent's pending child join or its exact next frame.
@@ -168,7 +168,6 @@ defmodule Alto.Runner.Checkpoint do
          true <- valid_authority?(Map.take(run, @authority_fields)),
          authority <- narrow_authority(run, binding.authority),
          true <- saved.transcript_bytes <= authority.max_transcript_bytes,
-         true <- packet["usage"] == Alto.Protocol.encode_term(Alto.Usage.to_map(saved.usage)),
          true <- packet["session_id"] == run.session,
          :ok <- unexpired(binding.expires_at_ms),
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
@@ -291,8 +290,6 @@ defmodule Alto.Runner.Checkpoint do
       "fingerprint" => captured.fingerprint,
       "state" => captured.encoded,
       "budget" => budget,
-      "usage" => Alto.Protocol.encode_term(Alto.Usage.to_map(captured.saved.usage)),
-      "agent_identity" => Alto.Protocol.encode_term(captured.saved.agent_identity),
       "session_id" => run.session,
       "transcript_revision" => captured.revision
     }
@@ -311,7 +308,6 @@ defmodule Alto.Runner.Checkpoint do
          true <- valid_history_state?(saved),
          true <- saved.transcript_revision == packet["transcript_revision"],
          true <- Alto.AgentIdentity.valid?(saved.agent_identity),
-         true <- packet["agent_identity"] == Alto.Protocol.encode_term(saved.agent_identity),
          {:ok, revision} <- transcript_revision(run),
          true <- revision == saved.transcript_revision do
       {:ok, decoded}

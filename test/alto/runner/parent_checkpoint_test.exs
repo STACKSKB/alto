@@ -85,6 +85,8 @@ defmodule Alto.Runner.ParentCheckpointTest do
     assert same_packet["fingerprint"] == packet["fingerprint"]
     assert packet["kind"] == "parent"
     refute Map.has_key?(packet, "request")
+    refute Map.has_key?(packet, "usage")
+    refute Map.has_key?(packet, "agent_identity")
     packet = packet |> JSON.encode!() |> JSON.decode!()
 
     # Children can spend shared reservations after the pending parent is saved.
@@ -236,7 +238,9 @@ defmodule Alto.Runner.ParentCheckpointTest do
     for changed <- [
           put_in(saved, [:pending, :kind], :invalid),
           put_in(saved, [:binding, :store], %{}),
-          put_in(saved, [:binding, :authority, :max_steps], -1)
+          put_in(saved, [:binding, :authority, :max_steps], -1),
+          put_in(saved, [:run, :usage], %{run.usage | input_tokens: -1}),
+          put_in(saved, [:run, :agent_identity], %{root_run_id: "root", path: ["child"]})
         ] do
       {:ok, encoded} = Checkpoint.encode(changed)
       assert {:error, _} = Checkpoint.restore_parent(run, %{packet | "state" => encoded}, opts)
