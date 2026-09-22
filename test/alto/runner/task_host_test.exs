@@ -68,6 +68,26 @@ defmodule Alto.Runner.TaskHostTest do
     refute_receive {:alto_runner_result, ^ref, _}
   end
 
+  test "dead subscribers release their completion registrations while the run continues" do
+    {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
+    on_exit(fn -> TaskHost.terminate(handle) end)
+    subscriber = spawn(fn -> Process.sleep(:infinity) end)
+    assert {:ok, _} = TaskHost.subscribe(handle, subscriber)
+    assert map_size(:sys.get_state(handle.pid).waiters) == 1
+    Process.exit(subscriber, :kill)
+
+    assert Enum.any?(1..100, fn _ ->
+             if :sys.get_state(handle.pid).waiters == %{} do
+               true
+             else
+               Process.sleep(5)
+               false
+             end
+           end)
+
+    assert {:error, :await_timeout} = TaskHost.await(handle, 0)
+  end
+
   test "forced termination reports uncertain execution and releases observers" do
     {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
     {:ok, ref} = TaskHost.subscribe(handle)
