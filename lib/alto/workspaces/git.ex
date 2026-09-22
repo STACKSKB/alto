@@ -343,33 +343,27 @@ defmodule Alto.Workspaces.Git do
       if length(paths) > limits.max_files do
         {:error, :source_too_large}
       else
-        Enum.reduce_while(paths, {:ok, 0}, fn relative, {:ok, bytes} ->
+        Alto.Result.reduce(paths, 0, fn relative, bytes ->
           path = Path.expand(relative, root)
 
-          result =
-            with :ok <- reject_symlink_components(path) do
-              case File.lstat(path) do
-                {:ok, %{type: :regular, size: size}}
-                when bytes + size <= limits.max_checkout_bytes ->
-                  {:ok, bytes + size}
+          with :ok <- reject_symlink_components(path) do
+            case File.lstat(path) do
+              {:ok, %{type: :regular, size: size}}
+              when bytes + size <= limits.max_checkout_bytes ->
+                {:ok, bytes + size}
 
-                {:error, :enoent} ->
-                  {:ok, bytes}
+              {:error, :enoent} ->
+                {:ok, bytes}
 
-                {:ok, %{type: :directory}} ->
-                  {:error, :submodule_unsupported}
+              {:ok, %{type: :directory}} ->
+                {:error, :submodule_unsupported}
 
-                {:ok, _} ->
-                  {:error, :source_too_large}
+              {:ok, _} ->
+                {:error, :source_too_large}
 
-                {:error, reason} ->
-                  {:error, reason}
-              end
+              {:error, reason} ->
+                {:error, reason}
             end
-
-          case result do
-            {:ok, next} -> {:cont, {:ok, next}}
-            error -> {:halt, error}
           end
         end)
         |> case do
@@ -381,31 +375,25 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp bounded_tree(path, max_bytes, max_files) do
-    case walk(path, 0, 0, max_bytes, max_files) do
-      {:ok, _, _} -> :ok
-      {:error, _} = error -> error
-    end
+    with {:ok, _counts} <- walk(path, {0, 0}, max_bytes, max_files), do: :ok
   end
 
-  defp walk(path, bytes, files, max_bytes, max_files) do
+  defp walk(path, {bytes, files}, max_bytes, max_files) do
     case File.lstat(path) do
       {:ok, %File.Stat{type: :symlink}} ->
         {:error, :symlink_unsupported}
 
       {:ok, %File.Stat{type: :regular, size: size}}
       when bytes + size <= max_bytes and files + 1 <= max_files ->
-        {:ok, bytes + size, files + 1}
+        {:ok, {bytes + size, files + 1}}
 
       {:ok, %File.Stat{type: :regular}} ->
         {:error, :source_too_large}
 
       {:ok, %File.Stat{type: :directory}} ->
         with {:ok, entries} <- File.ls(path) do
-          Enum.reduce_while(entries, {:ok, bytes, files}, fn entry, {:ok, b, f} ->
-            case walk(Path.join(path, entry), b, f, max_bytes, max_files) do
-              {:ok, b, f} -> {:cont, {:ok, b, f}}
-              {:error, _} = error -> {:halt, error}
-            end
+          Alto.Result.reduce(entries, {bytes, files}, fn entry, counts ->
+            walk(Path.join(path, entry), counts, max_bytes, max_files)
           end)
         else
           {:error, reason} -> {:error, {:source_read_failed, reason}}
