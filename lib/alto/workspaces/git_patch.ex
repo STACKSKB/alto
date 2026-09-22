@@ -181,29 +181,11 @@ defmodule Alto.Workspaces.GitPatch do
     end
   end
 
-  defp file_digest(path, remaining) do
-    with {:ok, io} <- File.open(path, [:read, :raw, :binary]) do
-      try do
-        digest_chunks(io, :crypto.hash_init(:sha256), remaining)
-      after
-        File.close(io)
-      end
-    end
-  end
-
-  defp digest_chunks(io, state, remaining) do
-    case IO.binread(io, min(remaining + 1, 64_000)) do
-      :eof ->
-        {:ok, Base.encode16(:crypto.hash_final(state), case: :lower)}
-
-      bytes when is_binary(bytes) and byte_size(bytes) <= remaining ->
-        digest_chunks(io, :crypto.hash_update(state, bytes), remaining - byte_size(bytes))
-
-      bytes when is_binary(bytes) ->
-        {:error, :patch_target_too_large}
-
-      error ->
-        error
+  defp file_digest(path, limit) do
+    case Alto.BoundedFile.digest(path, limit) do
+      {:ok, %{fingerprint: fingerprint}} -> {:ok, Base.encode16(fingerprint, case: :lower)}
+      {:error, {:too_large, _, _}} -> {:error, :patch_target_too_large}
+      error -> error
     end
   end
 

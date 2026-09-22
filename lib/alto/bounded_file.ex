@@ -37,24 +37,34 @@ defmodule Alto.BoundedFile do
   end
 
   @doc "Hash the entire regular file, retaining content only if it fits the cap."
-  def fingerprint_snapshot(path, max) when is_integer(max) and max >= 0 do
+  def fingerprint_snapshot(path, max) when is_integer(max) and max >= 0,
+    do: hash_file(path, max, :infinity)
+
+  defp hash_file(path, retain, limit) do
     with_regular_file(path, fn io, stat ->
-      with {:ok, snapshot} <- hash_chunks(io, max, :crypto.hash_init(:sha256), 0, []),
+      with {:ok, snapshot} <- hash_chunks(io, {retain, limit}, :crypto.hash_init(:sha256), 0, []),
            do: {:ok, Map.put(snapshot, :stat, stat)}
     end)
   end
 
-  def digest(path) do
-    with {:ok, snapshot} <- fingerprint_snapshot(path, 0),
+  @doc "Stream a digest without retaining content, optionally stopping at a byte ceiling."
+  def digest(path, limit \\ :infinity)
+      when limit == :infinity or (is_integer(limit) and limit >= 0) do
+    with {:ok, snapshot} <- hash_file(path, 0, limit),
          do: {:ok, Map.take(snapshot, [:fingerprint, :bytes])}
   end
 
-  defp hash_chunks(io, max, hash, bytes, parts) do
-    case :file.read(io, @chunk_size) do
+  defp hash_chunks(io, {max, limit} = bounds, hash, bytes, parts) do
+    length = if limit == :infinity, do: @chunk_size, else: min(limit - bytes + 1, @chunk_size)
+
+    case :file.read(io, length) do
+      {:ok, chunk} when limit != :infinity and bytes + byte_size(chunk) > limit ->
+        {:error, {:too_large, bytes + byte_size(chunk), limit}}
+
       {:ok, chunk} ->
         size = bytes + byte_size(chunk)
         kept = if parts != nil and size <= max, do: [chunk | parts], else: nil
-        hash_chunks(io, max, :crypto.hash_update(hash, chunk), size, kept)
+        hash_chunks(io, bounds, :crypto.hash_update(hash, chunk), size, kept)
 
       :eof ->
         content = if parts, do: parts |> Enum.reverse() |> IO.iodata_to_binary(), else: nil
