@@ -1446,6 +1446,48 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.textarea_get_value(failed.textarea) == "Hi"
   end
 
+  test "editing a configured provider preserves its options and model catalog", context do
+    config =
+      Alto.Test.TUI.config(
+        provider_profiles: [
+          [
+            id: "local",
+            label: "Local",
+            provider:
+              {Alto.Providers.OpenAICompatible, base_url: "http://old.test/v1", timeout: 777},
+            models: ["original"],
+            default_model: "original"
+          ]
+        ]
+      )
+
+    app = start_app!(context, config: config, credentials_path: context.credentials)
+    Runtime.inject_event(app, %Key{code: "f3", kind: "press"})
+    menu = user_state(app).overlay
+    assert Enum.any?(menu.items, &(&1.value == {:configure_provider, "local"}))
+    Runtime.inject_event(app, %Key{code: "up", kind: "press"})
+    Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
+    form = user_state(app).overlay
+    assert form.kind == :provider_form
+
+    for field <- form.fields, field.key in [:label, :base_url, :model] do
+      value = %{label: "Updated", base_url: "http://new.test/v1", model: "new-model"}[field.key]
+      ExRatatui.text_input_set_value(field.input, value)
+    end
+
+    Runtime.inject_event(app, %Key{code: "s", modifiers: ["ctrl"], kind: "press"})
+    saved = user_state(app)
+    assert saved.overlay == nil
+    assert saved.selected_model == "new-model"
+    [profile] = saved.profiles
+    assert profile.label == "Updated"
+    assert profile.models == [%{id: "original", name: "original"}]
+    assert {Alto.Providers.OpenAICompatible, options} = profile.provider
+    assert options[:timeout] == 777
+    assert options[:base_url] == "http://new.test/v1"
+    refute Keyword.has_key?(options, :api_key)
+  end
+
   test "provider setup masks and privately persists API keys", context do
     config =
       Alto.Test.TUI.config(

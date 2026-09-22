@@ -1020,7 +1020,7 @@ defmodule Alto.TUI.App do
 
     configure =
       case State.selected_profile(state) do
-        %{module: Alto.Providers.OpenAICompatible} = profile ->
+        %{provider: {Alto.Providers.OpenAICompatible, _}} = profile ->
           [%{label: "⚙ Configure #{profile.label}…", value: {:configure_provider, profile.id}}]
 
         _other ->
@@ -1745,12 +1745,16 @@ defmodule Alto.TUI.App do
 
   defp merge_saved_profile(nil, saved), do: saved
 
-  defp merge_saved_profile(prior, saved) do
+  defp merge_saved_profile(
+         %{provider: {module, options}} = prior,
+         %{provider: {_, saved_options}} = saved
+       ) do
     %{
       prior
       | label: saved.label,
         default_model: saved.default_model,
-        options: Keyword.put(prior.options, :base_url, Keyword.fetch!(saved.options, :base_url))
+        provider:
+          {module, Keyword.put(options, :base_url, Keyword.fetch!(saved_options, :base_url))}
     }
   end
 
