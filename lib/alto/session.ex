@@ -292,6 +292,18 @@ defmodule Alto.Session do
     end
   end
 
+  @doc "Load the transcript and revision as options for a resumed run."
+  def resume_options(id, opts \\ []) do
+    with {:ok, snapshot} <- transcript(id, Keyword.take(opts, [:session_dir])) do
+      {:ok,
+       [
+         session: id,
+         resume:
+           Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
+       ]}
+    end
+  end
+
   @doc "List sessions newest-first, capped for single-user convenience."
   @spec list(keyword()) :: {:ok, [summary()]} | {:error, term()}
   def list(opts \\ []) do

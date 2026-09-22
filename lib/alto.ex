@@ -63,21 +63,8 @@ defmodule Alto do
   """
   @spec resume(String.t(), term(), keyword()) :: Runner.outcome() | {:error, term()}
   def resume(session_id, task, opts \\ []) do
-    dir_opts = Keyword.take(opts, [:session_dir])
-
-    case Alto.Session.transcript(session_id, dir_opts) do
-      {:ok, snapshot} ->
-        opts
-        |> Keyword.put(:session, session_id)
-        |> Keyword.put(
-          :resume,
-          Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-        )
-        |> then(&Runner.run(task, &1))
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    with {:ok, resume_opts} <- Alto.Session.resume_options(session_id, opts),
+         do: Runner.run(task, Keyword.merge(opts, resume_opts))
   end
 
   @doc """

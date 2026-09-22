@@ -1006,20 +1006,8 @@ defmodule Alto.FrontEnd.Registry do
     end
   end
 
-  defp resume_opts(session_id, state) when is_binary(session_id) do
-    case Alto.Session.transcript(session_id, session_dir: state.session_dir) do
-      {:ok, snapshot} ->
-        {:ok,
-         [
-           session: session_id,
-           resume:
-             Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-         ]}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+  defp resume_opts(session_id, state) when is_binary(session_id),
+    do: Alto.Session.resume_options(session_id, session_dir: state.session_dir)
 
   defp resume_opts(other, _state), do: {:error, {:invalid_resume_option, other}}
 

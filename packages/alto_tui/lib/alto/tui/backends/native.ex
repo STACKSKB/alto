@@ -9,19 +9,8 @@ defmodule Alto.TUI.Backends.Native do
   def start(task, prompt, run_options, _options) do
     case task["conversation_id"] do
       conversation_id when is_binary(conversation_id) ->
-        session_opts = Keyword.take(run_options, [:session_dir])
-
-        with {:ok, snapshot} <- Session.transcript(conversation_id, session_opts) do
-          run_options =
-            run_options
-            |> Keyword.put(:session, conversation_id)
-            |> Keyword.put(
-              :resume,
-              Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-            )
-
-          Alto.start(prompt, run_options)
-        end
+        with {:ok, resume_opts} <- Session.resume_options(conversation_id, run_options),
+             do: Alto.start(prompt, Keyword.merge(run_options, resume_opts))
 
       _none ->
         Alto.start(prompt, Keyword.put(run_options, :session, :new))
