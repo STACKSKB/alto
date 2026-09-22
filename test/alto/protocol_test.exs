@@ -39,7 +39,6 @@ defmodule Alto.ProtocolTest do
         id: "run-1:op-1",
         run_id: "run-1",
         call_id: "call-1",
-        operation_id: "run-1:op-1",
         tool: "echo",
         arguments: %{"value" => "hello"},
         execution_mode: :parallel
@@ -49,7 +48,6 @@ defmodule Alto.ProtocolTest do
                "id" => "run-1:op-1",
                "run_id" => "run-1",
                "call_id" => "call-1",
-               "operation_id" => "run-1:op-1",
                "tool" => "echo",
                "arguments" => %{"value" => "hello"},
                "execution_mode" => "parallel",
@@ -149,7 +147,6 @@ defmodule Alto.ProtocolTest do
         id: "run-41:op-1",
         run_id: "run-41",
         call_id: "call-1",
-        operation_id: "run-41:op-1",
         tool: "run_command",
         arguments: %{"program" => "ls"},
         execution_mode: :exclusive,
@@ -157,6 +154,7 @@ defmodule Alto.ProtocolTest do
       }
 
       assert {:ok, line} = Protocol.approval_request("s-5", "run-41", request, @max_line_bytes)
+      assert decode_line(line)["request"] == Protocol.encode_term(request)
 
       assert %{
                "type" => "approval_request",
@@ -164,7 +162,6 @@ defmodule Alto.ProtocolTest do
                  "id" => "run-41:op-1",
                  "run_id" => "run-41",
                  "call_id" => "call-1",
-                 "operation_id" => "run-41:op-1",
                  "tool" => "run_command",
                  "arguments" => %{"program" => "ls"},
                  "execution_mode" => "exclusive",

@@ -355,7 +355,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                     } = request}
 
     assert is_binary(request.id)
-    assert request.operation_id == request.id
     assert is_binary(request.run_id)
 
     assert_receive {:tool_ran, "hello"}
@@ -410,7 +409,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                     } = request}
 
     assert is_binary(request.id)
-    assert request.operation_id == request.id
 
     # run_prepared consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.

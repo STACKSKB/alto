@@ -190,7 +190,7 @@ defmodule Alto.Protocol do
         "type" => "approval_request",
         "id" => id,
         "run_id" => run_id,
-        "request" => request_object(request)
+        "request" => encode_term(request)
       },
       max_line_bytes
     )
@@ -204,7 +204,7 @@ defmodule Alto.Protocol do
         "type" => "approval_resolved",
         "id" => id,
         "run_id" => run_id,
-        "request" => request_object(request),
+        "request" => encode_term(request),
         "decision" => encode_term(decision)
       },
       max_line_bytes
@@ -275,19 +275,6 @@ defmodule Alto.Protocol do
       "domain" => Atom.to_string(event.domain),
       "at_ms" => event.at_ms,
       "event" => %{"type" => Atom.to_string(event.type), "data" => encode_term(event.data)}
-    }
-  end
-
-  defp request_object(%ApprovalRequest{} = request) do
-    %{
-      "id" => request.id,
-      "run_id" => request.run_id,
-      "call_id" => request.call_id,
-      "operation_id" => request.operation_id,
-      "tool" => request.tool,
-      "arguments" => encode_term(request.arguments),
-      "execution_mode" => Atom.to_string(request.execution_mode),
-      "details" => encode_term(request.details)
     }
   end
 

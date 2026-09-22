@@ -538,7 +538,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   # Approval handles are globally unique operation ids: no scoping
-  # or random-suffix patch. The handle in `request.id`/`operation_id` is the
+  # or random-suffix patch. The handle in `request.id` is the
   # key; `call_id` is correlation only. A duplicate handle is a caller bug
   # and is rejected instead of silently replacing the waiter.
   def handle_call({:request_approval, session_id, request, waiter}, _from, state)

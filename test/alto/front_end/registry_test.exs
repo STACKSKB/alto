@@ -341,7 +341,6 @@ defmodule Alto.FrontEnd.RegistryTest do
     # Approval handles are globally unique operation ids; the provider
     # call id is correlation only.
     assert request.call_id == "call-1"
-    assert request.operation_id == request.id
     assert request.run_id == run_id
     assert String.starts_with?(request.id, run_id <> ":op-")
     assert request.tool == "echo"
@@ -409,7 +408,6 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     for {run_id, request} <- approvals do
       assert request.run_id == run_id
-      assert request.operation_id == request.id
       assert String.starts_with?(request.id, run_id <> ":op-")
       decision = if run_id == first_run, do: :approve, else: {:deny, :second_run}
       assert :ok = Registry.approval_response(registry, request.id, decision)
@@ -593,7 +591,6 @@ defmodule Alto.FrontEnd.RegistryTest do
       id: "run-missing:op-1",
       run_id: "run-missing",
       call_id: "call-1",
-      operation_id: "run-missing:op-1",
       tool: "echo",
       arguments: %{"value" => "hello"},
       execution_mode: :exclusive

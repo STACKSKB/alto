@@ -170,7 +170,7 @@ surface, from `Alto.Approval.Request`.
 ```json
 {"v": 1, "type": "approval_request", "id": "s-5", "run_id": "run-41",
  "request": {"id": "run-41:op-1", "run_id": "run-41",
-             "call_id": "call-1", "operation_id": "run-41:op-1",
+             "call_id": "call-1",
              "tool": "echo",
              "arguments": {"value": "hello"},
              "execution_mode": "exclusive",
@@ -179,17 +179,9 @@ surface, from `Alto.Approval.Request`.
 
 Identities: `run_id` is the host run; `call_id` is the
 provider/native tool-call correlation token (repeatable, nullable, never a
-handle); `operation_id` is the globally unique runtime operation
-(`"<run_id>:op-<seq>"`); `id` is the approval handle, 1:1 with
-`operation_id`. A client answers with `approval_response` carrying the
+handle); `id` is the globally unique runtime operation and approval handle
+(`"<run_id>:op-<seq>"`). A client answers with `approval_response` carrying the
 handle in `request_id`, never the bare `call_id`.
-
-Wire compatibility (v1 breaking clarification): servers before this change
-emitted `"id": "<call_id>"` with no `run_id`/`call_id`/`operation_id`
-fields. Clients that assumed `id == call_id` must migrate to the handle
-plus `call_id` correlation. Receivers must still ignore unknown fields, so
-old clients see a globally unique `id` and can answer it unchanged; new
-clients must not assume `id` equals any provider id.
 
 `details` is the same bounded display map the interactive CLI shows. A client
 answers with `approval_response`. If no response arrives inside the host's
@@ -395,7 +387,7 @@ The reply is `ok`; the observable effect arrives as the durable
  "decision": "approve"}
 ```
 
-`request_id` is the approval handle (`request.id`/`operation_id`), not the
+`request_id` is the approval handle (`request.id`), not the
 `call_id`. `decision` is `"approve"` or `{"deny": "<reason>"}`. A `request_id`
 that is already resolved, cancelled, or never pending yields `error`
 (`not_found`); the host's approval timeout bounds how long a request stays

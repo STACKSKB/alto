@@ -2,11 +2,9 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
   @moduledoc """
   : operation and approval identity.
 
-  Identities: run (`session_id`, globally unique), provider call (`call_id`,
-  repeatable correlation only), runtime operation (`operation_id`,
-  `"<run_id>:op-<seq>"`, globally unique per invocation), approval handle
-  (`id`, 1:1 with `operation_id`). Front ends answer with the handle; the
-  `call_id` is never a handle.
+  Run identities are globally unique; provider call ids are repeatable
+  correlation tokens. Each invocation has one operation/approval handle
+  (`id`, `"<run_id>:op-<seq>"`). Front ends answer with this handle.
   """
 
   use ExUnit.Case, async: true
@@ -222,7 +220,6 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert first_req.id != second_req.id
     assert first_req.run_id == first
     assert second_req.run_id == second
-    assert first_req.operation_id == first_req.id
     assert String.starts_with?(first_req.id, first <> ":op-")
 
     assert :ok = Registry.approval_response(registry, first_req.id, :approve)

@@ -58,7 +58,6 @@ defmodule Alto.Runner.Execution.Tool do
       id: job.op_id,
       run_id: context.session_id,
       call_id: job.id,
-      operation_id: job.op_id,
       tool: job.name,
       arguments: job.arguments,
       execution_mode: job.tool.execution_mode,

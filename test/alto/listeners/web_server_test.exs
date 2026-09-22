@@ -177,7 +177,6 @@ defmodule Alto.Listeners.WebServerTest do
     assert request["request"]["call_id"] == "call-1"
     assert request["request"]["run_id"] == run_id
     approval_id = request["request"]["id"]
-    assert approval_id == request["request"]["operation_id"]
 
     send_envelope(socket, %{
       "type" => "approval_response",

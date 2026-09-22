@@ -12,7 +12,6 @@ defmodule Alto.Approvals.DelegatedTest do
       id: "run-1:op-1",
       run_id: "run-1",
       call_id: "provider-call",
-      operation_id: "run-1:op-1",
       tool: "git_mutate",
       arguments: %{"action" => "stage"},
       execution_mode: :exclusive,
@@ -33,7 +32,6 @@ defmodule Alto.Approvals.DelegatedTest do
     request = %Request{
       id: "id",
       run_id: "run",
-      operation_id: "id",
       tool: "write",
       arguments: %{},
       execution_mode: :exclusive,

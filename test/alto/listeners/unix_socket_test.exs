@@ -220,7 +220,6 @@ defmodule Alto.Listeners.UnixSocketTest do
     assert request_envelope["run_id"] == run_id
     assert request_envelope["request"]["call_id"] == "call-1"
     assert request_envelope["request"]["run_id"] == run_id
-    assert request_envelope["request"]["operation_id"] == request_envelope["request"]["id"]
 
     assert request_envelope["request"]["tool"] == "echo"
 
