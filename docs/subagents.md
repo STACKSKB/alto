@@ -198,7 +198,7 @@ alias Alto.Subagents.Continuation
 :ok = Continuation.retire(batch, acknowledged.revision)
 ```
 
-`acknowledge/3` fences the viewed revision and accepts a nonempty JSON receipt;
+`acknowledge/3` fences the viewed revision and accepts a nonempty portable-term receipt;
 the host is responsible for that receipt referring to its durable continuation.
 The runner does not automatically acknowledge a join merely because its loop
 received an event or a best-effort session write succeeded. Acknowledgement
@@ -209,7 +209,7 @@ updates, never child execution. Reusing an evicted key creates a new generation,
 so old parent bindings and dispatch tickets cannot attach to the replacement.
 
 For custom hosts, `open/4` creates/reconnects a batch from ordered unique IDs
-and immutable JSON metadata. `dispatch/2` grants a planned child once;
+and immutable portable metadata. `dispatch/2` grants a planned child once;
 `complete/2` retains a portable result under that ticket, and `skip/3` records a
 planned child's known non-dispatch. Exact repeated result publication is
 idempotent; conflicting results are rejected. A lost dispatch reply does not

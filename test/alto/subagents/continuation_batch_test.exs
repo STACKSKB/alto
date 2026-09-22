@@ -40,18 +40,24 @@ defmodule Alto.Subagents.ContinuationTest do
     id: id
   } do
     %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
-    batch = open!(ledger, "batch-order", ["z-first", "a-second"])
+    batch = open!(ledger, "batch-order", ["z-first", "a-second"], %{origin: {:native, 1}})
     identity = Continuation.identity(batch)
     {:ok, first} = Continuation.dispatch(batch, "z-first")
     {:ok, second} = Continuation.dispatch(batch, "a-second")
-    assert {:ok, _} = Continuation.complete(second, %{value: 2})
+    assert {:ok, _} = Continuation.complete(second, nil)
     assert {:ok, _} = Continuation.complete(first, %{value: 1})
+    assert {:ok, snapshot} = Continuation.read(batch)
+    assert snapshot.packet["children"]["z-first"]["result"] == %{value: 1}
     stop_supervised!(child_id)
 
     %{ledger: restarted} = start_ledger!(dir, id)
     {:ok, restored} = Continuation.restore(restarted, identity)
 
-    assert {:ok, %{results: [{"z-first", %{value: 1}}, {"a-second", %{value: 2}}]}} =
+    assert {:ok,
+            %{
+              results: [{"z-first", %{value: 1}}, {"a-second", nil}],
+              metadata: %{origin: {:native, 1}}
+            }} =
              Continuation.join(restored)
   end
 
@@ -107,8 +113,9 @@ defmodule Alto.Subagents.ContinuationTest do
     }
 
     assert {:error, :child_result_conflict} = Continuation.complete(forged, :forged)
-    assert {:ok, _} = Continuation.complete(ticket, :accepted)
-    assert {:ok, _} = Continuation.complete(ticket, :accepted)
+    assert {:ok, _} = Continuation.complete(ticket, 1)
+    assert {:ok, _} = Continuation.complete(ticket, 1)
+    assert {:error, :child_result_conflict} = Continuation.complete(ticket, 1.0)
     assert {:error, :child_result_conflict} = Continuation.complete(ticket, :different)
   end
 
@@ -231,6 +238,9 @@ defmodule Alto.Subagents.ContinuationTest do
              Continuation.complete(ticket, String.duplicate("x", 65_000))
 
     assert Continuation.read(batch) == before
+    result = String.duplicate("x", 50_000)
+    assert {:ok, _} = Continuation.complete(ticket, result)
+    assert {:ok, %{results: [{"worker", ^result}]}} = Continuation.join(batch)
   end
 
   test "parent batches reject receipts and delayed child writes without changing state", %{

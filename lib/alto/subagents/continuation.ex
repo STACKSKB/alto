@@ -27,7 +27,7 @@ defmodule Alto.Subagents.Continuation do
   @max_result_bytes 64_000
   @max_checkpoint_bytes 2_000_000
 
-  @doc "Create or reconnect an ordered batch with immutable JSON metadata."
+  @doc "Create or reconnect an ordered batch with immutable portable metadata."
   def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
     open_with_parent(ledger, key, ids, metadata, nil, opts)
   end
@@ -46,7 +46,7 @@ defmodule Alto.Subagents.Continuation do
     with :ok <- valid_key(key), :ok <- valid_plan(ids, metadata, parent) do
       initial = %{
         "kind" => @kind,
-        "version" => 1,
+        "version" => 2,
         "generation" => nonce(),
         "ids" => ids,
         "metadata" => metadata,
@@ -130,7 +130,7 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "List aggregate continuations whose immutable metadata contains the filter."
   def list(ledger, metadata_filter \\ %{}, opts \\ []) do
-    with true <- is_map(metadata_filter) and json?(metadata_filter),
+    with true <- is_map(metadata_filter) and Codec.valid?(metadata_filter, max_bytes: 64_000),
          {:ok, deadline} <- Retained.deadline(opts) do
       safe(fn -> list_entries(ledger, metadata_filter, deadline) end)
     else
@@ -179,9 +179,8 @@ defmodule Alto.Subagents.Continuation do
          true <- snapshot.revision == expected_revision,
          child when not is_nil(child) <-
            Map.get(snapshot.packet["children"], child_id),
-         true <- child["state"] in ["suspended", "decided"],
-         {:ok, entry} <- decode_approval(batch, child_id, child) do
-      {:ok, Map.put(entry, :revision, snapshot.revision)}
+         true <- child["state"] in ["suspended", "decided"] do
+      {:ok, Map.put(approval_view(batch, child_id, child), :revision, snapshot.revision)}
     else
       false -> {:error, :stale_child_approval}
       nil -> {:error, :unknown_child}
@@ -207,17 +206,17 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "Retain an exact portable result before the worker reports completion."
   def complete(%Ticket{} = ticket, result) do
-    with {:ok, encoded} <- encode_result(result) do
+    with :ok <- validate_result(result) do
       change_child(ticket.batch, ticket.id, fn child ->
         cond do
           owns_dispatch?(child, ticket) ->
             {:ok,
              child
              |> Map.drop(["suspension"])
-             |> Map.merge(%{"state" => "completed", "result" => encoded})}
+             |> Map.merge(%{"state" => "completed", "result" => result})}
 
           child["state"] == "completed" and child["attempt"] == ticket.attempt and
-              child["result"] == encoded ->
+              child["result"] === result ->
             {:ok, child}
 
           true ->
@@ -229,10 +228,9 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "Retain an exact approval checkpoint before a child reports suspension."
   def suspend(%Ticket{} = ticket, checkpoint, workspace \\ nil) do
-    with {:ok, encoded} <-
-           Codec.encode(%{"checkpoint" => checkpoint, "workspace" => workspace},
-             max_bytes: @max_checkpoint_bytes
-           ) do
+    saved = %{"checkpoint" => checkpoint, "workspace" => workspace}
+
+    if valid_suspension?(saved) do
       change_child(ticket.batch, ticket.id, fn child ->
         if owns_dispatch?(child, ticket) do
           {:ok,
@@ -240,7 +238,7 @@ defmodule Alto.Subagents.Continuation do
              "state" => "suspended",
              "suspension" => %{
                "token" => nonce(),
-               "checkpoint" => encoded,
+               "checkpoint" => saved,
                "decision" => nil,
                "grant" => nil
              }
@@ -249,6 +247,8 @@ defmodule Alto.Subagents.Continuation do
           {:error, :child_result_conflict}
         end
       end)
+    else
+      {:error, :not_portable_or_too_large}
     end
   end
 
@@ -257,7 +257,8 @@ defmodule Alto.Subagents.Continuation do
     with {:ok, snapshot} <- read(batch) do
       snapshot.ids
       |> Enum.filter(&(snapshot.packet["children"][&1]["state"] in ["suspended", "decided"]))
-      |> Alto.Result.traverse(&decode_approval(batch, &1, snapshot.packet["children"][&1]))
+      |> Enum.map(&approval_view(batch, &1, snapshot.packet["children"][&1]))
+      |> then(&{:ok, &1})
     end
   end
 
@@ -344,12 +345,12 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "Record known non-dispatch (for example cancellation of a queued child)."
   def skip(%__MODULE__{} = batch, id, result) do
-    with {:ok, encoded} <- encode_result(result) do
+    with :ok <- validate_result(result) do
       change_child(batch, id, fn
         %{"state" => "planned"} = child ->
-          {:ok, %{child | "state" => "completed", "result" => encoded}}
+          {:ok, %{child | "state" => "completed", "result" => result}}
 
-        %{"state" => "completed", "attempt" => nil, "result" => ^encoded} = child ->
+        %{"state" => "completed", "attempt" => nil, "result" => ^result} = child ->
           {:ok, child}
 
         _ ->
@@ -361,7 +362,7 @@ defmodule Alto.Subagents.Continuation do
   @doc "Read ordered results when every child has a retained outcome. Never dispatches."
   def join(%__MODULE__{} = batch) do
     with {:ok, snapshot} <- read(batch),
-         {:ok, results} <- decode_results(snapshot.ids, snapshot.packet["children"]) do
+         {:ok, results} <- ordered_results(snapshot.ids, snapshot.packet["children"]) do
       {:ok, Map.put(snapshot, :results, results)}
     end
   end
@@ -372,7 +373,7 @@ defmodule Alto.Subagents.Continuation do
          :ok <- valid_parent(packet),
          {:ok, %{phase: :children} = snapshot} <- read(cell),
          :ok <- active(snapshot),
-         {:ok, results} <- decode_results(snapshot.ids, snapshot.packet["children"]),
+         {:ok, results} <- ordered_results(snapshot.ids, snapshot.packet["children"]),
          snapshot <- Map.put(snapshot, :results, results),
          true <- not is_nil(snapshot.parent) and snapshot.revision == expected_revision,
          replacement <- %{
@@ -405,7 +406,8 @@ defmodule Alto.Subagents.Continuation do
 
   @doc "Acknowledge a join only after its consumer has durably saved the continuation."
   def acknowledge(%__MODULE__{} = batch, expected_revision, receipt) do
-    with true <- is_map(receipt) and map_size(receipt) > 0 and json?(receipt),
+    with true <-
+           is_map(receipt) and map_size(receipt) > 0 and Codec.valid?(receipt, max_bytes: 64_000),
          {:ok, snapshot} <- join(batch),
          true <- is_nil(snapshot.parent),
          :ok <- active(snapshot),
@@ -480,12 +482,11 @@ defmodule Alto.Subagents.Continuation do
   defp active(%{state: :active}), do: :ok
   defp active(_), do: {:error, :batch_not_active}
 
-  defp decode_results(ids, children) do
+  defp ordered_results(ids, children) do
     Alto.Result.traverse(ids, fn id ->
       case children[id] do
-        %{"state" => "completed", "result" => encoded} ->
-          with {:ok, value} <- Codec.decode(encoded, max_bytes: @max_result_bytes),
-               do: {:ok, {id, value}}
+        %{"state" => "completed", "result" => result} ->
+          {:ok, {id, result}}
 
         %{"state" => state} ->
           {:error, {:child_pending, id, state}}
@@ -493,18 +494,14 @@ defmodule Alto.Subagents.Continuation do
     end)
   end
 
-  defp encode_result(result) do
-    case Codec.encode(result, max_bytes: @max_result_bytes) do
-      {:ok, encoded} ->
-        {:ok, encoded}
-
-      {:error, :not_portable_or_too_large} ->
-        if portable_size?(result),
-          do: {:error, :checkpoint_not_portable_or_too_large},
-          else: {:error, {:child_result_too_large, @max_result_bytes}}
+  defp validate_result(result) do
+    if Codec.valid?(result, max_bytes: @max_result_bytes) do
+      :ok
+    else
+      if portable_size?(result),
+        do: {:error, :checkpoint_not_portable_or_too_large},
+        else: {:error, {:child_result_too_large, @max_result_bytes}}
     end
-  rescue
-    _ -> {:error, :checkpoint_not_portable_or_too_large}
   end
 
   defp initialize(_batch, %{checkpoint: packet}) when is_map(packet), do: :ok
@@ -621,25 +618,17 @@ defmodule Alto.Subagents.Continuation do
     end
   end
 
-  defp decode_approval(batch, id, child) do
-    with {:ok, saved} <-
-           Codec.decode(child["suspension"]["checkpoint"], max_bytes: @max_checkpoint_bytes),
-         true <-
-           is_map(saved) and
-             Enum.sort(Map.keys(saved)) == Enum.sort(["checkpoint", "workspace"]) do
-      {:ok,
-       %{
-         checkpoint: saved["checkpoint"],
-         workspace: saved["workspace"],
-         id: id,
-         state: if(child["state"] == "suspended", do: :suspended, else: :decided),
-         identity: child_identity(batch, id, child),
-         decision: child["suspension"]["decision"]
-       }}
-    else
-      false -> {:error, :invalid_batch}
-      {:error, _} = error -> error
-    end
+  defp approval_view(batch, id, child) do
+    saved = child["suspension"]["checkpoint"]
+
+    %{
+      checkpoint: saved["checkpoint"],
+      workspace: saved["workspace"],
+      id: id,
+      state: if(child["state"] == "suspended", do: :suspended, else: :decided),
+      identity: child_identity(batch, id, child),
+      decision: child["suspension"]["decision"]
+    }
   end
 
   defp lifecycle(%{status: {:checkpointed, _, @initialize}}), do: {:ok, :active}
@@ -674,7 +663,7 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
     if Enum.sort(Map.keys(initial)) == Enum.sort(~w(kind version generation ids metadata parent)) and
-         initial["kind"] == @kind and initial["version"] == 1 and nonce?(initial["generation"]) do
+         initial["kind"] == @kind and initial["version"] == 2 and nonce?(initial["generation"]) do
       valid_plan(initial["ids"], initial["metadata"], initial["parent"])
     else
       {:error, :invalid_batch}
@@ -723,8 +712,8 @@ defmodule Alto.Subagents.Continuation do
         nonce?(attempt) and is_nil(result)
 
       "completed" ->
-        (is_nil(attempt) or nonce?(attempt)) and is_binary(result) and
-          byte_size(result) <= div(@max_result_bytes * 4, 3) + 8
+        (is_nil(attempt) or nonce?(attempt)) and
+          Codec.valid?(result, max_bytes: @max_result_bytes)
 
       _ ->
         false
@@ -744,8 +733,7 @@ defmodule Alto.Subagents.Continuation do
       Enum.sort(Map.keys(suspension)) == Enum.sort(~w(token checkpoint decision grant)) and
       nonce?(suspension["token"]) and
       if(state == "resuming", do: nonce?(suspension["grant"]), else: is_nil(suspension["grant"])) and
-      is_binary(suspension["checkpoint"]) and
-      byte_size(suspension["checkpoint"]) <= div(@max_checkpoint_bytes * 4, 3) + 8 and
+      valid_suspension?(suspension["checkpoint"]) and
       if(state == "suspended",
         do: is_nil(suspension["decision"]),
         else: suspension["decision"] in ["approve", "deny"]
@@ -754,20 +742,25 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_child?(_), do: false
 
+  defp valid_suspension?(%{"checkpoint" => _, "workspace" => _} = saved)
+       when map_size(saved) == 2,
+       do: Codec.valid?(saved, max_bytes: @max_checkpoint_bytes)
+
+  defp valid_suspension?(_), do: false
+
   defp valid_plan(ids, metadata, parent) do
     if is_list(ids) and length(ids) <= 64 and (ids != [] or not is_nil(parent)) and
          Enum.all?(ids, &valid_id?/1) and
-         Enum.uniq(ids) == ids and is_map(metadata) and json?(metadata) and
+         Enum.uniq(ids) == ids and is_map(metadata) and Codec.valid?(metadata, max_bytes: 64_000) and
          (is_nil(parent) or valid_parent(parent) == :ok),
        do: :ok,
        else: {:error, :invalid_batch_plan}
   end
 
   defp valid_parent(parent) when is_map(parent) do
-    case Codec.encode(parent, max_bytes: @max_checkpoint_bytes) do
-      {:ok, _} -> :ok
-      _ -> {:error, :checkpoint_not_portable_or_too_large}
-    end
+    if Codec.valid?(parent, max_bytes: @max_checkpoint_bytes),
+      do: :ok,
+      else: {:error, :checkpoint_not_portable_or_too_large}
   end
 
   defp valid_parent(_), do: {:error, :checkpoint_not_portable_or_too_large}
@@ -794,12 +787,6 @@ defmodule Alto.Subagents.Continuation do
 
   defp nonce?(value),
     do: is_binary(value) and byte_size(value) == 32 and String.match?(value, ~r/\A[0-9a-f]+\z/)
-
-  defp json?(value) do
-    :erlang.external_size(value) <= 64_000 and JSON.decode(JSON.encode!(value)) == {:ok, value}
-  rescue
-    _ -> false
-  end
 
   defp portable_size?(term) do
     :erlang.external_size(term) <= @max_result_bytes
