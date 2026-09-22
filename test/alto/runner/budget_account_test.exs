@@ -13,6 +13,23 @@ defmodule Alto.Runner.BudgetAccountTest do
     %{dir: dir, ledger: ledger, ledger_opts: ledger_opts}
   end
 
+  test "opening persists one initialized checkpoint and one attempt", %{ledger: ledger} do
+    assert {:ok, account} =
+             Account.open(ledger, "atomic-open", max_effects: 2, max_model_requests: 3)
+
+    assert {:ok, %{revision: 1, packet: packet, state: :active}} = Account.read(account)
+    assert packet["effects_used"] == 0
+    assert packet["model_requests_used"] == 0
+    assert OperationLog.attempts(ledger, "atomic-open") == 1
+
+    assert {:ok, reopened} =
+             Account.open(ledger, "atomic-open", max_effects: 2, max_model_requests: 3)
+
+    assert Account.identity(reopened) == Account.identity(account)
+    assert {:ok, %{revision: 1}} = Account.read(reopened)
+    assert OperationLog.attempts(ledger, "atomic-open") == 1
+  end
+
   test "concurrent reservations stop exactly at each cap and read counts consistently", %{
     ledger: ledger
   } do

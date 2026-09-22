@@ -44,6 +44,10 @@ defmodule Alto.OperationLogTest do
 
     {:ok, ledger} = OperationLog.start_link(id: id, dir: dir, name: nil, max_ops: 0)
     assert {:error, :ledger_full} = OperationLog.record_intent(ledger, "op", "tool", nil)
+
+    assert {:error, :ledger_full} =
+             OperationLog.retain(ledger, "cell", "internal", %{}, "init", %{})
+
     assert OperationLog.keys(ledger) == []
   end
 
@@ -75,7 +79,32 @@ defmodule Alto.OperationLogTest do
              OperationLog.record_intent(name, "op-1", "tool", nil)
 
     assert projected > 20
+
+    assert {:error, {:ledger_log_too_large, _, 20}} =
+             OperationLog.retain(name, "cell", "internal", %{}, "init", %{})
+
+    assert :no_intent = OperationLog.status(name, "cell")
     assert File.stat!(Path.join(dir, id <> ".jsonl")).size == 0
+  end
+
+  test "retained initialization is one durable command and never overwrites an existing record",
+       %{dir: dir, id: id} do
+    %{name: name, pid: pid} = start_ledger!(id: id, dir: dir)
+    packet = %{count: 0}
+    assert :ok = OperationLog.retain(name, "cell", "counter", %{limit: 3}, "init", packet)
+
+    assert {:ok, %{revision: 1, checkpoint: ^packet, attempts: 1} = original} =
+             OperationLog.recovery(name, "cell")
+
+    path = Path.join(dir, id <> ".jsonl")
+    bytes = File.read!(path)
+    assert length(String.split(bytes, "\n", trim: true)) == 1
+    assert :ok = OperationLog.retain(name, "cell", "other", %{}, "new", %{count: 99})
+    assert File.read!(path) == bytes
+    assert {:ok, ^original} = OperationLog.recovery(name, "cell")
+    GenServer.stop(pid)
+    %{name: replayed} = start_ledger!(id: id, dir: dir)
+    assert {:ok, ^original} = OperationLog.recovery(replayed, "cell")
   end
 
   defp unique_id, do: String.to_atom("ledger_test_#{System.unique_integer([:positive])}")

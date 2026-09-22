@@ -31,17 +31,17 @@ defmodule Alto.Runner.Budget.Account do
         })
 
       deadline = Keyword.get(opts, :deadline, :infinity)
+      packet = Map.merge(initial, %{"effects_used" => 0, "model_requests_used" => 0})
 
       safe(fn ->
-        with :ok <- Retained.deadline_ok(deadline),
-             {:ok, entry} <- Retained.ensure_intent(ledger, key, @kind, nil, initial, deadline),
+        with {:ok, entry} <-
+               Retained.ensure_checkpoint(ledger, key, @kind, initial, @attempt, packet, deadline),
              :ok <- valid_initial(entry),
              account = %__MODULE__{
                ledger: ledger,
                key: key,
                generation: entry.recovery["generation"]
              },
-             :ok <- initialize(account, entry, deadline),
              {:ok, _} <-
                tighten(account, caps["max_effects"], caps["max_model_requests"], deadline) do
           {:ok, account}
@@ -218,41 +218,6 @@ defmodule Alto.Runner.Budget.Account do
       {:ok, _} -> {:error, :budget_account_closed}
       error -> error
     end
-  end
-
-  # Initialization records only counter state, never external dispatch. Its
-  # deterministic attempt can safely finish an interrupted initialization.
-  defp initialize(account, %{status: {:checkpointed, _, @attempt}}, deadline),
-    do: ensure_readable(account, deadline)
-
-  defp initialize(account, %{status: {:intended}}, deadline) do
-    case Retained.record_attempt(account.ledger, account.key, @attempt, deadline) do
-      :ok ->
-        with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
-             do: initialize(account, entry, deadline)
-
-      {:error, :checkpoint_active} ->
-        ensure_readable(account, deadline)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp initialize(account, %{status: {:dispatched, @attempt}} = entry, deadline) do
-    packet = Map.merge(entry.recovery, %{"effects_used" => 0, "model_requests_used" => 0})
-
-    case Retained.record_checkpoint(account.ledger, account.key, @attempt, packet, deadline) do
-      :ok -> :ok
-      {:error, :checkpoint_active} -> ensure_readable(account, deadline)
-      {:error, _} = error -> error
-    end
-  end
-
-  defp initialize(_, _, _), do: {:error, :budget_account_not_active}
-
-  defp ensure_readable(account, deadline) do
-    with {:ok, _} <- read(account, deadline), do: :ok
   end
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do

@@ -53,16 +53,26 @@ defmodule Alto.Subagents.Continuation do
         "parent" => parent
       }
 
+      packet = %{
+        "phase" => "children",
+        "generation" => initial["generation"],
+        "children" =>
+          Map.new(ids, &{&1, %{"state" => "planned", "attempt" => nil, "result" => nil}}),
+        "join" => nil
+      }
+
+      deadline = Keyword.get(opts, :deadline, :infinity)
+
       safe(fn ->
-        with :ok <- Retained.deadline_ok(Keyword.get(opts, :deadline, :infinity)),
-             {:ok, entry} <-
-               Retained.ensure_intent(
+        with {:ok, entry} <-
+               Retained.ensure_checkpoint(
                  ledger,
                  key,
                  @kind,
-                 nil,
                  initial,
-                 Keyword.get(opts, :deadline, :infinity)
+                 @initialize,
+                 packet,
+                 deadline
                ),
              :ok <- valid_initial(entry),
              true <-
@@ -72,9 +82,8 @@ defmodule Alto.Subagents.Continuation do
                ledger: ledger,
                key: key,
                generation: entry.recovery["generation"],
-               deadline: Keyword.get(opts, :deadline, :infinity)
+               deadline: deadline
              },
-             :ok <- initialize(batch, entry),
              {:ok, _} <- read(batch) do
           {:ok, batch}
         else
@@ -503,48 +512,6 @@ defmodule Alto.Subagents.Continuation do
         else: {:error, {:child_result_too_large, @max_result_bytes}}
     end
   end
-
-  defp initialize(_batch, %{checkpoint: packet}) when is_map(packet), do: :ok
-
-  defp initialize(batch, %{status: {:intended}}) do
-    case Retained.record_attempt(batch.ledger, batch.key, @initialize, batch.deadline) do
-      :ok ->
-        with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
-             do: initialize(batch, entry)
-
-      {:error, :checkpoint_active} ->
-        :ok
-
-      error ->
-        error
-    end
-  end
-
-  defp initialize(batch, %{status: {:dispatched, @initialize}, recovery: initial}) do
-    children =
-      Map.new(initial["ids"], &{&1, %{"state" => "planned", "attempt" => nil, "result" => nil}})
-
-    packet = %{
-      "phase" => "children",
-      "generation" => initial["generation"],
-      "children" => children,
-      "join" => nil
-    }
-
-    case Retained.record_checkpoint(
-           batch.ledger,
-           batch.key,
-           @initialize,
-           packet,
-           batch.deadline
-         ) do
-      :ok -> :ok
-      {:error, :checkpoint_active} -> :ok
-      error -> error
-    end
-  end
-
-  defp initialize(_, _), do: {:error, :invalid_batch_state}
 
   defp begin_retirement(batch, %{state: :active} = snapshot) do
     with {:ok, _} <-

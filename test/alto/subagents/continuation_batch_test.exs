@@ -26,6 +26,22 @@ defmodule Alto.Subagents.ContinuationTest do
     batch
   end
 
+  test "opening persists one initialized checkpoint and one attempt", %{dir: dir, id: id} do
+    %{ledger: ledger} = start_ledger!(dir, id)
+    batch = open!(ledger, "batch-atomic-open", ["a", "b"])
+
+    assert {:ok, %{revision: 1, state: :active, packet: packet}} = Continuation.read(batch)
+    assert packet["phase"] == "children"
+    assert packet["join"] == nil
+    assert Enum.sort(Map.keys(packet["children"])) == ["a", "b"]
+    assert OperationLog.attempts(ledger, "batch-atomic-open") == 1
+
+    assert {:ok, reopened} = Continuation.open(ledger, "batch-atomic-open", ["a", "b"])
+    assert Continuation.identity(reopened) == Continuation.identity(batch)
+    assert {:ok, %{revision: 1}} = Continuation.read(reopened)
+    assert OperationLog.attempts(ledger, "batch-atomic-open") == 1
+  end
+
   test "concurrent dispatch grants a child exactly once", %{dir: dir, id: id} do
     %{ledger: ledger} = start_ledger!(dir, id)
     batch = open!(ledger, "batch-concurrent", ["child-a"])

@@ -79,6 +79,11 @@ defmodule Alto.OperationLog do
     call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
   end
 
+  @doc "Create a retained checkpoint atomically if absent; an existing record is unchanged."
+  def retain(server \\ __MODULE__, op_key, tool, recovery, attempt, checkpoint, timeout \\ 5_000) do
+    call(server, {:retain, op_key, tool, recovery, attempt, checkpoint}, timeout)
+  end
+
   @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_attempt(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
     call(server, {:attempt, op_key, attempt_id}, timeout)
@@ -193,6 +198,7 @@ defmodule Alto.OperationLog do
 
   @commands %{
     intent: 5,
+    retain: 6,
     attempt: 3,
     release: 3,
     outcome: 5,
@@ -526,8 +532,8 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp plan(state, {:intent, op, _tool, _inbox, _recovery}) do
-    if Map.has_key?(state.ops, op), do: {:ok, state}, else: ensure_room(state)
+  defp plan(state, command) when elem(command, 0) in [:intent, :retain] do
+    if Map.has_key?(state.ops, elem(command, 1)), do: {:ok, state}, else: ensure_room(state)
   end
 
   defp plan(state, _event), do: {:ok, state}
@@ -554,6 +560,14 @@ defmodule Alto.OperationLog do
        do: :view
 
   defp transition_reply(_type), do: :ok
+
+  defp log_apply(nil, {:retain, op, tool, recovery, attempt, checkpoint}, state) do
+    with {:ok, record} <- log_apply(nil, {:intent, op, tool, nil, recovery}, state),
+         {:ok, record} <- log_apply(record, {:attempt, op, attempt}, state),
+         do: log_apply(record, {:checkpoint, op, attempt, checkpoint}, state)
+  end
+
+  defp log_apply(_record, {:retain, _, _, _, _, _}, _state), do: :noop
 
   defp log_apply(nil, command, _state) when elem(command, 0) != :intent,
     do: {:error, :no_intent}
