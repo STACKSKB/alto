@@ -145,6 +145,11 @@ defmodule Alto.Runner.Execution do
 
             RunSession.persist_outcome(run, outcome)
 
+          {:error, {:cancelled, reason}} ->
+            event = Event.durable(:run_cancelled, %{reason: reason})
+            Alto.Events.notify(Keyword.get(opts, :event_sink, fn _ -> :ok end), event)
+            {:error, {:cancelled, reason}, %{Result.empty(session) | events: [event]}}
+
           {:error, reason} ->
             {:error, reason, Result.empty(session)}
         end

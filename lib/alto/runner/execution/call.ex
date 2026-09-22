@@ -28,29 +28,22 @@ defmodule Alto.Runner.Execution.Call do
     end
   end
 
-  defp await(task, deadline, cancel_ref) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    case Task.yield(task, min(remaining, 50)) do
-      {:ok, value} ->
+  defp await(%Task{ref: ref} = task, deadline, cancel_ref) do
+    receive do
+      {^ref, value} ->
+        Process.demonitor(ref, [:flush])
         {:ok, value}
 
-      {:exit, reason} ->
+      {:DOWN, ^ref, :process, _, reason} ->
         {:error, reason}
 
-      nil when remaining == 0 ->
+      {:alto_cancel, ^cancel_ref, reason} when not is_nil(cancel_ref) ->
+        Task.shutdown(task, :brutal_kill)
+        {:cancelled, reason}
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
         Task.shutdown(task, :brutal_kill)
         {:error, :timeout}
-
-      nil ->
-        case cancellation(cancel_ref) do
-          {:cancelled, reason} ->
-            Task.shutdown(task, :brutal_kill)
-            {:cancelled, reason}
-
-          :continue ->
-            await(task, deadline, cancel_ref)
-        end
     end
   end
 
