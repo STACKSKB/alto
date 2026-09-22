@@ -64,8 +64,8 @@ defmodule Alto.Runner.Execution.Parent do
 
         {:ok, {kind, reason}, outcomes, _, state} ->
           state =
-            Enum.reduce(outcomes, state, fn {_, out}, acc ->
-              Children.merge_child_result(acc, out)
+            Enum.reduce(outcomes, state, fn {id, outcome}, acc ->
+              Children.merge_child_summary(acc, Children.child_summary(id, outcome))
             end)
 
           {kind, reason, state}

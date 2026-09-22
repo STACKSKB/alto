@@ -572,7 +572,8 @@ defmodule Alto.Runner.Execution do
            Children.run_children(specs, concurrency, run) do
       {results, run} =
         Enum.map_reduce(outcomes, run, fn {id, outcome}, acc ->
-          {Children.subagent_data(id, outcome), Children.merge_child_result(acc, outcome)}
+          summary = Children.child_summary(id, outcome)
+          {Children.public_child_summary(summary), Children.merge_child_summary(acc, summary)}
         end)
 
       case status do

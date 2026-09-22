@@ -102,8 +102,8 @@ defmodule Alto.Runner.Execution.Children do
 
         if status == :ok do
           run =
-            Enum.reduce(outcomes, run, fn {_, outcome}, acc ->
-              merge_child_result(acc, outcome)
+            Enum.reduce(outcomes, run, fn {id, outcome}, acc ->
+              merge_child_summary(acc, child_summary(id, outcome))
             end)
 
           {:error, {:subagent_journal_failed, reason}, run}
@@ -118,10 +118,9 @@ defmodule Alto.Runner.Execution.Children do
   @doc "Validate and merge retained native child summaries without redispatch."
   def merge_retained(results, run) when is_list(results) do
     Enum.reduce_while(results, {:ok, [], run}, fn {id, data}, {:ok, values, acc} ->
-      case retained_outcome(id, data) do
-        {:ok, outcome} ->
-          {:cont,
-           {:ok, [Map.delete(data, :persistence) | values], merge_child_result(acc, outcome)}}
+      case validate_child_summary(id, data) do
+        :ok ->
+          {:cont, {:ok, [public_child_summary(data) | values], merge_child_summary(acc, data)}}
 
         {:error, _} = error ->
           {:halt, error}
@@ -133,7 +132,7 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  defp retained_outcome(id, %{id: id, status: status} = data)
+  defp validate_child_summary(id, %{id: id, status: status} = data)
        when status in [:ok, :error, :cancelled] do
     if Map.has_key?(data, :usage) do
       usage = data.usage
@@ -151,29 +150,18 @@ defmodule Alto.Runner.Execution.Children do
              ],
            true <- is_integer(data[:model_requests]) and data.model_requests >= 0,
            true <- valid_persistence?(Map.get(data, :persistence, :ok)) do
-        result = %{
-          Alto.Runner.Result.empty()
-          | usage: usage,
-            verdict: data.outcome,
-            persistence: Map.get(data, :persistence, :ok)
-        }
-
-        {:ok,
-         if(status == :ok,
-           do: {:ok, result},
-           else: {:error, data[:error] || data[:reason], result}
-         )}
+        :ok
       else
         _ -> {:error, :invalid_retained_child_result}
       end
     else
       if status == :error and Map.has_key?(data, :error),
-        do: {:ok, {:error, data.error}},
+        do: :ok,
         else: {:error, :invalid_retained_child_result}
     end
   end
 
-  defp retained_outcome(_, _), do: {:error, :invalid_retained_child_result}
+  defp validate_child_summary(_, _), do: {:error, :invalid_retained_child_result}
   defp valid_persistence?(value) when value in [:ok, :not_requested], do: true
   defp valid_persistence?({:degraded, errors}) when is_list(errors), do: true
   defp valid_persistence?(_), do: false
@@ -241,7 +229,7 @@ defmodule Alto.Runner.Execution.Children do
           started
 
         {:error, reason} = error ->
-          case Continuation.complete(ticket, subagent_data(spec.id, error)) do
+          case Continuation.complete(ticket, child_summary(spec.id, error)) do
             {:ok, _} ->
               error
 
@@ -261,9 +249,8 @@ defmodule Alto.Runner.Execution.Children do
       do: outcome
 
   def retain_child_outcome(%Continuation.Ticket{} = ticket, outcome) do
-    data = subagent_data(ticket.id, outcome)
+    data = child_summary(ticket.id, outcome)
     result = elem(outcome, tuple_size(outcome) - 1)
-    retained = Map.put(data, :persistence, result.persistence)
 
     stored =
       case outcome do
@@ -271,7 +258,7 @@ defmodule Alto.Runner.Execution.Children do
           Continuation.suspend(ticket, checkpoint, result.workspace)
 
         _ ->
-          Continuation.complete(ticket, retained)
+          Continuation.complete(ticket, data)
       end
 
     case stored do
@@ -292,7 +279,7 @@ defmodule Alto.Runner.Execution.Children do
     skipped =
       Enum.reduce_while(outcomes, :ok, fn
         {id, {:error, {:not_started, _}} = outcome}, :ok ->
-          case Continuation.skip(journal, id, subagent_data(id, outcome)) do
+          case Continuation.skip(journal, id, child_summary(id, outcome)) do
             {:ok, _} -> {:cont, :ok}
             error -> {:halt, error}
           end
@@ -549,16 +536,19 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  def subagent_data(id, {:ok, result}),
+  @doc "Remove journal-only accounting details from a child summary delivered to its loop."
+  def public_child_summary(summary), do: Map.delete(summary, :persistence)
+
+  def child_summary(id, {:ok, result}),
     do: Map.merge(child_fields(id, result), %{status: :ok})
 
-  def subagent_data(id, {:error, {:cancelled, reason}, result}),
+  def child_summary(id, {:error, {:cancelled, reason}, result}),
     do: Map.merge(child_fields(id, result), %{status: :cancelled, reason: reason})
 
-  def subagent_data(id, {:error, reason, result}),
+  def child_summary(id, {:error, reason, result}),
     do: Map.merge(child_fields(id, result), %{status: :error, error: reason})
 
-  def subagent_data(id, {:error, reason}), do: %{id: id, status: :error, error: reason}
+  def child_summary(id, {:error, reason}), do: %{id: id, status: :error, error: reason}
 
   defp child_fields(id, result) do
     %{
@@ -567,33 +557,31 @@ defmodule Alto.Runner.Execution.Children do
       model_requests: result.model_requests,
       usage: result.usage,
       outcome: result.verdict,
+      persistence: result.persistence,
       run_id: result.run_id,
       session_id: result.session_id,
       workspace: result.workspace
     }
   end
 
-  def merge_child_result(run, {:error, {:run_process_failed, _}, _}),
+  def merge_child_summary(run, %{error: {:run_process_failed, _}}),
     do: Events.merge_verdict(run, :unknown)
 
-  def merge_child_result(run, {:error, {:run_process_failed, _}}),
-    do: Events.merge_verdict(run, :unknown)
-
-  def merge_child_result(run, {:error, _reason, result}),
-    do: merge_child_result(run, {:ok, result})
-
-  def merge_child_result(run, {:ok, result}) do
-    run = Events.merge_verdict(run, result.verdict)
-    run = %{run | usage: Usage.merge(run.usage, struct(Usage, result.usage))}
+  def merge_child_summary(run, %{usage: usage, outcome: outcome} = summary) do
+    run = Events.merge_verdict(run, outcome)
+    run = %{run | usage: Usage.merge(run.usage, struct(Usage, usage))}
 
     Enum.reduce(
-      Result.persistence_errors(result),
+      persistence_errors(summary),
       run,
       &Events.add_persistence_error(&2, {:subagent, &1})
     )
   end
 
-  def merge_child_result(run, _outcome), do: run
+  def merge_child_summary(run, _summary), do: run
+
+  defp persistence_errors(%{persistence: {:degraded, errors}}), do: errors
+  defp persistence_errors(_), do: []
 
   defp validate_subagent_tools(:inherit, _run), do: :ok
 
