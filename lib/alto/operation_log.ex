@@ -14,43 +14,21 @@ defmodule Alto.OperationLog do
 
   @version 1
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
-  @default_max_ops 10_000
   @max_key_bytes 256
-  @default_max_identifier_bytes 256
-  @default_max_evidence_bytes 64_000
-  @default_max_recovery_bytes 64_000
-  @default_max_record_bytes 128_000
-  @default_max_log_bytes 64_000_000
-  @default_max_attempts 32
+  @limits [
+    max_ops: [type: :non_neg_integer, default: 10_000],
+    max_identifier_bytes: [type: :pos_integer, default: 256],
+    max_evidence_bytes: [type: :pos_integer, default: 64_000],
+    max_recovery_bytes: [type: :pos_integer, default: 64_000],
+    max_record_bytes: [type: :pos_integer, default: 128_000],
+    max_log_bytes: [type: :pos_integer, default: 64_000_000],
+    max_attempts: [type: :pos_integer, default: 32]
+  ]
+  @limits_schema NimbleOptions.new!(@limits)
   @scrub_pattern ~r/password|secret|token|api_key|apikey|credential|private_key/i
 
-  @enforce_keys [
-    :id,
-    :dir,
-    :path,
-    :max_ops,
-    :max_identifier_bytes,
-    :max_evidence_bytes,
-    :max_recovery_bytes,
-    :max_record_bytes,
-    :max_log_bytes,
-    :max_attempts
-  ]
-  defstruct [
-    :id,
-    :dir,
-    :path,
-    :lock,
-    :max_ops,
-    :max_identifier_bytes,
-    :max_evidence_bytes,
-    :max_recovery_bytes,
-    :max_record_bytes,
-    :max_log_bytes,
-    :max_attempts,
-    ops: %{},
-    order: []
-  ]
+  @enforce_keys [:id, :dir, :path] ++ Keyword.keys(@limits)
+  defstruct @enforce_keys ++ [:lock, ops: %{}, order: []]
 
   @type op_key :: String.t()
   @type status ::
@@ -66,36 +44,12 @@ defmodule Alto.OperationLog do
     id = Keyword.fetch!(opts, :id)
     :ok = validate_id!(id)
 
-    max_ops = Keyword.get(opts, :max_ops, @default_max_ops)
+    with {:ok, limits} <-
+           NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@limits)), @limits_schema) do
+      directory = dir(opts)
 
-    max_identifier_bytes =
-      Keyword.get(opts, :max_identifier_bytes, @default_max_identifier_bytes)
-
-    max_evidence_bytes = Keyword.get(opts, :max_evidence_bytes, @default_max_evidence_bytes)
-    max_recovery_bytes = Keyword.get(opts, :max_recovery_bytes, @default_max_recovery_bytes)
-    max_record_bytes = Keyword.get(opts, :max_record_bytes, @default_max_record_bytes)
-    max_log_bytes = Keyword.get(opts, :max_log_bytes, @default_max_log_bytes)
-    max_attempts = Keyword.get(opts, :max_attempts, @default_max_attempts)
-
-    with :ok <- validate_max_ops(max_ops),
-         :ok <- validate_positive_limit(:max_identifier_bytes, max_identifier_bytes),
-         :ok <- validate_positive_limit(:max_evidence_bytes, max_evidence_bytes),
-         :ok <- validate_positive_limit(:max_recovery_bytes, max_recovery_bytes),
-         :ok <- validate_positive_limit(:max_record_bytes, max_record_bytes),
-         :ok <- validate_positive_limit(:max_log_bytes, max_log_bytes),
-         :ok <- validate_positive_limit(:max_attempts, max_attempts) do
-      state = %__MODULE__{
-        id: id,
-        dir: Keyword.get(opts, :dir, dir(opts)),
-        path: log_path(Keyword.get(opts, :dir, dir(opts)), id),
-        max_ops: max_ops,
-        max_identifier_bytes: max_identifier_bytes,
-        max_evidence_bytes: max_evidence_bytes,
-        max_recovery_bytes: max_recovery_bytes,
-        max_record_bytes: max_record_bytes,
-        max_log_bytes: max_log_bytes,
-        max_attempts: max_attempts
-      }
+      state =
+        struct!(__MODULE__, [id: id, dir: directory, path: log_path(directory, id)] ++ limits)
 
       Alto.Storage.start_server(__MODULE__, state, &load/1, opts)
     end
@@ -557,12 +511,6 @@ defmodule Alto.OperationLog do
 
   defp decode_recovery(nil), do: {:ok, nil}
   defp decode_recovery(recovery), do: SessionStore.decode_term(recovery)
-
-  defp validate_max_ops(n) when is_integer(n) and n >= 0, do: :ok
-  defp validate_max_ops(n), do: {:error, {:invalid_max_ops, n}}
-
-  defp validate_positive_limit(_name, n) when is_integer(n) and n >= 1, do: :ok
-  defp validate_positive_limit(name, n), do: {:error, {:invalid_limit, name, n}}
 
   defp validate_id!(id) do
     if is_binary(id) and Regex.match?(@id_pattern, id) do

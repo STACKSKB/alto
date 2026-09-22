@@ -23,6 +23,30 @@ defmodule Alto.OperationLogTest do
     %{dir: dir, id: "l" <> Integer.to_string(System.unique_integer([:positive]))}
   end
 
+  test "startup rejects invalid limits before opening storage and permits zero capacity", %{
+    dir: dir,
+    id: id
+  } do
+    for {key, value} <- [
+          max_ops: -1,
+          max_attempts: 0,
+          max_identifier_bytes: "256",
+          max_evidence_bytes: 0,
+          max_recovery_bytes: nil,
+          max_record_bytes: -1,
+          max_log_bytes: 0
+        ] do
+      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
+               OperationLog.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])
+
+      refute File.exists?(dir)
+    end
+
+    {:ok, ledger} = OperationLog.start_link(id: id, dir: dir, name: nil, max_ops: 0)
+    assert {:error, :ledger_full} = OperationLog.record_intent(ledger, "op", "tool", nil)
+    assert OperationLog.keys(ledger) == []
+  end
+
   defp start_ledger!(opts) do
     name = :"ledger_#{System.unique_integer([:positive])}"
     {:ok, pid} = OperationLog.start_link(Keyword.put(opts, :name, name))
