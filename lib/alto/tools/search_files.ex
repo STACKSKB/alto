@@ -158,51 +158,45 @@ defmodule Alto.Tools.SearchFiles do
   defp walk([], state, _query, _case_sensitive?, _cwd, _limits), do: {:ok, state}
 
   defp walk(
-         queue,
+         _queue,
          %{scanned_files: files, visited_entries: entries, matches: matches} = state,
-         query,
-         case_sensitive?,
-         cwd,
+         _query,
+         _case_sensitive?,
+         _cwd,
          limits
-       ) do
-    cond do
-      files >= limits.max_files or entries >= limits.max_entries or
-          length(matches) >= limits.max_matches ->
-        {:ok, %{state | truncated: true}}
+       )
+       when files >= limits.max_files or entries >= limits.max_entries or
+              length(matches) >= limits.max_matches,
+       do: {:ok, %{state | truncated: true}}
 
-      true ->
-        do_walk(queue, state, query, case_sensitive?, cwd, limits)
-    end
-  end
-
-  defp do_walk([path | rest], state, query, case_sensitive?, cwd, limits) do
+  defp walk([path | rest], state, query, case_sensitive?, cwd, limits) do
     state = %{state | visited_entries: state.visited_entries + 1}
 
-    case File.lstat(path) do
-      {:ok, %{type: :directory}} ->
-        case File.ls(path) do
-          {:ok, names} ->
-            children =
-              names
-              |> Enum.reject(&MapSet.member?(limits.excluded_directories, &1))
-              |> Enum.sort()
-              |> Enum.map(&Path.join(path, &1))
+    {children, state} =
+      case File.lstat(path) do
+        {:ok, %{type: :directory}} ->
+          {directory_children(path, limits.excluded_directories), state}
 
-            walk(children ++ rest, state, query, case_sensitive?, cwd, limits)
+        {:ok, %{type: :regular, size: size}} when size <= limits.max_file_bytes ->
+          {[], search_file(path, state, query, case_sensitive?, cwd, limits)}
 
-          {:error, _reason} ->
-            walk(rest, state, query, case_sensitive?, cwd, limits)
-        end
+        _ ->
+          {[], state}
+      end
 
-      {:ok, %{type: :regular, size: size}} when size <= limits.max_file_bytes ->
-        next_state = search_file(path, state, query, case_sensitive?, cwd, limits)
-        walk(rest, next_state, query, case_sensitive?, cwd, limits)
+    walk(children ++ rest, state, query, case_sensitive?, cwd, limits)
+  end
 
-      {:ok, _stat} ->
-        walk(rest, state, query, case_sensitive?, cwd, limits)
+  defp directory_children(path, excluded) do
+    case File.ls(path) do
+      {:ok, names} ->
+        names
+        |> Enum.reject(&MapSet.member?(excluded, &1))
+        |> Enum.sort()
+        |> Enum.map(&Path.join(path, &1))
 
-      {:error, _reason} ->
-        walk(rest, state, query, case_sensitive?, cwd, limits)
+      {:error, _} ->
+        []
     end
   end
 
