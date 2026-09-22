@@ -84,7 +84,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
     assert same_packet["fingerprint"] == packet["fingerprint"]
     assert packet["kind"] == "parent"
-    assert packet["stage"] == "children"
     refute Map.has_key?(packet, "request")
     packet = packet |> JSON.encode!() |> JSON.decode!()
 
@@ -116,7 +115,9 @@ defmodule Alto.Runner.ParentCheckpointTest do
              Checkpoint.capture_parent(restored, %{kind: :frame}, [], {:stop, "done"})
 
     assert ready["expires_at_ms"] <= expiry
-    assert ready["stage"] == "frame"
+
+    assert {:ok, _, %{pending: %{kind: :frame}}} =
+             Checkpoint.restore_parent(restored, ready, opts)
 
     expired = replace_expiry(packet, System.system_time(:millisecond) - 1)
     assert {:error, :run_timeout} = Checkpoint.restore_parent(run, expired, opts)
@@ -220,13 +221,25 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
     for changed <- [
-          Map.put(packet, "stage", "frame"),
           Map.put(packet, "session_id", "other"),
           Map.put(packet, "expires_at_ms", packet["expires_at_ms"] + 1),
-          put_in(packet, ["authority", "max_steps"], 100),
           put_in(packet, ["budget", "effects_used"], 0.5)
         ] do
       assert {:error, _} = Checkpoint.restore_parent(run, changed, opts)
+    end
+
+    refute Map.has_key?(packet, "stage")
+    refute Map.has_key?(packet, "store")
+    refute Map.has_key?(packet, "authority")
+    {:ok, saved} = Checkpoint.decode(packet["state"])
+
+    for changed <- [
+          put_in(saved, [:pending, :kind], :invalid),
+          put_in(saved, [:binding, :store], %{}),
+          put_in(saved, [:binding, :authority, :max_steps], -1)
+        ] do
+      {:ok, encoded} = Checkpoint.encode(changed)
+      assert {:error, _} = Checkpoint.restore_parent(run, %{packet | "state" => encoded}, opts)
     end
 
     assert {:error, _} =

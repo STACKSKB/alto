@@ -89,7 +89,7 @@ defmodule Alto.Runner.Checkpoint do
     :tool_timeout,
     :approval_timeout
   ]
-  @parent_packet_fields ~w(format continuation_format kind stage version fingerprint state budget usage agent_identity session_id transcript_revision store authority expires_at_ms)
+  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget usage agent_identity session_id transcript_revision expires_at_ms)
 
   @doc """
   Capture a root parent's pending child join or its exact next frame.
@@ -126,9 +126,6 @@ defmodule Alto.Runner.Checkpoint do
         |> checkpoint_packet(captured, budget)
         |> Map.merge(%{
           "kind" => "parent",
-          "stage" => Atom.to_string(pending.kind),
-          "store" => store,
-          "authority" => Alto.Protocol.encode_term(authority),
           "expires_at_ms" => expires
         })
 
@@ -150,10 +147,9 @@ defmodule Alto.Runner.Checkpoint do
     with :ok <- parent_capabilities(run),
          true <- Enum.sort(Map.keys(packet)) == Enum.sort(@parent_packet_fields),
          true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
-         true <- packet["kind"] == "parent" and packet["stage"] in ["children", "frame"],
+         true <- packet["kind"] == "parent",
          {:ok, _} <- encode(packet),
          {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
-         true <- store == packet["store"],
          {:ok,
           %{
             run: saved,
@@ -164,10 +160,9 @@ defmodule Alto.Runner.Checkpoint do
             binding: binding
           } = decoded} <- decode_state(run, packet, @parent_fields),
          true <- map_size(decoded) == 6,
-         true <- valid_parent_binding?(binding, packet),
+         true <- valid_parent_binding?(binding, packet) and binding.store == store,
          :ok <- parent_budget_binding(run, packet["budget"]),
          true <- valid_parent_pending?(pending),
-         true <- Atom.to_string(pending.kind) == packet["stage"],
          true <- valid_frame?(remaining, terminal),
          true <- valid_parent_saved?(saved, binding.authority),
          true <- valid_authority?(Map.take(run, @authority_fields)),
@@ -371,10 +366,9 @@ defmodule Alto.Runner.Checkpoint do
 
   defp valid_parent_binding?(binding, packet) when is_map(binding) do
     map_size(binding) == 5 and valid_authority?(binding.authority) and
-      binding.store == packet["store"] and binding.budget == packet["budget"] and
+      binding.budget == packet["budget"] and
       binding.session_id == packet["session_id"] and
-      binding.expires_at_ms == packet["expires_at_ms"] and
-      Alto.Protocol.encode_term(binding.authority) == packet["authority"]
+      binding.expires_at_ms == packet["expires_at_ms"]
   end
 
   defp valid_parent_binding?(_, _), do: false
