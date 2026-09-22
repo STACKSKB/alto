@@ -880,12 +880,24 @@ defmodule Alto.FrontEnd.Registry do
   ## Approvals
 
   defp resolve_approval(state, request_id, decision) do
-    case find_pending(state, request_id: request_id) do
-      nil ->
+    case take_pending(state, request_id: request_id) do
+      {nil, state} ->
         {{:error, :not_found}, state}
 
-      {run_id, request_id, entry} ->
+      {entry, state} ->
         send(entry.waiter, {:alto_approval_decision, request_id, decision})
+        {:ok, state}
+    end
+  end
+
+  defp clear_pending(state, selector), do: elem(take_pending(state, selector), 1)
+
+  defp take_pending(state, selector) do
+    case find_pending(state, selector) do
+      nil ->
+        {nil, state}
+
+      {run_id, request_id, entry} ->
         Process.demonitor(entry.monitor, [:flush])
 
         state =
@@ -893,21 +905,7 @@ defmodule Alto.FrontEnd.Registry do
             %{run | pending: Map.delete(run.pending, request_id)}
           end)
 
-        {:ok, state}
-    end
-  end
-
-  defp clear_pending(state, selector) do
-    case find_pending(state, selector) do
-      nil ->
-        state
-
-      {run_id, request_id, entry} ->
-        Process.demonitor(entry.monitor, [:flush])
-
-        update_run(state, run_id, fn run ->
-          %{run | pending: Map.delete(run.pending, request_id)}
-        end)
+        {entry, state}
     end
   end
 
