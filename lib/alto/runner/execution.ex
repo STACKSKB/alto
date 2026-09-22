@@ -991,7 +991,7 @@ defmodule Alto.Runner.Execution do
     {run, events, failure} =
       Enum.zip(jobs, outcomes)
       |> Enum.reduce({run, [], nil}, fn {job, outcome}, {run, events, failure} ->
-        interpreted = batch_outcome(job, outcome, run)
+        interpreted = finish_tool_job(job, outcome, run)
 
         case interpreted do
           {:event, event, next} -> {Events.record(next, event), events ++ [event], failure}
@@ -1007,15 +1007,6 @@ defmodule Alto.Runner.Execution do
         {:error, reason, run}
     end
   end
-
-  defp batch_outcome(job, {:ok, value}, run),
-    do: finish_tool_job(job, {:participant, value}, run)
-
-  defp batch_outcome(job, {:rejected, reason}, run),
-    do: finish_tool_job(job, {:rejected, reason}, run)
-
-  defp batch_outcome(job, {:error, reason}, run),
-    do: finish_tool_job(job, {:uncertain, reason}, run)
 
   defp dispatch_batch([], run, effects, rest, terminal),
     do: execute(effects ++ rest, run, terminal)
@@ -1043,7 +1034,7 @@ defmodule Alto.Runner.Execution do
 
   defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([job], run)
 
-  defp finish_tool_job(job, {:participant, outcome}, run) do
+  defp finish_tool_job(job, {:ok, outcome}, run) do
     tool_outcome(job, outcome, run)
     |> tool_event_summary(job.summary)
   end
@@ -1051,7 +1042,7 @@ defmodule Alto.Runner.Execution do
   defp finish_tool_job(job, {:rejected, reason}, run),
     do: tool_failure(job, reason, :rejected_before_dispatch, run)
 
-  defp finish_tool_job(job, {:uncertain, reason}, run),
+  defp finish_tool_job(job, {:error, reason}, run),
     do: tool_failure(job, reason, :unknown, run)
 
   defp tool_event_summary({:event, event, run}, summary),
@@ -1060,12 +1051,9 @@ defmodule Alto.Runner.Execution do
   defp tool_event_summary(other, _summary), do: other
 
   defp tool_outcome(job, {:ok, value}, run) do
-    # Bound native values before retention or persistence. An oversized result
-    # is an uncertain failure after dispatch, never permission to rerun.
-    # Deterministic loops consume `value`; providers receive normalized content
-    # without retaining a second serialized copy in the completion event.
-    with :ok <- Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes),
-         {:ok, content} <- model_result_content(value, run) do
+    # Workers bound native values before returning them. Provider content has
+    # a separate encoding bound and is not duplicated in the completion event.
+    with {:ok, content} <- model_result_content(value, run) do
       commit_tool_outcome(
         job,
         content,
