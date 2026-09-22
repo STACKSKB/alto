@@ -749,11 +749,8 @@ defmodule Alto.TUI.Backends.Codex do
     completed? = status == "completed"
     catalog_status = if completed?, do: "completed", else: "failed"
 
-    local_id =
-      Enum.find_value(state.runs, fn {id, candidate} -> if candidate == run, do: id end)
-
     state
-    |> Host.finish_run(local_id, catalog_status,
+    |> Host.finish_run(run.local_id, catalog_status,
       entry:
         if(completed?,
           do: nil,

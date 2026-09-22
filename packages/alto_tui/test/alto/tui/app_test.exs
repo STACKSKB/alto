@@ -693,11 +693,43 @@ defmodule Alto.TUI.AppTest do
     assert text =~ "Continue from the saved design."
   end
 
+  test "buffered Codex events retain run identity through phase changes and completion",
+       context do
+    state = state!(context)
+    run = %{kind: :codex, task_id: "task", thread_id: "thread", turn_id: nil, status: :starting}
+    state = App.attach_run(%{state | selected_task_id: "task"}, "run", run, "hello", "starting")
+    params = %{"threadId" => "thread", "turnId" => "turn", "delta" => "Thinking"}
+
+    pending = [
+      {:notification, "item/reasoning/textDelta", params},
+      {:notification, "item/agentMessage/delta", %{params | "delta" => "Answer"}},
+      {:notification, "turn/completed", Map.put(params, "turn", %{"status" => "completed"})}
+    ]
+
+    state = put_in(state.backend_state[Codex].pending_messages, pending)
+
+    assert {:noreply, state} =
+             App.handle_info(
+               {:codex_turn_started, "run", {:ok, %{thread_id: "thread", turn_id: "turn"}}},
+               state
+             )
+
+    assert state.runs == %{}
+    assert state.backend_state[Codex].pending_messages == []
+    assert state.notice == "Codex run completed"
+
+    assert Enum.any?(
+             State.current_entries(state),
+             &(&1.kind == :codex_assistant and &1.text == "Answer")
+           )
+  end
+
   test "Codex reasoning summaries replace raw deltas and the completed item is authoritative",
        context do
     state = state!(context)
 
     run = %{
+      local_id: "run",
       kind: :codex,
       task_id: "task",
       thread_id: "thread",

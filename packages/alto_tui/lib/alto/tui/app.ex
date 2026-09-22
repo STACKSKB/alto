@@ -645,7 +645,7 @@ defmodule Alto.TUI.App do
 
     state
     |> State.append_entry(run.task_id, %{kind: :user, text: prompt})
-    |> Map.update!(:runs, &Map.put(&1, local_id, run))
+    |> Map.update!(:runs, &Map.put(&1, local_id, Map.put(run, :local_id, local_id)))
     |> Map.put(:notice, notice)
     |> Map.put(:transcript_scroll, 0)
     |> Map.put(:transcript_follow?, true)
@@ -820,12 +820,7 @@ defmodule Alto.TUI.App do
     update_in(state.runs[local_id], &Map.merge(&1, Map.new(changes)))
   end
 
-  def update_run(state, run, changes) do
-    case Enum.find(state.runs, fn {_id, candidate} -> candidate == run end) do
-      {local_id, _run} -> update_run(state, local_id, changes)
-      nil -> state
-    end
-  end
+  def update_run(state, %{local_id: id}, changes), do: update_run(state, id, changes)
 
   def sync_run_task(state, run) do
     changes =
