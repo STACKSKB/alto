@@ -263,6 +263,15 @@ defmodule Alto.OperationLogTest do
                  "op-1",
                  "print",
                  "job-1",
+                 %{recovery | payload: %{v: 1.0}}
+               )
+
+      assert {:error, :intent_conflict} =
+               OperationLog.record_intent(
+                 name,
+                 "op-1",
+                 "print",
+                 "job-1",
                  %{recovery | generation_id: "gen-b"}
                )
     end

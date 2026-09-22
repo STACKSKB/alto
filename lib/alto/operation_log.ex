@@ -353,7 +353,7 @@ defmodule Alto.OperationLog do
   defp current_attempt(%{attempts: attempts}), do: List.last(attempts)
 
   defp same_intent?(entry, tool, inbox, recovery) do
-    entry.tool == tool and entry.inbox == inbox and entry.recovery == recovery
+    entry.tool == tool and entry.inbox == inbox and entry.recovery === recovery
   end
 
   defp recovery_view(op_key, entry) do
