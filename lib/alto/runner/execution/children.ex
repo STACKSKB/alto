@@ -117,18 +117,13 @@ defmodule Alto.Runner.Execution.Children do
 
   @doc "Validate and merge retained native child summaries without redispatch."
   def merge_retained(results, run) when is_list(results) do
-    Enum.reduce_while(results, {:ok, [], run}, fn {id, data}, {:ok, values, acc} ->
-      case validate_child_summary(id, data) do
-        :ok ->
-          {:cont, {:ok, [public_child_summary(data) | values], merge_child_summary(acc, data)}}
-
-        {:error, _} = error ->
-          {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, values, run} -> {:ok, Enum.reverse(values), run}
-      error -> error
+    with {:ok, {values, run}} <-
+           Alto.Result.reduce(results, {[], run}, fn {id, data}, {values, acc} ->
+             with :ok <- validate_child_summary(id, data),
+                  do:
+                    {:ok, {[public_child_summary(data) | values], merge_child_summary(acc, data)}}
+           end) do
+      {:ok, Enum.reverse(values), run}
     end
   end
 
@@ -632,19 +627,18 @@ defmodule Alto.Runner.Execution.Children do
   def validate_batch(_data, _run), do: {:error, :invalid_agents}
 
   defp validate_batch_specs(agents, run, concurrency) do
-    Enum.reduce_while(agents, {:ok, []}, fn request, {:ok, specs} ->
-      with {:ok, spec} <- validate_spawn(request),
-           :ok <- validate_subagent_tools(spec.tools, run),
-           false <- Enum.any?(specs, &(&1.id == spec.id)) do
-        {:cont, {:ok, [spec | specs]}}
-      else
-        true -> {:halt, {:error, :duplicate_child_id}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, specs} -> {:ok, Enum.reverse(specs), concurrency}
-      error -> error
+    with {:ok, specs} <-
+           Alto.Result.reduce(agents, [], fn request, specs ->
+             with {:ok, spec} <- validate_spawn(request),
+                  :ok <- validate_subagent_tools(spec.tools, run),
+                  false <- Enum.any?(specs, &(&1.id == spec.id)) do
+               {:ok, [spec | specs]}
+             else
+               true -> {:error, :duplicate_child_id}
+               {:error, _} = error -> error
+             end
+           end) do
+      {:ok, Enum.reverse(specs), concurrency}
     end
   end
 
