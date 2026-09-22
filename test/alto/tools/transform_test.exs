@@ -96,13 +96,15 @@ defmodule Alto.Tools.TransformTest do
 
     assert :ok =
              ExecutionTool.authorize(
-               "call-1",
-               "freeze",
-               original,
+               %{
+                 id: "call-1",
+                 name: "freeze",
+                 arguments: original,
+                 tool: tool,
+                 op_id: "transform-run:op-1"
+               },
                details,
-               tool,
-               caps,
-               "transform-run:op-1"
+               caps
              )
 
     assert_received {:approval, request}

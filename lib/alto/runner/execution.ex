@@ -830,15 +830,7 @@ defmodule Alto.Runner.Execution do
   defp prepare_and_run_tool(call, encoding, origin, op_id, run) do
     case prepare_tool_job(call, encoding, origin, op_id, run) do
       {:ok, job, details} ->
-        case Alto.Runner.Execution.Tool.authorize(
-               job.id,
-               job.name,
-               job.arguments,
-               details,
-               job.tool,
-               run,
-               op_id
-             ) do
+        case Alto.Runner.Execution.Tool.authorize(job, details, run) do
           :ok ->
             dispatch_tool_job(job, run)
 

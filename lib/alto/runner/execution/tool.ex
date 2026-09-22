@@ -47,21 +47,21 @@ defmodule Alto.Runner.Execution.Tool do
   end
 
   @doc "Authorize the exact prepared value's operation."
-  def authorize(_call_id, _name, _arguments, _details, %{approval: :never}, _caps, _operation_id),
+  def authorize(%{tool: %{approval: :never}}, _details, _caps),
     do: :ok
 
-  def authorize(call_id, name, arguments, details, tool, caps, operation_id) do
+  def authorize(job, details, caps) do
     {policy, policy_opts} = caps.approval
     context = caps.tool_context
 
     request = %Request{
-      id: operation_id,
+      id: job.op_id,
       run_id: context.session_id,
-      call_id: call_id,
-      operation_id: operation_id,
-      tool: name,
-      arguments: arguments,
-      execution_mode: tool.execution_mode,
+      call_id: job.id,
+      operation_id: job.op_id,
+      tool: job.name,
+      arguments: job.arguments,
+      execution_mode: job.tool.execution_mode,
       details: details
     }
 

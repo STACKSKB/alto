@@ -68,13 +68,15 @@ defmodule Alto.Runner.ExecutionComponentsTest do
 
     assert :ok =
              Tool.authorize(
-               "call-1",
-               "prepared",
-               %{},
+               %{
+                 id: "call-1",
+                 name: "prepared",
+                 arguments: %{},
+                 tool: tool,
+                 op_id: "run-test:op-1"
+               },
                %{resolved: true},
-               tool,
-               caps,
-               "run-test:op-1"
+               caps
              )
 
     assert_receive {:event, %Alto.Event{type: :approval_requested, data: %{request: request}}}
