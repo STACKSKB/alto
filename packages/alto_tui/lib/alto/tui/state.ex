@@ -425,6 +425,14 @@ defmodule Alto.TUI.State do
     %{state | selected_project_id: task["project_id"], selected_task_id: task["id"]}
   end
 
+  @doc "Persist task changes and refresh their cached record without changing selection."
+  def update_task(state, task_id, changes) do
+    case Catalog.update_task(task_id, changes, state.catalog_opts) do
+      {:ok, task} -> update_task_record(state, task)
+      {:error, _reason} -> state
+    end
+  end
+
   @doc "Replace a task record without changing the front end's current selection."
   def update_task_record(%__MODULE__{} = state, task) do
     project_id = task["project_id"]

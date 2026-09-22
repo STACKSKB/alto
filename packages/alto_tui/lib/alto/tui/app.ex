@@ -802,11 +802,7 @@ defmodule Alto.TUI.App do
     run = Map.fetch!(state.runs, local_id)
     changes = %{"status" => status} |> maybe_change("conversation_id", opts[:session_id])
 
-    state =
-      case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
-        {:ok, task} -> State.update_task_record(state, task)
-        {:error, _reason} -> state
-      end
+    state = State.update_task(state, run.task_id, changes)
 
     state = if opts[:entry], do: State.append_entry(state, run.task_id, opts[:entry]), else: state
 
@@ -828,10 +824,7 @@ defmodule Alto.TUI.App do
       |> maybe_change("backend", run[:backend_id] && Atom.to_string(run.backend_id))
       |> maybe_change("conversation_id", run[:thread_id])
 
-    case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
-      {:ok, task} -> State.update_task_record(state, task)
-      {:error, _reason} -> state
-    end
+    State.update_task(state, run.task_id, changes)
   end
 
   defp maybe_change(map, _key, nil), do: map
@@ -1700,16 +1693,8 @@ defmodule Alto.TUI.App do
 
   defp persist_task_backend(state, nil, _backend), do: state
 
-  defp persist_task_backend(state, task, backend) do
-    case Catalog.update_task(
-           task["id"],
-           %{"backend" => Atom.to_string(backend)},
-           state.catalog_opts
-         ) do
-      {:ok, updated} -> State.update_task_record(state, updated)
-      {:error, _reason} -> state
-    end
-  end
+  defp persist_task_backend(state, task, backend),
+    do: State.update_task(state, task["id"], %{"backend" => Atom.to_string(backend)})
 
   defp select_backend_ui(state) do
     case Backend.ui(state, :selected) do
