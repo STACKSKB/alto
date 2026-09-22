@@ -152,16 +152,17 @@ defmodule Alto.QueueAdmissionTest do
 
       good =
         JSON.encode!(%{
-          "v" => 4,
+          "v" => 5,
           "type" => "put",
-          "id" => "rec-1",
-          "key" => "k",
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "mode" => "business",
-          "generation_id" => "gen-fixture",
-          "at_ms" => 1,
-          "queue" => id
+          "record" =>
+            Alto.Session.encode_term(%Queue.Record{
+              id: "rec-1",
+              key: "k",
+              payload: %{n: 1},
+              revision: 1,
+              generation_id: "gen-fixture",
+              at_ms: 1
+            })
         })
 
       # Torn tail: bytes with no trailing newline that do not decode.

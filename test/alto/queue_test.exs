@@ -454,22 +454,41 @@ defmodule Alto.QueueTest do
 
       valid_put =
         JSON.encode!(%{
-          "v" => 4,
+          "v" => 5,
           "type" => "put",
-          "id" => "rec-1",
-          "key" => "k",
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "mode" => "business",
-          "generation_id" => "gen-fixture",
-          "at_ms" => 1,
-          "queue" => id
+          "record" =>
+            Alto.Session.encode_term(%Queue.Record{
+              id: "rec-1",
+              key: "k",
+              payload: %{n: 1},
+              revision: 1,
+              generation_id: "gen-fixture",
+              at_ms: 1
+            })
         })
 
       File.write!(path, valid_put <> "\nnot json\n")
 
       assert {:error, {:queue_corrupt, ^id, 2}} =
                Queue.start_link(id: id, dir: dir, name: :"corrupt_#{unique_id()}")
+
+      entry = JSON.decode!(valid_put)
+      {:ok, record} = Alto.Session.decode_term(entry["record"])
+
+      for malformed <- [
+            %{record | status: :claimed, claim_id: nil, lease_until_ms: "bad"},
+            record |> Map.delete(:key) |> Map.put(:unexpected, "k")
+          ] do
+        File.write!(
+          path,
+          JSON.encode!(%{entry | "record" => Alto.Session.encode_term(malformed)}) <> "\n"
+        )
+
+        assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
+      end
+
+      File.write!(path, JSON.encode!(%{entry | "v" => 4}) <> "\n")
+      assert {:error, {:queue_corrupt, ^id, 1}} = Queue.start_link(id: id, dir: dir, name: nil)
     end
   end
 
@@ -568,7 +587,7 @@ defmodule Alto.QueueTest do
 
       File.write!(
         path,
-        JSON.encode!(%{"v" => 4, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
+        JSON.encode!(%{"v" => 5, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
           "\n"
       )
 

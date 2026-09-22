@@ -3,7 +3,7 @@ defmodule Alto.Queue do
   A durable, bounded claim/ack record queue (the integration contract, "durable queue").
 
   One GenServer per queue id, one append-only JSONL log per queue under the
-  state home (`queues/<id>.jsonl`). Payloads travel as exact terms (base64
+  state home (`queues/<id>.jsonl`). Records travel as exact terms (base64
   `term_to_binary`, the `Alto.Session` convention), so a queued record
   survives restarts byte-exact; blanks and cancels persist as tombstones,
   so the default queue log is append-only like a session log. Hosts may opt
@@ -52,7 +52,7 @@ defmodule Alto.Queue do
   alias Alto.Session, as: SessionStore
   alias Alto.DurableLog
 
-  @version 4
+  @version 5
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @options [
     max_records: [type: :non_neg_integer, default: 10_000],
@@ -428,42 +428,36 @@ defmodule Alto.Queue do
 
   defp log_apply(_state, _type, _entry), do: {:error, :bad_entry}
 
-  defp decode_record(
-         %{
-           "id" => id,
-           "key" => key,
-           "payload" => encoded,
-           "revision" => revision,
-           "mode" => mode,
-           "generation_id" => generation,
-           "at_ms" => at
-         } = entry
-       )
-       when is_binary(id) and is_binary(key) and is_integer(revision) and revision >= 1 and
-              mode in ["business", "delivery", "recovery"] and is_integer(at) do
-    with {:ok, sequence} <- record_sequence(id),
-         :ok <- validate_generation(generation),
-         :ok <- validate_due(entry["not_before_ms"]),
-         {:ok, payload} <- SessionStore.decode_term(encoded) do
-      {:ok,
-       %Record{
-         id: id,
-         key: key,
-         payload: payload,
-         revision: revision,
-         at_ms: at,
-         mode: String.to_existing_atom(mode),
-         generation_id: generation,
-         operation_key: entry["operation_key"],
-         not_before_ms: entry["not_before_ms"]
-       }, sequence}
+  defp decode_record(%{"record" => encoded}) do
+    with {:ok, %Record{} = record} <- SessionStore.decode_term(encoded),
+         true <- Enum.sort(Map.keys(record)) == Enum.sort(Map.keys(Record.__struct__())),
+         true <- is_binary(record.key) and is_integer(record.revision) and record.revision >= 1,
+         true <- record.mode in [:business, :delivery, :recovery] and is_integer(record.at_ms),
+         true <- valid_lease?(record),
+         {:ok, sequence} <- record_sequence(record.id),
+         :ok <- validate_generation(record.generation_id),
+         :ok <- validate_due(record.not_before_ms) do
+      {:ok, record, sequence}
     else
-      :error -> {:error, :bad_entry}
-      error -> error
+      {:error, _} = error -> error
+      _ -> {:error, :bad_entry}
     end
   end
 
   defp decode_record(_), do: {:error, :bad_entry}
+
+  defp valid_lease?(%Record{
+         status: :pending,
+         claim_id: nil,
+         claimed_by: nil,
+         lease_until_ms: nil
+       }),
+       do: true
+
+  defp valid_lease?(%Record{status: :claimed, claim_id: id, lease_until_ms: until}),
+    do: is_binary(id) and is_integer(until)
+
+  defp valid_lease?(_), do: false
 
   @impl true
   def handle_call({operation, key, payload, opts}, _from, state)
@@ -869,25 +863,8 @@ defmodule Alto.Queue do
     end
   end
 
-  defp put_log(record) do
-    record
-    |> Map.from_struct()
-    |> Map.take([
-      :id,
-      :key,
-      :payload,
-      :revision,
-      :mode,
-      :generation_id,
-      :operation_key,
-      :not_before_ms,
-      :at_ms
-    ])
-    |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
-    |> Map.put("payload", SessionStore.encode_term(record.payload))
-    |> Map.put("mode", Atom.to_string(record.mode))
-    |> Map.merge(%{"v" => @version, "type" => "put"})
-  end
+  defp put_log(record),
+    do: %{"v" => @version, "type" => "put", "record" => SessionStore.encode_term(record)}
 
   defp commit_record(original, current, record) do
     reply = {:ok, Map.take(record, [:id, :revision, :status])}
@@ -1044,7 +1021,7 @@ defmodule Alto.Queue do
   # appended afterwards through the existing sync path; a replacement failure
   # cannot commit an operation that its caller was told had failed.
   defp compact_log(state, reserved_bytes) do
-    retained = Enum.flat_map(ordered_records(state), &retained_record/1)
+    retained = Enum.map(ordered_records(state), &put_log/1)
     record_lines = Enum.map(retained, &JSON.encode!/1)
 
     header = %{
@@ -1077,12 +1054,6 @@ defmodule Alto.Queue do
     end
   rescue
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}
-  end
-
-  defp retained_record(record) do
-    if record.status == :claimed,
-      do: [put_log(record), claim_log(record)],
-      else: [put_log(record)]
   end
 
   defp claim_log(%Record{} = record) do
