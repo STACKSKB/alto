@@ -34,7 +34,7 @@ socket `start_run` commands cannot inject these options.
 5. Claim the ready cell with a one-use compare-and-swap before the scheduler
    executes its next effect. A claimed cell never reissues that grant.
 
-`Alto.Subagents.Continuation.open_parent/6` creates this aggregate. `identity/1`,
+`Alto.Subagents.Continuation.open/5` with `parent: checkpoint` creates this aggregate. `identity/1`,
 `restore/3`, `read/1`, `ready/3`, and `claim/2` address its later lifecycle.
 The `children`, `ready`, and `claimed` phases survive store restart. Generation
 and revision checks prevent replacement or competing consumers from issuing a

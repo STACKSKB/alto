@@ -273,12 +273,12 @@ defmodule Alto.Subagents.ContinuationTest do
     %{ledger: ledger} = start_ledger!(dir, id)
 
     assert {:ok, cell} =
-             Continuation.open_parent(
+             Continuation.open(
                ledger,
                "parent-batch",
                ["child-a"],
                %{},
-               %{"frame" => "pending"}
+               parent: %{"frame" => "pending"}
              )
 
     assert {:ok, ticket} = Continuation.dispatch(cell, "child-a")

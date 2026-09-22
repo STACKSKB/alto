@@ -25,7 +25,10 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     ledger: ledger
   } do
     pending = %{"frame" => "pending"}
-    assert {:ok, cell} = Continuation.open_frame(ledger, "parent", pending, %{"run" => "one"})
+    assert {:error, :invalid_batch_plan} = Continuation.open(ledger, "parent", [])
+
+    assert {:ok, cell} =
+             Continuation.open(ledger, "parent", [], %{"run" => "one"}, parent: pending)
 
     assert {:ok, %{phase: :children, parent: ^pending, ids: [], revision: revision}} =
              Continuation.read(cell)
@@ -60,13 +63,13 @@ defmodule Alto.Subagents.ContinuationFrameTest do
 
   test "pending parent packet is immutable recovery and bounded", %{ledger: ledger} do
     pending = %{"frame" => String.duplicate("p", 200_000)}
-    assert {:ok, cell} = Continuation.open_frame(ledger, "large", pending)
+    assert {:ok, cell} = Continuation.open(ledger, "large", [], %{}, parent: pending)
     assert {:ok, entry} = OperationLog.recovery(ledger, "large")
     assert entry.recovery["parent"] == pending
     assert {:ok, %{parent: ^pending}} = Continuation.read(cell)
 
     assert {:error, :invalid_batch_key} =
-             Continuation.open_frame(ledger, "", %{"frame" => "bad"})
+             Continuation.open(ledger, "", [], %{}, parent: %{"frame" => "bad"})
   end
 
   test "foreign records are excluded from discovery", %{ledger: ledger} do
@@ -125,11 +128,12 @@ defmodule Alto.Subagents.ContinuationFrameTest do
   test "metadata filters require present keys and discovery contains dead stores", %{
     ledger: ledger
   } do
-    assert {:ok, _} = Continuation.open_frame(ledger, "one", %{"frame" => 1}, %{})
+    assert {:ok, _} = Continuation.open(ledger, "one", [], %{}, parent: %{"frame" => 1})
     assert {:ok, []} = Continuation.list(ledger, %{"missing" => nil})
 
     for key <- ["z", "a"] do
-      assert {:ok, _} = Continuation.open_frame(ledger, key, %{"frame" => key}, %{"group" => 1})
+      assert {:ok, _} =
+               Continuation.open(ledger, key, [], %{"group" => 1}, parent: %{"frame" => key})
     end
 
     assert {:ok, items} = Continuation.list(ledger, %{"group" => 1})

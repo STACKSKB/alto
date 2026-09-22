@@ -27,22 +27,14 @@ defmodule Alto.Subagents.Continuation do
   @max_result_bytes 64_000
   @max_checkpoint_bytes 2_000_000
 
-  @doc "Create or reconnect an ordered batch with immutable portable metadata."
+  @doc """
+  Create or reconnect an ordered batch with immutable portable metadata.
+  Pass `parent: checkpoint` to bind a pending parent; an empty child list
+  then retains a parent frame without child dependencies.
+  """
   def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
-    open_with_parent(ledger, key, ids, metadata, nil, opts)
-  end
+    parent = Keyword.get(opts, :parent)
 
-  @doc "Create a child batch bound to an immutable pending parent checkpoint."
-  def open_parent(ledger, key, ids, metadata, parent, opts \\ []) do
-    open_with_parent(ledger, key, ids, metadata, parent, opts)
-  end
-
-  @doc "Retain a parent frame with no child dependencies."
-  def open_frame(ledger, key, parent, metadata \\ %{}, opts \\ []) do
-    open_with_parent(ledger, key, [], metadata, parent, opts)
-  end
-
-  defp open_with_parent(ledger, key, ids, metadata, parent, opts) do
     with :ok <- valid_key(key), :ok <- valid_plan(ids, metadata, parent) do
       initial = %{
         "kind" => @kind,

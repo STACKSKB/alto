@@ -73,12 +73,12 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
     {:ok, cell} =
-      Continuation.open_parent(
+      Continuation.open(
         ledger,
         "parent",
         ["worker"],
         %{"agent_identity" => Alto.Protocol.encode_term(run.agent_identity)},
-        packet
+        parent: packet
       )
 
     {:ok, _} =

@@ -182,26 +182,14 @@ defmodule Alto.Runner.Execution.Children do
     with {:ok, journal} <-
            durable_call(
              fn ->
-               args = [deadline: run.budget.deadline]
-
-               if is_nil(parent),
-                 do:
-                   Continuation.open(
-                     run.continuation_store,
-                     "children:" <> key,
-                     Enum.map(specs, & &1.id),
-                     metadata,
-                     args
-                   ),
-                 else:
-                   Continuation.open_parent(
-                     run.continuation_store,
-                     "children:" <> key,
-                     Enum.map(specs, & &1.id),
-                     metadata,
-                     parent,
-                     args
-                   )
+               Continuation.open(
+                 run.continuation_store,
+                 "children:" <> key,
+                 Enum.map(specs, & &1.id),
+                 metadata,
+                 parent: parent,
+                 deadline: run.budget.deadline
+               )
              end,
              run
            ) do
