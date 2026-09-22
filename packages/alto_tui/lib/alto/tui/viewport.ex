@@ -16,6 +16,12 @@ defmodule Alto.TUI.Viewport do
              scroll: {0, 0}
          }, rect}
 
+      {%Paragraph{text: text, wrap: false, scroll: {offset, horizontal}} = widget, rect}
+      when is_binary(text) and byte_size(text) > 4096 ->
+        inner = SelectionRegions.content_rect(widget, rect)
+        visible = text |> String.split("\n") |> Enum.slice(offset, max(inner.height, 0))
+        {%{widget | text: Enum.join(visible, "\n"), scroll: {0, horizontal}}, rect}
+
       {%Paragraph{text: text, wrap: true, scroll: {offset, 0}, alignment: :left} = widget, rect}
       when is_binary(text) and byte_size(text) > 4096 ->
         inner = SelectionRegions.content_rect(widget, rect)

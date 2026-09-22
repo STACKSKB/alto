@@ -26,6 +26,34 @@ defmodule Alto.TUI.ViewportTest do
     end
   end
 
+  test "unwrapped viewports preserve alignment, horizontal scroll, Unicode and borders" do
+    text = Enum.map_join(1..300, "\n", &"#{&1} 猫 é 👩‍💻 long plain text")
+    rect = %Rect{width: 25, height: 9}
+
+    for alignment <- [:left, :center, :right], offset <- [0, 127, 298], horizontal <- [0, 4] do
+      original = [
+        {%Paragraph{
+           text: text,
+           wrap: false,
+           scroll: {offset, horizontal},
+           alignment: alignment,
+           block: %ExRatatui.Widgets.Block{title: "History", borders: [:all]}
+         }, rect}
+      ]
+
+      native = ExRatatui.CellSession.new(25, 9)
+      cached = ExRatatui.CellSession.new(25, 9)
+      :ok = ExRatatui.CellSession.draw(native, original)
+      :ok = ExRatatui.CellSession.draw(cached, Viewport.widgets(original))
+
+      assert ExRatatui.CellSession.take_cells(native).cells ==
+               ExRatatui.CellSession.take_cells(cached).cells
+
+      ExRatatui.CellSession.close(native)
+      ExRatatui.CellSession.close(cached)
+    end
+  end
+
   test "bottom uses native wrapping for blanks, Unicode, and long documents" do
     assert Viewport.bottom("", 20, 5) == 0
     assert Viewport.bottom("short", 20, 5) == 0
