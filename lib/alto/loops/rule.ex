@@ -50,12 +50,12 @@ defmodule Alto.Loops.Rule do
 
   @impl true
   def handle_event(
-        %Event{type: :tool_completed, data: %{call_id: call_id} = data},
+        %Event{type: :tool_completed, data: %{call_id: call_id, value: value}},
         %__MODULE__{} = state,
         spec
       ) do
     if call_id == call_id(state) do
-      state = %{state | results: [Map.get(data, :value, Map.get(data, :output)) | state.results]}
+      state = %{state | results: [value | state.results]}
 
       case Enum.at(spec.driver_options[:steps], state.index) do
         nil ->

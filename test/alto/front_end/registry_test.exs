@@ -319,7 +319,7 @@ defmodule Alto.FrontEnd.RegistryTest do
            ]
 
     assert Enum.any?(events, fn {_seq, event} ->
-             event.type == :tool_completed and event.data[:output] == ~s({"echo":"hello"})
+             event.type == :tool_completed and event.data[:value] == %{echo: "hello"}
            end)
 
     assert Enum.any?(events, fn {_seq, event} -> event.type == :model_started end)

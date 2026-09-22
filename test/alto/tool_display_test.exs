@@ -2,6 +2,12 @@ defmodule Alto.ToolDisplayTest do
   use ExUnit.Case, async: true
   alias Alto.ToolDisplay
 
+  test "false native results survive both local and wire event shapes" do
+    for data <- [%{value: false}, %{"value" => false}] do
+      assert ToolDisplay.entry(:tool_completed, data).detail == "No"
+    end
+  end
+
   test "tool titles identify files, commands and revisions without argument dumps" do
     assert ToolDisplay.summary("read_file", ~s({"path":"lib/a.ex","offset":20})) ==
              "read_file lib/a.ex (from 20)"

@@ -61,8 +61,10 @@ defmodule Alto.Runner.MultimodalTest do
     assert [%{"type" => "image", "data" => @png}] = tool["content"]
     event = Enum.find(result.events, &(&1.type == :tool_completed))
     assert %Alto.Content{} = event.data.value
-    assert event.data.output == "Image · image/png · 1 × 1"
-    refute event.data.output =~ @png
+
+    assert Alto.ToolDisplay.entry(:tool_completed, event.data).detail ==
+             "Image · image/png · 1 × 1"
+
     assert {:ok, saved} = Alto.Session.transcript(result.session_id, session_dir: dir)
     assert Enum.find(saved.messages, &(&1["role"] == "tool"))["content"] == tool["content"]
   end
@@ -75,7 +77,7 @@ defmodule Alto.Runner.MultimodalTest do
              )
 
     event = Enum.find(result.events, &(&1.type == :tool_completed))
-    assert event.data.output == ""
+    refute Map.has_key?(event.data, :output)
     assert event.data.value == content()
   end
 

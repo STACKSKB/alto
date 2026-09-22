@@ -183,15 +183,14 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     refute inspect(failed.data) =~ String.duplicate("m", 1_000)
   end
 
-  test "small non-JSON values remain available through provider encoding" do
+  test "small non-JSON values remain available as native results" do
     assert {:ok, result} =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "t-1", tool: "tup"),
                tools: [TupleTool]
              )
 
-    assert {:completed, %{value: {:tuple_ok, 1, 2}, output: output}} = result.output
-    assert is_binary(output)
+    assert {:completed, %{value: {:tuple_ok, 1, 2}}} = result.output
   end
 
   test "hybrid loop: oversize provider tool becomes bounded failure in transcript" do

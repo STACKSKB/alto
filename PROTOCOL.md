@@ -135,13 +135,13 @@ values, format `run-<integer>`).
  "event": {"type": "tool_completed",
            "data": {"call_id": "call-1", "operation_id": "run-41:op-1",
                     "run_id": "run-41", "name": "echo",
-                    "output": "{\"echo\":\"hi\"}"}}}
+                    "value": {"echo":"hi"}}}}
 ```
 
 Tool events carry both `call_id` (correlation, repeatable) and
 `operation_id`/`run_id` (globally unique runtime operation). `tool_completed`
-additionally carries `value` (bounded native term) alongside the legacy
-`output` string; oversize natives are rejected as `tool_failed`
+carries `value` (bounded native term); provider-facing serialization stays in
+the transcript. Oversize native results are rejected as `tool_failed`
 (`{:tool_result_too_large, ...}`) before retention, fanout, or persistence,
 never silently truncated.
 

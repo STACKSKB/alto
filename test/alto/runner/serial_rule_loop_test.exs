@@ -125,7 +125,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, state, _spec) do
       state |> Map.update!(:results, &[output | &1]) |> request_next()
     end
 
@@ -202,7 +202,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, _state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, _state, _spec) do
       Transition.stop(%{}, output)
     end
 
@@ -236,7 +236,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, state, _spec) do
       Transition.stop(state, output)
     end
 
@@ -284,7 +284,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                project_instructions: :auto
              )
 
-    assert result.output == [~s({"echo":"hello"})]
+    assert result.output == [%{echo: "hello"}]
   end
 
   test "a rule loop performs a bounded tool workflow with no provider configured" do
@@ -298,7 +298,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
              )
 
     # Tool result content is the bounded encoded value, one per invocation.
-    assert result.output == [~s({"echo":"a"}), ~s({"echo":"b"})]
+    assert result.output == [%{echo: "a"}, %{echo: "b"}]
     assert result.messages == []
     assert result.model_requests == 0
     assert Enum.map(result.events, & &1.type) == [:tool_completed, :tool_completed]
@@ -323,7 +323,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                tools: [ArgsEchoTool]
              )
 
-    assert result.output == ~s({"tuple_is_tuple":true})
+    assert result.output == %{tuple_is_tuple: true}
     assert result.messages == []
     assert result.model_requests == 0
   end
@@ -362,7 +362,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
-    assert result.output == [~s({"echo":"hello"})]
+    assert result.output == [%{echo: "hello"}]
 
     assert_receive {:approval_decision,
                     %ApprovalRequest{
@@ -432,10 +432,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
     # run_prepared consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.
-    assert {:ok, %{"stamped" => "frozen", "token" => ^token}} = JSON.decode(result.output)
+    assert %{stamped: "frozen", token: ^token} = result.output
   end
 
-  test "tool_completed carries the native value alongside the encoded output" do
+  test "tool_completed carries the native value" do
     parent = self()
 
     assert {:ok, _result} =
@@ -448,8 +448,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     events = received_events()
     completed = Enum.find(events, &(&1.type == :tool_completed))
 
-    assert %{output: output, value: %{echo: "a"}} = completed.data
-    assert output == ~s({"echo":"a"})
+    assert %{value: %{echo: "a"}} = completed.data
   end
 
   test "model_tools projects a subset to the provider while all tools stay invokable" do

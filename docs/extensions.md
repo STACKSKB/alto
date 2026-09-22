@@ -246,10 +246,9 @@ A retry callback returns `:stop` or `{:retry, delay_ms, reason}`. Execution stil
 refuses to replay an attempt after output delivery and enforces the attempt and
 time budgets. Omitted retry policy preserves the existing transient policy;
 `provider_retries: 0` disables retries. Omitted presentation emits the tool name.
-The optional `result/2` presenter callback supplies a preview for typed content;
-without it, `output` is empty and `value` retains the content. Presenter failures
-fall back to the tool name or an empty preview; presentation cannot change tool input
-or authorization.
+Completion events retain the native result in `value`; consumers render it with
+`Alto.ToolDisplay` or their own presentation function. Tool-title presenter failures
+fall back to the tool name; presentation cannot change tool input or authorization.
 
 `Alto.Events.combine/1` composes synchronous sinks in order, isolating sink
 failures. CLI, registry and TUI delivery attach their host sink before the

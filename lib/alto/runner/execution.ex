@@ -1117,13 +1117,13 @@ defmodule Alto.Runner.Execution do
     # Bound native values before retention or persistence. An oversized result
     # is an uncertain failure after dispatch, never permission to rerun.
     # Deterministic loops consume `value`; providers receive normalized content
-    # and the host may supply a bounded display string in `output`.
+    # without retaining a second serialized copy in the completion event.
     with :ok <- Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes),
-         {:ok, content, output} <- model_result_content(value, run) do
+         {:ok, content} <- model_result_content(value, run) do
       commit_tool_outcome(
         job,
         content,
-        %{output: output, value: value, outcome: :completed},
+        %{value: value, outcome: :completed},
         run
       )
     else
@@ -1358,26 +1358,9 @@ defmodule Alto.Runner.Execution do
   end
 
   defp model_result_content(value, run) do
-    limit = run.max_tool_result_bytes
-
-    case Alto.Content.normalize_tool_result(value, limit) do
-      :not_content ->
-        text = encode_tool_result(value, limit)
-        {:ok, text, text}
-
-      {:ok, blocks} ->
-        output =
-          present(
-            run,
-            fn -> Alto.ToolPresentation.result(run.tool_presenter, value) end,
-            "",
-            limit
-          )
-
-        {:ok, blocks, output}
-
-      {:error, _} = error ->
-        error
+    case Alto.Content.normalize_tool_result(value, run.max_tool_result_bytes) do
+      :not_content -> {:ok, encode_tool_result(value, run.max_tool_result_bytes)}
+      result -> result
     end
   end
 
