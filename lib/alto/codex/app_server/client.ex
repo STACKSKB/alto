@@ -290,22 +290,7 @@ defmodule Alto.Codex.AppServer.Client do
   defp send_payload(state, payload),
     do: JSONRPC.send(state.process.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
 
-  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
-
-  defp handle_line("", state), do: {:ok, state}
-
-  defp handle_line(line, state) do
-    case JSON.decode(line) do
-      {:ok, message} when is_map(message) ->
-        handle_message(message, state)
-
-      {:ok, _other} ->
-        {:error, :codex_app_server_message_not_object, state}
-
-      {:error, error} ->
-        {:error, {:codex_app_server_invalid_json, Exception.message(error)}, state}
-    end
-  end
+  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_message/2)
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.

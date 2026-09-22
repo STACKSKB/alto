@@ -246,17 +246,7 @@ defmodule Alto.External.MCP.Client do
     ArgumentError -> {:error, {:mcp_transport_lost, :closed}}
   end
 
-  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
-
-  defp handle_line("", state), do: {:ok, state}
-
-  defp handle_line(line, state) do
-    case JSON.decode(line) do
-      {:ok, message} when is_map(message) -> handle_message(message, state)
-      {:ok, _other} -> {:error, :mcp_message_not_object, state}
-      {:error, error} -> {:error, {:mcp_invalid_json, Exception.message(error)}, state}
-    end
-  end
+  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_message/2)
 
   # A server request has both `method` and `id`; inspect that shape before
   # looking up pending responses so it cannot consume an outgoing id.

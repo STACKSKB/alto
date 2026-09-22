@@ -183,15 +183,29 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  def consume_lines(state, handle_line) do
+  def consume_lines(state, handle_message) do
     case :binary.split(state.buffer, "\n") do
       [_rest] ->
         {:ok, state}
 
       [line, rest] ->
         with {:ok, state} <-
-               handle_line.(String.trim_trailing(line, "\r"), %{state | buffer: rest}),
-             do: consume_lines(state, handle_line)
+               decode_line(
+                 String.trim_trailing(line, "\r"),
+                 %{state | buffer: rest},
+                 handle_message
+               ),
+             do: consume_lines(state, handle_message)
+    end
+  end
+
+  defp decode_line("", state, _handle_message), do: {:ok, state}
+
+  defp decode_line(line, state, handle_message) do
+    case JSON.decode(line) do
+      {:ok, message} when is_map(message) -> handle_message.(message, state)
+      {:ok, _other} -> {:error, :json_rpc_message_not_object, state}
+      {:error, error} -> {:error, {:json_rpc_invalid_json, Exception.message(error)}, state}
     end
   end
 
