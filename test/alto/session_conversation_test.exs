@@ -285,6 +285,49 @@ defmodule Alto.SessionConversationTest do
              )
   end
 
+  test "an uncommitted revision cannot bypass the fenced head and can be retried", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("native work")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    {:ok, _} = Session.mark_dispatched(id, ["op-1"], session_dir: dir, run_id: "run-1")
+    head_path = Path.join(dir, id <> ".transcript.json")
+    fenced_head = File.read!(head_path)
+    options = [session_dir: dir, expected_revision: 1, resolved_operations: ["op-1"]]
+    {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
+
+    # Model a crash after the immutable entry was written but before the head commit.
+    File.write!(head_path, fenced_head)
+
+    assert {:error, {:session_unsettled_tool_dispatch, %{revision: 1}}} =
+             Session.transcript(id, session_dir: dir)
+
+    assert {:error, {:conversation_dispatch_conflict, _}} =
+             Session.mark_dispatched(id, ["op-2"], session_dir: dir, run_id: "other-run")
+
+    assert {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
+    assert {:ok, resumed} = Session.transcript(id, session_dir: dir)
+    assert resumed.revision == 2
+    refute Map.has_key?(resumed, :unsettled)
+  end
+
+  test "invalid or obsolete heads cannot discard an unresolved fence", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("work")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    path = Path.join(dir, id <> ".transcript.json")
+    head = JSON.decode!(File.read!(path))
+
+    for invalid <- [
+          Map.put(head, "dispatch", %{"tool_call_ids" => []}),
+          %{"v" => 1, "revision" => 1}
+        ] do
+      File.write!(path, JSON.encode!(invalid))
+
+      assert {:error, {:session_corrupt, ^id, :transcript}} =
+               Session.transcript(id, session_dir: dir)
+    end
+  end
+
   test "a missing immutable head fails resume instead of returning a stale transcript", %{
     dir: dir
   } do
