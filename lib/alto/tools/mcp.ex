@@ -45,9 +45,7 @@ defmodule Alto.Tools.MCP do
       Keyword.get(opts, :request_timeout, Keyword.get(server_opts, :request_timeout, 30_000))
 
     with {:ok, client} <- Client.ensure_started(server_opts),
-         {:ok, result} <- Client.call_tool(client, remote_name(opts), arguments, timeout) do
-      {:ok, result}
-    end
+         do: Client.call_tool(client, remote_name(opts), arguments, timeout)
   end
 
   defp discover_schema!(opts) do

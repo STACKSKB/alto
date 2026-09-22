@@ -215,10 +215,7 @@ defmodule Alto.Session.Conversation do
           existing_entry_result(existing, encoded, id, revision, path)
 
         {:error, :enoent} ->
-          with :ok <- Storage.ensure_private_file(path),
-               :ok <- DurableLog.replace(path, encoded) do
-            :ok
-          end
+          with :ok <- Storage.ensure_private_file(path), do: DurableLog.replace(path, encoded)
 
         {:error, reason} ->
           {:error, {:conversation_write_failed, reason}}

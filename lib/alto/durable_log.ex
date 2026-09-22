@@ -40,10 +40,8 @@ defmodule Alto.DurableLog do
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
          {:ok, io} <- File.open(path, [:append, :binary, :raw]),
-         result <- Alto.AtomicFile.write_sync_close(io, iodata),
-         :ok <- result,
-         :ok <- maybe_sync_parent(path, existed?) do
-      :ok
+         :ok <- Alto.AtomicFile.write_sync_close(io, iodata) do
+      maybe_sync_parent(path, existed?)
     end
   end
 

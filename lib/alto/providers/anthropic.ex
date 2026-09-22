@@ -39,9 +39,8 @@ defmodule Alto.Providers.Anthropic do
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
     with {:ok, config} <- config(opts),
-         {:ok, body} <- request_body(request, config),
-         {:ok, completion} <- send_request(body, config, sink) do
-      {:ok, completion}
+         {:ok, body} <- request_body(request, config) do
+      send_request(body, config, sink)
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}

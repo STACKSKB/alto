@@ -454,9 +454,8 @@ defmodule Alto.Subagents.Continuation do
   defp replace(batch, snapshot, packet) do
     safe(fn ->
       with {:ok, entry} <-
-             Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline),
-           {:ok, snapshot} <- snapshot(entry, batch.generation) do
-        {:ok, snapshot}
+             Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline) do
+        snapshot(entry, batch.generation)
       end
     end)
   end
@@ -502,11 +501,8 @@ defmodule Alto.Subagents.Continuation do
 
   defp snapshot_read(batch) do
     with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
-         :ok <- valid_initial(entry),
-         {:ok, snapshot} <- snapshot(entry, batch.generation) do
-      {:ok, snapshot}
-    else
-      {:error, _} = error -> error
+         :ok <- valid_initial(entry) do
+      snapshot(entry, batch.generation)
     end
   end
 

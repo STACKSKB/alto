@@ -290,8 +290,7 @@ defmodule Alto.Workspaces.Git do
 
   defp checkout_size(root, commit, max, limits) do
     with {:ok, output} <- git(root, ["ls-tree", "-r", "-l", "--full-tree", commit], limits),
-         {:ok, total} <- parse_tree_sizes(output, max, limits.max_files),
-         do: {:ok, total}
+         do: parse_tree_sizes(output, max, limits.max_files)
   end
 
   defp parse_tree_sizes(output, max, max_files) do

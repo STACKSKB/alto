@@ -141,9 +141,8 @@ defmodule Alto.Tools.GitInspect do
              optional_ref(
                ["log", "--decorate", "--oneline", "-n", Integer.to_string(limit)],
                input
-             ),
-           {:ok, result} <- append_path(base, Map.get(input, "path")) do
-        {:ok, result}
+             ) do
+        append_path(base, Map.get(input, "path"))
       end
     else
       {:error, {:invalid_git_limit, limit}}
@@ -152,9 +151,7 @@ defmodule Alto.Tools.GitInspect do
 
   defp args(%{"action" => "show", "ref" => ref} = input) do
     with {:ok, ref} <- Git.ref(ref),
-         {:ok, result} <- append_path(["show", "--stat", "--patch", ref], Map.get(input, "path")) do
-      {:ok, result}
-    end
+         do: append_path(["show", "--stat", "--patch", ref], Map.get(input, "path"))
   end
 
   defp args(%{"action" => "blame", "path" => path} = input) do

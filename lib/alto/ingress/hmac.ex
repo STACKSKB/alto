@@ -10,10 +10,9 @@ defmodule Alto.Ingress.HMAC do
          {:ok, header} <- header(opts),
          {:ok, encoding} <- encoding(opts),
          {:ok, prefix} <- prefix(opts),
-         {:ok, signature} <- single_header(headers, header),
-         expected <- prefix <> encode(:crypto.mac(:hmac, :sha256, secret, body), encoding),
-         :ok <- secure_compare(signature, expected) do
-      :ok
+         {:ok, signature} <- single_header(headers, header) do
+      expected = prefix <> encode(:crypto.mac(:hmac, :sha256, secret, body), encoding)
+      secure_compare(signature, expected)
     end
   end
 

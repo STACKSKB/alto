@@ -35,9 +35,8 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, status, state} <- models_request(config),
-         {:ok, models} <- models_result(status, state) do
-      {:ok, models}
+         {:ok, status, state} <- models_request(config) do
+      models_result(status, state)
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
@@ -45,10 +44,7 @@ defmodule Alto.Providers.OpenAICompatible do
 
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
-    with {:ok, config} <- config(opts),
-         {:ok, completion} <- request(config, request, sink) do
-      {:ok, completion}
-    end
+    with {:ok, config} <- config(opts), do: request(config, request, sink)
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
   end
