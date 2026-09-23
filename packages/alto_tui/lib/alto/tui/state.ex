@@ -315,16 +315,16 @@ defmodule Alto.TUI.State do
   end
 
   def select_task(%__MODULE__{} = state, id) do
-    if Enum.any?(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
-      task = Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id))
+    case Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
+      nil ->
+        state
 
-      state
-      |> Map.put(:selected_task_id, id)
-      |> Map.put(:transcript_follow?, true)
-      |> sync_backend(task)
-      |> hydrate_selected()
-    else
-      state
+      task ->
+        state
+        |> Map.put(:selected_task_id, id)
+        |> Map.put(:transcript_follow?, true)
+        |> sync_backend(task)
+        |> hydrate_selected()
     end
   end
 
