@@ -8,11 +8,11 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,167 lines, a reduction of 7,488 (18.4%). A 30%
-reduction would require at most 28,458 lines, or another 4,709 lines below the
+The 2026-09-24 inventory is 33,152 lines, a reduction of 7,503 (18.5%). A 30%
+reduction would require at most 28,458 lines, or another 4,694 lines below the
 current inventory. Test files are tracked separately and never count toward
-that production target. Recount after each coherent change; a moved line is not
-a reduction.
+that production target. A 50% stretch would require at most 20,327 lines.
+Recount after each coherent change; a moved line is not a reduction.
 
 The largest remaining files are `Alto.TUI.App` (1,718),
 `Alto.Runner.Execution` (1,323), `Alto.Queue` (1,054),
@@ -147,6 +147,14 @@ fields. This keeps the configured limits aligned while retaining every tool;
 the MCP integration test covers all three calls. Ripwire's action-specific
 flags and the webhook's separate run/enqueue admission paths carry distinct
 behavior, so this pass did not fold them into a generic adapter.
+Codex TUI history loading now has one eligibility gate for the selected
+backend, thread identity, empty transcript, in-flight dedupe, and live client.
+Operator listing now validates once and accumulates queue pages through one
+path; ledger precedence remains explicit. Audits of storage, prompt, example,
+and small context tests found no whole cases that merely assert a fixture or
+standard-library result. Their similar cases cover distinct publication,
+recovery, authority, or API boundaries. The CLI run/serve option pipeline was
+also already shared; its remaining approval and session rules differ.
 
 ## Next passes
 

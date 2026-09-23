@@ -335,34 +335,21 @@ defmodule Alto.TUI.Backends.Codex do
     thread_id = task && task["conversation_id"]
     entries = Map.get(state.entries, task_id, [])
 
-    cond do
-      not selected?(state) ->
-        state
+    if selected?(state) and is_binary(thread_id) and entries == [] and
+         not MapSet.member?(data(state).history_loading, task_id) and is_pid(data(state).client) do
+      owner = self()
+      client = data(state).client
 
-      not is_binary(thread_id) ->
-        state
+      Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
+        send(owner, {:codex_history_loaded, task_id, CodexBackend.history(client, thread_id)})
+      end)
 
-      entries != [] ->
-        state
-
-      MapSet.member?(data(state).history_loading, task_id) ->
-        state
-
-      not is_pid(data(state).client) ->
-        state
-
-      true ->
-        owner = self()
-        client = data(state).client
-
-        Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-          send(owner, {:codex_history_loaded, task_id, CodexBackend.history(client, thread_id)})
-        end)
-
-        put_in(
-          state.backend_state[__MODULE__].history_loading,
-          MapSet.put(data(state).history_loading, task_id)
-        )
+      put_in(
+        state.backend_state[__MODULE__].history_loading,
+        MapSet.put(data(state).history_loading, task_id)
+      )
+    else
+      state
     end
   end
 

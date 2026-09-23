@@ -80,13 +80,12 @@ defmodule Alto.Ops do
   def list(queue, ledger, opts \\ []) do
     with {:ok, limit} <- validate_limit(Keyword.get(opts, :limit, @default_limit)),
          {:ok, cursor} <- validate_cursor(Keyword.get(opts, :cursor, 0)),
-         {:ok, filter} <- validate_filter(Keyword.get(opts, :filter, :all)) do
-      with {:ok, items} <- collect(queue, ledger) do
-        items = filter_items(items, filter)
-        page = Enum.slice(items, cursor, limit)
-        next_cursor = if cursor + limit < length(items), do: cursor + limit, else: nil
-        {:ok, %{items: page, next_cursor: next_cursor}}
-      end
+         {:ok, filter} <- validate_filter(Keyword.get(opts, :filter, :all)),
+         {:ok, items} <- collect(queue, ledger) do
+      items = filter_items(items, filter)
+      page = Enum.slice(items, cursor, limit)
+      next_cursor = if cursor + limit < length(items), do: cursor + limit, else: nil
+      {:ok, %{items: page, next_cursor: next_cursor}}
     end
   catch
     :exit, reason -> {:error, {:ops_unavailable, reason}}
@@ -185,11 +184,12 @@ defmodule Alto.Ops do
   defp snapshot_pages(queue, cursor, acc) do
     try do
       case Alto.Queue.snapshot_page(queue, cursor, 100) do
-        {:ok, %{records: records, next_cursor: nil}} ->
-          {:ok, Enum.reverse(Enum.reduce(records, acc, &[&1 | &2]))}
-
         {:ok, %{records: records, next_cursor: next_cursor}} ->
-          snapshot_pages(queue, next_cursor, Enum.reduce(records, acc, &[&1 | &2]))
+          acc = Enum.reverse(records, acc)
+
+          if is_nil(next_cursor),
+            do: {:ok, Enum.reverse(acc)},
+            else: snapshot_pages(queue, next_cursor, acc)
 
         {:error, reason} ->
           {:error, {:queue_unavailable, reason}}
@@ -301,12 +301,10 @@ defmodule Alto.Ops do
 
   defp reason_of(evidence, class) when is_map(evidence) do
     base = "#{class}: #{inspect(Map.delete(evidence, :__struct__), limit: 10)}"
-    truncate(base, @max_reason_bytes)
+    Alto.Text.truncate(base, @max_reason_bytes, "...")
   end
 
   defp reason_of(_evidence, class), do: "#{class}"
-
-  defp truncate(binary, max), do: Alto.Text.truncate(binary, max, "...")
 
   defp filter_items(items, :all), do: items
   defp filter_items(items, status), do: Enum.filter(items, &(&1.status == status))
