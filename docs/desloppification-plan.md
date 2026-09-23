@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,429 lines, a reduction of 7,226 (17.8%). A 30%
-reduction would require at most 28,458 lines, or another 4,971 lines below the
+The 2026-09-24 inventory is 33,390 lines, a reduction of 7,265 (17.9%). A 30%
+reduction would require at most 28,458 lines, or another 4,932 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -60,6 +60,8 @@ their remaining approval, persistence, and output paths have different owners.
 The front-end registry likewise centralizes run completion, approval cleanup,
 and guarded queue calls. Folding its distinct read projections into another
 layer would add indirection without a useful reduction.
+The consumer's repeated lifecycle and option prose was condensed by 39 lines;
+that improves the source inventory but does not shrink executable code.
 
 ## Next passes
 

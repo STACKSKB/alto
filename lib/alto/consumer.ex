@@ -1,57 +1,26 @@
 defmodule Alto.Consumer do
   @moduledoc """
-  A bounded durable inbox consumer: claim → short run → outcome
-  handling → ack or park.
+  Polls a bounded queue, handles each claim, records its outcome in
+  `Alto.OperationLog`, then acknowledges or releases the claim. A decided
+  outcome is acknowledged without re-running; a dispatched attempt with no
+  outcome is parked because it may have committed. Fresh or intended work
+  starts a counted attempt. Unknown results and exhausted attempts park;
+  explicit retries release the claim and record that release in the ledger.
 
-  Each poll claims at most `batch` records within `claim_bytes`, then
-  handles them one at a time under the ledger's recovery table
-  (`Alto.OperationLog`):
+  Outcome recording precedes acknowledgement. A failed ledger write leaves
+  the claim live. Queue claim IDs fence stale workers, and an expired lease is
+  reconciled through the ledger rather than blindly replayed. The handler is
+  bounded by `handle_timeout`, so a stuck handler blocks only its worker.
 
-    * decided outcome on record → ack *without* re-running;
-    * dispatched without outcome → park (`:requires_operator`, acked) —
-      the previous attempt may have committed;
-    * intended / fresh → record intent + attempt, run the handler;
-    * attempts exhausted → park (`:attempts_exhausted`, acked);
-    * handler `:done` → `:completed`, ack;
-    * handler `{:failed, reason}` → `:failed_known`, ack (terminal);
-    * handler `{:retry, reason}` → queue release + ledger release line
-      (a counted retry, the only path back to intended);
-    * handler `{:park, reason}` or handler silence (crash/timeout past
-      `handle_timeout`) → `:requires_operator`, ack.
-
-  Ack happens only after the outcome is durably recorded; any store
-  failure before that leaves the work live (lease expiry hands it to
-  another worker, which parks it). Ack failures (`:lease_expired`,
-  `:not_found`) are logged and skipped — a newer owner, if any, reconciles
-  through the same table.
-
-  Fencing, leases, bounds, restarts:
-
-    * **ownership fencing** is the queue `claim_id`: it rotates on every
-      claim, so a stale worker's ack answers `:not_found` and can never
-      acknowledge a newer owner's claim;
-    * **safe expiry, no renewal**: work must fit the queue lease; expired
-      work is re-claimed and governed by ledger state, never replayed
-      blindly;
-    * **attempt bounds** (`max_attempts`, default 3) cap retries; unknown
-      outcomes park on first sight, before any repeat;
-    * **restart**: a dead worker's lease expires; the next claim finds
-      `dispatched` and parks, or `decided` and acks;
-    * **placement**: workers are plain supervised processes that *call*
-      the queue/ledger/registry. The registry never waits on a worker, so
-      a stuck downstream blocks only its worker's poll loop, and handler
-      execution is bounded by `handle_timeout`.
-
-  The handler contract:
+  A handler returns:
 
       handler.(payload, %{key: key, claim_id: id, attempt: n}) ::
         :done | {:done, evidence} | {:failed, reason} |
         {:retry, reason} | {:park, reason} | {:run, runner_result} |
         {:outcome, outcome_class, evidence}
 
-  `evidence` must be a map (scrubbed of credentials by the ledger).
-  Handlers built on `Alto.run/2` can return `{:run, result}` to persist its
-  authoritative verdict, which remains valid after retained events are evicted.
+  `evidence` is a map scrubbed by the ledger. `{:run, result}` retains the
+  runner's authoritative verdict after its events have been evicted.
   """
 
   use GenServer
@@ -76,21 +45,13 @@ defmodule Alto.Consumer do
   ## Client API
 
   @doc """
-  Start a consumer. Options:
-
-    * `:queue` — `Alto.Queue` server (required);
-    * `:ledger` — `Alto.OperationLog` server (required);
-    * `:handler` — `fun/2` (required, see module docs);
-    * `:by` — claim owner tag (default `"consumer"`, unique per worker);
-    * `:tool` — tool name recorded in ledger intents;
-    * `:max_attempts` — counted retries before parking (default 3);
-    * `:poll_ms` — idle delay between polls (default 250);
-    * `:claim_bytes` — encoded-bytes claim budget (default 256 KiB);
-    * `:batch` — max records per poll (default 1);
-    * `:handle_timeout` — handler deadline in ms (default 60,000);
-    * `:autostart` — begin polling on start (default true; tests pass false
-      and drive `poll/1`);
-    * `:name` — registered name.
+  Start a consumer with required `:queue`, `:ledger`, and `:handler` options.
+  Optional `:by` (`"consumer"`), `:tool` (`"consumer_handler"`),
+  `:max_attempts` (3), `:poll_ms` (250),
+  `:claim_bytes` (256 KiB), `:batch` (1), `:handle_timeout` (60 seconds),
+  and `:autostart` (true) control polling and handling.
+  `:name` registers the process. Set `autostart: false` to drive `poll/1`
+  manually.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
