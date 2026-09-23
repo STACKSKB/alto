@@ -7,40 +7,35 @@ defmodule Alto.Tools.FFF do
   in-memory index can remain resident across runs.
   """
 
+  @page_fields %{
+    maxResults: %{type: "number", minimum: 1, maximum: 100},
+    cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
+  }
+  @content_fields Map.merge(@page_fields, %{
+                    output_mode: %{type: "string"},
+                    context: %{type: "number", minimum: 0, maximum: 100}
+                  })
+
   @file_schema Alto.Tool.object_schema(
                  "Frecency- and git-aware fuzzy path search using the external FFF index. Keep queries short; supports path prefixes and FFF glob constraints.",
-                 %{
+                 Map.merge(@page_fields, %{
                    query: %{
                      type: "string",
                      description: "Fuzzy path query and optional FFF constraints."
-                   },
-                   maxResults: %{type: "number", minimum: 1, maximum: 100},
-                   cursor: %{
-                     type: "string",
-                     description: "Opaque cursor from a previous result page."
                    }
-                 },
+                 }),
                  ["query"]
                )
 
   @grep_schema Alto.Tool.object_schema(
                  "Search file contents through the external FFF warm index. Put filename, directory, glob, and exclusion constraints inline before the query.",
-                 %{
-                   query: %{type: "string", description: "Content query."},
-                   maxResults: %{type: "number", minimum: 1, maximum: 100},
-                   output_mode: %{type: "string"},
-                   context: %{type: "number", minimum: 0, maximum: 100},
-                   cursor: %{
-                     type: "string",
-                     description: "Opaque cursor from a previous result page."
-                   }
-                 },
+                 Map.put(@content_fields, :query, %{type: "string", description: "Content query."}),
                  ["query"]
                )
 
   @multi_schema Alto.Tool.object_schema(
                   "Search several content patterns in one call through the external FFF warm index.",
-                  %{
+                  Map.merge(@content_fields, %{
                     patterns: %{
                       type: "array",
                       items: %{type: "string"},
@@ -50,12 +45,8 @@ defmodule Alto.Tools.FFF do
                     constraints: %{
                       type: "string",
                       description: "FFF file constraints, such as '*.{ex,exs} !deps/'."
-                    },
-                    maxResults: %{type: "number", minimum: 1, maximum: 100},
-                    output_mode: %{type: "string"},
-                    context: %{type: "number", minimum: 0, maximum: 100},
-                    cursor: %{type: "string"}
-                  },
+                    }
+                  }),
                   ["patterns"]
                 )
 
