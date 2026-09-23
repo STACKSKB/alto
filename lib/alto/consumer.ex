@@ -261,54 +261,52 @@ defmodule Alto.Consumer do
   end
 
   defp apply_verdict(op, claim_id, verdict, state) do
-    case verdict do
-      :done ->
-        decide(op, claim_id, :completed, %{}, state)
-
-      {:done, evidence} when is_map(evidence) ->
-        decide(op, claim_id, :completed, evidence, state)
-
-      {:failed, reason} ->
-        decide(op, claim_id, :failed_known, %{reason: inspect(reason, limit: 5)}, state)
-
-      {:run, %Alto.Runner.Result{} = result} ->
-        apply_run_verdict(op, claim_id, result, state)
-
-      {:outcome, class, evidence}
-      when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] and
-             is_map(evidence) ->
-        decide(op, claim_id, class, evidence, state)
-
-      {:retry, _reason} ->
-        retry(op, claim_id, state)
-
-      {:checkpoint, checkpoint} when is_map(checkpoint) ->
-        checkpoint(op, claim_id, checkpoint, state)
-
-      {:park, reason} ->
-        park(op, claim_id, :parked_by_handler, %{reason: inspect(reason, limit: 5)}, state)
-
-      other ->
-        park(op, claim_id, :invalid_verdict, %{verdict: inspect(other, limit: 3)}, state)
+    case normalize_verdict(verdict) do
+      {:decide, class, evidence} -> decide(op, claim_id, class, evidence, state)
+      :retry -> retry(op, claim_id, state)
+      {:checkpoint, data} -> checkpoint(op, claim_id, data, state)
+      {:park, reason, evidence} -> park(op, claim_id, reason, evidence, state)
     end
   end
+
+  defp normalize_verdict(:done), do: {:decide, :completed, %{}}
+
+  defp normalize_verdict({:done, evidence}) when is_map(evidence),
+    do: {:decide, :completed, evidence}
+
+  defp normalize_verdict({:failed, reason}),
+    do: {:decide, :failed_known, %{reason: inspect(reason, limit: 5)}}
+
+  defp normalize_verdict({:outcome, class, evidence})
+       when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] and
+              is_map(evidence),
+       do: {:decide, class, evidence}
+
+  defp normalize_verdict({:retry, _reason}), do: :retry
+  defp normalize_verdict({:checkpoint, data}) when is_map(data), do: {:checkpoint, data}
+
+  defp normalize_verdict({:park, reason}),
+    do: {:park, :parked_by_handler, %{reason: inspect(reason, limit: 5)}}
+
+  defp normalize_verdict({:run, %Alto.Runner.Result{} = result}) do
+    evidence = %{run_id: result.run_id, events_dropped: result.events_dropped}
+
+    case result.verdict do
+      class when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] ->
+        {:decide, class, evidence}
+
+      :empty ->
+        {:park, :empty_run_verdict, evidence}
+    end
+  end
+
+  defp normalize_verdict(other),
+    do: {:park, :invalid_verdict, %{verdict: inspect(other, limit: 3)}}
 
   defp checkpoint(op, claim_id, data, state) do
     settle_ledger(claim_id, :checkpointed, state, fn ->
       Alto.OperationLog.record_checkpoint(state.ledger, op, claim_id, data)
     end)
-  end
-
-  defp apply_run_verdict(op, claim_id, result, state) do
-    evidence = %{run_id: result.run_id, events_dropped: result.events_dropped}
-
-    case result.verdict do
-      class when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] ->
-        decide(op, claim_id, class, evidence, state)
-
-      :empty ->
-        park(op, claim_id, :empty_run_verdict, evidence, state)
-    end
   end
 
   # Terminal: outcome first, ack second. Ack failures only strand work the
