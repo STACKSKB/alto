@@ -244,12 +244,5 @@ defmodule Alto.Display do
     )
   end
 
-  defp bound(text, limit) when byte_size(text) <= limit, do: text
-
-  defp bound(text, limit) do
-    case String.split_at(text, limit) do
-      {head, ""} -> head
-      {head, _rest} -> head <> "…"
-    end
-  end
+  defp bound(text, limit), do: Alto.Text.truncate(text, limit, "…")
 end

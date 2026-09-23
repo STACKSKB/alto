@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,192 lines, a reduction of 7,463 (18.4%). A 30%
-reduction would require at most 28,458 lines, or another 4,734 lines below the
+The 2026-09-24 inventory is 33,185 lines, a reduction of 7,470 (18.4%). A 30%
+reduction would require at most 28,458 lines, or another 4,727 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -129,6 +129,12 @@ were kept from those probes.
 The TaskHost lifecycle audit likewise found no safe local cut: host and
 subscriber monitors, waiter timers, and capacity cleanup cover separate crash
 and cancellation paths. No TaskHost edits were made.
+Display output now uses Alto's shared UTF-8 byte truncator. Its previous
+grapheme-based clipping could exceed the advertised byte bound; the old
+multibyte test had asserted that accidental behavior and now checks the actual
+limit. A focused audit of context, codec, loop, and small provider tests found
+no full case that merely measured Elixir or library behavior; apparent overlaps
+covered different Alto limits or failure boundaries.
 
 ## Next passes
 

@@ -25,9 +25,14 @@ defmodule Alto.DisplayTest do
     end
   end
 
-  test "does not mark short multibyte text as truncated" do
-    text = String.duplicate("😀", 2_001)
-    assert Display.error(text) == text
+  test "bounds multibyte text by UTF-8 bytes without clipping a character" do
+    fitting = String.duplicate("😀", 2_000)
+    assert Display.error(fitting) == fitting
+
+    truncated = Display.error(fitting <> "😀")
+    assert String.valid?(truncated)
+    assert byte_size(truncated) <= 8_000
+    assert String.ends_with?(truncated, "…")
   end
 
   test "provider errors retain the cause and useful fields without Elixir syntax" do
