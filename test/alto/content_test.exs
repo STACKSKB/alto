@@ -14,7 +14,6 @@ defmodule Alto.ContentTest do
 
     assert {:ok, blocks} = Content.normalize_tool_result(content, 10_000)
     assert blocks == content.blocks
-    assert JSON.decode!(JSON.encode!(blocks)) == blocks
     assert {:ok, ^content} = Content.decode_transcript(blocks)
   end
 

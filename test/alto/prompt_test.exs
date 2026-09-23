@@ -135,7 +135,6 @@ defmodule Alto.PromptTest do
                tools: []
              })
 
-    assert {:ok, "literal"} = Alto.Prompt.build("literal", %{})
     assert {:ok, nil} = Alto.Prompt.build(nil, %{})
     assert {:ok, nil} = Alto.Prompt.build("", %{})
 

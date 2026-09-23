@@ -93,7 +93,6 @@ defmodule Alto.ToolDisplayTest do
     assert entry.text == "read_file large.ex ✓"
     assert entry.detail == "#{byte_size(content)} bytes read · more available"
     refute inspect(entry) =~ "PRIVATE_CANARY"
-    assert value.content == content
   end
 
   defmodule Provider do

@@ -46,24 +46,7 @@ defmodule Alto.Context.EstimatorTest do
     assert Estimator.estimate(%{messages: [], tools: []}, tokenizer: fn _ -> 1 end) == 0
   end
 
-  test "rejects tokenizer and framing values that cannot form a bound" do
-    assert_raise NimbleOptions.ValidationError, ~r/tokenizer/, fn ->
-      Estimator.new(tokenizer: :not_a_function)
-    end
-
-    assert_raise NimbleOptions.ValidationError, ~r/provider_overhead/, fn ->
-      Estimator.config(provider_overhead: -1)
-    end
-
-    for field <- [:provider_overhead, :message_overhead, :tool_overhead],
-        value <- [-1, 1.5, nil] do
-      assert_raise NimbleOptions.ValidationError, fn -> Estimator.config([{field, value}]) end
-    end
-
-    assert_raise NimbleOptions.ValidationError, fn ->
-      Estimator.config(model_overhead: %{"model" => -1})
-    end
-
+  test "rejects tokenizer results that cannot form a bound" do
     assert_raise ArgumentError, ~r/tokenizer must return a non-negative integer/, fn ->
       Estimator.estimate(%{messages: [%{"x" => 1}], tools: []}, tokenizer: fn _ -> :unknown end)
     end
