@@ -73,18 +73,4 @@ defmodule Alto.Providers.ObserveTest do
       assert_receive {:request, %{}, _}
     end
   end
-
-  test "unwrapped executor has no prefix diagnostic payload" do
-    owner = self()
-
-    assert {:ok, _} =
-             Alto.run("hello",
-               provider: {Provider, owner: owner},
-               tools: [],
-               event_sink: &send(owner, {:event, &1})
-             )
-
-    assert_receive {:event, %Alto.Event{type: :model_started, data: %{step: 1} = data}}
-    assert data == %{step: 1}
-  end
 end

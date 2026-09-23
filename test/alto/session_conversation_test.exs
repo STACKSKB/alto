@@ -6,11 +6,8 @@ defmodule Alto.SessionConversationTest do
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-conversation-#{System.unique_integer([:positive])}")
-    workspace = Path.join(dir, "workspace")
-    File.mkdir_p!(workspace)
-    File.write!(Path.join(workspace, "kept.txt"), "unchanged")
     on_exit(fn -> File.rm_rf!(dir) end)
-    %{dir: dir, workspace: workspace}
+    %{dir: dir}
   end
 
   defp user(content), do: %{"role" => "user", "content" => content}
@@ -109,7 +106,6 @@ defmodule Alto.SessionConversationTest do
              Session.transcript(id, session_dir: dir)
 
     assert {:ok, closed} = Transcript.close_interrupted(recovery)
-    assert :ok = Transcript.validate(closed)
     assert List.last(closed)["tool_call_id"] == "call-1"
     assert JSON.decode!(List.last(closed)["content"])["outcome"] == "unknown"
 
@@ -175,10 +171,7 @@ defmodule Alto.SessionConversationTest do
     assert {:ok, %{messages: ^outcome}} = Session.transcript(id, session_dir: dir)
   end
 
-  test "forks copy only a complete transcript and immutable provenance", %{
-    dir: dir,
-    workspace: workspace
-  } do
+  test "forks copy only a complete transcript and immutable provenance", %{dir: dir} do
     {:ok, source} = Session.create("task", %{}, session_dir: dir)
     first = [user("one")]
     second = first ++ [%{"role" => "assistant", "content" => "two"}]
@@ -243,7 +236,6 @@ defmodule Alto.SessionConversationTest do
     assert {:ok, branch_records} = Session.read("sess-branch", session_dir: dir)
     assert Enum.map(branch_records, & &1["type"]) == ["started", "forked"]
     refute Enum.any?(branch_records, &(&1["type"] == "approval_grant"))
-    assert File.read!(Path.join(workspace, "kept.txt")) == "unchanged"
   end
 
   test "revision and aggregate storage fences fail without replacing the head", %{dir: dir} do

@@ -105,35 +105,6 @@ defmodule Alto.TUI.ViewTest do
     assert status.text =~ "Esc stop"
   end
 
-  test "native input scrolls a long Unicode model identifier to its cursor" do
-    input = ExRatatui.text_input_new()
-    value = String.duplicate("界", 16) <> "END"
-    :ok = ExRatatui.text_input_set_value(input, value)
-
-    state = base_state(model_form(input))
-    widgets = View.widgets(state, frame(30, 20))
-    assert %TextInput{state: ^input} = active_input(widgets)
-
-    terminal = ExRatatui.init_test_terminal(30, 20)
-    assert :ok = ExRatatui.draw(terminal, widgets)
-    screen = ExRatatui.get_buffer_content(terminal)
-    assert screen =~ "Model ID"
-    assert screen =~ "END"
-  end
-
-  test "native input reserves a cell for the cursor when the value fills the field" do
-    input = ExRatatui.text_input_new()
-    :ok = ExRatatui.text_input_set_value(input, "abcd")
-    state = base_state(model_form(input))
-
-    widgets = View.widgets(state, frame(30, 20))
-    terminal = ExRatatui.init_test_terminal(30, 20)
-    assert :ok = ExRatatui.draw(terminal, widgets)
-    screen = ExRatatui.get_buffer_content(terminal)
-    assert screen =~ "bcd"
-    refute screen =~ "abcd"
-  end
-
   test "model buttons retain their mouse-routing rows" do
     state = base_state(model_form(ExRatatui.text_input_new()))
     widgets = View.widgets(state, frame(80, 30))

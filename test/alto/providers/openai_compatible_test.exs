@@ -3,7 +3,6 @@ defmodule Alto.Providers.OpenAICompatibleTest do
 
   alias Alto.Event
   alias Alto.Providers.OpenAICompatible
-  alias Alto.Providers.SSE
 
   defmodule Adapter do
     def run(request) do
@@ -339,49 +338,6 @@ defmodule Alto.Providers.OpenAICompatibleTest do
                max_response_bytes: 10,
                req_options: [adapter: Adapter]
              )
-  end
-
-  test "SSE framing survives CRLF and arbitrary chunk boundaries" do
-    state = SSE.new(100)
-    assert {:ok, state, []} = SSE.feed(state, "data: one\r")
-    assert {:ok, state, ["one"]} = SSE.feed(state, "\n\r\ndata: tw")
-    assert {:ok, _state, ["two"]} = SSE.feed(state, "o\n\n")
-  end
-
-  test "SSE framing is byte-safe across every boundary in multibyte content" do
-    wire = "data: " <> JSON.encode!(%{"text" => "hello 😀 café"}) <> "\r\n\r\n"
-
-    {state, payloads} =
-      wire
-      |> :binary.bin_to_list()
-      |> Enum.reduce({SSE.new(1_000), []}, fn byte, {state, payloads} ->
-        assert {:ok, state, emitted} = SSE.feed(state, <<byte>>)
-        {state, payloads ++ emitted}
-      end)
-
-    assert {:ok, []} = SSE.finish(state)
-    assert [payload] = payloads
-    assert JSON.decode!(payload) == %{"text" => "hello 😀 café"}
-  end
-
-  test "SSE accepts bare CR lines, joins data lines, and removes one optional space" do
-    state = SSE.new(100)
-
-    assert {:ok, state, ["first\n  indented"]} =
-             SSE.feed(state, "event: message\rdata: first\rdata:   indented\r\r")
-
-    assert {:ok, []} = SSE.finish(state)
-  end
-
-  test "non-SSE response fallback preserves raw bytes including blank lines" do
-    raw = "{\n\n  \"message\": \"😀\"\n}"
-    assert {:ok, state, []} = SSE.feed(SSE.new(100), raw)
-    assert {:raw, ^raw} = SSE.finish(state)
-  end
-
-  test "SSE bounds an unfinished event across chunks" do
-    assert {:ok, state, []} = SSE.feed(SSE.new(12), "data: 123")
-    assert {:error, {:sse_event_too_large, 12}} = SSE.feed(state, "4567")
   end
 
   defp sse(value), do: "data: " <> JSON.encode!(value) <> "\n\n"

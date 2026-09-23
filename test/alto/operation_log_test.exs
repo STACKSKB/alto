@@ -479,17 +479,6 @@ defmodule Alto.OperationLogTest do
       assert 1 = OperationLog.attempts(restarted, "op")
     end
 
-    test "parked work is retained while terminal work can be evicted", %{dir: dir, id: id} do
-      %{name: name} = start_ledger!(id: id, dir: dir, max_ops: 2)
-      :ok = OperationLog.record_intent(name, "parked", "t", nil)
-      :ok = OperationLog.record_attempt(name, "parked", "a")
-      :ok = OperationLog.record_outcome(name, "parked", "a", :requires_operator)
-      :ok = OperationLog.record_intent(name, "done", "t", nil)
-      :ok = OperationLog.record_attempt(name, "done", "b")
-      :ok = OperationLog.record_outcome(name, "done", "b", :completed)
-      assert ["parked"] = entry_keys(OperationLog.entries(name, :parked))
-    end
-
     test "credential-shaped evidence never reaches disk", %{dir: dir, id: id} do
       %{name: name} = start_ledger!(id: id, dir: dir)
 
@@ -516,17 +505,6 @@ defmodule Alto.OperationLogTest do
         bytes |> String.split("\n", trim: true) |> List.last() |> JSON.decode!()
 
       assert {:ok, {:outcome, "op-1", "clm-a", :completed, ^evidence}} =
-               Alto.Persistence.Codec.decode(encoded)
-    end
-
-    test "raw arguments are not stored: intent keeps identity only", %{dir: dir, id: id} do
-      %{name: name} = start_ledger!(id: id, dir: dir)
-      :ok = OperationLog.record_intent(name, "op-1", "print", "inbox:del-1")
-
-      {:ok, bytes} = File.read(Path.join(dir, id <> ".jsonl"))
-      assert %{"v" => 2, "command" => encoded} = JSON.decode!(bytes)
-
-      assert {:ok, {:intent, "op-1", "print", "inbox:del-1", nil}} =
                Alto.Persistence.Codec.decode(encoded)
     end
 

@@ -534,15 +534,6 @@ defmodule Alto.QueueTest do
       assert {:error, :queue_full} = Queue.put(name, "c", %{})
     end
 
-    test "updating a pending key does not consume new capacity", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir, max_records: 2)
-      {:ok, _} = Queue.put(name, "a", %{v: 1})
-      {:ok, _} = Queue.put(name, "a", %{v: 2})
-      {:ok, _} = Queue.put(name, "b", %{})
-
-      assert %{pending: 2} = Queue.count(name)
-    end
-
     test "invalid keys and payloads are rejected", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
 

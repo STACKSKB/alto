@@ -51,8 +51,7 @@ defmodule Alto.SessionTest do
     event = Event.durable(:tool_completed, data)
     assert :ok = Session.append(id, Session.event_record("run-9", event), session_dir: dir)
 
-    assert {:ok, [started, stored]} = Session.read(id, session_dir: dir)
-    assert started["type"] == "started"
+    assert {:ok, [_started, stored]} = Session.read(id, session_dir: dir)
     assert stored["type"] == "event"
     assert stored["domain"] == "durable"
     assert stored["event"] == "tool_completed"

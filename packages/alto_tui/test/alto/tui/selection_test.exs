@@ -1,7 +1,7 @@
 defmodule Alto.TUI.SelectionTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{Clipboard, Selection}
+  alias Alto.TUI.Selection
   alias ExRatatui.CellSession
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect
@@ -100,11 +100,6 @@ defmodule Alto.TUI.SelectionTest do
                {10, 1},
                nil
              )
-  end
-
-  test "clipboard payload is base64 and cannot inject terminal escapes" do
-    text = "hello\n猫\e]52;c;bad\a"
-    assert Clipboard.sequence(text) == "\e]52;c;" <> Base.encode64(text) <> "\a"
   end
 
   test "a multirow drag stays inside its box even when the mouse crosses adjacent panes" do

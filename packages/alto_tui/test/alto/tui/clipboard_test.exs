@@ -48,8 +48,13 @@ defmodule Alto.TUI.ClipboardTest do
   test "missing or failed desktop helpers request OSC 52 without claiming confirmation", %{
     path: path
   } do
-    assert capture_io(fn -> assert Clipboard.write("hello") == :terminal_requested end) ==
-             Clipboard.sequence("hello")
+    text = "hello\n猫\e]52;c;bad\a"
+    request = capture_io(fn -> assert Clipboard.write(text) == :terminal_requested end)
+    assert String.starts_with?(request, "\e]52;c;")
+    assert String.ends_with?(request, "\a")
+    refute request =~ "\e]52;c;bad"
+    encoded = request |> String.trim_leading("\e]52;c;") |> String.trim_trailing("\a")
+    assert Base.decode64!(encoded) == text
 
     executable(path, "xclip", "exit 1")
 
