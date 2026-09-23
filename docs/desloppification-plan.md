@@ -8,15 +8,15 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,321 lines, a reduction of 7,334 (18.0%). A 30%
-reduction would require at most 28,458 lines, or another 4,863 lines below the
+The 2026-09-24 inventory is 33,293 lines, a reduction of 7,362 (18.1%). A 30%
+reduction would require at most 28,458 lines, or another 4,835 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
-The largest remaining files are `Alto.TUI.App` (1,730),
-`Alto.Runner.Execution` (1,329), `Alto.Queue` (1,058),
-`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (890),
+The largest remaining files are `Alto.TUI.App` (1,718),
+`Alto.Runner.Execution` (1,323), `Alto.Queue` (1,054),
+`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (878),
 `Alto.TUI.View` (890), and `Alto.OperationLog` (855). Their size identifies
 where to investigate, not what to delete. Focused audits found that many
 apparently similar branches differ in authority, cancellation, event ordering,
@@ -85,6 +85,9 @@ Network integration tests now run serially after parallel full-suite runs
 exposed socket timeouts; their behavioral assertions are unchanged.
 The separate Chat loop was a 33-line wrapper around Default. `chat_loop/1`
 now configures Default's tool-free mode directly; both full suites pass.
+The superseded Chat checkpoint assertions were removed. Codex history and live
+completed items now share one entry projection; queue, workspace, and provider
+validation also pass through errors without separate forwarding branches.
 
 The latest runner outcome prototype increased production code by two lines
 after formatting and left the branches intact, so it was discarded. A CLI

@@ -640,20 +640,6 @@ defmodule Alto.TUI.Backends.Codex do
     })
   end
 
-  defp apply_codex_run_event(state, run, "item/completed", %{
-         "item" => %{"type" => "reasoning"} = item
-       }) do
-    text = CodexBackend.reasoning_text(item)
-
-    if text == "",
-      do: state,
-      else:
-        State.upsert_entry(state, run.task_id, {:codex_reasoning, run.turn_id, item["id"]}, %{
-          kind: :reasoning,
-          text: text
-        })
-  end
-
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
     state
     |> State.put_usage(run.task_id, Alto.Usage.from_codex(usage))
@@ -680,13 +666,15 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp apply_codex_run_event(state, run, "item/completed", %{"item" => item}) do
-    case CodexBackend.item_summary(item) do
-      nil ->
-        state
+    case CodexBackend.item_entry(item) do
+      %{kind: :reasoning} = entry ->
+        State.upsert_entry(state, run.task_id, {:codex_reasoning, run.turn_id, item["id"]}, entry)
 
-      text ->
-        entry = CodexBackend.item_entry(item)
+      %{kind: :tool, text: text} = entry ->
         State.append_entry(state, run.task_id, %{entry | text: text <> " ✓"})
+
+      _other ->
+        state
     end
   end
 

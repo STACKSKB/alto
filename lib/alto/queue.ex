@@ -199,15 +199,11 @@ defmodule Alto.Queue do
           {:ok, [map()]} | {:error, term()}
   def claim_matching(server \\ __MODULE__, selector, count \\ 1, by \\ nil, max_bytes)
       when is_integer(count) and count >= 1 and is_integer(max_bytes) and max_bytes >= 0 do
-    case validate_selector(selector) do
-      :ok ->
-        GenServer.call(
-          server,
-          {:claim_matching, selector, min(count, @max_claim_count), by, max_bytes}
-        )
-
-      {:error, _reason} = error ->
-        error
+    with :ok <- validate_selector(selector) do
+      GenServer.call(
+        server,
+        {:claim_matching, selector, min(count, @max_claim_count), by, max_bytes}
+      )
     end
   end
 

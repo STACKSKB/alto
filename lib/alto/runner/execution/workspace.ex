@@ -79,16 +79,12 @@ defmodule Alto.Runner.Execution.Workspace do
   end
 
   def call(fun, budget, timeout, cancel_ref) do
-    case Budget.check(budget) do
-      :ok ->
-        case Alto.Runner.Execution.Call.run(fun, Budget.timeout(budget, timeout), cancel_ref) do
-          {:ok, value} -> value
-          {:error, reason} -> {:error, {:workspace_process_failed, reason}}
-          {:cancelled, reason} -> {:error, {:cancelled, reason}}
-        end
-
-      {:error, _} = error ->
-        error
+    with :ok <- Budget.check(budget) do
+      case Alto.Runner.Execution.Call.run(fun, Budget.timeout(budget, timeout), cancel_ref) do
+        {:ok, value} -> value
+        {:error, reason} -> {:error, {:workspace_process_failed, reason}}
+        {:cancelled, reason} -> {:error, {:cancelled, reason}}
+      end
     end
   end
 

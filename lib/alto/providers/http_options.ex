@@ -22,12 +22,8 @@ defmodule Alto.Providers.HTTPOptions do
   end
 
   def validate(opts, schema) do
-    case NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
-      {:ok, values} ->
-        {:ok, Map.new(values)}
-
-      {:error, _} = error ->
-        error
+    with {:ok, values} <- NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
+      {:ok, Map.new(values)}
     end
   end
 

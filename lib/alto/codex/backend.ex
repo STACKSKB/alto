@@ -170,11 +170,11 @@ defmodule Alto.Codex.Backend do
   end
 
   defp history_turn(%{"items" => items}) when is_list(items),
-    do: Enum.flat_map(items, &history_item/1)
+    do: items |> Enum.map(&item_entry/1) |> Enum.reject(&is_nil/1)
 
   defp history_turn(_turn), do: []
 
-  defp history_item(%{"type" => "userMessage", "content" => content}) when is_list(content) do
+  def item_entry(%{"type" => "userMessage", "content" => content}) when is_list(content) do
     text =
       content
       |> Enum.flat_map(fn
@@ -183,27 +183,27 @@ defmodule Alto.Codex.Backend do
       end)
       |> Enum.join("\n")
 
-    if text == "", do: [], else: [%{kind: :user, text: text}]
+    if text == "", do: nil, else: %{kind: :user, text: text}
   end
 
-  defp history_item(%{"type" => "agentMessage", "text" => text}) when is_binary(text),
-    do: [%{kind: :codex_assistant, text: text}]
+  def item_entry(%{"type" => "agentMessage", "text" => text}) when is_binary(text),
+    do: %{kind: :codex_assistant, text: text}
 
-  defp history_item(%{"type" => type} = item)
-       when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
-       do: [item_entry(item)]
-
-  defp history_item(%{"type" => "reasoning"} = item) do
+  def item_entry(%{"type" => "reasoning"} = item) do
     case reasoning_text(item) do
-      "" -> []
-      text -> [%{kind: :reasoning, text: text}]
+      "" -> nil
+      text -> %{kind: :reasoning, text: text}
     end
   end
 
-  defp history_item(%{"type" => "plan", "text" => text}) when is_binary(text),
-    do: [%{kind: :system, text: "plan\n" <> text}]
+  def item_entry(%{"type" => "plan", "text" => text}) when is_binary(text),
+    do: %{kind: :system, text: "plan\n" <> text}
 
-  defp history_item(_item), do: []
+  def item_entry(%{"type" => type} = item)
+      when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
+      do: %{kind: :tool, text: item_summary(item), detail: item_detail(item)}
+
+  def item_entry(_item), do: nil
 
   def reasoning_text(item) do
     summary = Enum.filter(item["summary"] || [], &is_binary/1) |> Enum.join("\n\n")
@@ -212,10 +212,6 @@ defmodule Alto.Codex.Backend do
       do: summary,
       else: Enum.filter(item["content"] || [], &is_binary/1) |> Enum.join("\n\n")
   end
-
-  def item_entry(%{"type" => type} = item)
-      when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
-      do: %{kind: :tool, text: item_summary(item), detail: item_detail(item)}
 
   def item_summary(%{"type" => "commandExecution", "command" => command}),
     do: "command · " <> Alto.Display.text(command)

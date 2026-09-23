@@ -5,7 +5,7 @@ defmodule Alto.LoopCheckpointTest do
   alias Alto.Loops.{Default, Rule}
   alias Alto.Runtime
 
-  test "default and chat checkpoints restore runtime state and use the current spec" do
+  test "default checkpoints restore runtime state and use the current spec" do
     spec = Spec.new(Default, context: %{window: 1}, subagents: %{depth: 2})
 
     state = %Default{
@@ -22,21 +22,6 @@ defmodule Alto.LoopCheckpointTest do
     assert restored == state
     next = Default.handle_event(Alto.Event.live(:input_received, %{text: "next"}), restored, spec)
     assert [%{data: %{context: %{window: 1}}}] = next.effects
-
-    chat_spec = Alto.chat_loop(context: %{window: 3})
-    chat_state = Runtime.init(chat_spec, "hi").state
-
-    assert {:ok, ^chat_state} = Default.dump_checkpoint(chat_state, chat_spec)
-    assert {:ok, ^chat_state} = Default.load_checkpoint(chat_state, chat_spec)
-
-    next =
-      Default.handle_event(
-        Alto.Event.live(:input_received, %{text: "next"}),
-        chat_state,
-        chat_spec
-      )
-
-    assert [%{data: %{context: %{window: 3}}}] = next.effects
   end
 
   test "rule checkpoint excludes configured function steps" do
