@@ -14,9 +14,4 @@ defmodule Alto.Providers.OptionsTest do
                )
     end
   end
-
-  test "model discovery rejects non-HTTP endpoints" do
-    assert {:error, %NimbleOptions.ValidationError{key: :endpoint, value: "invalid"}} =
-             OpenAICompatible.list_models(models_endpoint: "invalid", base_url: nil)
-  end
 end

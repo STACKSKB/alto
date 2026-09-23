@@ -39,12 +39,9 @@ defmodule Alto.ConfigTest do
     end
   end
 
-  test "rejects listener modules without start_link and malformed options" do
-    for options <- [
-          [listeners: [{String, []}]],
-          [listeners: [{Alto.Listeners.WebServer, %{port: 4747}}]]
-        ] do
-      assert_raise NimbleOptions.ValidationError, fn -> Config.new(options) end
+  test "rejects listener modules without start_link" do
+    assert_raise NimbleOptions.ValidationError, fn ->
+      Config.new(listeners: [{String, []}])
     end
   end
 

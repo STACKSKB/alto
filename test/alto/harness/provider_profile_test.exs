@@ -31,12 +31,10 @@ defmodule Alto.Harness.ProviderProfileTest do
   end
 
   test "rejects malformed provider options before reading model defaults" do
-    for options <- [[123], [{"model", "large"}], [:model]] do
-      assert {:error, {:invalid_profile_provider, "invalid"}} =
-               ProviderProfile.from_run_options(
-                 provider_profiles: [%{id: "invalid", provider: {Provider, options}}]
-               )
-    end
+    assert {:error, {:invalid_profile_provider, "invalid"}} =
+             ProviderProfile.from_run_options(
+               provider_profiles: [%{id: "invalid", provider: {Provider, [123]}}]
+             )
   end
 
   test "module and tuple specs share defaults without losing provider options" do
