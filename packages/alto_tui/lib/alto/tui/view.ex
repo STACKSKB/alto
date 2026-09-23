@@ -415,27 +415,27 @@ defmodule Alto.TUI.View do
 
   defp add_details(widgets, state, layout) do
     details = details_widget(state, layout)
+    clear = if layout.presentation == :drawer, do: [{%Clear{}, layout.rect}], else: []
 
-    widgets =
-      if layout.presentation == :drawer, do: add(widgets, %Clear{}, layout.rect), else: widgets
-
-    widgets =
+    body =
       if layout.controls == [] do
-        add(widgets, details, layout.rect)
+        [{details, layout.rect}]
       else
-        widgets
-        |> add(%{details | text: "", scroll: {0, 0}}, layout.rect)
-        |> add(%{details | block: nil}, layout.content)
+        [
+          {%{details | text: "", scroll: {0, 0}}, layout.rect},
+          {%{details | block: nil}, layout.content}
+        ]
       end
 
-    Enum.reduce(layout.controls, widgets, fn control, acc ->
-      button = %Paragraph{
-        text: control.label,
-        style: style(fg: :black, bg: @accent, modifiers: [:bold])
-      }
+    buttons =
+      Enum.map(layout.controls, fn control ->
+        {%Paragraph{
+           text: control.label,
+           style: style(fg: :black, bg: @accent, modifiers: [:bold])
+         }, control.rect}
+      end)
 
-      add(acc, button, control.rect)
-    end)
+    widgets ++ clear ++ body ++ buttons
   end
 
   # Rendering and hit testing share these rectangles; only a visible button
@@ -569,13 +569,16 @@ defmodule Alto.TUI.View do
     inner = content_rect(rect)
     bg = style(fg: :white, bg: @panel_alt)
 
-    field_widgets =
-      Enum.flat_map(Enum.with_index(form.fields), &text_form_field(form, inner, bg, &1))
-
     error_row = 2 + length(form.fields)
     {button_row, _cancel_row} = TextForm.button_rows(form)
 
-    [
+    rows = [
+      {if(form.error, do: "  ! " <> form.error, else: ""), error_row},
+      {"  " <> Enum.at(form.buttons, 0), button_row},
+      {"  " <> Enum.at(form.buttons, 1), button_row + 1}
+    ]
+
+    background = [
       {%Clear{}, rect},
       {%Paragraph{
          text: "  " <> form.intro,
@@ -588,15 +591,11 @@ defmodule Alto.TUI.View do
            style: style(bg: @panel_alt)
          }
        }, rect}
-      | field_widgets ++
-          [
-            {form_paragraph(if(form.error, do: "  ! " <> form.error, else: ""), bg),
-             form_row(inner, error_row)},
-            {form_paragraph("  " <> Enum.at(form.buttons, 0), bg), form_row(inner, button_row)},
-            {form_paragraph("  " <> Enum.at(form.buttons, 1), bg),
-             form_row(inner, button_row + 1)}
-          ]
     ]
+
+    background ++
+      Enum.flat_map(Enum.with_index(form.fields), &text_form_field(form, inner, bg, &1)) ++
+      Enum.map(rows, fn {text, row} -> {form_paragraph(text, bg), form_row(inner, row)} end)
   end
 
   defp text_form_field(form, inner, bg, {field, index}) do
