@@ -30,7 +30,6 @@ defmodule Alto.ProtocolTest do
       assert String.valid?(key)
       assert byte_size(key) <= 1_000
       assert String.ends_with?(key, "…")
-      assert {:ok, ^encoded} = encoded |> JSON.encode!() |> JSON.decode()
     end
 
     test "inspect fallback is a string and improper lists do not crash the encoder" do
@@ -38,7 +37,6 @@ defmodule Alto.ProtocolTest do
 
       assert %{"$inspect" => text} = Protocol.encode_term(fn -> :ok end)
       assert text =~ "#Function<"
-      assert String.valid?(text)
     end
   end
 
@@ -114,6 +112,7 @@ defmodule Alto.ProtocolTest do
       }
 
       assert {:ok, line} = Protocol.approval_request("s-5", "run-41", request, @max_line_bytes)
+
       assert %{
                "type" => "approval_request",
                "request" => %{

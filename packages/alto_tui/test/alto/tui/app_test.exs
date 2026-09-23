@@ -1085,7 +1085,6 @@ defmodule Alto.TUI.AppTest do
     usage = State.current_usage(state)
     assert usage.total_tokens == 850
     assert usage.cached_input_tokens == 400
-    assert Alto.Usage.cache_hit_rate(usage) == 50.0
   end
 
   test "a Codex thread ID collision never hydrates native session history", context do

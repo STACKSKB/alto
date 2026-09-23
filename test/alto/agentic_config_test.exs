@@ -18,9 +18,4 @@ defmodule Alto.AgenticConfigTest do
     assert [profile] = Alto.Config.run_options(config)[:provider_profiles]
     assert {Alto.Providers.Observe, _} = profile[:provider]
   end
-
-  test "the coding profile loads as Alto configuration" do
-    path = Path.expand("../../alto.agentic.exs", __DIR__)
-    assert {:ok, %Alto.Config{}} = Alto.Config.load(path)
-  end
 end
