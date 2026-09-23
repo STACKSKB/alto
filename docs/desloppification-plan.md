@@ -8,20 +8,30 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,454 lines, a reduction of 7,201 (17.7%). A 30%
-reduction would require at most 28,458 lines, or another 4,996 lines below the
+The 2026-09-24 inventory is 33,447 lines, a reduction of 7,208 (17.7%). A 30%
+reduction would require at most 28,458 lines, or another 4,989 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
 The largest remaining files are `Alto.TUI.App` (1,730),
 `Alto.Runner.Execution` (1,329), `Alto.Queue` (1,058),
-`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (872),
+`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (890),
 `Alto.TUI.View` (890), and `Alto.OperationLog` (855). Their size identifies
 where to investigate, not what to delete. Focused audits found that many
 apparently similar branches differ in authority, cancellation, event ordering,
 or recovery guarantees; extracting a helper just to reduce line count can make
 those rules harder to see.
+
+The current audit found no removable run-context fields. In particular,
+`agent_identity` appears in both the live tool context and the checkpoint state
+because checkpoint packets must retain that portable identity without
+serializing the tool context's live metadata. The workspace tool tests cover
+different host, runner, and approval boundaries even when their inputs look
+similar. Git inspection and isolated-workspace Git execution have different
+command authority and environment isolation. Keep these boundaries explicit;
+the next reduction should come from a complete data-flow redesign, not from
+removing one side of such a pair.
 
 ## Next passes
 

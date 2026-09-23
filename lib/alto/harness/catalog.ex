@@ -19,6 +19,7 @@ defmodule Alto.Harness.Catalog do
   @max_catalog_bytes 32_000_000
   @max_title_bytes 2_000
   @max_state_field_bytes 32_000
+  @task_changes ~w(status backend conversation_id title)
 
   @type path :: Path.t()
   @type project :: map()
@@ -304,15 +305,7 @@ defmodule Alto.Harness.Catalog do
   defp nonnegative_integer?(value), do: is_integer(value) and value >= 0
 
   defp validate_changes(changes) when is_map(changes) do
-    allowed =
-      MapSet.new([
-        "status",
-        "backend",
-        "conversation_id",
-        "title"
-      ])
-
-    unknown = changes |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
+    unknown = changes |> Map.keys() |> Enum.reject(&(&1 in @task_changes))
 
     cond do
       unknown != [] ->
