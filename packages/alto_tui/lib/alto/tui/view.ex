@@ -481,16 +481,11 @@ defmodule Alto.TUI.View do
 
     message = if state.notice, do: " │ " <> short(state.notice, 32), else: ""
     left = left <> message
+    left_width = width - String.length(right)
 
     text =
-      if width > String.length(right) + 12 do
-        left_width = width - String.length(right)
-
-        if left_width >= String.length(left) do
-          String.pad_trailing(short(left, left_width), left_width) <> right
-        else
-          compact_status_line(activity, message, right, width)
-        end
+      if left_width > 12 and left_width >= String.length(left) do
+        String.pad_trailing(left, left_width) <> right
       else
         compact_status_line(activity, message, right, width)
       end
@@ -550,13 +545,7 @@ defmodule Alto.TUI.View do
 
     popup = %Popup{
       content: content,
-      block: %Block{
-        title: " #{Menu.title(overlay)} │ ↑↓ · Enter · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
+      block: overlay_block(" #{Menu.title(overlay)} │ ↑↓ · Enter · Esc "),
       percent_width: 62,
       percent_height: 62
     }
@@ -583,13 +572,7 @@ defmodule Alto.TUI.View do
       {%Paragraph{
          text: "  " <> form.intro,
          style: bg,
-         block: %Block{
-           title: " #{form.title} │ #{form.hint} ",
-           borders: [:all],
-           border_type: :rounded,
-           border_style: style(fg: @accent),
-           style: style(bg: @panel_alt)
-         }
+         block: overlay_block(" #{form.title} │ #{form.hint} ")
        }, rect}
     ]
 
@@ -791,6 +774,16 @@ defmodule Alto.TUI.View do
       border_type: :plain,
       border_style: style(fg: if(focused?, do: @accent, else: @muted)),
       style: style(bg: @panel)
+    }
+  end
+
+  defp overlay_block(title) do
+    %Block{
+      title: title,
+      borders: [:all],
+      border_type: :rounded,
+      border_style: style(fg: @accent),
+      style: style(bg: @panel_alt)
     }
   end
 

@@ -950,15 +950,10 @@ defmodule Alto.TUI.App do
       [] ->
         profile = State.selected_profile(state)
 
-        cond do
-          profile &&
-            not Map.has_key?(state.models, profile.id) &&
-              not MapSet.member?(state.model_loading, profile.id) ->
-            {:load, profile}
-
-          true ->
-            {:error, "This model does not advertise effort selection"}
-        end
+        if profile && not Map.has_key?(state.models, profile.id) &&
+             not MapSet.member?(state.model_loading, profile.id),
+           do: {:load, profile},
+           else: {:error, "This model does not advertise effort selection"}
 
       choices ->
         {:ok, "reasoning effort · next turn",
@@ -1082,10 +1077,7 @@ defmodule Alto.TUI.App do
     do: %{state | overlay: Menu.move(state.overlay, delta)}
 
   defp select_overlay(%{overlay: overlay} = state) do
-    items = Menu.items(overlay)
-    index = overlay.index
-
-    case Enum.at(items, index) do
+    case Enum.at(Menu.items(overlay), overlay.index) do
       nil ->
         state
 
@@ -1156,21 +1148,17 @@ defmodule Alto.TUI.App do
   defp apply_selection(state, :model, value),
     do: %{state | selected_model: value, overlay: nil, notice: "model: #{value}"}
 
-  defp apply_selection(state, :project, value),
-    do:
-      state
-      |> State.select_project(value)
-      |> prepare_selected_backend()
-      |> Map.put(:overlay, nil)
-      |> Map.put(:notice, "workspace switched")
+  defp apply_selection(state, kind, value) when kind in [:project, :task] do
+    {selected, notice} =
+      case kind do
+        :project -> {State.select_project(state, value), "workspace switched"}
+        :task -> {State.select_task(state, value), "task switched"}
+      end
 
-  defp apply_selection(state, :task, value),
-    do:
-      state
-      |> State.select_task(value)
-      |> prepare_selected_backend()
-      |> Map.put(:overlay, nil)
-      |> Map.put(:notice, "task switched")
+    selected
+    |> prepare_selected_backend()
+    |> Map.merge(%{overlay: nil, notice: notice})
+  end
 
   defp handle_mouse(state, %Mouse{kind: "down", button: "left", x: x, y: y}) do
     {width, height} = state.dimensions
