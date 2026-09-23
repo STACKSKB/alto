@@ -60,7 +60,6 @@ defmodule Alto.Workspaces.Git do
       {:ok,
        %{"source" => root, "base_commit" => String.trim(commit), "base_tree" => String.trim(tree)}}
     else
-      false -> {:error, :source_dirty}
       {:error, _} = error -> error
     end
   end
@@ -68,6 +67,9 @@ defmodule Alto.Workspaces.Git do
   @spec checkout(map(), Path.t(), keyword()) :: :ok | {:error, term()}
   def checkout(snapshot, destination, opts \\ [])
       when is_map(snapshot) and is_binary(destination) do
+    root = Path.expand(destination)
+    git_dir = root <> ".git"
+
     with {:ok, limits} <- limits(opts),
          {:ok, snapshot} <- validate_snapshot(snapshot),
          :ok <- ordinary_repository(snapshot["source"]),
@@ -85,13 +87,12 @@ defmodule Alto.Workspaces.Git do
              limits.max_checkout_bytes,
              limits
            ),
-         :ok <- reject_new_path(destination),
-         :ok <- reject_new_path(Path.expand(destination) <> ".git"),
-         :ok <- File.mkdir_p(Path.dirname(Path.expand(destination))),
-         git_dir <- Path.expand(destination) <> ".git",
+         :ok <- reject_new_path(root),
+         :ok <- reject_new_path(git_dir),
+         :ok <- File.mkdir_p(Path.dirname(root)),
          {:ok, _} <-
            git(
-             Path.dirname(Path.expand(destination)),
+             Path.dirname(root),
              [
                "clone",
                "--local",
@@ -101,19 +102,19 @@ defmodule Alto.Workspaces.Git do
                git_dir,
                "--template=/dev/null",
                snapshot["source"],
-               Path.expand(destination)
+               root
              ],
              limits
            ),
-         :ok <- verify_git_pointer(Path.expand(destination), git_dir),
+         :ok <- verify_git_pointer(root, git_dir),
          {:ok, _} <-
            workspace_git(
-             Path.expand(destination),
+             root,
              git_dir,
              ["checkout", "--detach", snapshot["base_commit"]],
              limits
            ),
-         :ok <- verify_checkout(Path.expand(destination), snapshot, limits, git_dir) do
+         :ok <- verify_checkout(root, snapshot, limits, git_dir) do
       :ok
     else
       {:error, _} = error -> error
@@ -151,7 +152,6 @@ defmodule Alto.Workspaces.Git do
         do: {:ok, patch},
         else: {:error, :patch_too_large}
     else
-      false -> {:error, :wrong_workspace}
       {:error, _} = error -> error
     end
   end
@@ -198,7 +198,6 @@ defmodule Alto.Workspaces.Git do
          true <- Path.expand(String.trim(reported)) == root or {:error, :not_repository} do
       {:ok, root}
     else
-      false -> {:error, :repository_not_found}
       {:error, _} = error -> error
     end
   end
@@ -235,7 +234,6 @@ defmodule Alto.Workspaces.Git do
          true <- File.dir?(source) or {:error, :invalid_snapshot} do
       {:ok, snapshot}
     else
-      false -> {:error, :invalid_snapshot}
       {:error, _} = error -> error
     end
   end
@@ -251,7 +249,6 @@ defmodule Alto.Workspaces.Git do
          true <- String.trim(tree) == snapshot["base_tree"] or {:error, :stale_workspace} do
       :ok
     else
-      false -> {:error, :stale_workspace}
       {:error, _} = error -> error
     end
   end
@@ -282,7 +279,6 @@ defmodule Alto.Workspaces.Git do
          true <- File.dir?(git_dir) or {:error, :invalid_git_pointer} do
       :ok
     else
-      false -> {:error, :invalid_git_pointer}
       {:ok, _} -> {:error, :invalid_git_pointer}
       {:error, _} = error -> error
     end

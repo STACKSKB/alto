@@ -628,24 +628,22 @@ defmodule Alto.CLI do
   end
 
   defp command_mode(options) do
-    unsandboxed? = Keyword.get(options, :allow_command, false)
-    sandboxed? = Keyword.get(options, :sandbox_command, false)
-    network? = Keyword.get(options, :allow_command_network, false)
-
-    cond do
-      unsandboxed? and sandboxed? ->
+    case {Keyword.get(options, :allow_command, false),
+          Keyword.get(options, :sandbox_command, false),
+          Keyword.get(options, :allow_command_network, false)} do
+      {true, true, _} ->
         {:error, "choose either --allow-command or --sandbox-command, not both"}
 
-      network? and not sandboxed? ->
+      {_, false, true} ->
         {:error, "--allow-command-network requires --sandbox-command"}
 
-      sandboxed? ->
+      {_, true, _} ->
         {:ok, :sandboxed}
 
-      unsandboxed? ->
+      {true, false, false} ->
         {:ok, :unsandboxed}
 
-      true ->
+      _ ->
         {:ok, :disabled}
     end
   end

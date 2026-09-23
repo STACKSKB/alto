@@ -100,11 +100,11 @@ defmodule Alto.Workspaces do
 
   @doc "Hold the workspace lock throughout worker use; a crashed use remains dispatched."
   def use(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
-    do: use_at(manager, id, revision, fun, "ready")
+    do: use_at(manager, id, revision, fn _ -> {:ok, nil} end, fn ws, _ -> fun.(ws) end, "ready")
 
   @doc "Continue a suspended worker at the exact retained workspace revision."
   def resume(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
-    do: use_at(manager, id, revision, fun, "worked")
+    do: use_at(manager, id, revision, fn _ -> {:ok, nil} end, fn ws, _ -> fun.(ws) end, "worked")
 
   @doc """
   Validate and admit a continuation while holding its workspace lock, before
@@ -118,19 +118,6 @@ defmodule Alto.Workspaces do
   def resume(%__MODULE__{} = manager, id, revision, admit, execute)
       when is_function(admit, 1) and is_function(execute, 2),
       do: use_at(manager, id, revision, admit, execute, "worked")
-
-  defp use_at(manager, id, revision, fun, expected_status) do
-    use_at(
-      manager,
-      id,
-      revision,
-      fn _ -> {:ok, nil} end,
-      fn workspace, _ ->
-        fun.(workspace)
-      end,
-      expected_status
-    )
-  end
 
   defp use_at(manager, id, revision, admit, execute, expected_status) do
     locked(manager, id, fn ->

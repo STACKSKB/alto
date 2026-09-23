@@ -1,28 +1,27 @@
 defmodule Alto.TUI.Clipboard do
   @moduledoc "Desktop clipboard helpers with an OSC 52 fallback for remote terminals."
 
+  @helpers %{
+    write: [
+      {"WAYLAND_DISPLAY", "wl-copy", []},
+      {"DISPLAY", "xclip", ["-selection", "clipboard", "-in"]},
+      {"DISPLAY", "xsel", ["--clipboard", "--input"]},
+      {nil, "pbcopy", []}
+    ],
+    read: [
+      {"WAYLAND_DISPLAY", "wl-paste", ["--no-newline"]},
+      {"DISPLAY", "xclip", ["-selection", "clipboard", "-o"]},
+      {"DISPLAY", "xsel", ["--clipboard", "--output"]},
+      {nil, "pbpaste", []}
+    ]
+  }
+
   @doc "Encode text as an OSC 52 clipboard write; text cannot inject terminal commands."
   def sequence(text), do: "\e]52;c;" <> Base.encode64(text) <> "\a"
 
   @doc "Copy through a desktop helper, falling back to a terminal clipboard request."
   def write(text) do
-    command =
-      cond do
-        System.get_env("WAYLAND_DISPLAY") && System.find_executable("wl-copy") ->
-          {System.find_executable("wl-copy"), []}
-
-        System.get_env("DISPLAY") && System.find_executable("xclip") ->
-          {System.find_executable("xclip"), ["-selection", "clipboard", "-in"]}
-
-        System.get_env("DISPLAY") && System.find_executable("xsel") ->
-          {System.find_executable("xsel"), ["--clipboard", "--input"]}
-
-        System.find_executable("pbcopy") ->
-          {System.find_executable("pbcopy"), []}
-
-        true ->
-          nil
-      end
+    command = desktop_command(:write)
 
     if command && desktop_write(command, text) == :ok, do: :ok, else: terminal_write(text)
   end
@@ -93,23 +92,7 @@ defmodule Alto.TUI.Clipboard do
 
   @doc "Read the local desktop clipboard when a supported helper is installed."
   def read do
-    command =
-      cond do
-        System.get_env("WAYLAND_DISPLAY") && System.find_executable("wl-paste") ->
-          {"wl-paste", ["--no-newline"]}
-
-        System.get_env("DISPLAY") && System.find_executable("xclip") ->
-          {"xclip", ["-selection", "clipboard", "-o"]}
-
-        System.get_env("DISPLAY") && System.find_executable("xsel") ->
-          {"xsel", ["--clipboard", "--output"]}
-
-        System.find_executable("pbpaste") ->
-          {"pbpaste", []}
-
-        true ->
-          nil
-      end
+    command = desktop_command(:read)
 
     if command do
       task =
@@ -133,5 +116,16 @@ defmodule Alto.TUI.Clipboard do
     else
       {:error, :unavailable}
     end
+  end
+
+  defp desktop_command(direction) do
+    Enum.find_value(Map.fetch!(@helpers, direction), fn {display, name, args} ->
+      if is_nil(display) || System.get_env(display) do
+        case System.find_executable(name) do
+          nil -> nil
+          path -> {path, args}
+        end
+      end
+    end)
   end
 end
