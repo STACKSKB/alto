@@ -11,7 +11,7 @@ defmodule Alto.Session.Conversation do
   alias Alto.Context.Transcript
   alias Alto.{DurableLog, Session, Storage}
 
-  @version 1
+  @version 2
   @head_version 2
   @max_entry_bytes 16_000_000
   @default_max_conversation_bytes 128_000_000
@@ -52,7 +52,6 @@ defmodule Alto.Session.Conversation do
          {:ok, summary} <- optional_summary(Keyword.get(opts, :summary)) do
       draft = %{
         "v" => @version,
-        "type" => "conversation_entry",
         "session_id" => id,
         "messages" => messages,
         "transcript_bytes" => transcript_bytes,
@@ -148,11 +147,9 @@ defmodule Alto.Session.Conversation do
          {:ok, parent} <- resolve_parent(id, current, constraints.requested_parent),
          entry <-
            Map.merge(draft, %{
-             "entry_id" => entry_id(id, next_revision),
              "revision" => next_revision,
              "parent" => encode_parent(parent),
-             "retained_bytes_before" => retained_bytes,
-             "at_ms" => System.system_time(:millisecond)
+             "retained_bytes_before" => retained_bytes
            }),
          {:ok, encoded} <- encode_bounded(entry),
          conversation_bytes <- retained_bytes + byte_size(encoded),
@@ -163,7 +160,7 @@ defmodule Alto.Session.Conversation do
              constraints.max_conversation_bytes,
              byte_size(encoded)
            ),
-         :ok <- put_entry(id, next_revision, encoded, opts),
+         :ok <- put_entry(id, next_revision, entry, encoded, opts),
          snapshot <- snapshot(entry, byte_size(encoded)),
          :ok <- write_head(id, snapshot.revision, nil, opts) do
       {:ok, snapshot}
@@ -197,7 +194,7 @@ defmodule Alto.Session.Conversation do
       context_observation: entry["context_observation"],
       transcript_bytes: entry["transcript_bytes"],
       revision: entry["revision"],
-      entry_id: entry["entry_id"],
+      entry_id: entry_id(entry["session_id"], entry["revision"]),
       entry_session_id: entry["session_id"],
       parent: decode_parent!(entry["parent"]),
       summary: entry["summary"],
@@ -206,13 +203,22 @@ defmodule Alto.Session.Conversation do
     }
   end
 
-  defp put_entry(id, revision, encoded, opts) do
+  defp put_entry(id, revision, entry, encoded, opts) do
     path = entry_path(opts, id, revision)
 
     with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true) do
       case Alto.BoundedFile.read(path, @max_entry_bytes) do
+        {:ok, ""} ->
+          DurableLog.replace(path, encoded)
+
         {:ok, existing} ->
-          existing_entry_result(existing, encoded, id, revision, path)
+          case JSON.decode(existing) do
+            {:ok, ^entry} ->
+              :ok
+
+            _ ->
+              {:error, {:conversation_revision_conflict, %{session_id: id, revision: revision}}}
+          end
 
         {:error, :enoent} ->
           with :ok <- Storage.ensure_private_file(path), do: DurableLog.replace(path, encoded)
@@ -220,20 +226,6 @@ defmodule Alto.Session.Conversation do
         {:error, reason} ->
           {:error, {:conversation_write_failed, reason}}
       end
-    end
-  end
-
-  defp existing_entry_result("", encoded, _id, _revision, path),
-    do: DurableLog.replace(path, encoded)
-
-  defp existing_entry_result(existing, encoded, id, revision, _path) do
-    with {:ok, old} when is_map(old) <- JSON.decode(existing),
-         {:ok, new} when is_map(new) <- JSON.decode(encoded),
-         true <- Map.drop(old, ["at_ms"]) == Map.drop(new, ["at_ms"]) do
-      :ok
-    else
-      _ ->
-        {:error, {:conversation_revision_conflict, %{session_id: id, revision: revision}}}
     end
   end
 
@@ -282,9 +274,8 @@ defmodule Alto.Session.Conversation do
 
   defp decode_entry(contents, id, revision) do
     with {:ok, entry} when is_map(entry) <- JSON.decode(contents),
-         true <- entry["v"] == @version and entry["type"] == "conversation_entry",
+         true <- entry["v"] == @version,
          true <- entry["session_id"] == id and entry["revision"] == revision,
-         true <- entry["entry_id"] == entry_id(id, revision),
          true <- is_list(entry["messages"]),
          true <- is_integer(entry["transcript_bytes"]) and entry["transcript_bytes"] >= 0,
          {:ok, settled} <- validate_messages(entry["messages"], true),
