@@ -41,6 +41,15 @@ that look similar inspect different wire contracts. These seams need a new
 shared contract to shrink; line-by-line helper extraction would only relocate
 policy.
 
+The queue and operation ledger already share durable file operations and each
+uses its own transition function for live writes and replay. A queue lease log
+stores only the changed lease fields; replacing it with a full record would
+increase write volume, and a naive replacement would lose the replay check
+that the record already exists.
+The Codex and MCP clients likewise share JSON-RPC framing and request tracking.
+The next durable-state cut must change the state representation or API shape,
+not repeat those existing extractions.
+
 ## Next passes
 
 1. **Runner state and effect flow.** The clearest remaining duplication is the

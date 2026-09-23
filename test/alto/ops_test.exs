@@ -48,7 +48,7 @@ defmodule Alto.OpsTest do
     assert %{status: :claimed, source: "/hooks/events", claim_id: claim_id} =
              by_key["/hooks/events:del-1"]
 
-    assert is_binary(claim_id) and claim_id == claimed.claim_id
+    assert claim_id == claimed.claim_id
     assert %{status: :accepted, source: "business", operation: "job-9"} = by_key["job-9"]
 
     # Correlation is inbox key + claim identity, never an invented run.
@@ -223,7 +223,6 @@ defmodule Alto.OpsTest do
     {:ok, _} = Queue.put(q, "same-display", %{})
 
     assert {:ok, %{items: items}} = Ops.list(q, l)
-    assert length(items) == 2
     assert Enum.map(items, & &1.key) == ["same-display", "same-display"]
     assert Enum.map(items, & &1.status) == [:accepted, :completed]
     assert Enum.at(items, 0).operation_key != old_operation
