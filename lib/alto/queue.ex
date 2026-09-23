@@ -532,28 +532,16 @@ defmodule Alto.Queue do
     end
   end
 
-  def handle_call({:cancel, key}, _from, state) do
+  def handle_call({operation, key}, _from, state)
+      when operation in [:cancel, :cancel_pending] do
     victims =
       ordered_records(state)
       |> Enum.filter(&(&1.key == key))
 
-    cancel_records(state, key, victims)
-  end
-
-  def handle_call({:cancel_pending, key}, _from, state) do
-    victims =
-      ordered_records(state)
-      |> Enum.filter(&(&1.key == key))
-
-    cond do
-      victims == [] ->
-        {:reply, {:error, :not_found}, state}
-
-      Enum.any?(victims, &(&1.status == :claimed)) ->
-        {:reply, {:error, {:key_claimed, key}}, state}
-
-      true ->
-        cancel_records(state, key, victims)
+    if operation == :cancel_pending and Enum.any?(victims, &(&1.status == :claimed)) do
+      {:reply, {:error, {:key_claimed, key}}, state}
+    else
+      cancel_records(state, victims)
     end
   end
 
@@ -600,11 +588,11 @@ defmodule Alto.Queue do
     {:reply, reply, state}
   end
 
-  defp cancel_records(state, _key, []) do
+  defp cancel_records(state, []) do
     {:reply, {:error, :not_found}, state}
   end
 
-  defp cancel_records(state, _key, victims) do
+  defp cancel_records(state, victims) do
     logs =
       Enum.map(victims, fn record ->
         %{"v" => @version, "type" => "blank", "id" => record.id, "reason" => "cancelled"}
