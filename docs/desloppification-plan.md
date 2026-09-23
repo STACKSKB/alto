@@ -8,15 +8,15 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,253 lines, a reduction of 7,402 (18.2%). A 30%
-reduction would require at most 28,458 lines, or another 4,795 lines below the
+The 2026-09-24 inventory is 33,205 lines, a reduction of 7,450 (18.3%). A 30%
+reduction would require at most 28,458 lines, or another 4,747 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
 The largest remaining files are `Alto.TUI.App` (1,718),
 `Alto.Runner.Execution` (1,323), `Alto.Queue` (1,054),
-`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.View` (890),
+`Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
 `Alto.TUI.Backends.Codex` (855), and `Alto.OperationLog` (847). Their size identifies
 where to investigate, not what to delete. Focused audits found that many
 apparently similar branches differ in authority, cancellation, event ordering,
@@ -93,6 +93,8 @@ Codex approval methods share one descriptor for labels and response shapes.
 Immutable conversation entries use a smaller v2 record: entry IDs are derived
 from session and revision, and retries compare decoded entries. A storage-test
 audit retained cases that distinguish live state, persisted state, and recovery.
+The registry's repeated option and contract prose was condensed by 48 source
+lines; this improves navigation but does not reduce executable code.
 
 The latest runner outcome prototype increased production code by two lines
 after formatting and left the branches intact, so it was discarded. A CLI
@@ -115,6 +117,10 @@ TUI navigation prototype did the same; both were reverted. The remaining
 model, tool-batch, and scheduler branches account for different event order,
 admission, cancellation, and replay responsibilities. Treat a claimed
 200-line runner cut as unproven until an end-to-end replacement is smaller.
+A new audit measured the runner group at 5,366 lines and found that singleton
+and batch outcomes still require distinct dispatch order. TUI modal and
+approval consolidation likewise added indirection without a net cut; no edits
+were kept from those probes.
 
 ## Next passes
 

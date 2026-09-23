@@ -1,34 +1,14 @@
 defmodule Alto.FrontEnd.Registry do
   @moduledoc """
-  The resident-side hub between the execution host and front-end transports.
+  Resident hub for run lifetimes, bounded event replay, subscribers, and approvals.
+  Transports encode its typed notifications through `Alto.Protocol`. Durable
+  sequence numbers are provisional until the session store assigns final ones.
 
-  The registry owns run lifetimes started through it, assigns provisional
-  per-run durable sequence numbers (the protocol contract: the session store will assign
-  final ones later), retains a bounded durable replay buffer per run, and
-  correlates front-end approval decisions. It is transport-agnostic: it ships
-  typed notifications to subscriber processes, which encode them through
-  `Alto.Protocol` for their own wire.
-
-  Delivery is pull-based: subscribers receive notifications only in response
-  to `pull/3`, so a stalled client stops pulling and consumes at most its
-  configured buffer. When a subscriber's buffer is full, incoming
-  notifications are dropped and an `overflow` notification is queued for the
-  next pull — durable gaps are never silent. The core itself is never blocked
-  by a slow client.
-
-  Approval notifications ignore domain filters: any client attached to a run
-  is eligible to answer its approvals, and the first decision wins. Handles
-  are globally unique operations (`"<run_id>:op-<seq>"`, ): no scoping or
-  random-suffix patch, every request/response/event/cleanup path uses the
-  handle, and `call_id` is correlation only. Pending approvals replay on
-  `attach` for reconnect; duplicate handles fail `already_pending` and late
-  replies fail `not_found`.
-
-  Finished runs keep their replay buffers up to a bounded recent window
-  (`:max_finished_runs`, default 100); `run_ids/1` lists only live runs.
-  Once the window is exceeded the oldest finished run is evicted and a later
-  `attach` to it answers `unknown_run` — webhook-per-event traffic would
-  otherwise grow the registry monotonically.
+  Subscribers pull from bounded buffers; overflow is reported rather than
+  silently losing a durable gap. Attached clients can answer approvals regardless
+  of event-domain filters. The first decision wins, and pending requests replay
+  on attach. The bounded finished-run window retains recent replay buffers;
+  `run_ids/1` lists only live runs.
   """
 
   use GenServer
@@ -73,55 +53,27 @@ defmodule Alto.FrontEnd.Registry do
   ## Client API
 
   @doc """
-  Start the registry. Options:
+  Start the registry. `:config_resolver` maps a configuration name to
+  `{:ok, run_opts}` or `{:error, reason}`. `:queue` enables claim/ack;
+  `:queue` and `:ledger` together enable read-only operation inspection.
+  `:commands` maps trusted names to supervised callbacks; a timeout leaves an
+  unknown outcome for the caller to reconcile.
 
-    * `:config_resolver` — required fun taking a configuration name and
-      returning `{:ok, run_opts}` or `{:error, term()}`;
-    * `:cwd` — workspace root for started runs (default: `File.cwd!/0`);
-    * `:queue` — optional durable queue server (`Alto.Queue`) backing the
-      claim/ack surface;
-    * `:ledger` — optional operation ledger server (`Alto.OperationLog`)
-      backing the read-only operator inspection surface (`ops_list`);
-      the queue/ledger pair is read together, never written by inspection;
-    * `:max_buffer_messages` — per-subscriber notification bound;
-    * `:max_retained_events` — durable replay bound per run;
-    * `:max_finished_runs` — finished-run replay window (default 100);
-    * `:max_claim_bytes` — encoded-bytes budget for `queue_claim` replies
-      without an explicit per-call budget (default 1 MiB minus envelope
-      reserve); transports pass their own `max_line_bytes`-derived budget
-      per call so claims never outgrow the connection;
-    * :commands — optional map of non-empty binary names to trusted arity-one
-      callbacks. A callback receives a map and returns a map, {:ok, map()},
-      or {:error, reason}; it runs in a supervised task;
-    * `:command_timeout` — callback deadline in milliseconds (default 30,000).
-      A timeout reports an unknown outcome; callers must reconcile before retrying;
-    * `:disconnect_after_overflow` — `:never` (default) or `:immediately`;
-    * `:sessions` — served-run session persistence (, explicit opt-in,
-      default `false` keeps served runs unpersisted): `true` persists each
-      fresh run in the default session store, `[session_dir: path]` uses a
-      custom directory. Resume (`start_run` with `resume:`) reads from the
-      same directory regardless of this flag. Evicting a finished run from
-      the replay window never deletes its session files;
-    * `:session_dir` — session directory override (default: the standard
-      session store); also honoured when `sessions:` carries no directory;
-    * `:name` — registered name (default `Alto.FrontEnd.Registry`).
+  `:sessions` opts fresh served runs into persistence (`true` or
+  `[session_dir: path]`). Resume can read `:session_dir` regardless of that
+  setting. `:cwd` defaults to the process directory and `:name` to this module.
+  The buffer, replay, claim-size, command-timeout, and overflow
+  controls and their defaults are declared in `@options`.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @doc """
-  Start a run from a trusted, resolver-resolvable configuration name. An
-  optional owner pid may be supplied in opts; it receives the runner's
-  cancellation guarantee, while the registry process is the default owner.
-
-  Options: `:resume` — continue a persisted session id instead of starting
-  fresh. The session must exist with a resumable (completed-run) transcript
-  snapshot; crashed runs report `:no_resumable_transcript` rather than
-  rerunning anything. Provider, tools, approval, and bounds come from the
-  resolved configuration exactly like a fresh run. Trusted in-process callers may
-  supply `:cwd` to choose a workspace for this run; wire clients cannot override it. Hosts may also pass a validated `:reasoning_effort`
-  for the configured provider; wire start commands cannot supply provider overrides.
+  Start a run from a trusted configuration name. `:resume` requires a completed
+  transcript snapshot; a crashed run cannot be replayed as new work. Trusted
+  callers may set `:owner`, `:cwd`, or validated `:reasoning_effort`; wire
+  clients cannot override the provider, tools, approval, or workspace.
   """
   @spec start_run(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
