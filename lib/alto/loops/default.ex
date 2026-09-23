@@ -45,17 +45,25 @@ defmodule Alto.Loops.Default do
         %__MODULE__{phase: :awaiting_model} = state,
         spec
       ) do
-    case Map.get(data, :tool_calls, []) do
-      [] ->
+    mode = Keyword.get(spec.driver_options, :tool_execution, :serial)
+
+    case {mode, Map.get(data, :tool_calls, [])} do
+      {:disabled, []} ->
+        Transition.stop(state, output)
+
+      {:disabled, tool_calls} when is_list(tool_calls) ->
+        Transition.error(state, {:tools_not_supported, Enum.map(tool_calls, &Map.get(&1, :id))})
+
+      {_, []} ->
         settle(state, {:stop, output}, :completed)
 
-      tool_calls when is_list(tool_calls) ->
+      {mode, tool_calls} when is_list(tool_calls) ->
         # A provider may repeat a call id; every emitted invocation must
         # report before the step can settle.
         pending = Enum.frequencies_by(tool_calls, &Map.fetch!(&1, :id))
 
         effects =
-          case Keyword.get(spec.driver_options, :tool_execution, :serial) do
+          case mode do
             :serial -> Enum.map(tool_calls, &Effect.run_tool/1)
             {:parallel, limit} when limit in 1..32 -> [Effect.run_tools(tool_calls, limit)]
             other -> raise ArgumentError, "invalid tool_execution: #{inspect(other)}"

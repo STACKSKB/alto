@@ -24,15 +24,16 @@ defmodule Alto.LoopCheckpointTest do
     assert [%{data: %{context: %{window: 1}}}] = next.effects
 
     chat_spec = Spec.new(Chat, context: %{window: 3})
+    chat_state = Runtime.init(chat_spec, "hi").state
 
-    assert {:ok, chat_checkpoint} =
-             Chat.dump_checkpoint(%Chat{task: "hi", phase: :complete}, chat_spec)
+    assert {:ok, ^chat_state} = Chat.dump_checkpoint(chat_state, chat_spec)
+    assert {:ok, ^chat_state} = Chat.load_checkpoint(chat_state, chat_spec)
 
-    assert {:ok, %Chat{task: "hi", phase: :complete} = restored} =
-             Chat.load_checkpoint(chat_checkpoint, chat_spec)
+    assert {:error, :invalid_checkpoint} =
+             Chat.load_checkpoint(%{chat_state | phase: {:awaiting_tools, %{}}}, chat_spec)
 
     next =
-      Chat.handle_event(Alto.Event.live(:input_received, %{text: "next"}), restored, chat_spec)
+      Chat.handle_event(Alto.Event.live(:input_received, %{text: "next"}), chat_state, chat_spec)
 
     assert [%{data: %{context: %{window: 3}}}] = next.effects
   end
