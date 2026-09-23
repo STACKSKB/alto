@@ -1,50 +1,25 @@
 defmodule Alto.Queue do
   @moduledoc """
-  A durable, bounded claim/ack record queue (the integration contract, "durable queue").
+  A durable, bounded claim/ack queue. Each queue id owns a GenServer and a
+  JSONL log at `queues/<id>.jsonl`. Exact-term payloads survive restarts;
+  acknowledgements and cancellations append tombstones.
 
-  One GenServer per queue id, one append-only JSONL log per queue under the
-  state home (`queues/<id>.jsonl`). Records travel as exact terms (base64
-  `term_to_binary`, the `Alto.Session` convention), so a queued record
-  survives restarts byte-exact; blanks and cancels persist as tombstones,
-  so the default queue log is append-only like a session log. Hosts may opt
-  into state compaction when historical entries are not an audit archive.
+  `put/4` uses business keys: a pending key updates its payload and revision,
+  a claimed key rejects, and a blanked key may be queued again. `admit/4`
+  uses delivery keys: the first pending value wins, claimed keys reject, and
+  completed keys remain duplicates until they leave the bounded window.
+  Webhook admission namespaces keys by endpoint and delivery id.
 
-  Two key spaces share one log (the integration contract "Durable admission decision"):
+  `claim/3` leases the oldest pending records. Leases survive restart and
+  expire lazily back to pending. `claim_bounded/4` also limits encoded wire
+  bytes; an oversized head leases nothing. `ack/2` completes and tombstones
+  a claim, `release/2` returns it to pending, and `cancel/2` completes a key.
 
-  * **business keys** via `put/3` — idempotent upserts. A repeated key
-    while pending updates its payload and bumps revision (record
-    modification); while claimed it is an error; after blanking it
-    legitimately re-queues as a new record. Redeliveries are the ingress's
-    problem; the queue dedups by record key.
-  * **delivery keys** via `admit/3` — insert-only source admission,
-    first-wins. A repeated key while pending answers `:duplicate` without
-    touching the stored bytes (even when the redelivered body differs);
-    while claimed it answers `{:key_claimed, key}`; after blanking it
-    answers `:duplicate` for as long as the key survives in the bounded
-    completed window. The webhook `{:enqueue, _}` mode admits under
-    `"endpoint-path:delivery-id"` keys, so admission dedups per source
-    endpoint and completed markers survive ack and restart.
-
-  `claim/3` hands out the oldest pending records under a lease. An
-  expired lease reverts the record to pending lazily, so a crashed
-  claimer loses its claim, never the record. Claims persist: a restart
-  keeps claimed records under the same lease deadline. `claim_bounded/4`
-  additionally budgets the encoded wire bytes, so a transport never leases
-  records it cannot deliver; a lone oversized head answers
-  `{:record_too_large, ...}` with nothing leased. `ack/2` blanks the
-    record: removed from the queue, tombstoned in the log ("these records are
-    processed"), and its key joins the completed window. `release/2` returns a
-  claim to pending without completing. `cancel/2` blanks every record for
-  a key (record cancellation) and completes the key.
-
-  Bounds are part of correctness: record count,
-  completed-window size, payload bytes, and key length all have explicit
-  limits, and `put/4` rejects beyond them instead of truncating. Every
-  mutation is appended and file-synced before it is acknowledged; creation
-  and repair also flush the containing directory. A failed append leaves
-  memory and disk in agreement and reports the error to the caller.
-  A torn trailing write (crash mid-append) is discarded on replay; any
-  other corruption fails the start loudly.
+  Record count, completed keys, payloads, keys, and log bytes are bounded.
+  Mutations are appended and file-synced before acknowledgement; creation
+  and repair sync the directory. A failed append leaves memory unchanged.
+  Optional compaction replaces historical entries with retained state.
+  Replay discards only a torn trailing write; other corruption fails start.
   """
 
   use GenServer
@@ -102,26 +77,20 @@ defmodule Alto.Queue do
   @doc """
   Start a queue. Options:
 
-    * `:id` — required queue id; names the storage file, validated like a
-      session id so a hostile id cannot escape the queues directory;
-    * `:dir` — storage directory (default: `<state home>/alto/queues`);
+    * `:id` — required, validated storage-file id;
+    * `:dir` — storage directory (default `<state home>/alto/queues`);
     * `:name` — registered process name (default `Alto.Queue`);
-    * `:max_records` — pending + claimed record bound (default 10,000);
-    * `:max_completed` — completed-delivery window bound (default 10,000
-      keys; expiry re-admits, see `admit/3`);
-    * `:max_payload_bytes` — per-record exact-term size bound (default 64,000);
-    * `:max_key_bytes` — dedup key length bound (default 256);
-    * `:max_log_bytes` — maximum replay file size (default 64 MiB);
-    * `:auto_compact` — compact retained state before a full log rejects a write
-      (default false; compaction replaces historical audit entries);
+    * `:max_records` — pending plus claimed records (default 10,000);
+    * `:max_completed` — remembered delivery keys (default 10,000); eviction permits readmission;
+    * `:max_payload_bytes` — exact-term payload bound (default 64,000);
+    * `:max_key_bytes` — key length bound (default 256);
+    * `:max_log_bytes` — replay file bound (default 64 MiB);
+    * `:auto_compact` — replace history with retained state when full (default false);
     * `:lease_ms` — claim lease (default 300,000);
-    * `:clock` — injectable zero-arity millisecond clock (default system time);
+    * `:clock` — zero-arity millisecond clock (default system time).
 
-
-  A corrupt log fails the start loudly, like `Alto.Session` — the queue
-  never silently drops records it cannot decode. A torn trailing write
-  (crash mid-append) is the exception: the partial tail is discarded and
-  the file atomically replaced with the last acknowledged prefix.
+  A torn append tail is discarded and the acknowledged prefix atomically
+  restored; complete corruption prevents startup.
   """
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)

@@ -8,15 +8,15 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,518 lines, a reduction of 7,137 (17.6%). A 30%
-reduction would require at most 28,458 lines, or another 5,060 lines below the
+The 2026-09-24 inventory is 33,458 lines, a reduction of 7,197 (17.7%). A 30%
+reduction would require at most 28,458 lines, or another 5,000 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
 The largest remaining files are `Alto.TUI.App` (1,730),
-`Alto.Runner.Execution` (1,329), `Alto.Queue` (1,089),
-`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (919),
+`Alto.Runner.Execution` (1,329), `Alto.Queue` (1,058),
+`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (872),
 `Alto.TUI.View` (890), and `Alto.OperationLog` (855). Their size identifies
 where to investigate, not what to delete. Focused audits found that many
 apparently similar branches differ in authority, cancellation, event ordering,

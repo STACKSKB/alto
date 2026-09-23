@@ -117,54 +117,46 @@ defmodule Alto.TUI.Backends.Codex do
   def cancel(_run, _reason, _options), do: :ok
   defp handle_info(:ensure_codex_backend, state), do: {:noreply, ensure_codex(state, false)}
 
-  defp handle_info({:codex_connected, result}, state) do
-    case result do
-      {:ok, %{client: client, account: account}} ->
-        codex = %{data(state) | client: client, status: :ready, account: account}
-        next = put_data(state, codex)
+  defp handle_info({tag, {:error, reason}}, state)
+       when tag in [
+              :codex_connected,
+              :codex_refreshed,
+              :codex_login_started,
+              :codex_logout_finished
+            ],
+       do: {:noreply, codex_error_overlay(state, reason)}
 
-        if CodexBackend.chatgpt_account?(account) do
-          {:noreply, refresh_codex(next)}
-        else
-          {:noreply, codex_account_overlay(next)}
-        end
+  defp handle_info({:codex_connected, {:ok, %{client: client, account: account}}}, state) do
+    codex = %{data(state) | client: client, status: :ready, account: account}
+    next = put_data(state, codex)
 
-      {:error, reason} ->
-        next = put_in(state.backend_state[__MODULE__].status, {:error, reason})
-        {:noreply, codex_error_overlay(next, reason)}
+    if CodexBackend.chatgpt_account?(account) do
+      {:noreply, refresh_codex(next)}
+    else
+      {:noreply, codex_account_overlay(next)}
     end
   end
 
-  defp handle_info({:codex_refreshed, result}, state) do
-    case result do
-      {:ok, %{models: models, rate_limits: limits}} ->
-        selected =
-          if selected?(state) do
-            if Enum.any?(models, &(&1.id == state.selected_model)) do
-              state.selected_model
-            else
-              case Enum.find(models, &Map.get(&1, :default?, false)) || List.first(models) do
-                nil -> nil
-                model -> model.id
-              end
-            end
-          else
-            state.selected_model
-          end
+  defp handle_info({:codex_refreshed, {:ok, %{models: models, rate_limits: limits}}}, state) do
+    selected =
+      if selected?(state) and not Enum.any?(models, &(&1.id == state.selected_model)) do
+        case Enum.find(models, &Map.get(&1, :default?, false)) || List.first(models) do
+          nil -> nil
+          model -> model.id
+        end
+      else
+        state.selected_model
+      end
 
-        codex = %{data(state) | models: models, rate_limits: limits, status: :ready}
-        next = %{put_data(state, codex) | selected_model: selected, notice: "ChatGPT ready"}
+    codex = %{data(state) | models: models, rate_limits: limits, status: :ready}
+    next = %{put_data(state, codex) | selected_model: selected, notice: "ChatGPT ready"}
 
-        next =
-          if state.overlay && state.overlay.kind in [:codex_account, :codex_connecting],
-            do: %{next | overlay: nil},
-            else: next
+    next =
+      if state.overlay && state.overlay.kind in [:codex_account, :codex_connecting],
+        do: %{next | overlay: nil},
+        else: next
 
-        {:noreply, maybe_load_codex_history(next)}
-
-      {:error, reason} ->
-        {:noreply, codex_error_overlay(state, reason)}
-    end
+    {:noreply, maybe_load_codex_history(next)}
   end
 
   defp handle_info({:codex_limits_refreshed, {:ok, limits}}, state),
@@ -173,46 +165,37 @@ defmodule Alto.TUI.Backends.Codex do
   defp handle_info({:codex_limits_refreshed, _error}, state),
     do: {:noreply, state, render?: false}
 
-  defp handle_info({:codex_login_started, result}, state) do
-    case result do
-      {:ok, %{"authUrl" => url, "loginId" => _login_id} = login} ->
-        open_codex_url(state, url)
+  defp handle_info(
+         {:codex_login_started, {:ok, %{"authUrl" => url, "loginId" => _login_id} = login}},
+         state
+       ) do
+    open_codex_url(state, url)
 
-        if CodexBackend.chatgpt_account?(data(state).account) do
-          {:noreply, refresh_codex(state)}
-        else
-          codex = %{data(state) | status: {:authenticating, login}}
+    if CodexBackend.chatgpt_account?(data(state).account) do
+      {:noreply, refresh_codex(state)}
+    else
+      codex = %{data(state) | status: {:authenticating, login}}
 
-          next = %{
-            put_data(state, codex)
-            | overlay: codex_login_overlay(login),
-              notice: "waiting for ChatGPT sign-in"
-          }
+      next = %{
+        put_data(state, codex)
+        | overlay: codex_login_overlay(login),
+          notice: "waiting for ChatGPT sign-in"
+      }
 
-          {:noreply, next}
-        end
-
-      {:error, reason} ->
-        {:noreply, codex_error_overlay(state, reason)}
+      {:noreply, next}
     end
   end
 
-  defp handle_info({:codex_logout_finished, result}, state) do
-    case result do
-      {:ok, _result} ->
-        codex = %{
-          data(state)
-          | account: nil,
-            models: [],
-            rate_limits: nil,
-            status: :ready
-        }
+  defp handle_info({:codex_logout_finished, {:ok, _result}}, state) do
+    codex = %{
+      data(state)
+      | account: nil,
+        models: [],
+        rate_limits: nil,
+        status: :ready
+    }
 
-        {:noreply, codex_account_overlay(%{put_data(state, codex) | selected_model: nil})}
-
-      {:error, reason} ->
-        {:noreply, codex_error_overlay(state, reason)}
-    end
+    {:noreply, codex_account_overlay(%{put_data(state, codex) | selected_model: nil})}
   end
 
   defp handle_info({:codex_history_loaded, task_id, result}, state) do
@@ -485,32 +468,25 @@ defmodule Alto.TUI.Backends.Codex do
     account = data(state).account
 
     {message, items} =
-      cond do
-        CodexBackend.chatgpt_account?(account) ->
-          {
-            CodexBackend.account_label(account) <>
-              "\nOAuth credentials and refresh remain owned by Codex App Server and are shared with local Codex clients.",
-            [
-              %{label: "Refresh models and quota", value: :codex_refresh},
-              %{label: "Sign out of ChatGPT (also signs out Codex CLI)", value: :codex_logout}
-            ]
-          }
+      if CodexBackend.chatgpt_account?(account) do
+        {
+          CodexBackend.account_label(account) <>
+            "\nOAuth credentials and refresh remain owned by Codex App Server and are shared with local Codex clients.",
+          [
+            %{label: "Refresh models and quota", value: :codex_refresh},
+            %{label: "Sign out of ChatGPT (also signs out Codex CLI)", value: :codex_logout}
+          ]
+        }
+      else
+        message =
+          if get_in(account || %{}, ["account", "type"]) == "apiKey",
+            do: "Codex is using an API key, not ChatGPT subscription access.",
+            else:
+              "Sign in through the official managed ChatGPT OAuth flow. Alto never receives the token."
 
-        get_in(account || %{}, ["account", "type"]) == "apiKey" ->
-          {
-            "Codex is using an API key, not ChatGPT subscription access.",
-            [
-              %{label: "Sign in with ChatGPT subscription…", value: :codex_login}
-            ] ++ alternative_backends(state)
-          }
-
-        true ->
-          {
-            "Sign in through the official managed ChatGPT OAuth flow. Alto never receives the token.",
-            [
-              %{label: "Sign in with ChatGPT subscription…", value: :codex_login}
-            ] ++ alternative_backends(state)
-          }
+        {message,
+         [%{label: "Sign in with ChatGPT subscription…", value: :codex_login}] ++
+           alternative_backends(state)}
       end
 
     %{state | overlay: list_overlay(:codex_account, "Codex account", message, items)}
@@ -688,14 +664,16 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp apply_codex_run_event(state, run, "item/started", %{"item" => item}) do
+    summary = CodexBackend.item_summary(item)
+
     state =
       cond do
         item["type"] == "reasoning" -> codex_phase(state, run, "thinking")
-        CodexBackend.item_summary(item) != nil -> codex_phase(state, run, "running tool")
+        summary != nil -> codex_phase(state, run, "running tool")
         true -> state
       end
 
-    case CodexBackend.item_summary(item) do
+    case summary do
       nil -> state
       text -> State.append_entry(state, run.task_id, %{kind: :tool, text: text <> " …"})
     end
@@ -820,20 +798,13 @@ defmodule Alto.TUI.Backends.Codex do
               "Codex approval required · F8 approve / F9 deny"
             )
 
-          :read_only ->
+          level when level in [:read_only, :full_access] ->
+            decision = if level == :full_access, do: :approve, else: {:deny, :read_only}
+
             CodexClient.respond(
               data(state).client,
               id,
-              codex_approval_response(method, {:deny, :read_only}, params)
-            )
-
-            state
-
-          :full_access ->
-            CodexClient.respond(
-              data(state).client,
-              id,
-              codex_approval_response(method, :approve, params)
+              codex_approval_response(method, decision, params)
             )
 
             state
