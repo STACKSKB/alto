@@ -186,19 +186,9 @@ defmodule Alto.Providers.OpenAICompatible do
       if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
     end
 
-    options =
-      [
-        url: config.endpoint,
-        params: config.query,
-        headers: config.headers,
-        into: into,
-        raw: true,
-        retry: false,
-        receive_timeout: config.timeout,
-        request_timeout: config.timeout
-      ] ++ config.req_options
-
-    case Req.get(options) do
+    case Req.get(
+           HTTPOptions.request_options(config, config.headers, params: config.query, into: into)
+         ) do
       {:ok, response} ->
         {:ok, response.status, Req.Response.get_private(response, @models_state_key, state)}
 

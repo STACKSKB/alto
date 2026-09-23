@@ -315,14 +315,16 @@ defmodule Alto.Providers.OpenAICompatibleTest do
   end
 
   test "bounds the provider model catalog" do
-    configure_adapter(self(), 200, "application/json", [String.duplicate("x", 32)])
+    for request_options <- [[], [into: fn _chunk, pair -> {:cont, pair} end]] do
+      configure_adapter(self(), 200, "application/json", [String.duplicate("x", 32)])
 
-    assert {:error, {:models_response_too_large, 16}} =
-             OpenAICompatible.list_models(
-               base_url: "https://unit.test/v1",
-               max_models_response_bytes: 16,
-               req_options: [adapter: Adapter]
-             )
+      assert {:error, {:models_response_too_large, 16}} =
+               OpenAICompatible.list_models(
+                 base_url: "https://unit.test/v1",
+                 max_models_response_bytes: 16,
+                 req_options: [adapter: Adapter] ++ request_options
+               )
+    end
   end
 
   defp sse(value), do: "data: " <> JSON.encode!(value) <> "\n\n"

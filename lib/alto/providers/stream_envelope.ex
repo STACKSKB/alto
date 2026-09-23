@@ -1,5 +1,6 @@
 defmodule Alto.Providers.StreamEnvelope do
   @moduledoc false
+  alias Alto.Providers.HTTPOptions
   alias Alto.Providers.SSE
 
   @state_key :alto_stream_envelope
@@ -21,19 +22,9 @@ defmodule Alto.Providers.StreamEnvelope do
       if next.error, do: {:halt, {request, response}}, else: {:cont, {request, response}}
     end
 
-    options =
-      Keyword.merge(config.req_options,
-        url: config.endpoint,
-        body: JSON.encode!(body),
-        headers: headers,
-        into: into,
-        raw: true,
-        retry: false,
-        receive_timeout: config.timeout,
-        request_timeout: config.timeout
-      )
-
-    case Req.post(options) do
+    case Req.post(
+           HTTPOptions.request_options(config, headers, body: JSON.encode!(body), into: into)
+         ) do
       {:ok, response} ->
         state = Req.Response.get_private(response, @state_key, initial)
         result(state, response.status, decoder, sink)

@@ -31,6 +31,22 @@ defmodule Alto.Providers.HTTPOptions do
     end
   end
 
+  def request_options(config, headers, extra) do
+    # Provider extensions cannot override the streaming and timeout guards.
+    Keyword.merge(
+      config.req_options,
+      extra ++
+        [
+          url: config.endpoint,
+          headers: headers,
+          raw: true,
+          retry: false,
+          receive_timeout: config.timeout,
+          request_timeout: config.timeout
+        ]
+    )
+  end
+
   def nonempty_string(value) when is_binary(value) and value != "", do: {:ok, value}
   def nonempty_string(_), do: {:error, "expected a nonempty string"}
 
