@@ -135,7 +135,6 @@ defmodule Alto.Runner.ParentContinuationTest do
         ),
       tools: [IntegrateTool],
       continuation_store: ledgers.parent,
-      continuation_key: "trusted-parent",
       checkpoint_version: "v1",
       budget_account: ledgers.account,
       max_effects: 50,

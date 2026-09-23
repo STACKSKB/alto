@@ -375,7 +375,7 @@ defmodule Alto.FrontEnd.Registry do
 
       run_opts =
         config_opts
-        |> Keyword.merge(Keyword.take(opts, [:continuation_key, :budget_account, :cwd]))
+        |> Keyword.merge(Keyword.take(opts, [:budget_account, :cwd]))
         |> Alto.Reasoning.configure_run(Keyword.get(opts, :reasoning_effort))
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)

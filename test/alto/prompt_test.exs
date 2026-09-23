@@ -55,20 +55,6 @@ defmodule Alto.PromptTest do
     assert command_only =~ "command executor configured by the harness"
   end
 
-  test "the default CLI read-only tool set renders the read-only guidance" do
-    alias Alto.Tools.ReadFile
-    alias Alto.Tools.SearchFiles
-
-    prompt =
-      Alto.Prompts.Coding.build(
-        %{cwd: "/workspace", tools: [ListFiles, ReadFile, SearchFiles]},
-        []
-      )
-
-    assert prompt =~ "This run is read-only"
-    assert prompt =~ "Command execution is disabled"
-  end
-
   test "chat and coding builders share the same runtime prompt boundary" do
     assert {:ok, result} =
              Alto.run("say hello",

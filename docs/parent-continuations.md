@@ -13,10 +13,10 @@ must be supervised and private. The continuation ledger needs sufficient
 `max_recovery_bytes` and `max_record_bytes` for the encoded frame; parent cell
 packets are limited to 2 MB, with 64 KB metadata. Store limits can be lower.
 
-The optional trusted `continuation_key` identifies the host's logical task in
-cell metadata. It is not an execution grant. The resident Registry accepts it,
-per-task `budget_account`, and a `continuation` identity through its Elixir API;
-socket `start_run` commands cannot inject these options.
+The resident Registry accepts a per-task `budget_account` and a `continuation`
+identity through its Elixir API; socket `start_run` commands cannot inject these
+options. Hosts may put their own logical task key in cell metadata when opening
+continuations directly.
 
 ## Boundaries and grants
 

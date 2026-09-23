@@ -107,7 +107,6 @@ defmodule Alto.Runner.Execution.Setup do
     initial = %{
       loop_state: nil,
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
-      runner_options: Keyword.get(opts, :runner_options, []),
       input: Keyword.get(opts, :input),
       resolved_operations: [],
       history_digest: nil,
@@ -119,7 +118,6 @@ defmodule Alto.Runner.Execution.Setup do
       child_resume: Keyword.get(opts, :child_resume),
       parent_expires_at_ms: Keyword.get(opts, :parent_expires_at_ms),
       continuation_store: Keyword.get(opts, :continuation_store),
-      continuation_key: Keyword.get(opts, :continuation_key),
       checkpoint_resume:
         not is_nil(Keyword.get(opts, :checkpoint)) or not is_nil(Keyword.get(opts, :continuation)),
       tool_context: %Context{
