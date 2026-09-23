@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,441 lines, a reduction of 7,214 (17.7%). A 30%
-reduction would require at most 28,458 lines, or another 4,983 lines below the
+The 2026-09-24 inventory is 33,429 lines, a reduction of 7,226 (17.8%). A 30%
+reduction would require at most 28,458 lines, or another 4,971 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -49,6 +49,11 @@ that the record already exists.
 The Codex and MCP clients likewise share JSON-RPC framing and request tracking.
 The next durable-state cut must change the state representation or API shape,
 not repeat those existing extractions.
+
+The TUI now uses one state transition to select the model when a backend is
+chosen, whether selection came from opening a task or switching its backend.
+The catalog recovery flow warns and asks before replacing invalid data; the
+reported on-disk catalog now validates, and the TUI recovery tests pass.
 
 ## Next passes
 

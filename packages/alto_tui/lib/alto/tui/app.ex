@@ -1630,8 +1630,7 @@ defmodule Alto.TUI.App do
 
       true ->
         state = persist_task_backend(state, task, backend)
-        model = backend_model(state, backend)
-        next = %{state | selected_backend: backend, selected_model: model, overlay: nil}
+        next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 
         select_backend_ui(%{next | notice: "backend: #{backend}"})
     end
@@ -1651,17 +1650,6 @@ defmodule Alto.TUI.App do
     case Backend.ui(state, :selected) do
       :pass -> state
       next -> next
-    end
-  end
-
-  defp backend_model(state, backend) do
-    case Backend.ui(%{state | selected_backend: backend}, :model) do
-      :pass ->
-        profile = State.selected_profile(state)
-        profile && profile.default_model
-
-      model ->
-        model
     end
   end
 

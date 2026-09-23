@@ -680,9 +680,9 @@ defmodule Alto.TUI.State do
     |> Map.reject(fn {_id, models} -> models == [] end)
   end
 
-  defp sync_backend(state, task) do
-    backend = task_backend(task)
+  def sync_backend(state, task) when is_map(task), do: sync_backend(state, task_backend(task))
 
+  def sync_backend(state, backend) when is_atom(backend) do
     state = %{state | selected_backend: backend}
 
     model =
