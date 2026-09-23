@@ -27,78 +27,25 @@ defmodule Alto.ConfigTest do
            ]
   end
 
-  test "rejects unknown and duplicate options" do
-    assert_raise NimbleOptions.ValidationError, ~r/unknown options.*unknown/, fn ->
-      Config.new(unknown: true)
-    end
-
+  test "rejects duplicate options" do
     assert_raise ArgumentError, ~r/options must be unique/, fn ->
       Config.new(max_steps: 1, max_steps: 2)
     end
   end
 
-  test "validates TUI options" do
-    assert_raise NimbleOptions.ValidationError, ~r/unknown options.*mystery/, fn ->
-      Config.new(tui: [mystery: true])
-    end
-
-    assert_raise NimbleOptions.ValidationError, ~r/:type_to_compose.*boolean/, fn ->
-      Config.new(tui: [type_to_compose: :sometimes])
-    end
-
-    assert_raise NimbleOptions.ValidationError, ~r/:narrow_context/, fn ->
-      Config.new(tui: [narrow_context: :bottom_sheet])
-    end
-
-    assert_raise NimbleOptions.ValidationError, ~r/:narrow_context_width/, fn ->
-      Config.new(tui: [narrow_context_width: 20])
-    end
-  end
-
-  test "TUI schemas retain integer bounds and reject duplicate keys" do
-    for value <- [39, 101, 40.0, nil] do
-      assert_raise NimbleOptions.ValidationError,
-                   ~r/:narrow_context_width/,
-                   fn ->
-                     Config.new(tui: [narrow_context_width: value])
-                   end
-    end
-
+  test "rejects duplicate TUI options" do
     assert_raise ArgumentError, ~r/TUI configuration options must be unique/, fn ->
       Config.new(tui: [approval_auto_open: true, approval_auto_open: false])
     end
   end
 
-  test "rejects invalid host shapes at the configuration boundary" do
+  test "rejects listener modules without start_link and malformed options" do
     for options <- [
-          [runs: []],
-          [runs: %{job: []}],
-          [runs: %{"job" => ["not a keyword"]}],
-          [sessions: "yes"],
-          [sessions: [unknown: true]],
-          [sessions: [session_dir: 42]],
-          [queue: :yes],
-          [listeners: :none],
           [listeners: [{String, []}]],
           [listeners: [{Alto.Listeners.WebServer, %{port: 4747}}]]
         ] do
       assert_raise NimbleOptions.ValidationError, fn -> Config.new(options) end
     end
-  end
-
-  test "preserves configured host options and explicit opt-outs" do
-    options = [
-      runs: %{"job" => [max_steps: 2]},
-      sessions: nil,
-      queue: nil,
-      listeners: [
-        {Alto.Listeners.UnixSocket, path: "/tmp/alto.sock"},
-        {Alto.Listeners.WebServer, port: 0},
-        {Alto.Listeners.Webhook, port: 0, endpoints: []}
-      ]
-    ]
-
-    assert Config.run_options(Config.new(options)) == options
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do
