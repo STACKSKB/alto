@@ -22,7 +22,7 @@ defmodule Alto.Loops.ChatTest do
   end
 
   test "rejects tool calls instead of silently ignoring them" do
-    spec = Alto.chat_loop()
+    spec = Alto.chat_loop(driver_options: [tool_execution: :serial])
     initial = Runtime.init(spec, "hello")
 
     transition =

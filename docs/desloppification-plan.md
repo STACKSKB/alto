@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,356 lines, a reduction of 7,299 (18.0%). A 30%
-reduction would require at most 28,458 lines, or another 4,898 lines below the
+The 2026-09-24 inventory is 33,321 lines, a reduction of 7,334 (18.0%). A 30%
+reduction would require at most 28,458 lines, or another 4,863 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -83,6 +83,8 @@ Model-catalog GETs and provider streams now share request-option assembly;
 extension options cannot replace their response callbacks or timeout guards.
 Network integration tests now run serially after parallel full-suite runs
 exposed socket timeouts; their behavioral assertions are unchanged.
+The separate Chat loop was a 33-line wrapper around Default. `chat_loop/1`
+now configures Default's tool-free mode directly; both full suites pass.
 
 The latest runner outcome prototype increased production code by two lines
 after formatting and left the branches intact, so it was discarded. A CLI

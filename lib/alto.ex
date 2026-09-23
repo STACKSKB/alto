@@ -7,7 +7,6 @@ defmodule Alto do
   """
 
   alias Alto.Loop.Spec
-  alias Alto.Loops.Chat
   alias Alto.Loops.Default
   alias Alto.Loops.Rule
   alias Alto.Runner
@@ -24,9 +23,8 @@ defmodule Alto do
   @doc "Build the tool-free, one-request conversational loop."
   @spec chat_loop(keyword()) :: Spec.t()
   def chat_loop(opts \\ []) do
-    opts
-    |> Keyword.put_new(:context, Alto.Context.window())
-    |> then(&Spec.new(Chat, &1))
+    spec = Spec.new(Default, Keyword.put_new(opts, :context, Alto.Context.window()))
+    %{spec | driver_options: Keyword.put(spec.driver_options, :tool_execution, :disabled)}
   end
 
   @doc "Build a loop specification around a user-supplied loop module."
