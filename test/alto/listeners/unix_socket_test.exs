@@ -5,32 +5,11 @@ defmodule Alto.Listeners.UnixSocketTest do
   alias Alto.Listeners.UnixSocket
   alias Alto.TestSupport.EchoTool
   alias Alto.TestSupport.GuardedEchoTool
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   # Generous for parallel-test load; the fail-closed timeout path is pinned
   # by the registry tests with a tight, controlled bound.
   @approval_timeout_ms 5_000
-
-  # The request's own messages tell the provider which phase of the loop it
-  # is in; no per-run test pid is needed over the wire.
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, _sink, _opts) do
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
-    end
-  end
 
   defmodule BlockingProvider do
     @behaviour Alto.Provider

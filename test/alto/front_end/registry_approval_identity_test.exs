@@ -11,6 +11,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
 
   alias Alto.Event
   alias Alto.FrontEnd.Registry
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   @receive_timeout 5_000
 
@@ -59,26 +60,6 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     @impl true
     def run_prepared(%{value: value, token: token}, _ctx, _opts),
       do: {:ok, %{stamped: value, token: token}}
-  end
-
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-    @impl true
-    def describe(_opts), do: %{}
-    @impl true
-    def stream(request, _sink, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:provider_request, request})
-
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
-    end
   end
 
   defmodule DuplicateGuardedProvider do
