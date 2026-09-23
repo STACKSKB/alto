@@ -1,5 +1,7 @@
 defmodule Alto.TUI.CatalogRecoveryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureIO
 
   alias Alto.Harness.Catalog
   alias Alto.TUI.State
@@ -33,5 +35,27 @@ defmodule Alto.TUI.CatalogRecoveryTest do
     current = File.read!(path)
     assert :ok = Catalog.replace_invalid(path: path)
     assert File.read!(path) == current
+  end
+
+  test "the Mix entry point warns and exits cleanly when overwrite is declined" do
+    root = Path.join(System.tmp_dir!(), "alto-tui-entry-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    catalog = Path.join(root, "harness.json")
+    config = Path.join(root, "config.exs")
+    invalid = ~s({"version":1,"projects":[],"tasks":[]})
+    File.write!(catalog, invalid)
+    File.write!(config, "Alto.Config.new()")
+
+    warning =
+      capture_io(:stderr, fn ->
+        capture_io("no\n", fn ->
+          assert :ok = Mix.Tasks.Alto.Tui.run(["--config", config, "--catalog", catalog])
+        end)
+      end)
+
+    assert warning =~ "Warning: catalog #{catalog} is invalid"
+    assert warning =~ "Overwrite it with an empty catalog?"
+    assert File.read!(catalog) == invalid
   end
 end
