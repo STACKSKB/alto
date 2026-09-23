@@ -9,7 +9,7 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.Runner.{Budget, Result}
   alias Alto.Subagents.Continuation
   alias Alto.Subagents.Policy, as: ChildPolicy
-  alias Alto.Runner.Execution.Events
+  alias Alto.Runner.Execution.{Events, Operation}
 
   @spawn_schema NimbleOptions.new!(
                   id: [type: :string, required: true],
@@ -23,7 +23,7 @@ defmodule Alto.Runner.Execution.Children do
                 )
 
   @inherited_options ~w(provider_retries retry_policy tool_presenter checkpoint_version
-                        parent_expires_at_ms runner_options approval continuation_store
+                        parent_expires_at_ms approval continuation_store
                         max_approval_details_bytes max_tool_result_bytes max_transcript_bytes
                         max_events session_dir)a
 
@@ -171,11 +171,11 @@ defmodule Alto.Runner.Execution.Children do
   def open_continuation(_specs, %{continuation_store: nil} = run, nil), do: {:ok, nil, run}
 
   def open_continuation(specs, run, parent) do
-    {key, run} = next_operation(run)
+    {key, run} = Operation.next(run)
     open_reserved_continuation(specs, run, parent, key)
   end
 
-  def reserve_continuation(run), do: next_operation(run)
+  def reserve_continuation(run), do: Operation.next(run)
 
   def open_reserved_continuation(specs, run, parent, key) do
     metadata = %{
@@ -623,11 +623,6 @@ defmodule Alto.Runner.Execution.Children do
            end) do
       {:ok, Enum.reverse(specs), concurrency}
     end
-  end
-
-  defp next_operation(run) do
-    seq = run.op_seq + 1
-    {"#{run.tool_context.session_id}:op-#{seq}", %{run | op_seq: seq}}
   end
 
   defp child_agent_identity(%{root_run_id: id, path: path}, child),

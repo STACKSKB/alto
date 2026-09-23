@@ -28,7 +28,7 @@ defmodule Alto.Runner.Execution do
   def abort(context, {:cancelled, reason}), do: cancelled(reason, context)
   def abort(context, reason), do: {:error, reason, result(context, nil, :error)}
 
-  alias Alto.Runner.Execution.{Call, Children, Events, Model}
+  alias Alto.Runner.Execution.{Call, Children, Events, Model, Operation}
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
   alias Alto.Runner.Execution.Session, as: RunSession
   alias Alto.Effect
@@ -526,7 +526,7 @@ defmodule Alto.Runner.Execution do
   # id (`call.id`) is correlation only; the runtime mints a globally unique
   # operation id per invocation for approval and event correlation.
   defp interpret(%Effect{kind: :run_tool, data: call}, run) do
-    {op_id, run} = next_operation(run)
+    {op_id, run} = Operation.next(run)
     name = Map.get(call, :name)
 
     prepare_and_run_tool(call, :json, tool_origin(run, Map.get(call, :id), name), op_id, run)
@@ -534,7 +534,7 @@ defmodule Alto.Runner.Execution do
 
   # Native invocation from loops and hooks: arguments are already a map.
   defp interpret(%Effect{kind: :invoke_tool, data: call}, run) do
-    {op_id, run} = next_operation(run)
+    {op_id, run} = Operation.next(run)
     prepare_and_run_tool(call, :native, :native, op_id, run)
   end
 
@@ -858,14 +858,6 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  # Runtime operation identity: per-run monotonic counter scoped by the
-  # globally unique run id. `call_id` may repeat or be nil; `op_id` never does.
-  defp next_operation(run) do
-    seq = Map.get(run, :op_seq, 0) + 1
-    op_id = "#{run.tool_context.session_id}:op-#{seq}"
-    {op_id, Map.put(run, :op_seq, seq)}
-  end
-
   defp check_model_exposure(_name, :native, _run), do: :ok
 
   defp check_model_exposure(name, :provider, run) when is_binary(name) do
@@ -944,7 +936,7 @@ defmodule Alto.Runner.Execution do
     Enum.reduce_while(calls, {:ok, [], run}, fn call, {:ok, jobs, run} ->
       case reserve_effect(run) do
         :ok ->
-          {op_id, run} = next_operation(run)
+          {op_id, run} = Operation.next(run)
           name = Map.get(call, :name)
           id = Map.get(call, :id)
 
