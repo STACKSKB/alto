@@ -244,24 +244,18 @@ defmodule Alto.OperationLog do
 
   # Derive the transition, durably append it, then publish it.
   defp commit(state, command) do
-    with {:ok, planned} <- plan(state, command),
-         do: persist(state, planned, command),
-         else: ({:error, reason} -> {:reply, {:error, reason}, state})
-  end
-
-  defp persist(original, planned, command) do
-    case transition(planned, command) do
-      {:ok, ^planned, :noop} ->
-        {:reply, :ok, original}
+    case transition(state, command) do
+      {:ok, _next, :noop} ->
+        {:reply, :ok, state}
 
       {:ok, next, response} ->
-        case append(original, command) do
+        case append(state, command) do
           :ok -> {:reply, response(response, command, next), next}
-          {:error, reason} -> {:reply, {:error, reason}, original}
+          {:error, reason} -> {:reply, {:error, reason}, state}
         end
 
       {:error, reason} ->
-        {:reply, {:error, reason}, original}
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -524,9 +518,16 @@ defmodule Alto.OperationLog do
         {:ok, %{"v" => @version, "command" => encoded}} ->
           with {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
                true <- command?(command) do
-            with {:ok, planned} <- replay_plan(state, command),
-                 {:ok, state, _reply} <- transition(planned, command),
-                 do: {:ok, state}
+            case transition(state, command) do
+              {:ok, state, _reply} ->
+                {:ok, state}
+
+              {:error, :ledger_full} ->
+                {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
+
+              error ->
+                error
+            end
           else
             _ -> {:error, {:ledger_corrupt, state.id, number}}
           end
@@ -537,27 +538,18 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp replay_plan(state, command) do
-    case plan(state, command) do
-      {:error, :ledger_full} ->
-        {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
-
-      result ->
-        result
-    end
-  end
-
-  defp plan(state, command) when elem(command, 0) in [:intent, :retain] do
+  defp maybe_make_room(state, command) when elem(command, 0) in [:intent, :retain] do
     if Map.has_key?(state.ops, elem(command, 1)), do: {:ok, state}, else: ensure_room(state)
   end
 
-  defp plan(state, _event), do: {:ok, state}
+  defp maybe_make_room(state, _command), do: {:ok, state}
 
   # The same pure state transition serves live commands and durable replay.
   defp transition(state, command) do
     op = elem(command, 1)
 
-    with :ok <- validate_key(op),
+    with {:ok, state} <- maybe_make_room(state, command),
+         :ok <- validate_key(op),
          current <- Map.get(state.ops, op),
          {:ok, record} <- log_apply(current, command, state) do
       record = Map.put(record, :revision, if(current, do: current.revision + 1, else: 1))
