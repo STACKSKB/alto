@@ -448,8 +448,8 @@ defmodule Alto.QueueTest do
 
       valid_put =
         JSON.encode!(%{
-          "v" => 5,
-          "type" => "put",
+          "v" => 6,
+          "type" => "record",
           "record" =>
             Alto.Session.encode_term(%Queue.Record{
               id: "rec-1",
@@ -497,6 +497,15 @@ defmodule Alto.QueueTest do
       assert {:ok, %{revision: 2}} = Queue.put(name, "a", %{v: 2})
       assert {:error, :queue_full} = Queue.put(name, "b", %{})
       assert %{pending: 1} = Queue.count(name)
+    end
+
+    test "claim and release keep a large record within a small log", %{dir: dir, id: id} do
+      %{name: name} = start_queue!(id: id, dir: dir, max_log_bytes: 4_096)
+      {:ok, _} = Queue.put(name, "large", %{blob: String.duplicate("x", 2_000)})
+      {:ok, [claimed]} = Queue.claim(name)
+      assert :ok = Queue.release(name, claimed.claim_id)
+      assert %{pending: 1, claimed: 0} = Queue.count(name)
+      assert File.stat!(Path.join(dir, id <> ".jsonl")).size <= 4_096
     end
 
     test "claim ids are unique random handles, not monotonic integers", %{dir: dir, id: id} do
@@ -566,13 +575,27 @@ defmodule Alto.QueueTest do
       assert {:ok, [%{key: "good"}]} = Queue.claim(name)
     end
 
-    test "invalid persisted release schedule fails startup", %{dir: dir, id: id} do
+    test "invalid persisted record schedule fails startup", %{dir: dir, id: id} do
       path = Path.join(dir, id <> ".jsonl")
       File.mkdir_p!(dir)
 
+      record = %Queue.Record{
+        id: "rec-1",
+        key: "k",
+        payload: %{},
+        revision: 1,
+        generation_id: "gen-fixture",
+        at_ms: 1,
+        not_before_ms: "bad"
+      }
+
       File.write!(
         path,
-        JSON.encode!(%{"v" => 5, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
+        JSON.encode!(%{
+          "v" => 6,
+          "type" => "record",
+          "record" => Alto.Session.encode_term(record)
+        }) <>
           "\n"
       )
 

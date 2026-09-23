@@ -152,8 +152,8 @@ defmodule Alto.QueueAdmissionTest do
 
       good =
         JSON.encode!(%{
-          "v" => 5,
-          "type" => "put",
+          "v" => 6,
+          "type" => "record",
           "record" =>
             Alto.Session.encode_term(%Queue.Record{
               id: "rec-1",

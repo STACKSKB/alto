@@ -84,7 +84,7 @@ defmodule Alto.QueueCompactionTest do
     churn(q, 1..100)
     assert File.stat!(c.path).size <= 4_000
     [header | _] = c.path |> File.read!() |> String.split("\n", trim: true)
-    assert %{"v" => 5, "type" => "retained_state"} = JSON.decode!(header)
+    assert %{"v" => 6, "type" => "retained_state"} = JSON.decode!(header)
     assert {:ok, ^claimed} = Queue.lookup(q, "live")
     stop_supervised!(Queue)
     q = start_supervised!({Queue, opts})

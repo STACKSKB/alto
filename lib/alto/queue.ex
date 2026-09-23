@@ -52,7 +52,7 @@ defmodule Alto.Queue do
   alias Alto.Session, as: SessionStore
   alias Alto.DurableLog
 
-  @version 5
+  @version 6
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @options [
     max_records: [type: :non_neg_integer, default: 10_000],
@@ -377,42 +377,30 @@ defmodule Alto.Queue do
 
   # Replay applies logged transitions only; live ops only log transitions
   # they performed, so replaying reproduces the same state.
-  defp log_apply(state, "put", entry) do
+  defp log_apply(state, "record", entry) do
     with {:ok, record, sequence} <- decode_record(entry) do
       {:ok, %{put_record(state, record) | next_id: max(state.next_id, sequence + 1)}}
     end
   end
 
-  defp log_apply(state, "claim", entry) do
-    with {:ok, owner} <- SessionStore.decode_term(entry["by"]) do
-      case fetch_record(state.records, entry["id"]) do
-        {:ok, record} ->
-          record = %Record{
-            record
-            | status: :claimed,
-              claim_id: entry["claim_id"],
-              claimed_by: owner,
-              lease_until_ms: entry["until_ms"]
-          }
+  defp log_apply(state, "lease", entry) do
+    case {SessionStore.decode_term(entry["lease"]), fetch_record(state.records, entry["id"])} do
+      {{:ok, {status, claim_id, by, until, due}}, {:ok, record}} ->
+        next = %Record{
+          record
+          | status: status,
+            claim_id: claim_id,
+            claimed_by: by,
+            lease_until_ms: until,
+            not_before_ms: due
+        }
 
-          {:ok, put_record(state, record)}
+        if valid_lease?(next) and validate_due(due) == :ok,
+          do: {:ok, put_record(state, next)},
+          else: {:error, :bad_entry}
 
-        :error ->
-          {:ok, state}
-      end
-    end
-  end
-
-  defp log_apply(state, "release", entry) do
-    with :ok <- validate_due(entry["not_before_ms"]) do
-      case fetch_record(state.records, entry["id"]) do
-        {:ok, record} ->
-          {:ok,
-           put_record(state, %Record{unclaim(record) | not_before_ms: entry["not_before_ms"]})}
-
-        :error ->
-          {:ok, state}
-      end
+      _ ->
+        {:error, :bad_entry}
     end
   end
 
@@ -520,7 +508,7 @@ defmodule Alto.Queue do
       log =
         case operation do
           :ack -> %{"type" => "blank", "reason" => "acked"}
-          :release -> %{"type" => "release", "not_before_ms" => due}
+          :release -> lease_log(%Record{unclaim(record) | not_before_ms: due})
         end
 
       log = Map.merge(log, %{"v" => @version, "id" => record.id})
@@ -579,12 +567,12 @@ defmodule Alto.Queue do
   end
 
   def handle_call({:lookup, key}, _from, state) do
-    result =
-      Enum.find_value(ordered_records(state), fn record ->
-        if record.key == key, do: view(record)
-      end)
+    reply =
+      case find_by_key(state, key) do
+        nil -> {:error, :not_found}
+        record -> {:ok, view(record)}
+      end
 
-    reply = if result, do: {:ok, result}, else: {:error, :not_found}
     {:reply, reply, state}
   end
 
@@ -653,7 +641,7 @@ defmodule Alto.Queue do
         {:reply, {:ok, []}, state}
 
       {:ok, claimed} ->
-        logs = Enum.map(claimed, &Map.put(claim_log(&1), "at_ms", now))
+        logs = Enum.map(claimed, &lease_log/1)
 
         commit(state, state, logs, {:ok, Enum.map(claimed, &view/1)}, true)
     end
@@ -795,10 +783,7 @@ defmodule Alto.Queue do
   end
 
   defp build_record(state, key, payload, mode, fields) do
-    existing =
-      Enum.find_value(ordered_records(state), fn record ->
-        if record.key == key, do: record
-      end)
+    existing = find_by_key(state, key)
 
     cond do
       mode != :business and MapSet.member?(state.completed_set, key) ->
@@ -838,7 +823,20 @@ defmodule Alto.Queue do
   end
 
   defp put_log(record),
-    do: %{"v" => @version, "type" => "put", "record" => SessionStore.encode_term(record)}
+    do: %{"v" => @version, "type" => "record", "record" => SessionStore.encode_term(record)}
+
+  defp lease_log(record) do
+    lease =
+      {record.status, record.claim_id, record.claimed_by, record.lease_until_ms,
+       record.not_before_ms}
+
+    %{
+      "v" => @version,
+      "type" => "lease",
+      "id" => record.id,
+      "lease" => SessionStore.encode_term(lease)
+    }
+  end
 
   defp commit_record(original, current, record) do
     reply = {:ok, Map.take(record, [:id, :revision, :status])}
@@ -871,6 +869,9 @@ defmodule Alto.Queue do
     end
   end
 
+  defp find_by_key(state, key),
+    do: Enum.find(ordered_records(state), &(&1.key == key))
+
   defp view(%Record{} = record) do
     {mode, fields} = Map.pop(Map.from_struct(record), :mode)
 
@@ -890,32 +891,26 @@ defmodule Alto.Queue do
   defp validate_generation(id) when is_binary(id) and byte_size(id) in 1..256, do: :ok
   defp validate_generation(id), do: {:error, {:invalid_generation_id, id}}
 
-  defp recovery_key(operation_key, nil) do
-    digest = :crypto.hash(:sha256, operation_key) |> Base.url_encode64(padding: false)
-    "recovery-" <> digest
-  end
-
   defp recovery_key(operation_key, revision) do
-    digest =
-      :crypto.hash(:sha256, :erlang.term_to_binary({operation_key, revision}, [:deterministic]))
-      |> Base.url_encode64(padding: false)
+    material =
+      if revision == nil,
+        do: operation_key,
+        else: :erlang.term_to_binary({operation_key, revision}, [:deterministic])
 
-    "recovery-" <> digest
+    "recovery-" <> (:crypto.hash(:sha256, material) |> Base.url_encode64(padding: false))
   end
 
-  defp recovery_revision(opts) do
-    if Keyword.keyword?(opts) and
-         Keyword.keys(opts) |> Enum.uniq() == Keyword.keys(opts) and
-         Enum.all?(Keyword.keys(opts), &(&1 == :recovery_revision)) do
-      case Keyword.get(opts, :recovery_revision) do
-        nil -> {:ok, nil}
-        revision when is_integer(revision) and revision > 0 -> {:ok, revision}
-        other -> {:error, {:invalid_recovery_revision, other}}
-      end
-    else
-      {:error, {:invalid_recovery_revision, opts}}
-    end
-  end
+  defp recovery_revision([]), do: {:ok, nil}
+  defp recovery_revision(recovery_revision: nil), do: {:ok, nil}
+
+  defp recovery_revision(recovery_revision: revision)
+       when is_integer(revision) and revision > 0,
+       do: {:ok, revision}
+
+  defp recovery_revision(recovery_revision: other),
+    do: {:error, {:invalid_recovery_revision, other}}
+
+  defp recovery_revision(opts), do: {:error, {:invalid_recovery_revision, opts}}
 
   defp put_record(state, %Record{} = record) do
     {:ok, sequence} = record_sequence(record.id)
@@ -1028,17 +1023,6 @@ defmodule Alto.Queue do
     end
   rescue
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}
-  end
-
-  defp claim_log(%Record{} = record) do
-    %{
-      "v" => @version,
-      "type" => "claim",
-      "id" => record.id,
-      "claim_id" => record.claim_id,
-      "by" => SessionStore.encode_term(record.claimed_by),
-      "until_ms" => record.lease_until_ms
-    }
   end
 
   # Canonical records were synced before replacement, so a missing record is
