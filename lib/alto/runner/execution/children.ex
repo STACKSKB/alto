@@ -22,6 +22,11 @@ defmodule Alto.Runner.Execution.Children do
                   model_tools: [type: {:or, [nil, {:list, :any}]}, default: nil]
                 )
 
+  @inherited_options ~w(provider_retries retry_policy tool_presenter checkpoint_version
+                        parent_expires_at_ms runner_options approval continuation_store
+                        max_approval_details_bytes max_tool_result_bytes max_transcript_bytes
+                        max_events session_dir)a
+
   defp validate_spawn(data) when is_map(data) and not is_struct(data) do
     with true <- Enum.all?(Map.keys(data), &is_atom/1),
          {:ok, values} <- NimbleOptions.validate(Map.to_list(data), @spawn_schema),
@@ -335,26 +340,21 @@ defmodule Alto.Runner.Execution.Children do
     # (including `[]`) narrows further. Native `invoke_tool` still uses
     # full runtime capabilities; only provider-originated `run_tool`
     # calls are exposure-checked.
+    inherited = run |> Map.take(@inherited_options) |> Map.to_list()
+
     sub_opts =
-      [
-        provider: provider,
-        provider_retries: run.provider_retries,
-        retry_policy: run.retry_policy,
-        tool_presenter: run.tool_presenter,
-        checkpoint_version: run.checkpoint_version,
-        parent_expires_at_ms: run.parent_expires_at_ms,
-        child_profile: checkpoint_profile(spec),
-        runner_options: run.runner_options,
-        tools: subagent_tools(spec.tools, run),
-        approval: run.approval,
-        loop: spec.loop || Alto.default_loop()
-      ] ++
+      inherited ++
+        [
+          provider: provider,
+          child_profile: checkpoint_profile(spec),
+          tools: subagent_tools(spec.tools, run),
+          loop: spec.loop || Alto.default_loop()
+        ] ++
         child_prompt(spec, run.prompt_config) ++
         [
           cwd: run.tool_context.cwd,
           workspace_assignment: Map.get(spec, :workspace_assignment),
           parent_workspaces: run.workspaces,
-          continuation_store: run.continuation_store,
           subagent_ticket: Map.get(spec, :subagent_ticket),
           tool_context_metadata: run.tool_context.metadata,
           budget: run.budget,
@@ -368,12 +368,7 @@ defmodule Alto.Runner.Execution.Children do
           provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
           tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
           approval_timeout: Budget.timeout(run.budget, run.approval_timeout),
-          max_approval_details_bytes: run.max_approval_details_bytes,
-          max_tool_result_bytes: run.max_tool_result_bytes,
-          max_transcript_bytes: run.max_transcript_bytes,
-          max_events: run.max_events,
           event_sink: subagent_sink(run, spec.id),
-          session_dir: run.session_dir,
           parent_run_id: run.tool_context.session_id,
           agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
           parent_model_tools: run.model_tools,
