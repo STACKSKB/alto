@@ -5,7 +5,7 @@ defmodule Alto.Conformance.FakeTool do
   The two tools record an authoritative external commit before timing out or
   crashing, proving that the runner classifies a lost response as unknown.
 
-  Configure with `{Module, service: name, key: term(), test_pid: pid}`
+  Configure with `{Module, service: name, key: term()}`
   (all optional; `key` defaults to `"op"`, results echo the commit).
   """
 
@@ -18,12 +18,9 @@ defmodule Alto.Conformance.FakeTool do
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
       key = Keyword.get(opts, :key, "op")
-      test_pid = Keyword.get(opts, :test_pid)
-
       # Record the commit synchronously so the test can assert it even
       # though the runner will time this execution out as :unknown.
       {:ok, _} = Alto.Conformance.FakeService.commit(service, key)
-      if test_pid, do: send(test_pid, {:committed, key})
       Process.sleep(10_000)
       {:ok, %{unreachable: true}}
     end
@@ -38,10 +35,7 @@ defmodule Alto.Conformance.FakeTool do
     def run(_args, _ctx, opts) do
       service = Keyword.get(opts, :service, Alto.Conformance.FakeService)
       key = Keyword.get(opts, :key, "op")
-      test_pid = Keyword.get(opts, :test_pid)
-
       {:ok, _} = Alto.Conformance.FakeService.commit(service, key)
-      if test_pid, do: send(test_pid, {:committed, key})
       exit(:boom_after_commit)
     end
   end

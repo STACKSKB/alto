@@ -44,11 +44,10 @@ defmodule Alto.ConformanceTest do
     assert {:ok, result} =
              Alto.run({"commit_then_timeout", %{}},
                loop: Alto.loop(OnceLoop),
-               tools: [{FakeTool.CommitThenTimeout, service: s, key: "print-1", test_pid: self()}],
+               tools: [{FakeTool.CommitThenTimeout, service: s, key: "print-1"}],
                tool_timeout: 1_000
              )
 
-    assert_received {:committed, "print-1"}
     assert {:failed, %{outcome: :unknown}} = result.output
     assert FakeService.committed?(s, "print-1")
   end
@@ -57,10 +56,9 @@ defmodule Alto.ConformanceTest do
     assert {:ok, result} =
              Alto.run({"commit_then_crash", %{}},
                loop: Alto.loop(OnceLoop),
-               tools: [{FakeTool.CommitThenCrash, service: s, key: "print-2", test_pid: self()}]
+               tools: [{FakeTool.CommitThenCrash, service: s, key: "print-2"}]
              )
 
-    assert_received {:committed, "print-2"}
     assert {:failed, %{outcome: :unknown}} = result.output
     assert 1 = FakeService.commit_count(s, "print-2")
   end
