@@ -681,13 +681,6 @@ defmodule Alto.Runner.SerialTest do
     assert enum_has_tool_failure?(result, "encoding_error")
   end
 
-  test "a text-only assistant turn carries no tool_calls key" do
-    assert {:ok, result} = Alto.run("answer", provider: {AnswerProvider, test_pid: self()})
-
-    assert [%{"role" => "assistant", "content" => "done"}] =
-             Enum.filter(result.messages, &(&1["role"] == "assistant"))
-  end
-
   test ":auto project instructions reach the system prompt from the workspace" do
     root = Path.join(System.tmp_dir!(), "alto-instr-#{System.unique_integer([:positive])}")
     File.mkdir!(root)

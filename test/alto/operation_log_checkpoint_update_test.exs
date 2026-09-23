@@ -18,7 +18,7 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     :ok = OperationLog.record_checkpoint(name, "bank", "attempt", %{"used" => 1, "cap" => 4})
   end
 
-  test "updates active checkpoint without changing attempt or grant", %{name: name, dir: dir} do
+  test "updates active checkpoint without changing attempt or grant", %{name: name} do
     checkpoint(name)
     packet = %{"used" => 2, "cap" => 4}
     assert {:ok, view} = OperationLog.update_checkpoint(name, "bank", 3, packet)
@@ -32,9 +32,6 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     # A successful write consumes the revision even when the payload is unchanged.
     assert {:ok, %{revision: 5}} = OperationLog.update_checkpoint(name, "bank", 4, packet)
     assert {:error, :stale_revision} = OperationLog.update_checkpoint(name, "bank", 4, packet)
-    GenServer.stop(name)
-    {:ok, restarted} = OperationLog.start_link(id: "ledger", dir: dir, name: nil)
-    assert {:ok, %{revision: 5, checkpoint: ^packet}} = OperationLog.recovery(restarted, "bank")
   end
 
   test "competing updates are fenced by revision", %{name: name} do

@@ -22,7 +22,8 @@ defmodule Alto.Tools.UnifiedDiff do
           [hunk_header(hunk) | Enum.map(hunk, &format_record/1)]
         end)
 
-    bound(chunks, limit)
+    {content, truncated?} = take_chunks(chunks, limit, [])
+    %{content: content, truncated: truncated?}
   end
 
   defp split_lines(""), do: []
@@ -127,25 +128,20 @@ defmodule Alto.Tools.UnifiedDiff do
       else: [prefix, line, "\n\\ No newline at end of file\n"]
   end
 
-  defp bound(chunks, limit) do
-    {content, truncated?} = take_chunks(chunks, limit, [], false)
-    %{content: content, truncated: truncated?}
-  end
+  defp take_chunks([], _remaining, acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
 
-  defp take_chunks([], _remaining, acc, truncated?),
-    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), truncated?}
-
-  defp take_chunks(_chunks, 0, acc, _truncated?),
+  defp take_chunks(_chunks, 0, acc),
     do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), true}
 
-  defp take_chunks([chunk | rest], remaining, acc, truncated?) when is_list(chunk),
-    do: take_chunks(chunk ++ rest, remaining, acc, truncated?)
+  defp take_chunks([chunk | rest], remaining, acc) when is_list(chunk),
+    do: take_chunks(chunk ++ rest, remaining, acc)
 
-  defp take_chunks([chunk | rest], remaining, acc, truncated?) do
+  defp take_chunks([chunk | rest], remaining, acc) do
     size = byte_size(chunk)
 
     if size <= remaining do
-      take_chunks(rest, remaining - size, [chunk | acc], truncated?)
+      take_chunks(rest, remaining - size, [chunk | acc])
     else
       prefix = Alto.Text.prefix(chunk, remaining)
       {Enum.reverse([prefix | acc]) |> IO.iodata_to_binary(), true}
