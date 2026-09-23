@@ -557,10 +557,8 @@ defmodule Alto.FrontEnd.Registry do
             request: request
           }
 
-          state =
-            update_run(state, session_id, fn run ->
-              %{run | pending: Map.put(run.pending, request.id, entry)}
-            end)
+          run = %{run | pending: Map.put(run.pending, request.id, entry)}
+          state = put_in(state.runs[session_id], run)
 
           state = publish(state, run.id, {:approval_request, run.id, request}, :approval)
           {:reply, :ok, state}
@@ -600,16 +598,7 @@ defmodule Alto.FrontEnd.Registry do
   # unrelated run it owns — down with it. Queue failures stay observable
   # per call.
   defp queue_op(%{queue: nil}, _fun), do: {:error, :no_queue}
-
-  defp queue_op(_state, fun) do
-    try do
-      fun.()
-    rescue
-      error -> {:error, {:queue_unavailable, Exception.message(error)}}
-    catch
-      :exit, reason -> {:error, {:queue_unavailable, reason}}
-    end
-  end
+  defp queue_op(_state, fun), do: guarded_store_call(fun, :queue_unavailable)
 
   # Read-only inspection needs both stores; a dead store answers
   # per-call without taking the registry down. No new authority: this
@@ -617,13 +606,16 @@ defmodule Alto.FrontEnd.Registry do
   defp ops_list_op(%{queue: nil}, _opts), do: {:error, :no_ops}
   defp ops_list_op(%{ledger: nil}, _opts), do: {:error, :no_ops}
 
-  defp ops_list_op(%{queue: queue, ledger: ledger}, opts) do
+  defp ops_list_op(%{queue: queue, ledger: ledger}, opts),
+    do: guarded_store_call(fn -> Alto.Ops.list(queue, ledger, opts) end, :ops_unavailable)
+
+  defp guarded_store_call(fun, unavailable) do
     try do
-      Alto.Ops.list(queue, ledger, opts)
+      fun.()
     rescue
-      error -> {:error, {:ops_unavailable, Exception.message(error)}}
+      error -> {:error, {unavailable, Exception.message(error)}}
     catch
-      :exit, reason -> {:error, {:ops_unavailable, reason}}
+      :exit, reason -> {:error, {unavailable, reason}}
     end
   end
 
@@ -652,7 +644,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp maybe_drop_subscriber(state, monitor) do
-    case find_subscriber(state, monitor: monitor) do
+    case Enum.find(state.subscribers, fn {_pid, subscriber} -> subscriber.monitor == monitor end) do
       {pid, _subscriber} -> drop_subscriber(state, pid)
       nil -> state
     end
@@ -893,18 +885,30 @@ defmodule Alto.FrontEnd.Registry do
   defp clear_pending(state, selector), do: elem(take_pending(state, selector), 1)
 
   defp take_pending(state, selector) do
-    case find_pending(state, selector) do
+    pending =
+      Enum.find_value(state.runs, fn {run_id, run} ->
+        case selector do
+          [request_id: id] ->
+            case Map.fetch(run.pending, id) do
+              {:ok, entry} -> {run_id, id, entry}
+              :error -> nil
+            end
+
+          [monitor: ref] ->
+            Enum.find_value(run.pending, fn
+              {id, %{monitor: ^ref} = entry} -> {run_id, id, entry}
+              _other -> nil
+            end)
+        end
+      end)
+
+    case pending do
       nil ->
         {nil, state}
 
       {run_id, request_id, entry} ->
         Process.demonitor(entry.monitor, [:flush])
-
-        state =
-          update_run(state, run_id, fn run ->
-            %{run | pending: Map.delete(run.pending, request_id)}
-          end)
-
+        state = update_in(state.runs[run_id].pending, &Map.delete(&1, request_id))
         {entry, state}
     end
   end
@@ -913,35 +917,6 @@ defmodule Alto.FrontEnd.Registry do
 
   defp find_run(state, completion_ref: ref) do
     Enum.find_value(state.runs, fn {_id, run} -> if run.completion_ref == ref, do: run end)
-  end
-
-  defp find_subscriber(state, monitor: monitor) do
-    Enum.find(state.subscribers, fn {_pid, subscriber} -> subscriber.monitor == monitor end)
-  end
-
-  defp find_pending(state, request_id: request_id) do
-    Enum.find_value(state.runs, fn {run_id, run} ->
-      case Map.fetch(run.pending, request_id) do
-        {:ok, entry} -> {run_id, request_id, entry}
-        :error -> nil
-      end
-    end)
-  end
-
-  defp find_pending(state, monitor: monitor) do
-    Enum.find_value(state.runs, fn {run_id, run} ->
-      Enum.find_value(run.pending, fn
-        {request_id, %{monitor: ^monitor} = entry} -> {run_id, request_id, entry}
-        _other -> nil
-      end)
-    end)
-  end
-
-  defp update_run(state, run_id, fun) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} -> %{state | runs: Map.put(state.runs, run_id, fun.(run))}
-      :error -> state
-    end
   end
 
   # : fresh served runs persist only when enabled (registry-owned session
