@@ -36,14 +36,19 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     @impl true
     def stream(request, _sink, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:stream_call, request.messages})
-      send(Keyword.fetch!(opts, :test_pid), {:stream_request, request})
+      if test_pid = opts[:test_pid] do
+        send(test_pid, {:stream_call, request.messages})
+        send(test_pid, {:stream_request, request})
+      end
 
       cond do
-        summarize?(request.messages) ->
-          {:ok, %{message: "squib summary", tool_calls: []}}
+        summarize?(request.messages) and opts[:summary] != :disabled ->
+          case Keyword.get(opts, :summary, "squib summary") do
+            {:error, reason} -> {:error, reason}
+            summary -> {:ok, %{message: summary, tool_calls: []}}
+          end
 
-        tool_message?(request.messages) ->
+        tool_message?(request.messages) and opts[:after_tool] != :tool_call ->
           {:ok, %{message: String.duplicate("f", 150), tool_calls: []}}
 
         true ->
@@ -63,52 +68,6 @@ defmodule Alto.Runner.SerialCompactionTest do
     end
 
     defp tool_message?(messages), do: Enum.any?(messages, &(&1["role"] == "tool"))
-  end
-
-  defmodule SummaryTextProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, _sink, _opts) do
-      if Enum.any?(request.messages, fn
-           %{"role" => "user", "content" => "Summarize this agent work" <> _} -> true
-           _other -> false
-         end) do
-        {:ok, %{message: "squib", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
-         }}
-      end
-    end
-  end
-
-  defmodule FailingSummaryProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, _sink, _opts) do
-      if Enum.any?(request.messages, fn
-           %{"role" => "user", "content" => "Summarize this agent work" <> _} -> true
-           _other -> false
-         end) do
-        {:error, :kaput}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
-         }}
-      end
-    end
   end
 
   defmodule HandoffProvider do
@@ -149,22 +108,6 @@ defmodule Alto.Runner.SerialCompactionTest do
              tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
            }}
       end
-    end
-  end
-
-  defmodule AlwaysToolProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(_request, _sink, _opts) do
-      {:ok,
-       %{
-         message: nil,
-         tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
-       }}
     end
   end
 
@@ -334,7 +277,7 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "the compatibility default still permits one compaction", %{dir: dir} do
     assert {:error, {:transcript_limit, 400}, result} =
              Alto.run("go",
-               provider: {SummaryTextProvider, []},
+               provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
                tools: [EchoTool],
                max_transcript_bytes: 400,
                compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
@@ -350,7 +293,7 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "an explicit limit permits repeat reductions and stops at that limit", %{dir: dir} do
     assert {:error, {:transcript_limit, 800}, result} =
              Alto.run("go",
-               provider: {SummaryTextProvider, []},
+               provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
                tools: [EchoTool],
                max_transcript_bytes: 800,
                compaction: [
@@ -518,7 +461,7 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert {:error, {:transcript_limit, 400}, _result} =
              Alto.run("go",
-               provider: {AlwaysToolProvider, []},
+               provider: {ScriptedProvider, summary: :disabled, after_tool: :tool_call},
                tools: [EchoTool],
                max_transcript_bytes: 400,
                session: :new,
@@ -540,7 +483,7 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "a failed summary degrades to the transcript error with an event", %{dir: dir} do
     assert {:error, {:transcript_limit, 500}, result} =
              Alto.run("go",
-               provider: {FailingSummaryProvider, []},
+               provider: {ScriptedProvider, summary: {:error, :kaput}, after_tool: :tool_call},
                tools: [EchoTool],
                max_transcript_bytes: 500,
                compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
