@@ -48,7 +48,9 @@ increase write volume, and a naive replacement would lose the replay check
 that the record already exists.
 The Codex and MCP clients likewise share JSON-RPC framing and request tracking.
 The next durable-state cut must change the state representation or API shape,
-not repeat those existing extractions.
+not repeat those existing extractions. A whole-queue snapshot per mutation would
+turn a small lease write into a write of the entire bounded queue; prototype a
+transactional record store only if it keeps per-mutation work bounded.
 
 The TUI now uses one state transition to select the model when a backend is
 chosen, whether selection came from opening a task or switching its backend.
@@ -80,6 +82,13 @@ every cell at drag start and still leaves wide-glyph widths ambiguous. The
 large TUI app, provider, and workspace-tool test suites were checked for
 tautologies; their similar scenarios cover distinct boundaries. These findings
 rule out repeating those local helper extractions as a route to 30%.
+Further runner/front-end and TUI audits found no credible 150–200-line local
+extraction: root, parent, and child checkpoints already share serialization,
+while their remaining branches bind different authority; replacing the TUI's
+compact text index with exported cell maps would reintroduce a visible pause
+when starting a selection. A clone scan found no other long identical blocks
+outside a few small tool wrappers. Larger gains require replacing a whole
+representation or dropping an incidental policy, not shuffling helpers.
 
 ## Next passes
 
@@ -119,8 +128,9 @@ rule out repeating those local helper extractions as a route to 30%.
    Review the assertion and the behavior it protects, rather than deleting a
    test solely because it is short.
 
-For each pass: state the invariant, make one cohesive edit, run focused tests
-and both full suites when the change crosses a shared boundary, then compare
+For each pass: state the capability and the behavior worth retaining, make one
+cohesive edit, run focused tests and both full suites when the change crosses
+a shared boundary, then compare
 production and test line counts. If a proposed abstraction does not improve
 readability and reduce net production code, revert it. The 30% figure is a
-hypothesis to test, not a reason to erase useful safeguards or capabilities.
+baseline for the refactor, not a reason to erase useful safeguards or capabilities.

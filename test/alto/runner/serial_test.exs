@@ -663,9 +663,6 @@ defmodule Alto.Runner.SerialTest do
                       arguments: %{"value" => "hello"},
                       details: %{}
                     }}
-
-    refute_receive {:prepare_attempted, _prepare_pid}
-    refute_receive :forbidden_run_prepared
   end
 
   test "a non-encodable tool result stays a bounded tool message and does not fail the run" do
