@@ -58,4 +58,30 @@ defmodule Alto.TUI.CatalogRecoveryTest do
     assert warning =~ "Overwrite it with an empty catalog?"
     assert File.read!(catalog) == invalid
   end
+
+  test "malformed records in a current-version catalog reach the recovery prompt" do
+    root = Path.join(System.tmp_dir!(), "alto-tui-shape-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    path = Path.join(root, "harness.json")
+
+    for {projects, tasks} <- [{[%{"id" => "broken"}], []}, {[], [%{"title" => 42}]}] do
+      File.write!(path, JSON.encode!(%{"version" => 2, "projects" => projects, "tasks" => tasks}))
+      assert {:error, {:catalog_invalid, ^path}} = Catalog.read(path: path)
+
+      {:ok, input} = StringIO.open("yes\n")
+      {:ok, output} = StringIO.open("")
+
+      assert :ok =
+               Alto.TUI.prepare_catalog(Alto.Test.TUI.config(),
+                 path: path,
+                 input: input,
+                 output: output
+               )
+
+      {_input, warning} = StringIO.contents(output)
+      assert warning =~ "Warning: catalog #{path} is invalid"
+      assert {:ok, %{"projects" => [], "tasks" => []}} = Catalog.read(path: path)
+    end
+  end
 end

@@ -89,5 +89,8 @@ defmodule Alto.Harness.CatalogTest do
 
     assert {:error, {:invalid_task_backend, "../other"}} =
              Catalog.update_task(task["id"], %{"backend" => "../other"}, opts)
+
+    assert {:error, :invalid_task_field_value} =
+             Catalog.update_task(task["id"], %{"title" => nil}, opts)
   end
 end

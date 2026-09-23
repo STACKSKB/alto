@@ -250,7 +250,9 @@ defmodule Alto.Harness.Catalog do
     case JSON.decode(encoded) do
       {:ok, %{"version" => @version, "projects" => projects, "tasks" => tasks} = catalog}
       when is_list(projects) and is_list(tasks) ->
-        {:ok, catalog}
+        if valid_catalog?(projects, tasks),
+          do: {:ok, catalog},
+          else: {:error, {:catalog_invalid, path}}
 
       {:ok, _other} ->
         {:error, {:catalog_invalid, path}}
@@ -259,6 +261,47 @@ defmodule Alto.Harness.Catalog do
         {:error, {:catalog_invalid_json, path, Exception.message(error)}}
     end
   end
+
+  defp valid_catalog?(projects, tasks) do
+    length(projects) <= @max_projects and length(tasks) <= @max_tasks and
+      Enum.all?(projects, &valid_project?/1) and Enum.all?(tasks, &valid_task?/1)
+  end
+
+  defp valid_project?(
+         %{
+           "id" => id,
+           "name" => name,
+           "root" => root,
+           "created_at_ms" => created,
+           "last_opened_at_ms" => opened
+         } = project
+       ) do
+    valid_text?(id) and valid_text?(name) and valid_text?(root) and
+      nonnegative_integer?(created) and nonnegative_integer?(opened) and
+      Map.get(project, "closed") in [nil, true, false]
+  end
+
+  defp valid_project?(_), do: false
+
+  defp valid_task?(%{
+         "id" => id,
+         "project_id" => project_id,
+         "title" => title,
+         "status" => status,
+         "backend" => backend,
+         "conversation_id" => conversation_id,
+         "created_at_ms" => created,
+         "updated_at_ms" => updated
+       }) do
+    valid_text?(id) and valid_text?(project_id) and valid_text?(title) and
+      status in @statuses and valid_backend?(backend) and
+      valid_state_field?("conversation_id", conversation_id) and
+      nonnegative_integer?(created) and nonnegative_integer?(updated)
+  end
+
+  defp valid_task?(_), do: false
+
+  defp nonnegative_integer?(value), do: is_integer(value) and value >= 0
 
   defp validate_changes(changes) when is_map(changes) do
     allowed =
@@ -301,8 +344,10 @@ defmodule Alto.Harness.Catalog do
 
   defp valid_backend?(_), do: false
 
+  defp valid_state_field?("title", value),
+    do: valid_text?(value) and byte_size(value) <= @max_title_bytes
+
   defp valid_state_field?(_key, nil), do: true
-  defp valid_state_field?("title", value), do: bounded_binary?(value, @max_title_bytes)
   defp valid_state_field?(_key, value), do: bounded_binary?(value, @max_state_field_bytes)
 
   defp bounded_binary?(value, max),
