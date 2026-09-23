@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,185 lines, a reduction of 7,470 (18.4%). A 30%
-reduction would require at most 28,458 lines, or another 4,727 lines below the
+The 2026-09-24 inventory is 33,176 lines, a reduction of 7,479 (18.4%). A 30%
+reduction would require at most 28,458 lines, or another 4,718 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -135,6 +135,13 @@ multibyte test had asserted that accidental behavior and now checks the actual
 limit. A focused audit of context, codec, loop, and small provider tests found
 no full case that merely measured Elixir or library behavior; apparent overlaps
 covered different Alto limits or failure boundaries.
+The coding prompt builder now derives its two fragments directly from tool
+names instead of allocating an intermediate capability map. A direct test that
+only observed a prompt function returning its own literal construction was
+removed; the checkpoint integration test already proves callback invocation,
+system-message delivery, and no callback replay after resume. A separate TUI
+view audit found its three settings-width layouts and hit rectangles carry
+different presentation rules, so no view consolidation was kept.
 
 ## Next passes
 

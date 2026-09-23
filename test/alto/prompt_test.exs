@@ -114,13 +114,7 @@ defmodule Alto.PromptTest do
     assert prompt =~ "project instructions truncated"
   end
 
-  test "accepts literal text, disabled prompts, and prompt functions" do
-    assert {:ok, "cwd=/tmp\n"} =
-             Alto.Prompt.build(fn context -> "cwd=#{context.cwd}\n" end, %{
-               cwd: "/tmp",
-               tools: []
-             })
-
+  test "accepts literal text and disabled prompts" do
     assert {:ok, nil} = Alto.Prompt.build(nil, %{})
     assert {:ok, nil} = Alto.Prompt.build("", %{})
 
