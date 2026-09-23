@@ -354,8 +354,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       details: %{}
                     } = request}
 
-    assert is_binary(request.id)
     assert is_binary(request.run_id)
+    assert String.starts_with?(request.id, request.run_id <> ":")
 
     assert_receive {:tool_ran, "hello"}
 

@@ -30,12 +30,6 @@ defmodule Alto.TUI.RunLifecycleTest do
     end
   end
 
-  defmodule LegacyBackend do
-    @behaviour Alto.TUI.Backend
-    defdelegate start(task, prompt, options, backend_options), to: Alto.TUI.Backends.Native
-    defdelegate cancel(handle, reason, options), to: Alto.TUI.Backends.Native
-  end
-
   defmodule ApprovalProbe do
     @behaviour Alto.Tool
     def name(_opts), do: :approval_probe
@@ -57,58 +51,56 @@ defmodule Alto.TUI.RunLifecycleTest do
     %{root: root}
   end
 
-  for backend <- [Alto.TUI.Backends.Native, LegacyBackend] do
-    test "queued input preserves distinct streamed turns with #{inspect(backend)}", %{root: root} do
-      app = start_app(root, nil, unquote(backend))
-      submit(app, "first")
-      assert_receive {:model_waiting, first, _}, 5_000
-      send(first, {:delta, "first "})
-      eventually(fn -> List.last(State.current_entries(state(app)))[:text] == "first " end)
+  test "queued input preserves distinct streamed turns", %{root: root} do
+    app = start_app(root)
+    submit(app, "first")
+    assert_receive {:model_waiting, first, _}, 5_000
+    send(first, {:delta, "first "})
+    eventually(fn -> List.last(State.current_entries(state(app)))[:text] == "first " end)
 
-      submit(app, "next")
-      assert screen(app) =~ "Queued message: next"
+    submit(app, "next")
+    assert screen(app) =~ "Queued message: next"
 
-      assert State.current_entries(state(app)) == [
-               %{kind: :user, text: "first"},
-               %{kind: :assistant, text: "first "}
-             ]
+    assert State.current_entries(state(app)) == [
+             %{kind: :user, text: "first"},
+             %{kind: :assistant, text: "first "}
+           ]
 
-      send(first, {:finish, "done"})
-      assert_receive {:model_waiting, second, _}, 5_000
+    send(first, {:finish, "done"})
+    assert_receive {:model_waiting, second, _}, 5_000
 
-      assert State.current_entries(state(app)) == [
-               %{kind: :user, text: "first"},
-               %{kind: :assistant, text: "first done"},
-               %{kind: :user, text: "next"}
-             ]
+    assert State.current_entries(state(app)) == [
+             %{kind: :user, text: "first"},
+             %{kind: :assistant, text: "first done"},
+             %{kind: :user, text: "next"}
+           ]
 
-      refute screen(app) =~ "Queued message:"
-      refute state(app).notice =~ "message queued"
+    refute screen(app) =~ "Queued message:"
+    refute state(app).notice =~ "message queued"
 
-      send(second, {:finish, "second done"})
-      eventually(fn -> state(app).runs == %{} end)
+    send(second, {:finish, "second done"})
+    eventually(fn -> state(app).runs == %{} end)
 
-      expected = [
-        %{kind: :user, text: "first"},
-        %{kind: :assistant, text: "first done"},
-        %{kind: :user, text: "next"},
-        %{kind: :assistant, text: "second done"}
-      ]
+    expected = [
+      %{kind: :user, text: "first"},
+      %{kind: :assistant, text: "first done"},
+      %{kind: :user, text: "next"},
+      %{kind: :assistant, text: "second done"}
+    ]
 
-      assert State.current_entries(state(app)) == expected
-      rendered = screen(app)
-      assert rendered =~ "you › next"
-      assert length(Regex.scan(~r/alto ›/, rendered)) == 2
-      refute rendered =~ "Queued message:"
-      assert state(app).input_routes == %{}
+    assert State.current_entries(state(app)) == expected
+    rendered = screen(app)
+    assert rendered =~ "you › next"
+    assert length(Regex.scan(~r/alto ›/, rendered)) == 2
+    refute rendered =~ "Queued message:"
+    assert state(app).input_routes == %{}
 
-      session_id = State.selected_task(state(app))["conversation_id"]
+    session_id = State.selected_task(state(app))["conversation_id"]
 
-      assert {:ok, %{messages: messages}} =
-               Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
+    assert {:ok, %{messages: messages}} =
+             Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
 
-      assert Alto.ToolDisplay.transcript(messages) == expected
-    end
+    assert Alto.ToolDisplay.transcript(messages) == expected
   end
 
   test "a queued follow-up starts after completion without changing the foreground draft", %{
