@@ -5,6 +5,7 @@ defmodule Alto.Providers.SSETest do
   test "bounds unfinished wire data across chunks, including ignored comments" do
     assert {:ok, state, []} = SSE.feed(SSE.new(12), "data: 123")
     assert {:error, {:sse_event_too_large, 12}} = SSE.feed(state, "4567")
+
     assert {:error, {:sse_event_too_large, 12}} =
              SSE.feed(SSE.new(12), ":" <> String.duplicate("x", 20))
   end

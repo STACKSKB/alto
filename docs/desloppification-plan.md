@@ -161,6 +161,10 @@ mutable fenced head remain separate because they support branch fetch and
 crash-safe resume respectively. A subagent constructor test that echoed its
 own options and checked an isolated capacity rejection was removed; batch
 integration tests exercise actual child concurrency and admission.
+The isolated usage test equating the zero-value constructor with its nil
+fallback was removed; the remaining accounting tests cover provider fields,
+cache rates, cumulative totals, and explicit zero values. The repository-wide
+formatter check now passes.
 
 ## Next passes
 

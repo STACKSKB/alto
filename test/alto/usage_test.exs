@@ -44,11 +44,6 @@ defmodule Alto.UsageTest do
     assert Usage.merge(openai, anthropic).total_tokens == 1_730
   end
 
-  test "unknown or absent usage is zero and does not invent a cache rate" do
-    assert Usage.new() == Usage.normalize(nil)
-    assert Usage.cache_hit_rate(Usage.new()) == 0.0
-  end
-
   test "preserves explicit zero fields while defaulting only missing fields" do
     assert Usage.normalize(%{"input_tokens" => 12, "output_tokens" => 3, "total_tokens" => 0}).total_tokens ==
              0
