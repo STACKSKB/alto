@@ -8,25 +8,7 @@ defmodule Alto.Runner.SerialCompactionTest do
 
   alias Alto.Event
   alias Alto.Session
-
-  defmodule EchoTool do
-    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
-
-    @impl true
-    def schema(_opts) do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
-  end
+  alias Alto.TestSupport.EchoTool
 
   defmodule ScriptedProvider do
     @behaviour Alto.Provider

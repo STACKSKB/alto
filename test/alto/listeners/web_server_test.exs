@@ -3,37 +3,10 @@ defmodule Alto.Listeners.WebServerTest do
 
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.WebServer
+  alias Alto.TestSupport.EchoTool
+  alias Alto.TestSupport.GuardedEchoTool
 
   @approval_timeout_ms 5_000
-
-  defmodule EchoTool do
-    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
-
-    @impl true
-    def schema(_opts) do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
-  end
-
-  defmodule GuardedEchoTool do
-    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :required
-
-    @impl true
-    def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def run(arguments, _context, _opts), do: EchoTool.run(arguments, nil, [])
-  end
 
   defmodule ToolThenAnswerProvider do
     @behaviour Alto.Provider

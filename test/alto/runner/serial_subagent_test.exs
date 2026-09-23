@@ -10,26 +10,8 @@ defmodule Alto.Runner.SerialSubagentTest do
   alias Alto.Effect
   alias Alto.Event
   alias Alto.Session
+  alias Alto.TestSupport.EchoTool
   alias Alto.Transition
-
-  defmodule EchoTool do
-    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
-
-    @impl true
-    def schema(_opts) do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
-  end
 
   defmodule GuardedEchoTool do
     use Alto.Tool, name: :guarded_echo, execution_mode: :parallel, approval: :required
