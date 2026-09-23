@@ -134,10 +134,10 @@ defmodule Alto.TUI.View do
       details && details.presentation == :drawer ->
         :details_drawer_outside
 
-      layout.left_seam && abs(x - layout.left_seam) <= 0 ->
+      layout.left_seam && x == layout.left_seam ->
         :left_seam
 
-      layout.right_seam && abs(x - layout.right_seam) <= 0 ->
+      layout.right_seam && x == layout.right_seam ->
         :right_seam
 
       PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->

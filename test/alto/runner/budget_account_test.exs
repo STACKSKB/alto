@@ -71,7 +71,6 @@ defmodule Alto.Runner.BudgetAccountTest do
 
     assert Account.identity(reopened) == identity
     assert {:error, {:effect_limit, 2}} = Account.take(reopened, :effect, 99)
-    assert {:error, {:effect_limit, 2}} = Account.take(reopened, :effect, 99)
   end
 
   test "tightening affects existing handles and caller caps cannot widen", %{ledger: ledger} do
