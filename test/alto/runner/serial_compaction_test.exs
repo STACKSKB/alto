@@ -423,7 +423,7 @@ defmodule Alto.Runner.SerialCompactionTest do
                tools: [EchoTool],
                max_transcript_bytes: 600,
                compaction: [
-                 strategy: :handoff,
+                 strategy: {Alto.Context.Reducers.Handoff, []},
                  keep_recent_messages: 1,
                  max_handoff_bytes: 400,
                  artifact_dir: Path.join(dir, "h")

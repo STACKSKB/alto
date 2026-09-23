@@ -10,9 +10,6 @@ defmodule Alto.Context.Reducer do
   @callback compact(map(), (map() -> {:ok, map()} | {:error, term()}), keyword()) ::
               {:ok, map()} | {:error, term()}
 
-  def resolve(:summary), do: {:ok, {Alto.Context.Reducers.Summary, []}}
-  def resolve(:handoff), do: {:ok, {Alto.Context.Reducers.Handoff, []}}
-
   def resolve(spec), do: Alto.Capabilities.resolve(spec, __MODULE__)
 
   def request(input, isolated, transcript) do

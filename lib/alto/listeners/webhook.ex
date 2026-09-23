@@ -361,10 +361,6 @@ defmodule Alto.Listeners.Webhook do
   defp endpoint_on_event({:start_run, config}) when is_binary(config) and config != "",
     do: {:ok, {:start_run, config}}
 
-  defp endpoint_on_event({:enqueue, queue})
-       when not is_nil(queue) and (is_atom(queue) or is_pid(queue)),
-       do: {:ok, {:enqueue, {Alto.Inboxes.Queue, queue: queue}}}
-
   defp endpoint_on_event({:enqueue, {backend, opts}})
        when is_atom(backend) and is_list(opts) do
     case Alto.Inbox.validate_backend(backend, opts) do

@@ -5,8 +5,13 @@ Compaction is composed from a trigger, a reducer, and an allowance:
 ```elixir
 Alto.Config.new(
   loop: Alto.default_loop(context: Alto.Context.window(compact_at: 0.85)),
-  compaction: [strategy: :handoff, max_compactions: 8, keep_recent_messages: 12,
-    keep_initial_messages: 1, max_input_bytes: 1_000_000],
+  compaction: [
+    strategy: {Alto.Context.Reducers.Handoff, []},
+    max_compactions: 8,
+    keep_recent_messages: 12,
+    keep_initial_messages: 1,
+    max_input_bytes: 1_000_000
+  ],
   sessions: true
 )
 ```

@@ -508,7 +508,7 @@ defmodule Alto.Listeners.WebhookTest do
         path: "/hooks/events",
         verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
         identity: {IdentityHeader, header: "x-delivery-id"},
-        on_event: {:enqueue, queue}
+        on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
       }
     end
 
@@ -639,13 +639,13 @@ defmodule Alto.Listeners.WebhookTest do
           path: "/hooks/a",
           verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
           identity: {IdentityHeader, header: "x-delivery-id"},
-          on_event: {:enqueue, queue}
+          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
         },
         %{
           path: "/hooks/b",
           verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
           identity: {IdentityHeader, header: "x-delivery-id"},
-          on_event: {:enqueue, queue}
+          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
         }
       ]
 

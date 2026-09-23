@@ -233,8 +233,7 @@ return `{:ok, %{content: text, data: map, events: list, records: list}}`. Execut
 forces `tool_choice: :none`, accounts model calls, and checks replacement size,
 shrinkage and headroom before accepting it. Custom reducers use this same
 structured `compact/3` contract.
-`:summary` and `:handoff` remain compatibility aliases; new profiles can name the
-implementations explicitly.
+Built-in reducers use the same module configuration as host reducers.
 
 ```elixir
 retry_policy: {Alto.Retry.Transient, base_delay: 100, max_delay: 2_000},

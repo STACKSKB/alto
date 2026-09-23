@@ -298,7 +298,7 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   @compaction_schema [
-    strategy: [type: :any, default: :summary],
+    strategy: [type: :any, default: {Alto.Context.Reducers.Summary, []}],
     max_compactions: [type: :pos_integer, default: 1],
     keep_recent_messages: [type: :pos_integer, default: 10],
     keep_initial_messages: [type: :non_neg_integer, default: 0],
