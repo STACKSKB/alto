@@ -235,14 +235,10 @@ defmodule Alto.TUI.App do
   end
 
   defp route_event(%Key{code: "enter", modifiers: modifiers} = key, %{focus: :composer} = state) do
-    if "shift" in modifiers do
-      forward_textarea(state, key)
-    else
-      if "ctrl" in modifiers do
-        {:noreply, submit(state, :steer)}
-      else
-        {:noreply, submit(state)}
-      end
+    cond do
+      "shift" in modifiers -> forward_textarea(state, key)
+      "ctrl" in modifiers -> {:noreply, submit(state, :steer)}
+      true -> {:noreply, submit(state)}
     end
   end
 
@@ -341,20 +337,11 @@ defmodule Alto.TUI.App do
 
   # Completion is a runner notification, independent of its implementation.
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
-    case find_run(state, ref: ref) do
-      nil -> {:noreply, state, render?: false}
-      {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
-    end
+    finish_runner_message(state, [ref: ref], result)
   end
 
   def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
-    case find_run(state, monitor: monitor) do
-      nil ->
-        {:noreply, state, render?: false}
-
-      {local_id, run} ->
-        {:noreply, finish_runner_result(state, local_id, run, {:error, {:run_exited, reason}})}
-    end
+    finish_runner_message(state, [monitor: monitor], {:error, {:run_exited, reason}})
   end
 
   def handle_info(:prepare_backend, state), do: {:noreply, prepare_selected_backend(state)}
@@ -363,6 +350,13 @@ defmodule Alto.TUI.App do
     case Backend.message(state, message) do
       :pass -> {:noreply, state, render?: false}
       result -> result
+    end
+  end
+
+  defp finish_runner_message(state, matcher, result) do
+    case find_run(state, matcher) do
+      nil -> {:noreply, state, render?: false}
+      {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
     end
   end
 
@@ -1058,11 +1052,8 @@ defmodule Alto.TUI.App do
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
 
-  defp overlay_key(state, %Key{code: code}) when code in ["up", "k"],
-    do: move_overlay(state, -1)
-
-  defp overlay_key(state, %Key{code: code}) when code in ["down", "j"],
-    do: move_overlay(state, 1)
+  defp overlay_key(state, %Key{code: code}) when code in ["up", "k", "down", "j"],
+    do: move_overlay(state, if(code in ["up", "k"], do: -1, else: 1))
 
   defp overlay_key(state, %Key{code: "enter"}), do: select_overlay(state)
 
@@ -1350,18 +1341,10 @@ defmodule Alto.TUI.App do
 
     next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
-    cond do
-      rest != [] and next.details_drawer_open? ->
-        %{next | focus: :details}
-
-      rest == [] and next.details_drawer_auto_opened? ->
-        State.close_details_drawer(next)
-
-      next.details_drawer_open? ->
-        %{next | focus: :details}
-
-      true ->
-        %{next | focus: :composer}
+    if rest == [] and next.details_drawer_auto_opened? do
+      State.close_details_drawer(next)
+    else
+      %{next | focus: if(next.details_drawer_open?, do: :details, else: :composer)}
     end
   end
 
@@ -1376,10 +1359,7 @@ defmodule Alto.TUI.App do
       not next.approval_auto_open? ->
         State.ensure_visible_focus(next)
 
-      State.details_pane_visible?(next) ->
-        %{next | focus: :details}
-
-      next.details_drawer_open? ->
+      State.details_pane_visible?(next) or next.details_drawer_open? ->
         %{next | focus: :details}
 
       true ->
