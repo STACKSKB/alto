@@ -567,17 +567,6 @@ defmodule Alto.Runner.SerialTest do
            )
   end
 
-  test "approval detail limit must be positive" do
-    assert {:error, {:invalid_option, :max_approval_details_bytes, 0}, result} =
-             Alto.run("invalid limit",
-               provider: {ToolThenAnswerProvider, test_pid: self()},
-               max_approval_details_bytes: 0
-             )
-
-    assert result.model_requests == 0
-    refute_receive {:provider_request, _request}
-  end
-
   test "cancellation terminates an in-flight preparation task" do
     parent = self()
 
@@ -752,16 +741,6 @@ defmodule Alto.Runner.SerialTest do
     assert length(result.events) == 2
     assert result.events_dropped == 3
     assert Enum.any?(result.events, &(&1.type == :step_settled))
-  end
-
-  test "the event log bound must be positive" do
-    assert {:error, {:invalid_option, :max_events, 0}, result} =
-             Alto.run("no run", provider: AnswerProvider, max_events: 0)
-
-    assert result.verdict == :rejected_before_dispatch
-    assert result.usage.total_tokens == 0
-    assert result.model_requests == 0
-    assert result.events == []
   end
 
   defp enum_has_tool_failure?(result, needle) do

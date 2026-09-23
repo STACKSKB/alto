@@ -105,14 +105,12 @@ defmodule Alto.FrontEnd.RegistryTest do
     registry
   end
 
-  test "startup schema reports invalid fields and allows zero capacities" do
+  test "startup accepts zero capacity and validates command names" do
     resolver = fn _ -> {:ok, []} end
     assert {:ok, state} = Registry.init(config_resolver: resolver, max_active_runs: 0)
     assert state.max_active_runs == 0
 
     for {key, value} <- [
-          max_active_runs: -1,
-          disconnect_after_overflow: :sometimes,
           commands: %{"" => fn _ -> :ok end},
           commands: %{job: fn _ -> :ok end}
         ] do

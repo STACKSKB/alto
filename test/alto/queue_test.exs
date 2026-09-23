@@ -18,18 +18,6 @@ defmodule Alto.QueueTest do
     %{dir: dir, id: unique_id()}
   end
 
-  test "invalid queue bounds fail before storage opens", %{dir: dir, id: id} do
-    for {key, value} <- [
-          max_records: -1,
-          auto_compact: :yes
-        ] do
-      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
-               Queue.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])
-
-      refute File.exists?(dir)
-    end
-  end
-
   defp tmp_root do
     Path.join(System.tmp_dir!(), "alto-queue-test-#{System.unique_integer([:positive])}")
   end

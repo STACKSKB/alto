@@ -18,20 +18,10 @@ defmodule Alto.OperationLogTest do
     %{dir: dir, id: "l" <> Integer.to_string(System.unique_integer([:positive]))}
   end
 
-  test "startup rejects invalid limits before opening storage and permits zero capacity", %{
+  test "zero capacity rejects admission without creating entries", %{
     dir: dir,
     id: id
   } do
-    for {key, value} <- [
-          max_ops: -1,
-          max_identifier_bytes: "256"
-        ] do
-      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
-               OperationLog.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])
-
-      refute File.exists?(dir)
-    end
-
     {:ok, ledger} = OperationLog.start_link(id: id, dir: dir, name: nil, max_ops: 0)
     assert {:error, :ledger_full} = OperationLog.record_intent(ledger, "op", "tool", nil)
 

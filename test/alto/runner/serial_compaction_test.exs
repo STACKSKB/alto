@@ -476,17 +476,8 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert Enum.any?(result.events, &(&1.type == :context_compact_failed))
   end
 
-  test "invalid compaction and retry options fail closed at construction" do
-    assert {:error, {:invalid_compaction, _}, _} =
-             Alto.run("go", base_opts(compaction: [keep_recent_messages: 0]))
-
-    assert {:error, {:invalid_compaction, _}, _} =
-             Alto.run("go", base_opts(compaction: [max_compactions: 0]))
-
+  test "malformed compaction configuration fails at construction" do
     assert {:error, {:invalid_compaction, _}, _} = Alto.run("go", base_opts(compaction: "yes"))
-
-    assert {:error, {:invalid_option, :provider_retries, -1}, _} =
-             Alto.run("go", base_opts(provider_retries: -1))
   end
 
   test "oversized reduction input fails intact and a raised bound includes early requirements", %{

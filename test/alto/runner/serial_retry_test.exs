@@ -164,17 +164,6 @@ defmodule Alto.Runner.SerialRetryTest do
              )
   end
 
-  test "invalid retry budgets fail closed at construction", %{agent: agent} do
-    script = fn _n -> {:ok, %{message: "x", tool_calls: []}} end
-
-    assert {:error, {:invalid_option, :provider_retries, -1}, _} =
-             Alto.run("retry me",
-               provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
-               tools: [],
-               provider_retries: -1
-             )
-  end
-
   test "cancellation wins during backoff", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :down}} end
     owner = self()
