@@ -669,20 +669,8 @@ defmodule Alto.CLI do
     end
   end
 
-  defp format_reason({:http_error, status, detail}),
-    do: "provider returned HTTP #{status}: #{inspect(detail)}"
-
   defp format_reason({:socket_bind_failed, path, :already_in_use}),
     do: "socket #{path} is already served by another Alto process"
-
-  defp format_reason({:socket_bind_failed, path, reason}),
-    do: "could not bind socket #{path}: #{inspect(reason)}"
-
-  defp format_reason({:listen_failed, reason}),
-    do: "could not listen for the WebSocket: #{inspect(reason)}"
-
-  defp format_reason({:config_load_failed, path, reason}),
-    do: "could not load config #{path}: #{inspect(reason)}"
 
   defp format_reason({:invalid_config_return, path}),
     do: "config #{path} must return %Alto.Config{}"
@@ -694,12 +682,6 @@ defmodule Alto.CLI do
 
   defp format_reason({:invalid_session_id, id}), do: "invalid session id #{inspect(id)}"
 
-  defp format_reason({:session_corrupt, id, line}),
-    do: "session #{id} is corrupt near record #{inspect(line)}"
-
-  defp format_reason({:session_read_failed, reason}),
-    do: "could not read sessions: #{inspect(reason)}"
-
   defp format_reason({:transcript_limit, max}),
     do: "transcript exceeded #{max} bytes (set compaction: true to compact and continue)"
 
@@ -709,5 +691,5 @@ defmodule Alto.CLI do
   defp format_reason(:compaction_requires_provider),
     do: "transcript limit reached, but compaction needs a provider"
 
-  defp format_reason(reason), do: inspect(reason, pretty: true, limit: 20)
+  defp format_reason(reason), do: Alto.Display.error(reason)
 end

@@ -420,7 +420,7 @@ defmodule Alto.CLITest do
       "Alto.Config.new(provider: Alto.CLITest.AnswerProvider, listeners: [{Alto.CLITest.CustomListener, []}])"
     )
 
-    assert {:error, ":custom_listener_reached"} =
+    assert {:error, "Custom listener reached"} =
              Alto.CLI.run(["--config", path, "--serve"])
   end
 end
