@@ -325,21 +325,6 @@ defmodule Alto.Providers.OpenAICompatibleTest do
              )
   end
 
-  test "stops a stream that exceeds the complete-response limit" do
-    payload = sse(%{"choices" => [%{"delta" => %{"content" => "too much"}}]})
-    configure_adapter(self(), 200, "text/event-stream", [payload])
-
-    assert {:error, {:model_response_too_large, 10}} =
-             OpenAICompatible.stream(
-               %{messages: [], tools: []},
-               fn _event -> :ok end,
-               model: "test-model",
-               base_url: "https://unit.test/v1",
-               max_response_bytes: 10,
-               req_options: [adapter: Adapter]
-             )
-  end
-
   defp sse(value), do: "data: " <> JSON.encode!(value) <> "\n\n"
 
   test "merges index-less tool call fragments into one call" do

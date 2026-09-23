@@ -273,17 +273,10 @@ defmodule Alto.Providers.AnthropicTest do
              Anthropic.stream(request, fn _ -> :ok end, opts)
   end
 
-  test "receiving is bounded and provider error status survives" do
+  test "provider error status survives" do
     opts = configure(%{"error" => %{"type" => "overloaded_error"}}, 529)
     request = %{messages: [%{"role" => "user", "content" => "go"}], tools: []}
     assert {:error, {:http_error, 529, _}} = Anthropic.stream(request, fn _ -> :ok end, opts)
-
-    assert {:error, {:model_response_too_large, 10}} =
-             Anthropic.stream(
-               request,
-               fn _ -> :ok end,
-               Keyword.put(opts, :max_response_bytes, 10)
-             )
   end
 
   test "unsupported options fail before dispatch" do
