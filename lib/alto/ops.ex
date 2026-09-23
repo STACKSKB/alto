@@ -200,18 +200,15 @@ defmodule Alto.Ops do
   end
 
   defp ledger_items_complete(ledger, live_by_operation) do
-    with :ok <- ensure_server(ledger, :ledger) do
-      with {:ok, entries} <- ledger_call(fn -> Alto.OperationLog.entries(ledger) end) do
-        {:ok,
-         entries
-         |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
-         |> Enum.sort_by(&inspection_rank/1)
-         |> Enum.flat_map(fn entry ->
-           live = Map.get(live_by_operation, entry.operation_key)
-
-           ledger_rows(entry, live)
-         end)}
-      end
+    with {:ok, entries} <- ledger_call(fn -> Alto.OperationLog.entries(ledger) end) do
+      {:ok,
+       entries
+       |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
+       |> Enum.sort_by(&inspection_rank/1)
+       |> Enum.flat_map(fn entry ->
+         live = Map.get(live_by_operation, entry.operation_key)
+         ledger_rows(entry, live)
+       end)}
     end
   end
 
@@ -293,12 +290,6 @@ defmodule Alto.Ops do
       attempt_id: entry.current_attempt || (live && live.claim_id),
       recovery_available: is_map(envelope)
     }
-  end
-
-  defp ensure_server(server, kind) do
-    pid = if is_pid(server), do: server, else: Process.whereis(server)
-
-    if is_pid(pid) and Process.alive?(pid), do: :ok, else: {:error, {kind, :unavailable}}
   end
 
   defp source_of(key) do

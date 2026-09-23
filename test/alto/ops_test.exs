@@ -51,6 +51,17 @@ defmodule Alto.OpsTest do
     assert by_key["/hooks/events:del-1"].safe_to_retry == false
   end
 
+  test "inspection accepts a registered ledger reference", %{queue: queue, ledger: ledger} do
+    name = {:alto_ops_ledger, System.unique_integer([:positive])}
+    :yes = :global.register_name(name, Process.whereis(ledger))
+    on_exit(fn -> :global.unregister_name(name) end)
+
+    {:ok, _} = Queue.put(queue, "job", %{})
+
+    assert {:ok, %{items: [%{key: "job", status: :accepted}]}} =
+             Ops.list(queue, {:global, name})
+  end
+
   test "stale claims are visible accurately without mutating", %{queue: q, ledger: l} do
     {:ok, _} = Queue.admit(q, "src:stale", %{})
     {:ok, [claimed]} = Queue.claim(q, 1, "slow")
