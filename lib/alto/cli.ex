@@ -63,24 +63,18 @@ defmodule Alto.CLI do
          {:ok, command_mode} <- command_mode(options),
          {:ok, run_options, renderer} <- run_options(options, config, command_mode) do
       try do
-        case run_task(options, task, run_options) do
-          {:ok, result} ->
-            Renderer.finish(result.output, Renderer.stop(renderer))
-            IO.write("\n")
-            report_session(result.session_id)
-            :ok
+        {status, output, session_id} =
+          case run_task(options, task, run_options) do
+            {:ok, result} -> {:ok, result.output, result.session_id}
+            {:error, reason, result} -> {{:error, reason}, nil, result.session_id}
+            {:error, reason} -> {{:error, reason}, nil, nil}
+          end
 
-          {:error, reason, result} ->
-            Renderer.stop(renderer)
-            IO.write("\n")
-            report_session(result.session_id)
-            {:error, reason}
-
-          {:error, reason} ->
-            Renderer.stop(renderer)
-            IO.write("\n")
-            {:error, reason}
-        end
+        rendered = Renderer.stop(renderer)
+        if status == :ok, do: Renderer.finish(output, rendered)
+        IO.write("\n")
+        report_session(session_id)
+        status
       after
         # A run that crashes before reaching the case above would otherwise
         # leak the renderer process.
