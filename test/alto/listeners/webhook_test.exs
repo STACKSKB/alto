@@ -160,6 +160,33 @@ defmodule Alto.Listeners.WebhookTest do
     assert_receive {:rule_ran, _}, 2_000
   end
 
+  test "unexpected callback errors return a bounded server error", %{
+    listener: listener,
+    registry: registry
+  } do
+    verify_error = %{
+      path: "/hooks/verify",
+      verify: {fn _body, _headers, _opts -> {:error, :unexpected_verify} end, []},
+      identity: {fn _headers, _opts -> {:ok, "delivery"} end, []},
+      on_event: {:start_run, "job"}
+    }
+
+    identity_error = %{
+      verify_error
+      | path: "/hooks/identity",
+        verify: {fn _body, _headers, _opts -> :ok end, []},
+        identity: {fn _headers, _opts -> {:error, {:unexpected_identity, "detail"}} end, []}
+    }
+
+    port = start_listener(listener, registry, [verify_error, identity_error])
+
+    for path <- ["/hooks/verify", "/hooks/identity"] do
+      response = post(port, path, "event", [])
+      assert response =~ "500 Internal Server Error"
+      assert response =~ "webhook validation failed"
+    end
+  end
+
   test "identity extraction rejects duplicate delivery headers" do
     assert {:error, :duplicate_delivery_id} =
              IdentityHeader.extract(

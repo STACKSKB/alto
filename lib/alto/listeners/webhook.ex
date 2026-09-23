@@ -16,6 +16,28 @@ defmodule Alto.Listeners.Webhook do
   @default_max_delivery_ids 10_000
   @max_delivery_id_bytes 200
   @recv_timeout 5_000
+  @request_errors %{
+    too_large: {413, "payload too large"},
+    bad_length: {400, "bad content length"},
+    bad_signature: {401, "signature verification failed"},
+    missing_signature: {401, "signature verification failed"},
+    duplicate_signature: {401, "signature verification failed"},
+    signature_too_large: {401, "signature verification failed"},
+    invalid_verify: {401, "signature verification failed"},
+    missing_delivery_id: {400, "missing delivery id"},
+    delivery_id_too_large: {400, "delivery id too large"},
+    duplicate_delivery_id: {400, "duplicate delivery id"},
+    invalid_identity: {400, "invalid delivery id"},
+    invalid_delivery_id: {400, "invalid delivery id"}
+  }
+  @admission_errors %{
+    duplicate: {200, "duplicate"},
+    key_claimed: {200, "duplicate"},
+    payload_too_large: {413, "payload too large"},
+    invalid_key: {400, "delivery id too large"},
+    queue_full: {503, "inbox full"},
+    full: {503, "inbox full"}
+  }
 
   defmodule Endpoint do
     @moduledoc false
@@ -110,37 +132,14 @@ defmodule Alto.Listeners.Webhook do
          {:ok, delivery_id} <- identity(endpoint, conn) do
       dispatch(conn, endpoint, delivery_id, body, opts)
     else
-      {:error, :too_large, conn} ->
-        respond(conn, 413, "payload too large")
-
-      {:error, :bad_length, conn} ->
-        respond(conn, 400, "bad content length")
-
-      {:error, reason}
-      when reason in [
-             :bad_signature,
-             :missing_signature,
-             :duplicate_signature,
-             :signature_too_large,
-             :invalid_verify
-           ] ->
-        respond(conn, 401, "signature verification failed")
-
-      {:error, :missing_delivery_id} ->
-        respond(conn, 400, "missing delivery id")
-
-      {:error, :delivery_id_too_large} ->
-        respond(conn, 400, "delivery id too large")
-
-      {:error, :duplicate_delivery_id} ->
-        respond(conn, 400, "duplicate delivery id")
-
-      {:error, :invalid_identity} ->
-        respond(conn, 400, "invalid delivery id")
-
-      {:error, :invalid_delivery_id} ->
-        respond(conn, 400, "invalid delivery id")
+      {:error, reason, conn} -> request_error(conn, reason)
+      {:error, reason} -> request_error(conn, reason)
     end
+  end
+
+  defp request_error(conn, reason) do
+    {status, body} = Map.get(@request_errors, reason, {500, "webhook validation failed"})
+    respond(conn, status, body)
   end
 
   defp dispatch(
@@ -180,34 +179,24 @@ defmodule Alto.Listeners.Webhook do
     key = endpoint.source <> ":" <> delivery_id
     payload = %{"delivery_id" => delivery_id, "body" => body}
 
-    result = Alto.Inbox.admit(backend, key, payload, backend_opts)
+    case Alto.Inbox.admit(backend, key, payload, backend_opts) do
+      {:ok, _record} -> respond(conn, 200, "accepted")
+      {:error, reason} -> enqueue_error(conn, endpoint, reason)
+    end
+  end
 
-    case result do
-      {:ok, _record} ->
-        respond(conn, 200, "accepted")
+  defp enqueue_error(conn, endpoint, reason) do
+    kind =
+      case reason do
+        {name, _} when name in [:key_claimed, :payload_too_large, :invalid_key] -> name
+        other -> other
+      end
 
-      {:error, :duplicate} ->
-        respond(conn, 200, "duplicate")
+    case Map.fetch(@admission_errors, kind) do
+      {:ok, {status, body}} ->
+        respond(conn, status, body)
 
-      {:error, {:key_claimed, _key}} ->
-        respond(conn, 200, "duplicate")
-
-      {:error, {:payload_too_large, _size}} ->
-        respond(conn, 413, "payload too large")
-
-      {:error, :payload_too_large} ->
-        respond(conn, 413, "payload too large")
-
-      {:error, {:invalid_key, _key}} ->
-        respond(conn, 400, "delivery id too large")
-
-      {:error, :queue_full} ->
-        respond(conn, 503, "inbox full")
-
-      {:error, :full} ->
-        respond(conn, 503, "inbox full")
-
-      {:error, reason} ->
+      :error ->
         log_rejected(endpoint, "enqueue failed: #{inspect(reason)}")
         respond(conn, 500, "enqueue failed")
     end
@@ -239,19 +228,15 @@ defmodule Alto.Listeners.Webhook do
            read_length: min(max - total + 1, 64_000),
            read_timeout: max(deadline - System.monotonic_time(:millisecond), 1)
          ) do
-      {:ok, body, conn} when total + byte_size(body) <= max ->
-        {:ok, IO.iodata_to_binary([chunks, body]), conn}
+      {status, body, conn} when status in [:ok, :more] ->
+        total = total + byte_size(body)
 
-      {:ok, _body, conn} ->
-        {:error, :too_large, conn}
-
-      {:more, body, conn} when total + byte_size(body) <= max ->
-        if System.monotonic_time(:millisecond) < deadline,
-          do: read_body_chunks(conn, max, [chunks, body], total + byte_size(body), deadline),
-          else: {:error, :bad_length, conn}
-
-      {:more, _body, conn} ->
-        {:error, :too_large, conn}
+        cond do
+          total > max -> {:error, :too_large, conn}
+          status == :ok -> {:ok, IO.iodata_to_binary([chunks, body]), conn}
+          System.monotonic_time(:millisecond) >= deadline -> {:error, :bad_length, conn}
+          true -> read_body_chunks(conn, max, [chunks, body], total, deadline)
+        end
 
       {:error, _reason} ->
         {:error, :bad_length, conn}
