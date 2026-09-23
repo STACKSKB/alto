@@ -399,32 +399,27 @@ defmodule Alto.TUI.Selection do
   def text(%{active?: false}), do: ""
 
   def text(selection) do
-    selected_rows(selection)
-    |> Enum.map_join("\n", fn {_y, runs} ->
-      Enum.map_join(runs, fn {_x, _width, text} -> text end) |> String.trim_trailing(" ")
+    {{first, _}, {last, _}} = bounds = bounds(selection)
+
+    Enum.map_join(first..last, "\n", fn y ->
+      selection
+      |> selected_row(y)
+      |> selected_segments(y, bounds, selection.snapshot.width)
+      |> Enum.map_join(fn {_x, _width, text} -> text end)
+      |> String.trim_trailing(" ")
     end)
   end
 
   defp bounds(%{anchor: {ax, ay}, head: {hx, hy}}), do: Enum.min_max([{ay, ax}, {hy, hx}])
-
-  defp selected_rows(selection) do
-    {{fy, fx}, {ly, lx}} = bounds(selection)
-
-    for y <- fy..ly do
-      {y,
-       segments(
-         selected_row(selection, y),
-         if(y == fy, do: fx, else: 0),
-         if(y == ly, do: lx, else: selection.snapshot.width)
-       )}
-    end
-  end
 
   defp selected_row(%{scroll: %{history: history, offset: offset}, region: region}, y)
        when not is_nil(history),
        do: Map.fetch!(history, y + offset - region.y)
 
   defp selected_row(selection, y), do: elem(selection.snapshot.rows, y)
+
+  defp selected_segments(row, y, {{fy, fx}, {ly, lx}}, width),
+    do: segments(row, if(y == fy, do: fx, else: 0), if(y == ly, do: lx, else: width))
 
   defp segments(row, low, high) do
     Enum.flat_map(indexed_runs(row), fn run ->
@@ -475,11 +470,7 @@ defmodule Alto.TUI.Selection do
         if y > fy and y < ly do
           row.highlight
         else
-          segments(
-            row,
-            if(y == fy, do: fx, else: 0),
-            if(y == ly, do: lx, else: selection.snapshot.width)
-          )
+          selected_segments(row, y, {{fy, fx}, {ly, lx}}, selection.snapshot.width)
           |> Enum.map(&highlight_widget(&1, y))
         end
       end)
