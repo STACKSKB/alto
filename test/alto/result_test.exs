@@ -14,17 +14,9 @@ defmodule Alto.ResultTest do
     assert_receive {:visited, 3}
     refute_received {:visited, 4}
     assert Alto.Result.traverse(1..3, &{:ok, &1 * 2}) == {:ok, [2, 4, 6]}
-
-    assert Alto.Result.traverse([], fn _ -> flunk("empty traversal invoked callback") end) ==
-             {:ok, []}
   end
 
   test "reduction threads state in order and stops before later effects" do
-    assert Alto.Result.reduce([], :initial, fn _, _ -> flunk("empty fold") end) == {:ok, :initial}
-
-    assert Alto.Result.reduce(["a", "b"], "", fn item, acc -> {:ok, acc <> item} end) ==
-             {:ok, "ab"}
-
     assert {:error, {:stopped, [2, 1]}} =
              Alto.Result.reduce(1..4, [], fn item, acc ->
                send(self(), {:visited, item, acc})

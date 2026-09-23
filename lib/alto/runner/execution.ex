@@ -884,8 +884,8 @@ defmodule Alto.Runner.Execution do
 
   defp run_batch(calls, run, rest, terminal) do
     interpreted =
-      with {:ok, jobs, run} <- prepare_batch(calls, run),
-           do: dispatch_tool_jobs(jobs, run)
+      with {:ok, jobs_rev, run} <- prepare_batch(calls, run),
+           do: dispatch_tool_jobs(Enum.reverse(jobs_rev), run)
 
     case interpreted do
       {:events, events, run} ->
@@ -947,10 +947,10 @@ defmodule Alto.Runner.Execution do
               {:halt, {:error, {:cancelled, reason}, run}}
 
             {:ok, job, _details} ->
-              {:cont, {:ok, jobs ++ [job], run}}
+              {:cont, {:ok, [job | jobs], run}}
 
             {:error, reason, job} ->
-              {:cont, {:ok, jobs ++ [Map.put(job, :error, reason)], run}}
+              {:cont, {:ok, [Map.put(job, :error, reason) | jobs], run}}
           end
 
         {:error, reason} ->
@@ -971,14 +971,14 @@ defmodule Alto.Runner.Execution do
         interpreted = finish_tool_job(job, outcome, run)
 
         case interpreted do
-          {:event, event, next} -> {Events.record(next, event), events ++ [event], failure}
+          {:event, event, next} -> {Events.record(next, event), [event | events], failure}
           {:error, reason, next} -> {next, events, failure || reason}
         end
       end)
 
     case stopped || failure do
       nil ->
-        {:events, events, run}
+        {:events, Enum.reverse(events), run}
 
       reason ->
         {:error, reason, run}

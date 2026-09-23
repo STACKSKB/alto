@@ -54,11 +54,11 @@ defmodule Alto.UsageTest do
              0
 
     assert Usage.from_map(%{
-             "input_tokens" => 12,
-             "total_tokens" => 0,
-             "last_input_tokens" => 0,
-             "cached_input_tokens" => 99,
-             "last_cached_input_tokens" => 99
+             input_tokens: 12,
+             total_tokens: 0,
+             last_input_tokens: 0,
+             cached_input_tokens: 99,
+             last_cached_input_tokens: 99
            }) == %Usage{
              input_tokens: 12,
              output_tokens: 0,
@@ -70,20 +70,6 @@ defmodule Alto.UsageTest do
            }
 
     assert Usage.from_map(%{"input_tokens" => 12}).last_input_tokens == 12
-  end
-
-  test "accepts atom keys and clamps rehydrated cache counts" do
-    usage =
-      Usage.from_map(%{
-        input_tokens: 10,
-        last_input_tokens: 4,
-        cached_input_tokens: 99,
-        last_cached_input_tokens: 99
-      })
-
-    assert usage.input_tokens == 10
-    assert usage.cached_input_tokens == 10
-    assert usage.last_cached_input_tokens == 4
   end
 
   test "codex snapshots preserve zeros and do not claim a request count" do

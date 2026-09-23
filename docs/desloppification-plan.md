@@ -14,7 +14,7 @@ current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
-The largest remaining files are `Alto.TUI.App` (1,715),
+The largest remaining files are `Alto.TUI.App` (1,730),
 `Alto.Runner.Execution` (1,329), `Alto.Queue` (1,089),
 `Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (919),
 `Alto.TUI.View` (890), and `Alto.OperationLog` (855). Their size identifies
