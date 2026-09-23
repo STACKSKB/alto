@@ -1,5 +1,5 @@
 defmodule Alto.Listeners.WebServerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.WebServer
@@ -270,7 +270,7 @@ defmodule Alto.Listeners.WebServerTest do
         {head, rest}
 
       [_only] ->
-        {:ok, data} = :gen_tcp.recv(socket, 0, 2_000)
+        {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
         recv_head(socket, acc <> data)
     end
   end

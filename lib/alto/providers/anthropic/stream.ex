@@ -3,7 +3,6 @@ defmodule Alto.Providers.Anthropic.Stream do
 
   alias Alto.Event
 
-  @default_max_bytes 2_000_000
   @valid_stop_reasons ["end_turn", "tool_use", "stop_sequence"]
 
   defstruct blocks: %{},
@@ -13,9 +12,7 @@ defmodule Alto.Providers.Anthropic.Stream do
             stop_sequence: nil,
             message_started?: false,
             message_stopped?: false,
-            error: nil,
-            bytes: 0,
-            max_bytes: @default_max_bytes
+            error: nil
 
   @type t :: %__MODULE__{
           blocks: map(),
@@ -23,41 +20,29 @@ defmodule Alto.Providers.Anthropic.Stream do
           usage: map() | nil,
           stop_reason: binary() | nil,
           message_stopped?: boolean(),
-          error: term() | nil,
-          bytes: non_neg_integer(),
-          max_bytes: pos_integer()
+          error: term() | nil
         }
 
-  @spec new(pos_integer()) :: t()
-  def new(max_bytes \\ @default_max_bytes)
-      when is_integer(max_bytes) and max_bytes > 0,
-      do: %__MODULE__{max_bytes: max_bytes}
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
 
   @spec consume(t(), binary(), (Event.t() -> any())) :: t()
   def consume(%__MODULE__{error: error} = state, _payload, _sink) when not is_nil(error),
     do: state
 
   def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
-    bytes = state.bytes + byte_size(payload)
+    case JSON.decode(payload) do
+      {:ok, %{"type" => _type} = event} ->
+        consume_event(state, event, sink)
 
-    if bytes > state.max_bytes do
-      %{state | bytes: bytes, error: {:model_response_too_large, state.max_bytes}}
-    else
-      state = %{state | bytes: bytes}
+      {:ok, %{"error" => error}} ->
+        %{state | error: {:provider_error, error}}
 
-      case JSON.decode(payload) do
-        {:ok, %{"type" => _type} = event} ->
-          consume_event(state, event, sink)
+      {:ok, other} ->
+        %{state | error: {:unexpected_stream_payload, other}}
 
-        {:ok, %{"error" => error}} ->
-          %{state | error: {:provider_error, error}}
-
-        {:ok, other} ->
-          %{state | error: {:unexpected_stream_payload, other}}
-
-        {:error, _error} ->
-          %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
-      end
+      {:error, _error} ->
+        %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
     end
   end
 

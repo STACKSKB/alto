@@ -7,7 +7,7 @@ defmodule Alto.Providers.StreamEnvelope do
   def post(config, body, headers, decoder, sink) do
     initial = %{
       sse: SSE.new(config.max_event_bytes),
-      completion: decoder.new(config.max_response_bytes),
+      completion: decoder.new(),
       response_bytes: 0,
       error: nil,
       error_body: [],

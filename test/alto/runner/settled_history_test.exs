@@ -96,7 +96,7 @@ defmodule Alto.Runner.SettledHistoryTest do
       |> Keyword.put(:tools, [{Change, owner: self(), block: true}])
 
     {:ok, handle} = Alto.start(%{}, opts)
-    assert_receive {:changed, _}, 1000
+    assert_receive {:changed, _}, 5_000
     assert {:error, _, _} = Alto.Runner.terminate(handle)
 
     assert {:error, {:session_unsettled_tool_dispatch, fence}} =

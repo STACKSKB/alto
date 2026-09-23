@@ -113,14 +113,4 @@ defmodule Alto.Providers.ReasoningStreamTest do
              "reasoning_details" => [%{"type" => "reasoning.encrypted", "data" => "secret"}]
            }) == ""
   end
-
-  test "reasoning is included in response bounds" do
-    chunk =
-      JSON.encode!(%{"choices" => [%{"delta" => %{"reasoning" => String.duplicate("x", 200)}}]})
-
-    stream =
-      Stream.consume(Stream.new(100), chunk, fn _ -> flunk("emitted over-limit content") end)
-
-    assert {:error, {:model_response_too_large, 100}} = Stream.result(stream)
-  end
 end

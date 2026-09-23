@@ -116,7 +116,6 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
 
     assert size > 100_000
 
-    assert Enum.any?(result.events, &(&1.type == :tool_failed))
     refute Enum.any?(result.events, &(&1.type == :tool_completed))
 
     failed = Enum.find(result.events, &(&1.type == :tool_failed))

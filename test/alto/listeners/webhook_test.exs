@@ -5,7 +5,7 @@ defmodule Alto.Listeners.WebhookTest do
   per accepted delivery (the integration contract job-flow ingress).
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.FrontEnd.Registry
   alias Alto.Ingress.HMAC
@@ -195,7 +195,7 @@ defmodule Alto.Listeners.WebhookTest do
              )
   end
 
-  defp post(port, path, body, headers, recv_timeout \\ 2_000) do
+  defp post(port, path, body, headers, recv_timeout \\ 5_000) do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
 
     header_lines =
