@@ -72,12 +72,7 @@ defmodule Alto.TUI.State do
   @spec new(Alto.Config.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def new(%Alto.Config{} = config, opts \\ []) do
     run_options = Alto.Config.run_options(config)
-
-    catalog_opts =
-      opts
-      |> Keyword.take([:path, :session_dir])
-      |> Keyword.put_new_lazy(:session_dir, fn -> Keyword.get(run_options, :session_dir) end)
-      |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
+    catalog_opts = catalog_options(config, opts)
 
     root = opts |> Keyword.get(:project, File.cwd!()) |> Path.expand()
 
@@ -134,6 +129,16 @@ defmodule Alto.TUI.State do
       state = Alto.TUI.Backend.initialize(state)
       {:ok, hydrate_selected(state)}
     end
+  end
+
+  @doc false
+  def catalog_options(%Alto.Config{} = config, opts) do
+    opts
+    |> Keyword.take([:path, :session_dir])
+    |> Keyword.put_new_lazy(:session_dir, fn ->
+      Keyword.get(Alto.Config.run_options(config), :session_dir)
+    end)
+    |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   @doc "Visible execution stage and recovery controls for the selected task."

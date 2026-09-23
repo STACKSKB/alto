@@ -37,6 +37,7 @@ defmodule Mix.Tasks.Alto.Tui do
 
       case Alto.TUI.run(config, tui_opts) do
         :ok -> :ok
+        {:error, {:catalog_overwrite_declined, _path}} -> :ok
         {:error, reason} -> Mix.raise("Alto TUI failed: #{Alto.Display.error(reason)}")
       end
     end

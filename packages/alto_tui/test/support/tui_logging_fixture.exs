@@ -53,12 +53,12 @@ if scenario != "startup_failure" do
 end
 
 catalog = Path.join(root, "catalog.json")
-if scenario == "startup_failure", do: File.mkdir_p!(catalog)
+project = if scenario == "startup_failure", do: Path.join(root, "missing-project"), else: root
 
 options =
   [
     name: :tui_logging_fixture,
-    project: root,
+    project: project,
     path: catalog,
     credentials_path: Path.join(root, "credentials.json"),
     log_path: Path.join(root, "tui.log")

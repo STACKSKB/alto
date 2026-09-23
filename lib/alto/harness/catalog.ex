@@ -50,6 +50,27 @@ defmodule Alto.Harness.Catalog do
     end
   end
 
+  @doc "Whether a read failure describes catalog data that can be replaced."
+  def invalid_data?({:catalog_invalid, _path}), do: true
+  def invalid_data?({:catalog_invalid_json, _path, _detail}), do: true
+  def invalid_data?({:catalog_too_large, _size, _limit}), do: true
+  def invalid_data?(_reason), do: false
+
+  @doc "Replace an invalid catalog with an empty one after caller confirmation."
+  def replace_invalid(opts \\ []) do
+    path = Keyword.get(opts, :path, default_path(opts)) |> Path.expand()
+
+    Alto.Storage.with_lock(path <> ".lock", fn ->
+      case read(Keyword.put(opts, :path, path)) do
+        {:ok, _catalog} ->
+          :ok
+
+        {:error, reason} ->
+          if invalid_data?(reason), do: persist(path, empty()), else: {:error, reason}
+      end
+    end)
+  end
+
   @doc "Register or touch a project by canonical root."
   @spec register_project(Path.t(), keyword()) :: {:ok, project()} | {:error, term()}
   def register_project(root, opts \\ []) when is_binary(root) do
