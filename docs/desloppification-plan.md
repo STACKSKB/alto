@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,447 lines, a reduction of 7,208 (17.7%). A 30%
-reduction would require at most 28,458 lines, or another 4,989 lines below the
+The 2026-09-24 inventory is 33,441 lines, a reduction of 7,214 (17.7%). A 30%
+reduction would require at most 28,458 lines, or another 4,983 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.

@@ -329,10 +329,10 @@ defmodule Alto.Runner.Execution do
         execute(rest, next_run, terminal)
 
       {:event, event, next_run} ->
-        finish_effect({:events, [event], Events.record(next_run, event)}, rest, run, terminal)
+        dispatch_batch([event], Events.record(next_run, event), [], rest, :continue)
 
       {:events, events, next_run} ->
-        dispatch_batch(events, next_run, [], rest, :continue)
+        dispatch_batch(events, next_run, [], rest, terminal)
 
       {:error, {:cancelled, reason}, next_run} ->
         {:done, cancelled(reason, next_run)}
@@ -887,13 +887,7 @@ defmodule Alto.Runner.Execution do
       with {:ok, jobs_rev, run} <- prepare_batch(calls, run),
            do: dispatch_tool_jobs(Enum.reverse(jobs_rev), run)
 
-    case interpreted do
-      {:events, events, run} ->
-        dispatch_batch(events, run, [], rest, terminal)
-
-      other ->
-        finish_effect(other, rest, run, terminal)
-    end
+    finish_effect(interpreted, rest, run, terminal)
   end
 
   defp dispatch_tool_jobs(jobs, run) do

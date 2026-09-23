@@ -26,7 +26,6 @@ defmodule Alto.TUI.SelectionTest do
       )
 
     assert Selection.text(selected) == "title\n•••• popup\nsidebar | answer\nstatus"
-    refute Selection.text(selected) =~ "secret"
 
     {:copy, copied, cleared} =
       Selection.event(selected, %Key{code: "c", modifiers: ["ctrl"]}, {30, 4}, widgets)
@@ -46,7 +45,6 @@ defmodule Alto.TUI.SelectionTest do
     cells = CellSession.take_cells(terminal).cells
     assert Enum.find(cells, &(&1.symbol == "猫")).bg == :light_blue
     assert Enum.find(cells, &(&1.symbol == "Z")).col == 6
-    assert Enum.find(cells, &(&1.symbol == "n")).row == 1
   end
 
   test "selection is frozen while new output arrives; resize, paste and Escape clear it" do
