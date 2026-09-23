@@ -284,6 +284,7 @@ defmodule Alto.CLI do
       {UnixSocket, opts} -> {UnixSocket, Keyword.put_new(opts, :path, default_socket_path())}
       {WebServer, opts} -> {WebServer, Keyword.put_new(opts, :port, @default_serve_port)}
       {Webhook, opts} -> {Webhook, Keyword.put_new(opts, :port, @default_webhook_port)}
+      other -> other
     end)
   end
 
@@ -338,6 +339,8 @@ defmodule Alto.CLI do
 
     "serving webhook endpoints at http://127.0.0.1:#{Webhook.bound_port(listener)} (#{paths})"
   end
+
+  defp describe_listener(module, _opts, _listener), do: "started listener #{inspect(module)}"
 
   defp setup(options, []) do
     if Onboarding.terminal?() do

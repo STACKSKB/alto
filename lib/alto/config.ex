@@ -64,20 +64,7 @@ defmodule Alto.Config do
               ],
               queue: [type: {:or, [nil, :keyword_list]}],
               runs: [type: {:map, :string, :keyword_list}],
-              listeners: [
-                type:
-                  {:list,
-                   {:tuple,
-                    [
-                      {:in,
-                       [
-                         Alto.Listeners.UnixSocket,
-                         Alto.Listeners.WebServer,
-                         Alto.Listeners.Webhook
-                       ]},
-                      :keyword_list
-                    ]}}
-              ]
+              listeners: [type: {:list, {:custom, __MODULE__, :listener_spec, []}}]
             )
           )
   @enforce_keys [:run_options]
@@ -104,6 +91,17 @@ defmodule Alto.Config do
     if length(keys) != MapSet.size(MapSet.new(keys)),
       do: raise(ArgumentError, "#{label} configuration options must be unique")
   end
+
+  @doc false
+  def listener_spec({module, opts}) when is_atom(module) and is_list(opts) do
+    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
+         function_exported?(module, :start_link, 1),
+       do: {:ok, {module, opts}},
+       else: {:error, "expected a listener module with start_link/1 and keyword options"}
+  end
+
+  def listener_spec(_),
+    do: {:error, "expected a listener module with start_link/1 and keyword options"}
 
   @doc "Return the validated runner options stored in a configuration."
   @spec run_options(t()) :: keyword()

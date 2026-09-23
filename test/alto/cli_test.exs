@@ -79,6 +79,10 @@ defmodule Alto.CLITest do
     def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
+  defmodule CustomListener do
+    def start_link(_opts), do: {:error, :custom_listener_reached}
+  end
+
   setup do
     root = Path.join(System.tmp_dir!(), "alto-cli-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
@@ -406,5 +410,17 @@ defmodule Alto.CLITest do
 
     assert {:error, "invalid listener port: want 0-65535"} =
              Alto.CLI.run(["--config", path, "--serve", "--port", "99999"])
+  end
+
+  test "serve accepts a composed listener module", %{root: root} do
+    path = Path.join(root, "config.exs")
+
+    File.write!(
+      path,
+      "Alto.Config.new(provider: Alto.CLITest.AnswerProvider, listeners: [{Alto.CLITest.CustomListener, []}])"
+    )
+
+    assert {:error, ":custom_listener_reached"} =
+             Alto.CLI.run(["--config", path, "--serve"])
   end
 end
