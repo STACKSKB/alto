@@ -57,8 +57,8 @@ defmodule Alto.CLI.Arguments do
       --no-config               ignore ALTO_CONFIG and the per-user config
       --setup                   configure OpenRouter key and default model, then exit
       --serve                   run as a resident server (Unix socket + WebSocket)
-      --socket PATH             socket path (default: $XDG_STATE_HOME/alto/alto.sock,
-                                else ~/.local/state/alto/alto.sock)
+      --socket PATH             socket path (default: $ALTO_STATE_HOME/alto/alto.sock,
+                                else $XDG_STATE_HOME/alto/alto.sock or ~/.local/state/alto/alto.sock)
       --port PORT               WebSocket port on 127.0.0.1 (default: 4747)
 
     Model:
@@ -96,8 +96,8 @@ defmodule Alto.CLI.Arguments do
     With --serve, the loaded configuration is served to front ends as "default";
     served runs answer approvals through the WebSocket instead of the terminal, and a
     `listeners:` entry in the configuration selects the transports.
-    One-shot runs persist to $XDG_STATE_HOME/alto/sessions (else
-    ~/.local/state) and print their session id; continue one with
+    One-shot runs persist under the state home ($ALTO_STATE_HOME, then
+    $XDG_STATE_HOME, else ~/.local/state) and print their session id; continue one with
     --resume ID plus a follow-up task. Served runs persist only when the
     configuration opts in with sessions: true (or sessions with a
     session_dir); served clients discover sessions with the sessions

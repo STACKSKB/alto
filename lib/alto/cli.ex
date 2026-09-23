@@ -308,10 +308,7 @@ defmodule Alto.CLI do
   end
 
   defp default_socket_path do
-    state_home =
-      System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")
-
-    Path.join([state_home, "alto", "alto.sock"])
+    Path.join([Alto.Storage.state_home(), "alto", "alto.sock"])
   end
 
   defp start_serve_listeners(specs, registry) do
