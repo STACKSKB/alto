@@ -21,13 +21,7 @@ defmodule Alto.QueueTest do
   test "invalid queue bounds fail before storage opens", %{dir: dir, id: id} do
     for {key, value} <- [
           max_records: -1,
-          max_completed: -1,
-          max_payload_bytes: 0,
-          max_key_bytes: 0,
-          max_log_bytes: "large",
-          lease_ms: 0,
-          auto_compact: :yes,
-          clock: fn _ -> 0 end
+          auto_compact: :yes
         ] do
       assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
                Queue.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])

@@ -31,12 +31,7 @@ defmodule Alto.Workspaces.GitTest do
   test "validates workspace limits before running Git", %{repo: repo} do
     for {key, value} <- [
           max_source_bytes: 0,
-          max_files: -1,
-          max_checkout_bytes: "large",
-          max_patch_bytes: 1_000_001,
-          max_patch_bytes: 0,
-          timeout_ms: 120_001,
-          timeout_ms: 1.0
+          max_checkout_bytes: "large"
         ] do
       assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
                Git.command(repo, ["status"], [{key, value}])

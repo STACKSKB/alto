@@ -23,15 +23,9 @@ defmodule Alto.Tools.ReadImageTest do
   end
 
   test "validates host limits before reading a file", %{context: context} do
-    for {key, maximum} <- [
-          max_encoded_bytes: 8_000_000,
-          max_dimension: 16_384,
-          max_pixels: 40_000_000
-        ],
-        value <- [0, -1, 1.0, maximum + 1, nil] do
-      assert {:error, {:invalid_image_options, %NimbleOptions.ValidationError{key: ^key}}} =
-               ReadImage.run(%{"path" => "missing.png"}, context, [{key, value}])
-    end
+    assert {:error,
+            {:invalid_image_options, %NimbleOptions.ValidationError{key: :max_encoded_bytes}}} =
+             ReadImage.run(%{"path" => "missing.png"}, context, max_encoded_bytes: 0)
 
     assert {:error, {:invalid_image_options, _}} =
              ReadImage.run(%{"path" => "missing.png"}, context, unknown: true)

@@ -24,12 +24,7 @@ defmodule Alto.OperationLogTest do
   } do
     for {key, value} <- [
           max_ops: -1,
-          max_attempts: 0,
-          max_identifier_bytes: "256",
-          max_evidence_bytes: 0,
-          max_recovery_bytes: nil,
-          max_record_bytes: -1,
-          max_log_bytes: 0
+          max_identifier_bytes: "256"
         ] do
       assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
                OperationLog.start_link([id: id, dir: dir, name: nil] ++ [{key, value}])

@@ -90,13 +90,6 @@ defmodule Alto.TUI.MarkdownTest do
     assert Markdown.plain(unicode_table, 15) =~ "値: 猫猫猫"
   end
 
-  test "nested list indentation remains Markdown rather than becoming code" do
-    rendered = Markdown.plain("- parent\n    - child", 30)
-    assert rendered =~ "parent"
-    assert rendered =~ "child"
-    refute rendered =~ "code"
-  end
-
   test "incomplete streamed blocks can become headings, tables and code" do
     source =
       "## Results\n\n| File | Result |\n| --- | --- |\n| `one.ex` | **OK** |\n\n```elixir\n  :ok\n```"

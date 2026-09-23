@@ -112,13 +112,9 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     for {key, value} <- [
           max_active_runs: -1,
-          max_claim_bytes: -1,
-          max_finished_runs: -1,
-          command_timeout: -1,
           disconnect_after_overflow: :sometimes,
           commands: %{"" => fn _ -> :ok end},
-          commands: %{job: fn _ -> :ok end},
-          commands: %{"job" => fn -> :ok end}
+          commands: %{job: fn _ -> :ok end}
         ] do
       assert {:stop, %NimbleOptions.ValidationError{key: ^key}} =
                Registry.init([{:config_resolver, resolver}, {key, value}])

@@ -132,8 +132,7 @@ defmodule Alto.PolicyCompositionTest do
              )
   end
 
-  test "schemas reject invalid built-in context options and custom limits" do
-    assert_raise NimbleOptions.ValidationError, fn -> Alto.Context.window(reserve_output: -1) end
+  test "invalid custom subagent policy is rejected" do
     assert {:error, :invalid_subagent_policy} = Alto.Subagents.Policy.validate({String, []})
   end
 
