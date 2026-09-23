@@ -26,64 +26,14 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
   end
 
   test "a reviewed manifest applies at its recorded clean base" do
-    repo =
-      Path.join(System.tmp_dir!(), "alto-maintenance-repo-#{System.unique_integer([:positive])}")
+    %{repo: repo} = source = git_repo("old\n")
 
-    on_exit(fn -> File.rm_rf!(repo) end)
-
-    File.mkdir_p!(repo)
-    {_, 0} = System.cmd("git", ["init", "--quiet"], cd: repo)
-    File.write!(Path.join(repo, "README.md"), "old\n")
-    {_, 0} = System.cmd("git", ["add", "README.md"], cd: repo)
-
-    {_, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "user.email=test@example.invalid",
-          "-c",
-          "user.name=Test",
-          "commit",
-          "--quiet",
-          "-m",
-          "base"
-        ],
-        cd: repo
-      )
-
-    {base, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
-    {tree, 0} = System.cmd("git", ["rev-parse", "HEAD^{tree}"], cd: repo)
-    base = String.trim(base)
-    tree = String.trim(tree)
-
-    patch =
-      "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n"
-
-    artifact_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-artifacts-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn -> File.rm_rf!(artifact_dir) end)
-    File.mkdir_p!(artifact_dir)
-    patch_path = Path.join(artifact_dir, "patch-1.patch")
-    manifest_path = Path.join(artifact_dir, "patch-1.json")
-    File.write!(patch_path, patch)
-
-    manifest = %{
-      "version" => 1,
-      "patch_id" => String.duplicate("a", 64),
-      "patch_sha256" => sha256(patch),
-      "base_commit" => base,
-      "base_tree" => tree,
-      "patch_path" => patch_path,
-      "reviewed" => true
-    }
-
-    manifest_json = JSON.encode!(manifest) <> "\n"
-    File.write!(manifest_path, manifest_json)
+    %{
+      artifact_dir: artifact_dir,
+      manifest_path: manifest_path,
+      manifest: manifest,
+      json: manifest_json
+    } = manifest_fixture(source, "a", true)
 
     assert {:ok, ^manifest} =
              RepositoryMaintenance.Workflow.apply_reviewed(
@@ -97,64 +47,15 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
   end
 
   test "apply rejects an unreviewed manifest and a dirty target" do
-    repo =
-      Path.join(System.tmp_dir!(), "alto-maintenance-stale-#{System.unique_integer([:positive])}")
+    %{repo: repo} = source = git_repo("old\n")
 
-    on_exit(fn -> File.rm_rf!(repo) end)
-
-    File.mkdir_p!(repo)
-    {_, 0} = System.cmd("git", ["init", "--quiet"], cd: repo)
-    File.write!(Path.join(repo, "README.md"), "old\n")
-    {_, 0} = System.cmd("git", ["add", "README.md"], cd: repo)
-
-    {_, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "user.email=test@example.invalid",
-          "-c",
-          "user.name=Test",
-          "commit",
-          "--quiet",
-          "-m",
-          "base"
-        ],
-        cd: repo
-      )
-
-    {base, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
-    {tree, 0} = System.cmd("git", ["rev-parse", "HEAD^{tree}"], cd: repo)
-    base = String.trim(base)
-    tree = String.trim(tree)
-
-    patch =
-      "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n"
-
-    artifact_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-stale-artifacts-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn -> File.rm_rf!(artifact_dir) end)
-    File.mkdir_p!(artifact_dir)
-    patch_path = Path.join(artifact_dir, "patch.patch")
-    manifest_path = Path.join(artifact_dir, "manifest.json")
-    File.write!(patch_path, patch)
-
-    manifest = %{
-      "version" => 1,
-      "patch_id" => String.duplicate("b", 64),
-      "patch_sha256" => sha256(patch),
-      "base_commit" => base,
-      "base_tree" => tree,
-      "patch_path" => patch_path,
-      "reviewed" => false
-    }
-
-    json = JSON.encode!(manifest) <> "\n"
-    File.write!(manifest_path, json)
+    %{
+      patch: patch,
+      patch_path: patch_path,
+      manifest_path: manifest_path,
+      manifest: manifest,
+      json: json
+    } = manifest_fixture(source, "b", false)
 
     assert {:error, :manifest_not_reviewed} =
              RepositoryMaintenance.Workflow.apply_reviewed(repo, manifest_path, sha256(json))
@@ -182,58 +83,15 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
   end
 
   test "new files are included in the reviewed patch while the source stays clean" do
-    repo =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-new-file-#{System.unique_integer([:positive])}"
-      )
-
-    queue_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-new-file-queue-#{System.unique_integer([:positive])}"
-      )
-
-    state_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-new-file-state-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn ->
-      File.rm_rf!(repo)
-      File.rm_rf!(queue_dir)
-      File.rm_rf!(state_dir)
-    end)
-
-    File.mkdir_p!(repo)
-    {_, 0} = System.cmd("git", ["init", "--quiet"], cd: repo)
-    File.write!(Path.join(repo, "README.md"), "base\n")
-    {_, 0} = System.cmd("git", ["add", "README.md"], cd: repo)
-
-    {_, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "user.email=test@example.invalid",
-          "-c",
-          "user.name=Test",
-          "commit",
-          "--quiet",
-          "-m",
-          "base"
-        ],
-        cd: repo
-      )
-
-    {base, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
+    %{repo: repo, base: base} = git_repo("base\n")
+    queue_dir = temp_path("new-file-queue")
+    state_dir = temp_path("new-file-state")
 
     report = %{
       "kind" => "local_failure",
       "source" => "local",
       "delivery_id" => "new-file",
-      "commit" => String.trim(base),
+      "commit" => base,
       "failure" => "add a repair note"
     }
 
@@ -362,58 +220,15 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
   end
 
   test "failed tests retain the claimed checkout and an error record" do
-    repo =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-failed-#{System.unique_integer([:positive])}"
-      )
-
-    queue_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-failed-queue-#{System.unique_integer([:positive])}"
-      )
-
-    state_dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-failed-state-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn ->
-      File.rm_rf!(repo)
-      File.rm_rf!(queue_dir)
-      File.rm_rf!(state_dir)
-    end)
-
-    File.mkdir_p!(repo)
-    {_, 0} = System.cmd("git", ["init", "--quiet"], cd: repo)
-    File.write!(Path.join(repo, "README.md"), "old\n")
-    {_, 0} = System.cmd("git", ["add", "README.md"], cd: repo)
-
-    {_, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "user.email=test@example.invalid",
-          "-c",
-          "user.name=Test",
-          "commit",
-          "--quiet",
-          "-m",
-          "base"
-        ],
-        cd: repo
-      )
-
-    {base, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
+    %{repo: repo, base: base} = git_repo("old\n")
+    queue_dir = temp_path("failed-queue")
+    state_dir = temp_path("failed-state")
 
     report = %{
       "kind" => "local_failure",
       "source" => "local",
       "delivery_id" => "failed-tests",
-      "commit" => String.trim(base),
+      "commit" => base,
       "failure" => "repair this file"
     }
 
@@ -476,6 +291,83 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
 
     assert {:error, :state_dir_symlink} =
              RepositoryMaintenance.Workflow.process(nil, repo, state_dir: state)
+  end
+
+  defp temp_path(label) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "alto-maintenance-#{label}-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf!(path) end)
+    path
+  end
+
+  defp temp_dir(label) do
+    path = temp_path(label)
+    File.mkdir_p!(path)
+    path
+  end
+
+  defp git_repo(readme) do
+    repo = temp_dir("repo")
+    {_, 0} = System.cmd("git", ["init", "--quiet"], cd: repo)
+    File.write!(Path.join(repo, "README.md"), readme)
+    {_, 0} = System.cmd("git", ["add", "README.md"], cd: repo)
+
+    {_, 0} =
+      System.cmd(
+        "git",
+        [
+          "-c",
+          "user.email=test@example.invalid",
+          "-c",
+          "user.name=Test",
+          "commit",
+          "--quiet",
+          "-m",
+          "base"
+        ],
+        cd: repo
+      )
+
+    {base, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo)
+    {tree, 0} = System.cmd("git", ["rev-parse", "HEAD^{tree}"], cd: repo)
+    %{repo: repo, base: String.trim(base), tree: String.trim(tree)}
+  end
+
+  defp manifest_fixture(%{base: base, tree: tree}, patch_id, reviewed) do
+    artifact_dir = temp_dir("artifacts")
+    patch_path = Path.join(artifact_dir, "patch.patch")
+    manifest_path = Path.join(artifact_dir, "manifest.json")
+
+    patch =
+      "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n"
+
+    File.write!(patch_path, patch)
+
+    manifest = %{
+      "version" => 1,
+      "patch_id" => String.duplicate(patch_id, 64),
+      "patch_sha256" => sha256(patch),
+      "base_commit" => base,
+      "base_tree" => tree,
+      "patch_path" => patch_path,
+      "reviewed" => reviewed
+    }
+
+    json = JSON.encode!(manifest) <> "\n"
+    File.write!(manifest_path, json)
+
+    %{
+      artifact_dir: artifact_dir,
+      patch: patch,
+      patch_path: patch_path,
+      manifest_path: manifest_path,
+      manifest: manifest,
+      json: json
+    }
   end
 
   defp sha256(binary), do: :crypto.hash(:sha256, binary) |> Base.encode16(case: :lower)
