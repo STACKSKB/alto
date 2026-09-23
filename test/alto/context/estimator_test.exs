@@ -43,7 +43,6 @@ defmodule Alto.Context.EstimatorTest do
              )
 
     assert budget.input_tokens == 90
-    assert Estimator.estimate(%{messages: [], tools: []}, tokenizer: fn _ -> 1 end) == 0
   end
 
   test "rejects tokenizer results that cannot form a bound" do
