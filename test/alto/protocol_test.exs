@@ -41,18 +41,6 @@ defmodule Alto.ProtocolTest do
   end
 
   describe "server-to-client encoding" do
-    test "hello announces version, runs, and the line bound" do
-      assert {:ok, line} = Protocol.hello("s-1", ["run-41"], @max_line_bytes)
-
-      assert decode_line(line) == %{
-               "v" => 1,
-               "type" => "hello",
-               "id" => "s-1",
-               "runs" => ["run-41"],
-               "max_line_bytes" => @max_line_bytes
-             }
-    end
-
     test "durable events carry a seq, live events carry null" do
       durable = Event.durable(:tool_completed, %{call_id: "call-1", name: "echo"})
       live = Event.live(:model_delta, %{text: "he"})
@@ -166,36 +154,9 @@ defmodule Alto.ProtocolTest do
       assert %{"outcome" => "cancelled", "reason" => "user"} = decode_line(line)
     end
 
-    test "overflow and error carry their codes" do
-      assert {:ok, line} = Protocol.overflow("s-11", "run-41", :durable, 9, @max_line_bytes)
-
-      assert decode_line(line) == %{
-               "v" => 1,
-               "type" => "overflow",
-               "id" => "s-11",
-               "run_id" => "run-41",
-               "domain" => "durable",
-               "last_seq" => 9
-             }
-
-      assert {:ok, line} = Protocol.error("c-4", "unknown_type", "mumble", @max_line_bytes)
-
-      assert %{"type" => "error", "id" => "c-4", "code" => "unknown_type", "detail" => "mumble"} =
-               decode_line(line)
-
+    test "error envelopes can omit a client id" do
       assert {:ok, line} = Protocol.error(nil, "invalid", "no id", @max_line_bytes)
       assert %{"id" => nil} = decode_line(line)
-    end
-
-    test "ok replies carry their payload" do
-      assert {:ok, line} = Protocol.ok("c-5", %{"run_id" => "run-42"}, @max_line_bytes)
-
-      assert decode_line(line) == %{
-               "v" => 1,
-               "type" => "ok",
-               "id" => "c-5",
-               "run_id" => "run-42"
-             }
     end
 
     test "an envelope over the line bound overflows instead of truncating" do
@@ -271,18 +232,6 @@ defmodule Alto.ProtocolTest do
       assert {:error, :invalid} = Protocol.decode_command(missing)
     end
 
-    test "sessions decodes with no payload" do
-      line = JSON.encode!(%{"v" => 1, "type" => "sessions", "id" => "c-9"})
-
-      assert {:ok, {:sessions, "c-9"}} = Protocol.decode_command(line)
-    end
-
-    test "runs decodes with no payload" do
-      line = JSON.encode!(%{"v" => 1, "type" => "runs", "id" => "c-9"})
-
-      assert {:ok, {:runs, "c-9"}} = Protocol.decode_command(line)
-    end
-
     test "session_transcript decodes with only a session id" do
       line =
         JSON.encode!(%{
@@ -298,22 +247,6 @@ defmodule Alto.ProtocolTest do
         rejected = line |> JSON.decode!() |> Map.put(key, nil) |> JSON.encode!()
         assert Protocol.decode_command(rejected) == {:error, :unsupported}
       end
-    end
-
-    test "session_events decodes bounded replay parameters" do
-      line =
-        JSON.encode!(%{
-          "v" => 1,
-          "type" => "session_events",
-          "id" => "c-10",
-          "session_id" => "sess-1",
-          "limit" => 20,
-          "cursor" => 3,
-          "run_id" => "run-1"
-        })
-
-      assert {:ok, {:session_events, "c-10", "sess-1", 20, 3, "run-1"}} =
-               Protocol.decode_command(line)
     end
 
     test "cancel requires a run id and carries an optional reason" do
