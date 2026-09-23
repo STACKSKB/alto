@@ -36,6 +36,13 @@ defmodule Alto.Session.Conversation do
           optional(:context_observation) => map() | nil
         }
 
+  @doc false
+  def validate_fork_options(summary, max_bytes) do
+    with {:ok, _summary} <- optional_summary(summary),
+         {:ok, _max_bytes} <- max_conversation_bytes(max_conversation_bytes: max_bytes),
+         do: :ok
+  end
+
   @doc "Persist one complete conversation boundary and advance the branch head."
   @spec persist(Session.session_id(), [map()], non_neg_integer(), keyword()) ::
           {:ok, snapshot()} | {:error, term()}

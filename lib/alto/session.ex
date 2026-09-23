@@ -250,8 +250,11 @@ defmodule Alto.Session do
          :ok <- validate_id(destination),
          :ok <- branch_destination_available(destination, opts),
          summary <- Keyword.get(opts, :summary),
-         :ok <- validate_fork_summary(summary),
-         :ok <- validate_fork_storage_limit(Keyword.fetch!(opts, :max_conversation_bytes)),
+         :ok <-
+           Conversation.validate_fork_options(
+             summary,
+             Keyword.fetch!(opts, :max_conversation_bytes)
+           ),
          true <- source.settled,
          :ok <-
            append(
@@ -495,21 +498,6 @@ defmodule Alto.Session do
       :ok
     end
   end
-
-  defp validate_fork_summary(nil), do: :ok
-
-  defp validate_fork_summary(summary) when is_binary(summary) do
-    if summary != "" and String.valid?(summary) and byte_size(summary) <= 64_000,
-      do: :ok,
-      else: {:error, {:invalid_branch_summary, byte_size(summary)}}
-  end
-
-  defp validate_fork_summary(summary), do: {:error, {:invalid_branch_summary, summary}}
-
-  defp validate_fork_storage_limit(max) when is_integer(max) and max > 0, do: :ok
-
-  defp validate_fork_storage_limit(max),
-    do: {:error, {:invalid_max_conversation_bytes, max}}
 
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
   defp transcript_path(dir, id), do: Path.join(dir, id <> ".transcript.json")

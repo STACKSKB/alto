@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,152 lines, a reduction of 7,503 (18.5%). A 30%
-reduction would require at most 28,458 lines, or another 4,694 lines below the
+The 2026-09-24 inventory is 33,147 lines, a reduction of 7,508 (18.5%). A 30%
+reduction would require at most 28,458 lines, or another 4,689 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. A 50% stretch would require at most 20,327 lines.
 Recount after each coherent change; a moved line is not a reduction.
@@ -155,6 +155,12 @@ and small context tests found no whole cases that merely assert a fixture or
 standard-library result. Their similar cases cover distinct publication,
 recovery, authority, or API boundaries. The CLI run/serve option pipeline was
 also already shared; its remaining approval and session rules differ.
+Fork preflight now reuses the conversation module's summary and storage-limit
+rules before branch records are created. The immutable revision files and
+mutable fenced head remain separate because they support branch fetch and
+crash-safe resume respectively. A subagent constructor test that echoed its
+own options and checked an isolated capacity rejection was removed; batch
+integration tests exercise actual child concurrency and admission.
 
 ## Next passes
 

@@ -155,13 +155,4 @@ defmodule Alto.Runner.SerialChildSessionsTest do
     assert Enum.all?(results, &is_nil(&1.session_id))
     assert {:ok, []} = Session.list(session_dir: dir)
   end
-
-  test "bounded policies constrain concurrency to child capacity", _context do
-    assert_raise ArgumentError, ~r/max_concurrency/, fn ->
-      Alto.Subagents.bounded(max_children: 1, max_concurrency: 2)
-    end
-
-    assert %{max_children: 64, max_concurrency: 64, sessions: :separate} =
-             Alto.Subagents.bounded(max_children: 64, max_concurrency: 64, sessions: :separate)
-  end
 end
