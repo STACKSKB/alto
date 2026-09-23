@@ -721,7 +721,6 @@ defmodule Alto.FrontEnd.Registry do
     publish(state, run.id, {:event, run.id, nil, event}, :live)
   end
 
-  defp retain(events, max) when length(events) <= max, do: events
   defp retain(events, max), do: Enum.take(events, max)
 
   ## Fanout
@@ -852,7 +851,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp track_finished(state, run_id) do
-    order = (state.finished_order ++ [run_id]) |> Enum.uniq()
+    order = state.finished_order ++ [run_id]
     limit = state.max_finished_runs
     overflow = max(length(order) - limit, 0)
 
