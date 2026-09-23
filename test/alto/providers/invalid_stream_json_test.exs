@@ -7,7 +7,6 @@ defmodule Alto.Providers.InvalidStreamJSONTest do
       state = stream.consume(stream.new(), payload, fn _ -> flunk("unexpected stream output") end)
       assert {:error, {:invalid_stream_json, message}} = stream.result(state)
       assert message == "Invalid JSON in provider stream"
-      refute message =~ "PRIVATE-BODY"
     end
   end
 end

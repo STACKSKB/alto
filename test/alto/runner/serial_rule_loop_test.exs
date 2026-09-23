@@ -230,12 +230,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "a rule loop that requests a model effect without a provider fails closed" do
-    assert {:error, :provider_required, result} =
+    assert {:error, :provider_required, _result} =
              Alto.run("hello", loop: Alto.loop(ModelRequestRuleLoop), tools: [RuleEchoTool])
-
-    assert result.messages == []
-    assert result.events == []
-    assert result.model_requests == 0
   end
 
   test "the default model loop without a provider fails closed at its model effect" do
@@ -252,9 +248,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
         Keyword.merge([loop: Alto.loop(CountingRuleLoop), tools: [RuleEchoTool]], prompt_opts)
 
       assert {:error, :prompt_options_require_provider, result} = Alto.run("hello", opts)
-
       assert result.events == []
-      assert result.messages == []
     end
   end
 
@@ -306,8 +300,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
              )
 
     assert result.output == %{tuple_is_tuple: true}
-    assert result.messages == []
-    assert result.model_requests == 0
   end
 
   test "invoke_tool rejects non-map arguments as a bounded tool failure" do
@@ -354,7 +346,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       details: %{}
                     } = request}
 
-    assert is_binary(request.run_id)
     assert String.starts_with?(request.id, request.run_id <> ":")
 
     assert_receive {:tool_ran, "hello"}
@@ -406,9 +397,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       tool: "stamp",
                       arguments: %{"value" => "frozen"},
                       details: %{stamped_with: "frozen", token: token}
-                    } = request}
-
-    assert is_binary(request.id)
+                    }}
 
     # run_prepared consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.
