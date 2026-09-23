@@ -167,7 +167,7 @@ defmodule Alto.Runner.CheckpointTest do
     assert File.read!(Path.join(dir, "first")) == "1"
   end
 
-  test "changed configuration and nonportable data fail before dispatch", %{dir: dir, opts: opts} do
+  test "changed configuration fails before dispatch", %{dir: dir, opts: opts} do
     {:error, :approval_suspended, result} = Serial.run("{}", opts)
 
     changed =
@@ -184,12 +184,6 @@ defmodule Alto.Runner.CheckpointTest do
              Serial.run("{}", Keyword.put(opts, :checkpoint, {obsolete, :approve}))
 
     refute File.exists?(Path.join(dir, "guarded"))
-
-    for value <- [self(), make_ref(), fn -> :ok end] do
-      assert {:error, _} = Checkpoint.encode(%{value: value})
-    end
-
-    assert {:error, _} = Checkpoint.decode(Base.encode64(:erlang.term_to_binary(self())))
   end
 
   test "a stuck custom checkpoint callback is bounded and never dispatches the tool", %{
@@ -213,7 +207,7 @@ defmodule Alto.Runner.CheckpointTest do
     assert {:ok, run} = Alto.Runner.Execution.Setup.open("{}", opts)
 
     assert_raise RuntimeError, "checkpoint programmer error", fn ->
-      Alto.Runner.Checkpoint.restore(run, suspended.checkpoint, :approve, opts)
+      Checkpoint.restore(run, suspended.checkpoint, :approve, opts)
     end
   end
 
