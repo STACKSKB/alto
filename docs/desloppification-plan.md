@@ -69,9 +69,27 @@ and HTTP error bodies.
 Network integration tests now run serially after parallel full-suite runs
 exposed socket timeouts; their behavioral assertions are unchanged.
 
+The latest runner outcome prototype increased production code by two lines
+after formatting and left the branches intact, so it was discarded. A CLI
+mode-parameterized setup would likewise add branches around genuinely
+different terminal, listener, approval, and onboarding behavior. The TUI
+selection renderer cannot simply switch to full cell snapshots: that exports
+every cell at drag start and still leaves wide-glyph widths ambiguous. The
+large TUI app, provider, and workspace-tool test suites were checked for
+tautologies; their similar scenarios cover distinct boundaries. These findings
+rule out repeating those local helper extractions as a route to 30%.
+
 ## Next passes
 
-1. **Runner state and effect flow.** The clearest remaining duplication is the
+1. **Durable state machines.** Compare queue, operation ledger, session, and
+   continuation code at the record/transition boundary. Consolidate only
+   genuinely shared framing, validation, or atomic persistence. The approved
+   native v2 formats need no v1 compatibility path, but corrupt or partially
+   written current records must remain observable and safe. A transition
+   should have one live and replay implementation. The next prototype must
+   replace a complete representation or storage path, not another small
+   wrapper around the existing log operations.
+2. **Runner state and effect flow.** The clearest remaining duplication is the
    untyped outcome protocol between effect interpretation, tool completion,
    event dispatch, and the scheduler: several tuple shapes carry the run,
    events, failure or cancellation, and a pending approval frame. Prototype one
@@ -80,13 +98,8 @@ exposed socket timeouts; their behavioral assertions are unchanged.
    call counts, batch event ordering, approval checkpoint fencing, and the
    origin of cancellation. Map run-context fields to their owners and readers
    as part of that prototype. Reject a design that merely relocates the
-   existing map or adds adapters without shrinking the complete flow.
-2. **Durable state machines.** Compare queue, operation ledger, session, and
-   continuation code at the record/transition boundary. Consolidate only
-   genuinely shared framing, validation, or atomic persistence. The approved
-   native v2 formats need no v1 compatibility path, but corrupt or partially
-   written current records must remain observable and safe. A transition
-   should have one live and replay implementation.
+   existing map or adds adapters without shrinking the complete flow; a local
+   `finish_effect` normalization already failed that test.
 3. **TUI state flow.** Keep catalog recovery, backend selection, approval,
    clipboard, and selection capabilities. Look for state that the app stores
    twice or re-derives on every event; move pure decisions to existing state or
