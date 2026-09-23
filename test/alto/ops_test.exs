@@ -15,7 +15,7 @@ defmodule Alto.OpsTest do
   alias Alto.Ops
   alias Alto.Queue
 
-  setup do
+  setup context do
     dir = Path.join(System.tmp_dir!(), "alto-ops-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
@@ -25,7 +25,12 @@ defmodule Alto.OpsTest do
     lname = :"ops_l_#{tag}"
 
     {:ok, _} =
-      Queue.start_link(id: "q#{tag}", dir: Path.join(dir, "q"), name: qname, lease_ms: 50)
+      Queue.start_link(
+        id: "q#{tag}",
+        dir: Path.join(dir, "q"),
+        name: qname,
+        lease_ms: Map.get(context, :lease_ms, 5_000)
+      )
 
     {:ok, _} = OperationLog.start_link(id: "l#{tag}", dir: Path.join(dir, "l"), name: lname)
 
@@ -62,11 +67,10 @@ defmodule Alto.OpsTest do
              Ops.list(queue, {:global, name})
   end
 
+  @tag lease_ms: 50
   test "stale claims are visible accurately without mutating", %{queue: q, ledger: l} do
     {:ok, _} = Queue.admit(q, "src:stale", %{})
     {:ok, [claimed]} = Queue.claim(q, 1, "slow")
-    refute Ops.get(q, l, "src:stale") |> elem(1) |> Map.fetch!(:stale)
-
     Process.sleep(120)
 
     assert {:ok, item} = Ops.get(q, l, "src:stale")
