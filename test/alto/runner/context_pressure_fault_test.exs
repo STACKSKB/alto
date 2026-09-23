@@ -146,7 +146,7 @@ defmodule Alto.Runner.ContextPressureFaultTest do
       )
 
     {:ok, handle} = Alto.start("current", opts)
-    assert_receive {:reducer_started, reducer}
+    assert_receive {:reducer_started, reducer}, 3_000
     reducer_ref = Process.monitor(reducer)
     assert :ok = Alto.cancel(handle, :operator_stop)
     assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle)

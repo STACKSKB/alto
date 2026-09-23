@@ -8,16 +8,16 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,293 lines, a reduction of 7,362 (18.1%). A 30%
-reduction would require at most 28,458 lines, or another 4,835 lines below the
+The 2026-09-24 inventory is 33,253 lines, a reduction of 7,402 (18.2%). A 30%
+reduction would require at most 28,458 lines, or another 4,795 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
 
 The largest remaining files are `Alto.TUI.App` (1,718),
 `Alto.Runner.Execution` (1,323), `Alto.Queue` (1,054),
-`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.Backends.Codex` (878),
-`Alto.TUI.View` (890), and `Alto.OperationLog` (855). Their size identifies
+`Alto.FrontEnd.Registry` (1,009), `Alto.TUI.View` (890),
+`Alto.TUI.Backends.Codex` (855), and `Alto.OperationLog` (847). Their size identifies
 where to investigate, not what to delete. Focused audits found that many
 apparently similar branches differ in authority, cancellation, event ordering,
 or recovery guarantees; extracting a helper just to reduce line count can make
@@ -88,6 +88,11 @@ now configures Default's tool-free mode directly; both full suites pass.
 The superseded Chat checkpoint assertions were removed. Codex history and live
 completed items now share one entry projection; queue, workspace, and provider
 validation also pass through errors without separate forwarding branches.
+The operation ledger now performs room planning inside its live/replay transition.
+Codex approval methods share one descriptor for labels and response shapes.
+Immutable conversation entries use a smaller v2 record: entry IDs are derived
+from session and revision, and retries compare decoded entries. A storage-test
+audit retained cases that distinguish live state, persisted state, and recovery.
 
 The latest runner outcome prototype increased production code by two lines
 after formatting and left the branches intact, so it was discarded. A CLI
