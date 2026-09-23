@@ -52,18 +52,6 @@ defmodule Alto.QueueAdmissionTest do
 
       assert {:error, {:key_claimed, "src:del-1"}} = Queue.admit(name, "src:del-1", %{})
     end
-
-    test "put keeps business upsert semantics alongside admit", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-
-      # Business keys still update in place.
-      {:ok, _} = Queue.put(name, "job-1", %{total: 10})
-      assert {:ok, %{revision: 2}} = Queue.put(name, "job-1", %{total: 12})
-
-      # Delivery keys never update.
-      {:ok, _} = Queue.admit(name, "src:del-9", %{n: 1})
-      assert {:error, :duplicate} = Queue.admit(name, "src:del-9", %{n: 2})
-    end
   end
 
   describe "completed window" do

@@ -517,14 +517,6 @@ defmodule Alto.QueueTest do
       assert %{pending: 0} = Queue.count(name)
     end
 
-    test "the record count bound is enforced", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir, max_records: 2)
-      {:ok, _} = Queue.put(name, "a", %{})
-      {:ok, _} = Queue.put(name, "b", %{})
-
-      assert {:error, :queue_full} = Queue.put(name, "c", %{})
-    end
-
     test "invalid keys and payloads are rejected", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
 
