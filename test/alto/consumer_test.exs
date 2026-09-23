@@ -366,6 +366,7 @@ defmodule Alto.ConsumerTest do
 
     poller = spawn(fn -> Consumer.poll(c1) end)
     assert_receive {:work_started, handler}, 2_000
+    {:ok, %{current_attempt: first_attempt}} = OperationLog.recovery(l, "src:del-1")
     monitor = Process.monitor(handler)
     # A true crash: unlike GenServer.stop/3 (which politely waits out the
     # in-flight call), :kill preempts it mid-dispatch.
@@ -381,6 +382,10 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c2)
 
     assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
+
+    assert {:ok, %{current_attempt: ^first_attempt, attempts: 1}} =
+             OperationLog.recovery(l, "src:del-1")
+
     refute_received :handled
   end
 

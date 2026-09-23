@@ -166,14 +166,7 @@ defmodule Alto.Consumer do
           :acked_checkpoint
 
         {:dispatched, attempt} ->
-          park_existing(
-            op,
-            claim_id,
-            attempt,
-            :previous_attempt_unknown,
-            %{prior: :dispatched},
-            state
-          )
+          park(op, claim_id, :previous_attempt_unknown, %{prior: :dispatched}, state, attempt)
 
         {:decided, class, _evidence}
         when record.admission == :recovery and class in [:unknown, :requires_operator] ->
@@ -301,12 +294,9 @@ defmodule Alto.Consumer do
   end
 
   defp checkpoint(op, claim_id, data, state) do
-    result =
-      ledger_call(fn ->
-        Alto.OperationLog.record_checkpoint(state.ledger, op, claim_id, data)
-      end)
-
-    settle_claim(result, :checkpointed, claim_id, state)
+    settle_ledger(claim_id, :checkpointed, state, fn ->
+      Alto.OperationLog.record_checkpoint(state.ledger, op, claim_id, data)
+    end)
   end
 
   defp apply_run_verdict(op, claim_id, result, state) do
@@ -324,46 +314,31 @@ defmodule Alto.Consumer do
   # Terminal: outcome first, ack second. Ack failures only strand work the
   # ledger already describes, so they log and move on.
   defp decide(op, claim_id, class, evidence, state) do
-    result =
-      ledger_call(fn ->
-        Alto.OperationLog.record_outcome(state.ledger, op, claim_id, class, evidence)
-      end)
-
-    settle_claim(result, {:decided, class}, claim_id, state)
+    settle_ledger(claim_id, {:decided, class}, state, fn ->
+      Alto.OperationLog.record_outcome(state.ledger, op, claim_id, class, evidence)
+    end)
   end
 
-  defp park(op, claim_id, reason, evidence, state) do
-    result =
-      ledger_call(fn ->
-        with :ok <- Alto.OperationLog.record_attempt(state.ledger, op, claim_id) do
-          Alto.OperationLog.record_outcome(
-            state.ledger,
-            op,
-            claim_id,
-            :requires_operator,
-            Map.put(evidence, :park_reason, reason)
-          )
-        end
-      end)
+  # An unknown prior dispatch belongs to its original attempt. Other parked
+  # outcomes belong to the current claim, which first needs an attempt line.
+  defp park(op, claim_id, reason, evidence, state, original_attempt \\ nil) do
+    attempt = original_attempt || claim_id
 
-    settle_claim(result, :parked, claim_id, state)
-  end
-
-  defp park_existing(op, claim_id, attempt_id, reason, evidence, state) do
-    # The current queue claim is acknowledged only after the unresolved
-    # operation has been durably parked under its original attempt.
-    result =
-      ledger_call(fn ->
+    settle_ledger(claim_id, :parked, state, fn ->
+      with :ok <-
+             if(original_attempt,
+               do: :ok,
+               else: Alto.OperationLog.record_attempt(state.ledger, op, claim_id)
+             ) do
         Alto.OperationLog.record_outcome(
           state.ledger,
           op,
-          attempt_id,
+          attempt,
           :requires_operator,
           Map.put(evidence, :park_reason, reason)
         )
-      end)
-
-    settle_claim(result, :parked, claim_id, state)
+      end
+    end)
   end
 
   defp retry(op, claim_id, state) do
@@ -392,6 +367,9 @@ defmodule Alto.Consumer do
 
     :ok
   end
+
+  defp settle_ledger(claim_id, success, state, fun),
+    do: settle_claim(ledger_call(fun), success, claim_id, state)
 
   defp settle_claim(result, success, claim_id, state) do
     case result do
