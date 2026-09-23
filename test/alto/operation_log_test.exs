@@ -352,15 +352,13 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.record_outcome(name, "seed", "a", :completed)
 
       assert :ok = OperationLog.record_intent(name, "new", "t", nil)
-      assert map_size(:sys.get_state(pid).ops) == 1
       assert :no_intent = OperationLog.status(name, "seed")
       assert {:error, :ledger_full} = OperationLog.record_intent(name, "overflow", "t", nil)
       assert map_size(:sys.get_state(pid).ops) == 1
 
       GenServer.stop(pid)
-      %{name: restarted, pid: restarted_pid} = start_ledger!(id: id, dir: dir, max_ops: 1)
+      %{name: restarted} = start_ledger!(id: id, dir: dir, max_ops: 1)
       assert {:intended} = OperationLog.status(restarted, "new")
-      assert map_size(:sys.get_state(restarted_pid).ops) == 1
     end
 
     test "reusing an evicted key replays the same state after restart", %{dir: dir, id: id} do

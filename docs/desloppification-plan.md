@@ -55,6 +55,12 @@ chosen, whether selection came from opening a task or switching its backend.
 The catalog recovery flow warns and asks before replacing invalid data; the
 reported on-disk catalog now validates, and the TUI recovery tests pass.
 
+The CLI already shares one-shot and served-run provider/tool/prompt setup;
+their remaining approval, persistence, and output paths have different owners.
+The front-end registry likewise centralizes run completion, approval cleanup,
+and guarded queue calls. Folding its distinct read projections into another
+layer would add indirection without a useful reduction.
+
 ## Next passes
 
 1. **Runner state and effect flow.** The clearest remaining duplication is the

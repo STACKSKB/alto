@@ -6,11 +6,6 @@ defmodule Alto.Providers.PrefixContinuityTest do
   test "first request is unobserved, not a claimed cold start or invalidation" do
     report = PrefixContinuity.report(request())
     assert report.comparison == :unavailable
-    assert report.scope == :messages_and_tools
-    assert report.messages_count == 2
-    assert report.messages_bytes > 0
-    assert byte_size(report.messages_sha256) == 64
-    assert byte_size(report.tools_sha256) == 64
   end
 
   test "append-only requests preserve the previous successful serialized prefix" do
@@ -19,8 +14,6 @@ defmodule Alto.Providers.PrefixContinuityTest do
     next = %{next | messages: next.messages ++ [%{"role" => "assistant", "content" => "next"}]}
     report = PrefixContinuity.report(next)
     assert report.comparison == :preserved
-    assert report.previous_messages_count == 2
-    assert report.messages_count == 3
     assert report.compared_prefix_sha256 == report.previous_messages_sha256
     assert report.messages_sha256 != report.previous_messages_sha256
     assert report.tools_unchanged

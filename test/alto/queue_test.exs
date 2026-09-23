@@ -70,8 +70,7 @@ defmodule Alto.QueueTest do
       assert {:ok, [first, second]} = Queue.claim(name, 2, "station-1")
       assert %{key: "a", status: :claimed, claimed_by: "station-1"} = first
       assert %{key: "b"} = second
-      assert [%{claim_id: claim_id}] = [first]
-      assert is_binary(claim_id) and claim_id != ""
+      assert is_binary(first.claim_id) and first.claim_id != ""
       assert %{pending: 0, claimed: 2} = Queue.count(name)
     end
 
@@ -224,11 +223,10 @@ defmodule Alto.QueueTest do
     test "put on a claimed key is a conflict, not a shadow record", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
       {:ok, _} = Queue.put(name, "job-1", %{total: 10})
-      {:ok, [claimed]} = Queue.claim(name)
+      {:ok, [_]} = Queue.claim(name)
 
       assert {:error, {:key_claimed, "job-1"}} = Queue.put(name, "job-1", %{total: 12})
       assert %{pending: 0, claimed: 1} = Queue.count(name)
-      assert claimed.key == "job-1"
     end
 
     test "put on a blanked key re-queues as a new record", %{dir: dir, id: id} do
