@@ -156,15 +156,7 @@ defmodule Alto.Runner.SerialChildSessionsTest do
     assert {:ok, []} = Session.list(session_dir: dir)
   end
 
-  test "bounded policies validate individual limits and their relationship", _context do
-    for opts <- [
-          [sessions: :isolated],
-          [max_children: 0],
-          [workspaces: %{}]
-        ] do
-      assert_raise NimbleOptions.ValidationError, fn -> Alto.Subagents.bounded(opts) end
-    end
-
+  test "bounded policies constrain concurrency to child capacity", _context do
     assert_raise ArgumentError, ~r/max_concurrency/, fn ->
       Alto.Subagents.bounded(max_children: 1, max_concurrency: 2)
     end

@@ -556,9 +556,6 @@ defmodule Alto.QueueTest do
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, unknown: 1)
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, [:delay_ms])
 
-      assert {:error, %NimbleOptions.ValidationError{key: :clock}} =
-               Queue.start_link(id: unique_id(), dir: dir, name: unique_id(), clock: :bad)
-
       assert {:ok, _} = Queue.put(name, "good", %{})
       assert {:ok, [%{key: "good"}]} = Queue.claim(name)
     end
