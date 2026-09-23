@@ -50,7 +50,18 @@ The Codex and MCP clients likewise share JSON-RPC framing and request tracking.
 The next durable-state cut must change the state representation or API shape,
 not repeat those existing extractions. A whole-queue snapshot per mutation would
 turn a small lease write into a write of the entire bounded queue; prototype a
-transactional record store only if it keeps per-mutation work bounded.
+transactional record store only if it keeps per-mutation work bounded. A
+synthetic 10,000-record queue with 2 KiB payloads produced a 20.6 MB whole-state
+snapshot. Five synced rewrites took 33–37 ms each, versus under 0.2 ms for a
+small synced lease record on the same machine. That rules out whole-state
+rewrites as the default mutation path; it is not a production benchmark.
+Replacing Queue and OperationLog JSONL with SQLite is also a poor standalone
+route to the 30% target. Their 1,913 combined lines contain roughly 420 lines
+of clear replay, append, and compaction machinery; a shared transactional
+adapter, schema, and bounds handling would consume much of that saving. The
+lease, ordering, deduplication, revision, and checkpoint transitions would
+remain. Pre-release files would need no migration, but dropping that work does
+not make a 1,000-line net cut plausible from these two modules alone.
 
 The TUI now uses one state transition to select the model when a backend is
 chosen, whether selection came from opening a task or switching its backend.
@@ -89,6 +100,11 @@ compact text index with exported cell maps would reintroduce a visible pause
 when starting a selection. A clone scan found no other long identical blocks
 outside a few small tool wrappers. Larger gains require replacing a whole
 representation or dropping an incidental policy, not shuffling helpers.
+An additional effect-flow prototype increased code after formatting, and a
+TUI navigation prototype did the same; both were reverted. The remaining
+model, tool-batch, and scheduler branches account for different event order,
+admission, cancellation, and replay responsibilities. Treat a claimed
+200-line runner cut as unproven until an end-to-end replacement is smaller.
 
 ## Next passes
 
@@ -99,7 +115,8 @@ representation or dropping an incidental policy, not shuffling helpers.
    written current records must remain observable and safe. A transition
    should have one live and replay implementation. The next prototype must
    replace a complete representation or storage path, not another small
-   wrapper around the existing log operations.
+   wrapper around the existing log operations. Do not swap the current logs
+   for SQLite solely to improve the source line count.
 2. **Runner state and effect flow.** The clearest remaining duplication is the
    untyped outcome protocol between effect interpretation, tool completion,
    event dispatch, and the scheduler: several tuple shapes carry the run,
