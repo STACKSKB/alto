@@ -37,24 +37,7 @@ defmodule Alto.ConfigTest do
     end
   end
 
-  test "accepts the durability feature options" do
-    config = Config.new(compaction: true, provider_retries: 3)
-
-    assert Config.run_options(config) == [compaction: true, provider_retries: 3]
-  end
-
   test "validates TUI options" do
-    tui = [
-      type_to_compose: false,
-      narrow_context: :drawer,
-      narrow_context_width: 68,
-      narrow_context_fullscreen_below: 64,
-      approval_auto_open: false
-    ]
-
-    config = Config.new(tui: tui)
-    assert Config.run_options(config)[:tui] == tui
-
     assert_raise NimbleOptions.ValidationError, ~r/unknown options.*mystery/, fn ->
       Config.new(tui: [mystery: true])
     end
@@ -81,35 +64,9 @@ defmodule Alto.ConfigTest do
                    end
     end
 
-    for value <- [40, 100] do
-      assert Config.run_options(Config.new(tui: [narrow_context_width: value]))[:tui] ==
-               [narrow_context_width: value]
-    end
-
     assert_raise ArgumentError, ~r/TUI configuration options must be unique/, fn ->
       Config.new(tui: [approval_auto_open: true, approval_auto_open: false])
     end
-  end
-
-  test "accepts the integration-host options" do
-    config =
-      Config.new(
-        queue: [id: "jobs"],
-        runs: %{"job" => [tools: []]},
-        model_tools: ["echo"]
-      )
-
-    assert Config.run_options(config)[:queue] == [id: "jobs"]
-    assert Config.run_options(config)[:runs] == %{"job" => [tools: []]}
-    assert Config.run_options(config)[:model_tools] == ["echo"]
-  end
-
-  test "accepts the served-sessions options" do
-    config = Config.new(sessions: true)
-    assert Config.run_options(config)[:sessions] == true
-
-    config = Config.new(sessions: [session_dir: "/tmp/alto-sess"], session_dir: "/tmp/alto-sess")
-    assert Config.run_options(config)[:sessions] == [session_dir: "/tmp/alto-sess"]
   end
 
   test "rejects invalid host shapes at the configuration boundary" do

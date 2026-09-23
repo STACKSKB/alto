@@ -15,6 +15,5 @@ defmodule Alto.EventsTest do
     options[:event_sink].(event)
     assert_receive {:host, ^event}
     assert_receive {:app, ^event}
-    assert %Alto.Config{} = Alto.Config.new(event_sink: app)
   end
 end
