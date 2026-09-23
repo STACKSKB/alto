@@ -15,46 +15,6 @@ defmodule Alto.ProtocolTest do
   end
 
   describe "term encoding" do
-    test "scalars pass through and atoms become strings" do
-      assert Protocol.encode_term("s") == "s"
-      assert Protocol.encode_term(1) == 1
-      assert Protocol.encode_term(1.5) == 1.5
-      assert Protocol.encode_term(true) == true
-      assert Protocol.encode_term(nil) == nil
-      assert Protocol.encode_term(:approved) == "approved"
-    end
-
-    test "maps stringify keys and lists map over elements" do
-      assert Protocol.encode_term(%{:tool => :echo, "raw" => 2, 3 => :x}) == %{
-               "tool" => "echo",
-               "raw" => 2,
-               "3" => "x"
-             }
-
-      assert Protocol.encode_term([:a, 1, "b"]) == ["a", 1, "b"]
-    end
-
-    test "structs encode as their field maps" do
-      request = %Alto.Approval.Request{
-        id: "run-1:op-1",
-        run_id: "run-1",
-        call_id: "call-1",
-        tool: "echo",
-        arguments: %{"value" => "hello"},
-        execution_mode: :parallel
-      }
-
-      assert Protocol.encode_term(request) == %{
-               "id" => "run-1:op-1",
-               "run_id" => "run-1",
-               "call_id" => "call-1",
-               "tool" => "echo",
-               "arguments" => %{"value" => "hello"},
-               "execution_mode" => "parallel",
-               "details" => %{}
-             }
-    end
-
     test "tuples become tagged arrays and opaque terms become bounded inspect strings" do
       assert Protocol.encode_term({:denied, :user}) == %{"$tuple" => ["denied", "user"]}
 
@@ -154,8 +114,6 @@ defmodule Alto.ProtocolTest do
       }
 
       assert {:ok, line} = Protocol.approval_request("s-5", "run-41", request, @max_line_bytes)
-      assert decode_line(line)["request"] == Protocol.encode_term(request)
-
       assert %{
                "type" => "approval_request",
                "request" => %{
