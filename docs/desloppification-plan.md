@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,205 lines, a reduction of 7,450 (18.3%). A 30%
-reduction would require at most 28,458 lines, or another 4,747 lines below the
+The 2026-09-24 inventory is 33,192 lines, a reduction of 7,463 (18.4%). A 30%
+reduction would require at most 28,458 lines, or another 4,734 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. Recount after each coherent change; a moved line is not
 a reduction.
@@ -95,6 +95,11 @@ from session and revision, and retries compare decoded entries. A storage-test
 audit retained cases that distinguish live state, persisted state, and recovery.
 The registry's repeated option and contract prose was condensed by 48 source
 lines; this improves navigation but does not reduce executable code.
+The catalog now shares capacity-checked append and required-field validation
+between projects and tasks, reducing production code by 13 lines. A malformed
+task still blocks mutation until the caller explicitly replaces the catalog;
+the TUI warning and confirmation path remains covered. CLI key prompting now
+states its saved-key, empty-key, and new-key outcomes directly.
 
 The latest runner outcome prototype increased production code by two lines
 after formatting and left the branches intact, so it was discarded. A CLI
@@ -121,6 +126,9 @@ A new audit measured the runner group at 5,366 lines and found that singleton
 and batch outcomes still require distinct dispatch order. TUI modal and
 approval consolidation likewise added indirection without a net cut; no edits
 were kept from those probes.
+The TaskHost lifecycle audit likewise found no safe local cut: host and
+subscriber monitors, waiter timers, and capacity cleanup cover separate crash
+and cancellation paths. No TaskHost edits were made.
 
 ## Next passes
 

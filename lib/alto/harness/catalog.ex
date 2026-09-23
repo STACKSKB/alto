@@ -91,19 +91,15 @@ defmodule Alto.Harness.Catalog do
 
           case Enum.find(catalog["projects"], &(&1["root"] == expanded)) do
             nil ->
-              if length(catalog["projects"]) >= @max_projects do
-                {:error, :project_capacity}
-              else
-                project = %{
+              append(catalog, "projects", @max_projects, :project_capacity, fn ->
+                %{
                   "id" => id("project"),
                   "name" => bounded_string(name, @max_title_bytes),
                   "root" => expanded,
                   "created_at_ms" => now,
                   "last_opened_at_ms" => now
                 }
-
-                {:ok, Map.update!(catalog, "projects", &(&1 ++ [project])), project}
-              end
+              end)
 
             project ->
               updated = Map.put(project, "last_opened_at_ms", now)
@@ -134,17 +130,11 @@ defmodule Alto.Harness.Catalog do
 
     if String.valid?(title) and valid_backend?(backend) do
       transact(opts, fn catalog ->
-        cond do
-          not Enum.any?(catalog["projects"], &(&1["id"] == project_id)) ->
-            {:error, {:unknown_project, project_id}}
-
-          length(catalog["tasks"]) >= @max_tasks ->
-            {:error, :task_capacity}
-
-          true ->
+        if Enum.any?(catalog["projects"], &(&1["id"] == project_id)) do
+          append(catalog, "tasks", @max_tasks, :task_capacity, fn ->
             now = now_ms()
 
-            task = %{
+            %{
               "id" => id("task"),
               "project_id" => project_id,
               "title" => bounded_string(title, @max_title_bytes),
@@ -154,8 +144,9 @@ defmodule Alto.Harness.Catalog do
               "created_at_ms" => now,
               "updated_at_ms" => now
             }
-
-            {:ok, Map.update!(catalog, "tasks", &(&1 ++ [task])), task}
+          end)
+        else
+          {:error, {:unknown_project, project_id}}
         end
       end)
     else
@@ -210,6 +201,15 @@ defmodule Alto.Harness.Catalog do
 
       record ->
         replace(catalog, collection, fun.(record))
+    end
+  end
+
+  defp append(catalog, collection, limit, error, make_record) do
+    if length(catalog[collection]) >= limit do
+      {:error, error}
+    else
+      record = make_record.()
+      {:ok, Map.update!(catalog, collection, &(&1 ++ [record])), record}
     end
   end
 
@@ -268,39 +268,26 @@ defmodule Alto.Harness.Catalog do
       Enum.all?(projects, &valid_project?/1) and Enum.all?(tasks, &valid_task?/1)
   end
 
-  defp valid_project?(
-         %{
-           "id" => id,
-           "name" => name,
-           "root" => root,
-           "created_at_ms" => created,
-           "last_opened_at_ms" => opened
-         } = project
-       ) do
-    valid_text?(id) and valid_text?(name) and valid_text?(root) and
-      nonnegative_integer?(created) and nonnegative_integer?(opened) and
+  defp valid_project?(project) when is_map(project) do
+    valid_fields?(project, ~w(id name root), ~w(created_at_ms last_opened_at_ms)) and
       Map.get(project, "closed") in [nil, true, false]
   end
 
   defp valid_project?(_), do: false
 
-  defp valid_task?(%{
-         "id" => id,
-         "project_id" => project_id,
-         "title" => title,
-         "status" => status,
-         "backend" => backend,
-         "conversation_id" => conversation_id,
-         "created_at_ms" => created,
-         "updated_at_ms" => updated
-       }) do
-    valid_text?(id) and valid_text?(project_id) and valid_text?(title) and
-      status in @statuses and valid_backend?(backend) and
-      valid_state_field?("conversation_id", conversation_id) and
-      nonnegative_integer?(created) and nonnegative_integer?(updated)
+  defp valid_task?(task) when is_map(task) do
+    valid_fields?(task, ~w(id project_id title), ~w(created_at_ms updated_at_ms)) and
+      task["status"] in @statuses and valid_backend?(task["backend"]) and
+      Map.has_key?(task, "conversation_id") and
+      valid_state_field?("conversation_id", task["conversation_id"])
   end
 
   defp valid_task?(_), do: false
+
+  defp valid_fields?(record, text_fields, time_fields) do
+    Enum.all?(text_fields, &valid_text?(record[&1])) and
+      Enum.all?(time_fields, &nonnegative_integer?(record[&1]))
+  end
 
   defp nonnegative_integer?(value), do: is_integer(value) and value >= 0
 

@@ -93,4 +93,20 @@ defmodule Alto.Harness.CatalogTest do
     assert {:error, :invalid_task_field_value} =
              Catalog.update_task(task["id"], %{"title" => nil}, opts)
   end
+
+  test "rejects malformed records until explicitly replaced", %{root: root, opts: opts} do
+    {:ok, project} = Catalog.register_project(root, opts)
+    {:ok, _task} = Catalog.create_task(project["id"], "Keep me", opts)
+    path = Keyword.fetch!(opts, :path)
+
+    catalog = path |> File.read!() |> JSON.decode!()
+    [task] = catalog["tasks"]
+    malformed = Map.put(catalog, "tasks", [Map.delete(task, "conversation_id")])
+    File.write!(path, JSON.encode!(malformed))
+
+    assert {:error, {:catalog_invalid, ^path}} = Catalog.read(opts)
+    assert {:error, {:catalog_invalid, ^path}} = Catalog.create_task(project["id"], "New", opts)
+    assert :ok = Catalog.replace_invalid(opts)
+    assert {:ok, %{"projects" => [], "tasks" => []}} = Catalog.read(opts)
+  end
 end

@@ -74,20 +74,20 @@ defmodule Alto.CLI.Onboarding do
     case :io.get_password(opts[:input]) do
       value when is_list(value) or is_binary(value) ->
         entered = value |> IO.iodata_to_binary() |> String.trim()
-        key = if entered == "", do: fallback, else: entered
 
-        if is_binary(key) and key != "" do
-          if entered == "" do
-            {:ok, key, credentials}
-          else
+        cond do
+          entered == "" and is_binary(fallback) and fallback != "" ->
+            {:ok, fallback, credentials}
+
+          entered == "" ->
+            {:error, "OpenRouter API key cannot be empty"}
+
+          true ->
             with {:ok, credentials} <-
-                   Credentials.put(credentials, @provider_id, %{"api_key" => key}) do
+                   Credentials.put(credentials, @provider_id, %{"api_key" => entered}) do
               IO.puts(opts[:output], "Saved OpenRouter credentials to #{credentials.path}")
-              {:ok, key, credentials}
+              {:ok, entered, credentials}
             end
-          end
-        else
-          {:error, "OpenRouter API key cannot be empty"}
         end
 
       :eof ->
