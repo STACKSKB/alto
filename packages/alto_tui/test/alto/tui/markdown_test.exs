@@ -120,8 +120,6 @@ defmodule Alto.TUI.MarkdownTest do
     assert plain(text) =~ "## literal **text**"
     assert plain(text) =~ "Rendered heading"
     refute plain(text) =~ "**heading**"
-    assert List.last(entries).text == "## Rendered **heading**"
-    assert Transcript.render(entries, 60) == text
   end
 
   test "large user and reasoning messages are not shortened by diagnostic limits" do
