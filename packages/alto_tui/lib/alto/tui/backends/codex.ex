@@ -12,6 +12,14 @@ defmodule Alto.TUI.Backends.Codex do
     %{label: "AUTO · full host access; no prompts", value: :full_access}
   ]
 
+  @approval_methods %{
+    "item/commandExecution/requestApproval" => {"Codex command", :decision},
+    "item/fileChange/requestApproval" => {"Codex file changes", :decision},
+    "item/permissions/requestApproval" => {"Codex permissions", :permissions},
+    "execCommandApproval" => {"Codex command", :exec_decision},
+    "applyPatchApproval" => {"Codex file changes", :exec_decision}
+  }
+
   @impl true
   def ui(:init, state, options) do
     codex_options = Keyword.delete(options, :label)
@@ -740,13 +748,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp handle_codex_request(state, id, method, params)
-       when method in [
-              "item/commandExecution/requestApproval",
-              "item/fileChange/requestApproval",
-              "item/permissions/requestApproval",
-              "execCommandApproval",
-              "applyPatchApproval"
-            ] do
+       when is_map_key(@approval_methods, method) do
     case find_codex_run(state, params) do
       nil ->
         if Enum.any?(state.runs, fn {_run_id, run} ->
@@ -763,8 +765,9 @@ defmodule Alto.TUI.Backends.Codex do
           :ask ->
             request = %{
               id: "codex-#{id}",
-              tool: codex_approval_tool(method),
-              arguments: codex_approval_arguments(params),
+              tool: elem(Map.fetch!(@approval_methods, method), 0),
+              arguments:
+                Map.take(params, ~w(command cwd reason fileChanges grantRoot permissions)),
               details: params
             }
 
@@ -805,44 +808,18 @@ defmodule Alto.TUI.Backends.Codex do
     state
   end
 
-  defp codex_approval_decision(method, :approve)
-       when method in ["execCommandApproval", "applyPatchApproval"],
-       do: "approved"
+  defp codex_approval_response(method, decision, params) do
+    case elem(Map.fetch!(@approval_methods, method), 1) do
+      :permissions ->
+        permissions = if decision == :approve, do: Map.get(params, "permissions", %{}), else: %{}
+        %{"permissions" => permissions, "scope" => "turn"}
 
-  defp codex_approval_decision(method, {:deny, _reason})
-       when method in ["execCommandApproval", "applyPatchApproval"],
-       do: "abort"
-
-  defp codex_approval_decision(_method, :approve), do: "accept"
-  defp codex_approval_decision(_method, {:deny, _reason}), do: "decline"
-
-  defp codex_approval_response("item/permissions/requestApproval", :approve, params),
-    do: %{"permissions" => Map.get(params, "permissions", %{}), "scope" => "turn"}
-
-  defp codex_approval_response("item/permissions/requestApproval", {:deny, _reason}, _params),
-    do: %{"permissions" => %{}, "scope" => "turn"}
-
-  defp codex_approval_response(method, decision, _params),
-    do: %{"decision" => codex_approval_decision(method, decision)}
-
-  defp codex_approval_tool(method)
-       when method in ["item/fileChange/requestApproval", "applyPatchApproval"],
-       do: "Codex file changes"
-
-  defp codex_approval_tool("item/permissions/requestApproval"), do: "Codex permissions"
-
-  defp codex_approval_tool(_method), do: "Codex command"
-
-  defp codex_approval_arguments(params),
-    do:
-      Map.take(params, [
-        "command",
-        "cwd",
-        "reason",
-        "fileChanges",
-        "grantRoot",
-        "permissions"
-      ])
+      kind ->
+        approved = if kind == :exec_decision, do: "approved", else: "accept"
+        denied = if kind == :exec_decision, do: "abort", else: "decline"
+        %{"decision" => if(decision == :approve, do: approved, else: denied)}
+    end
+  end
 
   defp backend_model(state) do
     Keyword.get(data(state).options, :model) ||
