@@ -11,19 +11,17 @@ defmodule Alto.DisplayTest do
   end
 
   test "redacts known credentials in displayed text" do
-    for secret <- [
-          "sk-example_secret",
-          "ghp_example_secret",
-          "Bearer opaque",
-          "Authorization: Basic dXNlcjpwYXNz",
-          "x-api-key: opaque",
-          "?api_key=opaque"
+    for {secret, value} <- [
+          {"sk-example_secret", "example_secret"},
+          {"ghp_example_secret", "example_secret"},
+          {"Bearer opaque", "opaque"},
+          {"Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"},
+          {"x-api-key: opaque", "opaque"},
+          {"?api_key=opaque", "opaque"}
         ] do
       text = Display.error(secret)
       assert text =~ "[REDACTED]"
-      refute text =~ "example_secret"
-      refute text =~ "opaque"
-      refute text =~ "dXNlcjpwYXNz"
+      refute text =~ value
     end
   end
 

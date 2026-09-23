@@ -33,14 +33,26 @@ command authority and environment isolation. Keep these boundaries explicit;
 the next reduction should come from a complete data-flow redesign, not from
 removing one side of such a pair.
 
+The session event log and immutable conversation revisions also serve different
+reads; the transcript sidecar is the current revision head, not an obsolete
+second copy. The Git workspace's source-tree check, checkout-size check, and
+staged-workspace check enforce different safety rules. Provider adapter tests
+that look similar inspect different wire contracts. These seams need a new
+shared contract to shrink; line-by-line helper extraction would only relocate
+policy.
+
 ## Next passes
 
-1. **Runner state and effect flow.** Map every field of the run context to its
-   owner and readers. Prototype a smaller typed context or a set of cohesive
-   state records, then compare the entire runner module group before adopting
-   it. Keep effect ordering, approval suspension, budget reservation, provider
-   correlation, and child accounting explicit. Reject a design that merely
-   relocates the existing 40-field map or adds adapter layers.
+1. **Runner state and effect flow.** The clearest remaining duplication is the
+   untyped outcome protocol between effect interpretation, tool completion,
+   event dispatch, and the scheduler: several tuple shapes carry the run,
+   events, failure or cancellation, and a pending approval frame. Prototype one
+   internal outcome type at that boundary, then compare the entire runner
+   module group before adopting it. Preserve append-before-dispatch, provider
+   call counts, batch event ordering, approval checkpoint fencing, and the
+   origin of cancellation. Map run-context fields to their owners and readers
+   as part of that prototype. Reject a design that merely relocates the
+   existing map or adds adapters without shrinking the complete flow.
 2. **Durable state machines.** Compare queue, operation ledger, session, and
    continuation code at the record/transition boundary. Consolidate only
    genuinely shared framing, validation, or atomic persistence. The approved
