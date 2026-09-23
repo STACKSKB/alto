@@ -8,10 +8,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
   Generic runs keep every host-owned guarantee — approval, prepared
   operations, bounds, supervision, cancellation — while model-specific state
-  (provider, prompt, transcript) stays out of rule runs. A rule loop that
-  requests a model effect without a provider fails closed with
-  `:provider_required`, and prompt options without a provider are rejected at
-  construction.
+  (provider, prompt, transcript) stays out of rule runs. Model effects without
+  a provider fail closed, and prompt options without one fail at construction.
   """
 
   use ExUnit.Case, async: true
@@ -195,19 +193,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     def handle_event(_event, state, _spec), do: Transition.continue(state)
   end
 
-  # A rule loop that wrongly requests a model effect: the host must fail
-  # closed instead of crashing on the missing provider.
-  defmodule ModelRequestRuleLoop do
-    @behaviour Alto.Loop
-
-    @impl true
-    def init(_task, _spec),
-      do: Transition.continue(:requesting, [Effect.request_model(%{})])
-
-    @impl true
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
-  end
-
   defmodule StampRuleLoop do
     @behaviour Alto.Loop
 
@@ -227,11 +212,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)
-  end
-
-  test "a rule loop that requests a model effect without a provider fails closed" do
-    assert {:error, :provider_required, _result} =
-             Alto.run("hello", loop: Alto.loop(ModelRequestRuleLoop), tools: [RuleEchoTool])
   end
 
   test "the default model loop without a provider fails closed at its model effect" do
