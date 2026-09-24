@@ -68,12 +68,9 @@ defmodule Alto.Runner.SubagentBatch do
     do: %{state | completed: Map.put(state.completed, id, outcome)}
 
   defp stop(state, status, runner) do
-    Enum.each(state.active, fn {_ref, {_id, handle}} -> cancel(runner, handle, status) end)
-
-    state =
-      Enum.reduce(state.pending, %{state | pending: []}, fn spec, acc ->
-        complete(acc, spec.id, {:error, {:not_started, status}})
-      end)
+    Enum.each(state.active, fn {_ref, {_id, handle}} -> runner.cancel(handle, status) end)
+    skipped = Map.new(state.pending, &{&1.id, {:error, {:not_started, status}}})
+    state = %{state | pending: [], completed: Map.merge(state.completed, skipped)}
 
     # One grace period for the entire batch, not one timeout per child.
     drain(state, System.monotonic_time(:millisecond) + 5_000, runner)
@@ -86,7 +83,7 @@ defmodule Alto.Runner.SubagentBatch do
 
       System.monotonic_time(:millisecond) >= deadline ->
         Enum.reduce(state.active, %{state | active: %{}}, fn {_ref, {id, handle}}, acc ->
-          complete(acc, id, terminate(runner, handle))
+          complete(acc, id, runner.terminate(handle, :cancel_timeout))
         end)
 
       true ->
@@ -97,7 +94,4 @@ defmodule Alto.Runner.SubagentBatch do
         )
     end
   end
-
-  defp cancel(runner, handle, reason), do: runner.cancel(handle, reason)
-  defp terminate(runner, handle), do: runner.terminate(handle, :cancel_timeout)
 end

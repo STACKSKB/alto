@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,147 lines, a reduction of 7,508 (18.5%). A 30%
-reduction would require at most 28,458 lines, or another 4,689 lines below the
+The 2026-09-24 inventory is 33,141 lines, a reduction of 7,514 (18.5%). A 30%
+reduction would require at most 28,458 lines, or another 4,683 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. A 50% stretch would require at most 20,327 lines.
 Recount after each coherent change; a moved line is not a reduction.
@@ -165,6 +165,12 @@ The isolated usage test equating the zero-value constructor with its nil
 fallback was removed; the remaining accounting tests cover provider fields,
 cache rates, cumulative totals, and explicit zero values. The repository-wide
 formatter check now passes.
+Subagent batch cancellation now accumulates skipped outcomes directly and calls
+the runner's cancellation callbacks without forwarding helpers. The scheduling
+loop, one shared drain deadline, and result ordering remain unchanged. Fresh
+audits of the protocol/listener boundary, queue, Git/search/edit tools, and
+several test suites found no substantial deletion that preserved their distinct
+wire, durability, safety, or regression contracts; these files were left intact.
 
 ## Next passes
 

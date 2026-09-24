@@ -82,7 +82,7 @@ defmodule Alto.Listeners.UnixSocketTest do
 
     Process.exit(acceptor, :kill)
 
-    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}
+    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}, 5_000
     refute File.exists?(path)
   end
 
