@@ -581,10 +581,9 @@ defmodule Alto.OperationLogTest do
       assert :no_intent = OperationLog.status(name3, "op-torn")
     end
 
-    test "malformed records and obsolete formats fail startup", %{dir: dir, id: id} do
+    test "malformed records fail startup", %{dir: dir, id: id} do
       path = Path.join([dir, "l", id <> ".jsonl"])
       File.mkdir_p!(Path.dirname(path))
-      untagged = %{"v" => 1, "t" => "intent", "op" => "op", "tool" => "tool", "recovery" => %{}}
 
       {:ok, unknown} = Alto.Persistence.Codec.encode({:unknown, "op"})
       {:ok, incomplete} = Alto.Persistence.Codec.encode({:intent, "op"})
@@ -593,8 +592,7 @@ defmodule Alto.OperationLogTest do
             {JSON.encode!(%{"v" => 2, "command" => "invalid"}), {:ledger_corrupt, id, 1}},
             {JSON.encode!(%{"v" => 2, "command" => unknown}), {:ledger_corrupt, id, 1}},
             {JSON.encode!(%{"v" => 2, "command" => incomplete}), {:ledger_corrupt, id, 1}},
-            {"not json", {:ledger_corrupt, id, 1}},
-            {JSON.encode!(untagged), {:ledger_corrupt, id, 1}}
+            {"not json", {:ledger_corrupt, id, 1}}
           ] do
         File.write!(path, line <> "\n")
 

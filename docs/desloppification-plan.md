@@ -171,6 +171,19 @@ loop, one shared drain deadline, and result ordering remain unchanged. Fresh
 audits of the protocol/listener boundary, queue, Git/search/edit tools, and
 several test suites found no substantial deletion that preserved their distinct
 wire, durability, safety, or regression contracts; these files were left intact.
+Tests aimed only at rejecting old internal queue, ledger, and checkpoint
+versions were removed; malformed current records and live recovery remain
+covered. A standalone first-request prefix diagnostic test was removed because
+the provider integration test already checks that result and its privacy
+boundary.
+
+A prototype made numbered conversation revisions their own head and removed
+the mutable pointer, but a missing newest revision then silently exposed an
+older transcript that could replay dispatched work. The prototype was
+reverted. Using the session event log as the pointer would require publish
+markers, shared locks, private record projection, and a log-bound redesign;
+it would add code and make resume scan the log. Keep an independent monotonic
+head marker unless a replacement can fail closed on missing current state.
 
 ## Next passes
 

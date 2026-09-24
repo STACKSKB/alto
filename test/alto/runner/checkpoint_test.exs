@@ -177,13 +177,6 @@ defmodule Alto.Runner.CheckpointTest do
 
     assert {:error, :checkpoint_mismatch, _} = Serial.run("{}", changed)
     refute File.exists?(Path.join(dir, "guarded"))
-
-    obsolete = Map.put(result.checkpoint, "continuation_format", 1)
-
-    assert {:error, :invalid_checkpoint, _} =
-             Serial.run("{}", Keyword.put(opts, :checkpoint, {obsolete, :approve}))
-
-    refute File.exists?(Path.join(dir, "guarded"))
   end
 
   test "a stuck custom checkpoint callback is bounded and never dispatches the tool", %{

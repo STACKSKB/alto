@@ -466,9 +466,6 @@ defmodule Alto.QueueTest do
 
         assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
       end
-
-      File.write!(path, JSON.encode!(%{entry | "v" => 4}) <> "\n")
-      assert {:error, {:queue_corrupt, ^id, 1}} = Queue.start_link(id: id, dir: dir, name: nil)
     end
   end
 

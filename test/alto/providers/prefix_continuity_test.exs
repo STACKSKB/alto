@@ -3,11 +3,6 @@ defmodule Alto.Providers.PrefixContinuityTest do
 
   alias Alto.Providers.PrefixContinuity
 
-  test "first request is unobserved, not a claimed cold start or invalidation" do
-    report = PrefixContinuity.report(request())
-    assert report.comparison == :unavailable
-  end
-
   test "append-only requests preserve the previous successful serialized prefix" do
     previous = request()
     next = Map.put(previous, :context_observation, previous)
