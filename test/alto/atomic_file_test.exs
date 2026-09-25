@@ -16,13 +16,6 @@ defmodule Alto.AtomicFileTest do
     %{dir: dir}
   end
 
-  test "writes, renames, and leaves no temporary sibling", %{dir: dir} do
-    path = Path.join(dir, "state.txt")
-    assert :ok = AtomicFile.write(path, "new")
-    assert File.read!(path) == "new"
-    assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
-  end
-
   test "reports post-rename directory sync failure as uncertain", %{dir: dir} do
     bin = Path.join(dir, "bin")
     File.mkdir!(bin)

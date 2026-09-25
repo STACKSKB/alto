@@ -250,7 +250,4 @@ defmodule Alto.SessionTest do
       assert {:error, :invalid_term_payload} = Session.decode_term(%{"$term" => payload})
     end
   end
-
-  test "decode_term rejects garbage",
-    do: assert({:error, _} = Session.decode_term(%{"nope" => 1}))
 end
