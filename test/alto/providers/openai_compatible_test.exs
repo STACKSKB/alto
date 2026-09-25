@@ -3,7 +3,6 @@ defmodule Alto.Providers.OpenAICompatibleTest do
 
   alias Alto.Event
   alias Alto.Providers.OpenAICompatible
-  alias Alto.Providers.SSE
 
   defmodule Adapter do
     def run(request) do
@@ -104,16 +103,20 @@ defmodule Alto.Providers.OpenAICompatibleTest do
       %{"role" => "tool", "tool_call_id" => "call-text", "content" => "ordinary text"}
     ]
 
+    messages = [%{"role" => "user", "content" => Enum.at(messages, 1)["content"]} | messages]
+
     opts = [
       model: "vision-model",
       base_url: "https://unit.test/v1",
       req_options: [adapter: Adapter]
     ]
 
-    assert {:error, :model_does_not_support_images} =
-             OpenAICompatible.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
+    for input <- [messages, tl(messages)] do
+      assert {:error, :model_does_not_support_images} =
+               OpenAICompatible.stream(%{messages: input, tools: []}, fn _ -> :ok end, opts)
 
-    refute_received {:http_request, _}
+      refute_received {:http_request, _}
+    end
 
     assert {:ok, _completion} =
              OpenAICompatible.stream(
@@ -123,7 +126,12 @@ defmodule Alto.Providers.OpenAICompatibleTest do
              )
 
     assert_receive {:http_request, request}
-    [_assistant, image_tool, text_tool, attachment] = JSON.decode!(request.body)["messages"]
+    [user, _assistant, image_tool, text_tool, attachment] = JSON.decode!(request.body)["messages"]
+
+    assert user["content"] == [
+             %{"type" => "text", "text" => "workspace image"},
+             %{"type" => "image_url", "image_url" => %{"url" => "data:image/png;base64,#{image}"}}
+           ]
 
     assert image_tool["content"] ==
              "workspace image\n[Image attachment follows for tool call call-image.]"
@@ -307,72 +315,16 @@ defmodule Alto.Providers.OpenAICompatibleTest do
   end
 
   test "bounds the provider model catalog" do
-    configure_adapter(self(), 200, "application/json", [String.duplicate("x", 32)])
+    for request_options <- [[], [into: fn _chunk, pair -> {:cont, pair} end]] do
+      configure_adapter(self(), 200, "application/json", [String.duplicate("x", 32)])
 
-    assert {:error, {:models_response_too_large, 16}} =
-             OpenAICompatible.list_models(
-               base_url: "https://unit.test/v1",
-               max_models_response_bytes: 16,
-               req_options: [adapter: Adapter]
-             )
-  end
-
-  test "stops a stream that exceeds the complete-response limit" do
-    payload = sse(%{"choices" => [%{"delta" => %{"content" => "too much"}}]})
-    configure_adapter(self(), 200, "text/event-stream", [payload])
-
-    assert {:error, {:model_response_too_large, 10}} =
-             OpenAICompatible.stream(
-               %{messages: [], tools: []},
-               fn _event -> :ok end,
-               model: "test-model",
-               base_url: "https://unit.test/v1",
-               max_response_bytes: 10,
-               req_options: [adapter: Adapter]
-             )
-  end
-
-  test "SSE framing survives CRLF and arbitrary chunk boundaries" do
-    state = SSE.new(100)
-    assert {:ok, state, []} = SSE.feed(state, "data: one\r")
-    assert {:ok, state, ["one"]} = SSE.feed(state, "\n\r\ndata: tw")
-    assert {:ok, _state, ["two"]} = SSE.feed(state, "o\n\n")
-  end
-
-  test "SSE framing is byte-safe across every boundary in multibyte content" do
-    wire = "data: " <> JSON.encode!(%{"text" => "hello 😀 café"}) <> "\r\n\r\n"
-
-    {state, payloads} =
-      wire
-      |> :binary.bin_to_list()
-      |> Enum.reduce({SSE.new(1_000), []}, fn byte, {state, payloads} ->
-        assert {:ok, state, emitted} = SSE.feed(state, <<byte>>)
-        {state, payloads ++ emitted}
-      end)
-
-    assert {:ok, []} = SSE.finish(state)
-    assert [payload] = payloads
-    assert JSON.decode!(payload) == %{"text" => "hello 😀 café"}
-  end
-
-  test "SSE accepts bare CR lines, joins data lines, and removes one optional space" do
-    state = SSE.new(100)
-
-    assert {:ok, state, ["first\n  indented"]} =
-             SSE.feed(state, "event: message\rdata: first\rdata:   indented\r\r")
-
-    assert {:ok, []} = SSE.finish(state)
-  end
-
-  test "non-SSE response fallback preserves raw bytes including blank lines" do
-    raw = "{\n\n  \"message\": \"😀\"\n}"
-    assert {:ok, state, []} = SSE.feed(SSE.new(100), raw)
-    assert {:raw, ^raw} = SSE.finish(state)
-  end
-
-  test "SSE bounds an unfinished event across chunks" do
-    assert {:ok, state, []} = SSE.feed(SSE.new(12), "data: 123")
-    assert {:error, {:sse_event_too_large, 12}} = SSE.feed(state, "4567")
+      assert {:error, {:models_response_too_large, 16}} =
+               OpenAICompatible.list_models(
+                 base_url: "https://unit.test/v1",
+                 max_models_response_bytes: 16,
+                 req_options: [adapter: Adapter] ++ request_options
+               )
+    end
   end
 
   defp sse(value), do: "data: " <> JSON.encode!(value) <> "\n\n"

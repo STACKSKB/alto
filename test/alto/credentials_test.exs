@@ -33,16 +33,22 @@ defmodule Alto.CredentialsTest do
 
   test "merges provider preferences without dropping an existing key", %{path: path} do
     assert {:ok, credentials} = Credentials.load(path)
-    assert {:ok, credentials} = Credentials.put(credentials, "openrouter", %{"api_key" => "key"})
+    assert {:ok, _saved} = Credentials.put(credentials, "openrouter", %{"api_key" => "key"})
     assert {:ok, credentials} = Credentials.put(credentials, "openrouter", %{"model" => "model"})
 
     assert Credentials.get(credentials, "openrouter", "api_key") == "key"
     assert Credentials.get(credentials, "openrouter", "model") == "model"
+    assert Credentials.load(path) == {:ok, credentials}
   end
 
   test "rejects malformed and oversized files", %{path: path} do
     File.write!(path, "not json")
     assert {:error, {:invalid_credentials_json, _error}} = Credentials.load(path)
+
+    for values <- [%{"" => "key"}, %{"api_key" => ""}, %{"api_key" => false}] do
+      File.write!(path, JSON.encode!(%{"version" => 1, "providers" => %{"provider" => values}}))
+      assert {:error, :invalid_credentials_file} = Credentials.load(path)
+    end
 
     File.write!(path, String.duplicate("x", 64_001))
     assert {:error, {:credentials_too_large, 64_000}} = Credentials.load(path)

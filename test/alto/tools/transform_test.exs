@@ -7,30 +7,35 @@ defmodule Alto.Tools.TransformTest do
   alias Alto.Tools.Transform
 
   defmodule PreparedTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :freeze, execution_mode: :exclusive, approval: :required
 
-    def name, do: :freeze
-    def schema, do: %{description: "Freeze input.", parameters: %{type: "object"}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    def schema(_), do: %{description: "Freeze input.", parameters: %{type: "object"}}
 
-    def prepare(arguments, _context) do
+    def prepare(arguments, _context, _opts) do
       {:ok, {:prepared, arguments}, %{approved: arguments}}
     end
 
-    def run_prepared({:prepared, arguments}, _context) do
+    def run_prepared({:prepared, arguments}, _context, _opts) do
       {:ok, arguments}
     end
   end
 
   defmodule RawTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :raw, execution_mode: :parallel, approval: :never
 
-    def name, do: :raw
-    def schema, do: %{description: "Run transformed input.", parameters: %{type: "object"}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(arguments, _context), do: {:ok, arguments}
+    def schema(_), do: %{description: "Run transformed input.", parameters: %{type: "object"}}
+    def run(arguments, _context, _opts), do: {:ok, arguments}
+  end
+
+  defmodule IncompleteTool do
+    def prepare(_, _, _), do: raise("must reject incomplete callbacks before preparation")
+  end
+
+  test "transforms reject incomplete inner execution contracts before preparation" do
+    {_module, opts} = Transform.wrap(IncompleteTool, fn args, _ -> args end)
+
+    assert {:error, {:incomplete_tool_preparation_callbacks, IncompleteTool}} =
+             Transform.prepare(%{}, context(), opts)
   end
 
   defmodule CaptureApproval do
@@ -47,11 +52,16 @@ defmodule Alto.Tools.TransformTest do
   defp caps(opts) do
     {:ok, budget} = Budget.new(max_model_requests: 10, run_timeout: 30_000)
 
-    %ExecutionTool.Capabilities{
+    %{
       tools: %{},
       approval: Keyword.get(opts, :approval, {Alto.Approvals.DenyAll, []}),
-      context: context(),
+      tool_context: context(),
       budget: budget,
+      cancel_ref: nil,
+      tool_timeout: 125_000,
+      approval_timeout: 300_000,
+      max_approval_details_bytes: 64_000,
+      max_tool_result_bytes: 64_000,
       event_sink: Keyword.get(opts, :event_sink)
     }
   end
@@ -80,20 +90,24 @@ defmodule Alto.Tools.TransformTest do
 
     assert :ok =
              ExecutionTool.authorize(
-               "call-1",
-               "freeze",
-               original,
+               %{
+                 id: "call-1",
+                 name: "freeze",
+                 arguments: original,
+                 tool: tool,
+                 op_id: "transform-run:op-1"
+               },
                details,
-               tool,
-               caps,
-               "transform-run:op-1"
+               caps
              )
 
     assert_received {:approval, request}
     assert request.arguments == original
     assert request.details["alto_transformed_arguments"] == %{"path" => "/tmp/file.txt"}
 
-    assert {:ok, {:ok, %{"path" => "/tmp/file.txt"}}} = ExecutionTool.invoke(tool, prepared, caps)
+    assert {:ok, [{:ok, {:ok, %{"path" => "/tmp/file.txt"}}}]} =
+             Alto.Runner.ToolBatch.run([{tool, prepared}], caps)
+
     refute_received {:transformed, _, _}
   end
 

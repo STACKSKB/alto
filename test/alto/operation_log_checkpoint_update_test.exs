@@ -28,6 +28,10 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     assert view.checkpoint_grant_revision == nil
     assert view.checkpointed_attempts == ["attempt"]
     assert {:checkpointed, ^packet, "attempt"} = OperationLog.status(name, "bank")
+
+    # A successful write consumes the revision even when the payload is unchanged.
+    assert {:ok, %{revision: 5}} = OperationLog.update_checkpoint(name, "bank", 4, packet)
+    assert {:error, :stale_revision} = OperationLog.update_checkpoint(name, "bank", 4, packet)
   end
 
   test "competing updates are fenced by revision", %{name: name} do
@@ -67,7 +71,7 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     assert :ok = OperationLog.record_attempt(name, "bank", "retry")
     assert :ok = OperationLog.record_outcome(name, "bank", "retry", :completed, %{})
 
-    assert {:error, :already_decided} =
+    assert {:error, :not_checkpointed} =
              OperationLog.update_checkpoint(name, "bank", 6, %{"used" => 2})
   end
 
@@ -76,14 +80,10 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     GenServer.stop(name)
     path = Path.join(dir, "ledger.jsonl")
 
-    line =
-      JSON.encode!(%{
-        "v" => 1,
-        "t" => "checkpoint_update",
-        "op" => "bank",
-        "expected_revision" => 3,
-        "checkpoint" => %{"used" => 2}
-      })
+    {:ok, command} =
+      Alto.Persistence.Codec.encode({:checkpoint_update, "bank", 3, %{"used" => 2}})
+
+    line = JSON.encode!(%{"v" => 2, "command" => command})
 
     File.write!(path, line <> "\n" <> line <> "\n", [:append])
 

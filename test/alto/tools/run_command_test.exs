@@ -103,7 +103,6 @@ defmodule Alto.Tools.RunCommandTest do
              )
 
     assert result.truncated
-    assert is_binary(result.output)
     refute Map.has_key?(result, :output_base64)
     assert String.valid?(result.output)
     assert byte_size(result.output) <= 8

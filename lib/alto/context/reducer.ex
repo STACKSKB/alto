@@ -3,33 +3,14 @@ defmodule Alto.Context.Reducer do
   Structured context reduction. `compact/3` receives pinned/middle/recent
   messages, historical tool schemas, limits and artifact location metadata.
   Its model function is supervised and budgeted by execution; it cannot dispatch
-  tool calls. Return replacement content, event metadata and session records.
-  Built-in reducers use this same contract. Legacy text reducers are adapted.
+  tool calls. Return `%{content: binary, data: map}`. The host records one
+  durable `context_compacted` event with this metadata after applying the result.
+  Built-in reducers use this same contract.
   """
   @callback compact(map(), (map() -> {:ok, map()} | {:error, term()}), keyword()) ::
               {:ok, map()} | {:error, term()}
 
-  def resolve(:summary), do: {:ok, {Alto.Context.Reducers.Summary, []}}
-  def resolve(:handoff), do: {:ok, {Alto.Context.Reducers.Handoff, []}}
-
-  def resolve({module, opts}) when is_atom(module) and is_list(opts) do
-    cond do
-      not Keyword.keyword?(opts) or not Code.ensure_loaded?(module) ->
-        {:error, {:invalid_strategy, module}}
-
-      function_exported?(module, :compact, 3) ->
-        {:ok, {module, opts}}
-
-      function_exported?(module, :reduce, 3) or
-          (function_exported?(module, :request, 3) and function_exported?(module, :decode, 3)) ->
-        {:ok, {Alto.Context.Reducers.Legacy, [reducer: {module, opts}]}}
-
-      true ->
-        {:error, {:invalid_strategy, module}}
-    end
-  end
-
-  def resolve(other), do: {:error, {:invalid_strategy, other}}
+  def resolve(spec), do: Alto.Capabilities.resolve(spec, __MODULE__)
 
   def request(input, isolated, transcript) do
     messages =

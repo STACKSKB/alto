@@ -42,7 +42,7 @@ defmodule Alto.CLISessionTest do
       Alto.Config.new(
         provider: Alto.CLISessionTest.AnswerProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )

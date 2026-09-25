@@ -18,7 +18,7 @@ defmodule Alto.OperationLogCheckpointTest do
   test "checkpoint survives restart with exact packet", %{dir: dir, name: name} do
     :ok = OperationLog.record_intent(name, "op", "tool", nil)
     :ok = OperationLog.record_attempt(name, "op", "attempt")
-    packet = %{"state" => %{"step" => 2}, "budget" => 7, "items" => ["a", "b"]}
+    packet = %{"state" => %{"step" => 2}, "budget" => 7, "items" => ["a", "b"], state: {:step, 3}}
     assert :ok = OperationLog.record_checkpoint(name, "op", "attempt", packet)
     assert {:checkpointed, ^packet, "attempt"} = OperationLog.status(name, "op")
     {:ok, view} = OperationLog.recovery(name, "op")

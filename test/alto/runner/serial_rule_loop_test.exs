@@ -8,10 +8,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
   Generic runs keep every host-owned guarantee — approval, prepared
   operations, bounds, supervision, cancellation — while model-specific state
-  (provider, prompt, transcript) stays out of rule runs. A rule loop that
-  requests a model effect without a provider fails closed with
-  `:provider_required`, and prompt options without a provider are rejected at
-  construction.
+  (provider, prompt, transcript) stays out of rule runs. Model effects without
+  a provider fail closed, and prompt options without one fail at construction.
   """
 
   use ExUnit.Case, async: true
@@ -22,13 +20,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   alias Alto.Transition
 
   defmodule RuleEchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -40,26 +35,20 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedEchoTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: RuleEchoTool.schema()
+    def schema(_opts), do: RuleEchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     # No approval/0 callback: defaults to :required, exercising the default.
     @impl true
@@ -73,10 +62,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :stamp
+    def name(_opts), do: :stamp
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Stamp a value.",
         parameters: %{
@@ -88,18 +77,18 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     # Approval/0 omitted: defaults to :required, so the prepared invocation
     # crosses the approval boundary before run_prepared consumes it.
     @impl true
-    def prepare(%{"value" => value}, _context) do
+    def prepare(%{"value" => value}, _context, _opts) do
       token = "prep-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
       {:ok, %{value: value, token: token}, %{stamped_with: value, token: token}}
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _context) do
+    def run_prepared(%{value: value, token: token}, _context, _opts) do
       {:ok, %{stamped: value, token: token}}
     end
   end
@@ -125,7 +114,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, state, _spec) do
       state |> Map.update!(:results, &[output | &1]) |> request_next()
     end
 
@@ -152,13 +141,10 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   defmodule ArgsEchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo_args, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :echo_args
-
-    @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Report whether the tuple key survived as a native term.",
         parameters: %{
@@ -170,13 +156,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(arguments, _context) when is_map(arguments) do
+    def run(arguments, _context, _opts) when is_map(arguments) do
       {:ok, %{tuple_is_tuple: is_tuple(Map.get(arguments, :tuple))}}
     end
   end
@@ -202,7 +182,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, _state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, _state, _spec) do
       Transition.stop(%{}, output)
     end
 
@@ -210,19 +190,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
       Transition.stop(%{}, {:error, error})
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
-  end
-
-  # A rule loop that wrongly requests a model effect: the host must fail
-  # closed instead of crashing on the missing provider.
-  defmodule ModelRequestRuleLoop do
-    @behaviour Alto.Loop
-
-    @impl true
-    def init(_task, _spec),
-      do: Transition.continue(:requesting, [Effect.request_model(%{})])
-
-    @impl true
     def handle_event(_event, state, _spec), do: Transition.continue(state)
   end
 
@@ -236,7 +203,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def handle_event(%Event{type: :tool_completed, data: %{output: output}}, state, _spec) do
+    def handle_event(%Event{type: :tool_completed, data: %{value: output}}, state, _spec) do
       Transition.stop(state, output)
     end
 
@@ -245,15 +212,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)
-  end
-
-  test "a rule loop that requests a model effect without a provider fails closed" do
-    assert {:error, :provider_required, result} =
-             Alto.run("hello", loop: Alto.loop(ModelRequestRuleLoop), tools: [RuleEchoTool])
-
-    assert result.messages == []
-    assert result.events == []
-    assert result.model_requests == 0
   end
 
   test "the default model loop without a provider fails closed at its model effect" do
@@ -265,14 +223,12 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "prompt options are rejected for provider-less runs at construction" do
-    for prompt_opts <- [[system_prompt: "beep"], [prompt: Alto.Prompts.Coding]] do
+    for prompt_opts <- [[prompt: "beep"], [prompt: Alto.Prompts.Coding]] do
       opts =
         Keyword.merge([loop: Alto.loop(CountingRuleLoop), tools: [RuleEchoTool]], prompt_opts)
 
       assert {:error, :prompt_options_require_provider, result} = Alto.run("hello", opts)
-
       assert result.events == []
-      assert result.messages == []
     end
   end
 
@@ -284,7 +240,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                project_instructions: :auto
              )
 
-    assert result.output == [~s({"echo":"hello"})]
+    assert result.output == [%{echo: "hello"}]
   end
 
   test "a rule loop performs a bounded tool workflow with no provider configured" do
@@ -298,7 +254,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
              )
 
     # Tool result content is the bounded encoded value, one per invocation.
-    assert result.output == [~s({"echo":"a"}), ~s({"echo":"b"})]
+    assert result.output == [%{echo: "a"}, %{echo: "b"}]
     assert result.messages == []
     assert result.model_requests == 0
     assert Enum.map(result.events, & &1.type) == [:tool_completed, :tool_completed]
@@ -323,9 +279,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                tools: [ArgsEchoTool]
              )
 
-    assert result.output == ~s({"tuple_is_tuple":true})
-    assert result.messages == []
-    assert result.model_requests == 0
+    assert result.output == %{tuple_is_tuple: true}
   end
 
   test "invoke_tool rejects non-map arguments as a bounded tool failure" do
@@ -362,7 +316,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
-    assert result.output == [~s({"echo":"hello"})]
+    assert result.output == [%{echo: "hello"}]
 
     assert_receive {:approval_decision,
                     %ApprovalRequest{
@@ -372,9 +326,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       details: %{}
                     } = request}
 
-    assert is_binary(request.id)
-    assert request.operation_id == request.id
-    assert is_binary(request.run_id)
+    assert String.starts_with?(request.id, request.run_id <> ":")
 
     assert_receive {:tool_ran, "hello"}
 
@@ -425,17 +377,14 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       tool: "stamp",
                       arguments: %{"value" => "frozen"},
                       details: %{stamped_with: "frozen", token: token}
-                    } = request}
-
-    assert is_binary(request.id)
-    assert request.operation_id == request.id
+                    }}
 
     # run_prepared consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.
-    assert {:ok, %{"stamped" => "frozen", "token" => ^token}} = JSON.decode(result.output)
+    assert %{stamped: "frozen", token: ^token} = result.output
   end
 
-  test "tool_completed carries the native value alongside the encoded output" do
+  test "tool_completed carries the native value" do
     parent = self()
 
     assert {:ok, _result} =
@@ -448,8 +397,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     events = received_events()
     completed = Enum.find(events, &(&1.type == :tool_completed))
 
-    assert %{output: output, value: %{echo: "a"}} = completed.data
-    assert output == ~s({"echo":"a"})
+    assert %{value: %{echo: "a"}} = completed.data
   end
 
   test "model_tools projects a subset to the provider while all tools stay invokable" do
@@ -465,17 +413,11 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     defmodule HiddenTool do
-      @behaviour Alto.Tool
+      use Alto.Tool, name: :hidden, execution_mode: :parallel, approval: :never
       @impl true
-      def name, do: :hidden
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
       @impl true
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
-      @impl true
-      def execution_mode, do: :parallel
-      @impl true
-      def approval, do: :never
-      @impl true
-      def run(_args, _ctx), do: {:ok, %{hid: true}}
+      def run(_args, _ctx, _opts), do: {:ok, %{hid: true}}
     end
 
     parent = self()

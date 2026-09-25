@@ -1,57 +1,12 @@
 defmodule Alto.Listeners.WebServerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.WebServer
+  alias Alto.TestSupport.EchoTool
+  alias Alto.TestSupport.GuardedEchoTool
 
   @approval_timeout_ms 5_000
-
-  defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
-  end
-
-  defmodule GuardedEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :required
-
-    @impl true
-    def run(arguments, _context), do: EchoTool.run(arguments, nil)
-  end
 
   defmodule ToolThenAnswerProvider do
     @behaviour Alto.Provider
@@ -195,7 +150,6 @@ defmodule Alto.Listeners.WebServerTest do
     assert request["request"]["call_id"] == "call-1"
     assert request["request"]["run_id"] == run_id
     approval_id = request["request"]["id"]
-    assert approval_id == request["request"]["operation_id"]
 
     send_envelope(socket, %{
       "type" => "approval_response",
@@ -316,7 +270,7 @@ defmodule Alto.Listeners.WebServerTest do
         {head, rest}
 
       [_only] ->
-        {:ok, data} = :gen_tcp.recv(socket, 0, 2_000)
+        {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
         recv_head(socket, acc <> data)
     end
   end

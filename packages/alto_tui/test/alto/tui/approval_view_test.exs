@@ -51,7 +51,7 @@ defmodule Alto.TUI.ApprovalViewTest do
     text =
       ApprovalView.text(%{
         tool: "edit_file",
-        arguments: %{"old_text" => "old", "new_text" => "new"},
+        arguments: %{"edits" => [%{"old_text" => "old", "new_text" => "new"}]},
         details: %{
           path: "hello.c",
           replacements: 1,

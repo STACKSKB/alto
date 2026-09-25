@@ -13,15 +13,14 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.Connection
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   @receive_timeout 5_000
 
   defmodule EchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
     @impl true
-    def name, do: :echo
-    @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -33,47 +32,9 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
-    @impl true
-    def approval, do: :never
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
-  end
-
-  defmodule CountingTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name, do: :echo
-    @impl true
-    def schema, do: EchoTool.schema()
-    @impl true
-    def execution_mode, do: :parallel
-    @impl true
-    def approval, do: :never
-    @impl true
     def run(%{"value" => value}, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:tool_ran, value})
+      if pid = Keyword.get(opts, :test_pid), do: send(pid, {:tool_ran, value})
       {:ok, %{echo: value}}
-    end
-  end
-
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-    @impl true
-    def describe(_opts), do: %{}
-    @impl true
-    def stream(request, _sink, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:provider_request, request})
-
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
     end
   end
 
@@ -96,48 +57,45 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     end
   end
 
-  defmodule SpawnOnceLoop do
-    @behaviour Alto.Loop
-    @impl true
-    def init(%{spawn: spawn}, _spec),
-      do: Alto.Transition.continue(%{}, [Alto.Effect.spawn_agent(spawn)])
-
-    @impl true
-    def handle_event(%Alto.Event{type: :subagent_completed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:completed, data})
-
-    def handle_event(%Alto.Event{type: :subagent_failed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:failed, data})
-
-    def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
-  end
-
   defmodule SpawnBlockerLoop do
     @moduledoc false
     # Delegates to a blocking child; the binary task is opaque so the loop
     # works over the string-task registry boundary.
     @behaviour Alto.Loop
     @impl true
-    def init(_task, spec) do
-      test_pid = Keyword.fetch!(spec.driver_options, :test_pid)
-
+    def init(_task, _spec) do
       Alto.Transition.continue(%{}, [
-        Alto.Effect.spawn_agent(%{
-          id: "sub-1",
-          task: "child",
-          provider: {BlockingProvider, test_pid: test_pid}
+        Alto.Effect.spawn_agents(%{
+          agents: [
+            %{
+              id: "sub-1",
+              task: "child",
+              profile_key: "blocking"
+            }
+          ]
         })
       ])
     end
 
     @impl true
-    def handle_event(%Alto.Event{type: :subagent_completed, data: data}, s, _spec),
+    def handle_event(
+          %Alto.Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          s,
+          _spec
+        ),
+        do: Alto.Transition.stop(s, {:failed, data})
+
+    def handle_event(%Alto.Event{type: :subagents_completed, data: %{results: [data]}}, s, _spec),
       do: Alto.Transition.stop(s, {:completed, data})
 
-    def handle_event(%Alto.Event{type: :subagent_failed, data: data}, s, _spec),
-      do: Alto.Transition.stop(s, {:failed, data})
-
     def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+
+    @impl true
+    def resolve_child_provider("blocking", spec) do
+      {:ok, {BlockingProvider, test_pid: Keyword.fetch!(spec.driver_options, :test_pid)}}
+    end
+
+    def resolve_child_provider(_, _), do: {:error, :unknown_profile}
   end
 
   setup do
@@ -167,6 +125,21 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [EchoTool],
            approval: Alto.Approvals.DenyAll
+         ]}
+
+      other ->
+        {:error, {:unknown_config, other}}
+    end
+  end
+
+  defp counting_tool_resolver(parent) do
+    fn
+      "tool-loop" ->
+        {:ok,
+         [
+           provider: {ToolThenAnswerProvider, test_pid: parent},
+           tools: [{EchoTool, test_pid: parent}],
+           approval: Alto.Approvals.AllowAll
          ]}
 
       other ->
@@ -230,18 +203,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       parent = self()
       registry = :"sess-reg-#{System.unique_integer([:positive])}"
 
-      resolver = fn
-        "tool-loop" ->
-          {:ok,
-           [
-             provider: {ToolThenAnswerProvider, test_pid: parent},
-             tools: [{CountingTool, test_pid: parent}],
-             approval: Alto.Approvals.AllowAll
-           ]}
-
-        other ->
-          {:error, {:unknown_config, other}}
-      end
+      resolver = counting_tool_resolver(parent)
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
@@ -286,22 +248,6 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert summary3.completed_runs == 2
       assert summary3.last_outcome == "ok"
     end
-
-    test "unpersisted served runs stay unpersisted by default", %{session_dir: dir} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-      # Sessions disabled, but point reads at an isolated directory so the
-      # assertion is hermetic regardless of the ambient state home.
-      start_registry(registry, [session_dir: dir], tool_resolver(parent))
-
-      {:ok, run_id} = Registry.start_run(registry, "tool-loop", "task")
-      assert {:ok, "finished"} = attach_collect(registry, run_id)
-
-      assert Registry.run_session(registry, run_id) == nil
-      assert {:ok, []} = Registry.sessions(registry)
-      # Nothing was ever written for this directory.
-      assert File.ls(dir) == {:error, :enoent}
-    end
   end
 
   describe "crash honesty" do
@@ -309,18 +255,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       parent = self()
       registry = :"sess-reg-#{System.unique_integer([:positive])}"
 
-      resolver = fn
-        "tool-loop" ->
-          {:ok,
-           [
-             provider: {ToolThenAnswerProvider, test_pid: parent},
-             tools: [{CountingTool, test_pid: parent}],
-             approval: Alto.Approvals.AllowAll
-           ]}
-
-        other ->
-          {:error, {:unknown_config, other}}
-      end
+      resolver = counting_tool_resolver(parent)
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
@@ -561,12 +496,10 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       wait_empty(registry)
     end
 
-    test "unpersisted runs omit the session and resume reports honestly", %{
-      session_dir: _dir
-    } do
+    test "unpersisted runs omit the session and resume reports honestly", %{session_dir: dir} do
       parent = self()
       registry = :"sess-reg-#{System.unique_integer([:positive])}"
-      start_registry(registry, [], tool_resolver(parent))
+      start_registry(registry, [session_dir: dir], tool_resolver(parent))
 
       reply =
         wire(registry, %{
@@ -577,8 +510,12 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
           "task" => "task"
         })
 
-      assert %{"type" => "ok", "run_id" => _} = reply
+      assert %{"type" => "ok", "run_id" => run_id} = reply
       refute Map.has_key?(reply, "session_id")
+      wait_empty(registry)
+      assert Registry.run_session(registry, run_id) == nil
+      assert {:ok, []} = Registry.sessions(registry)
+      assert File.ls(dir) == {:error, :enoent}
 
       missing =
         wire(registry, %{
@@ -608,11 +545,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
   end
 
   defp wire(registry, envelope) do
-    Connection.run_command(JSON.encode!(envelope), registry, fn out ->
-      send(self(), {:line, out})
-    end)
-
-    assert_receive {:line, out}, @receive_timeout
+    [out] = Connection.command_lines(JSON.encode!(envelope), registry)
     JSON.decode!(IO.iodata_to_binary(out))
   end
 end

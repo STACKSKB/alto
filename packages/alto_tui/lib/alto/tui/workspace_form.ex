@@ -12,10 +12,8 @@ defmodule Alto.TUI.WorkspaceForm do
       base: base,
       folders: Enum.uniq(folders),
       suggestions: [],
-      suggestion_index: 0,
-      choose?: false,
+      suggestion_index: nil,
       completion: nil,
-      completion_pending?: false,
       tab_pending?: false,
       complete: Keyword.get(opts, :complete, &Alto.Harness.Folders.suggest(&1, base)),
       revision: make_ref(),
@@ -32,25 +30,25 @@ defmodule Alto.TUI.WorkspaceForm do
   def key(form, %Key{code: "n", modifiers: ["ctrl"]}), do: {:create, path(form)}
 
   def key(form, %Key{code: "enter"}),
-    do: {:submit, if(form.choose?, do: selected(form) || path(form), else: path(form))}
+    do: {:submit, selected(form) || path(form)}
 
   def key(%{suggestions: [_ | _]} = form, %Key{code: code})
       when code in ["up", "down", "back_tab"] do
     delta = if code == "down", do: 1, else: -1
 
     index =
-      if form.choose?,
+      if form.suggestion_index,
         do: Integer.mod(form.suggestion_index + delta, length(form.suggestions)),
         else: if(code == "down", do: 0, else: length(form.suggestions) - 1)
 
-    {:edit, %{form | suggestion_index: index, choose?: true, error: nil}}
+    {:edit, %{form | suggestion_index: index, error: nil}}
   end
 
   def key(form, %Key{code: "tab"}) do
     cond do
-      form.choose? -> {:edit, complete_path(form, selected(form))}
+      form.suggestion_index -> {:edit, complete_path(form, selected(form))}
       path(form) == "" -> {:edit, form}
-      form.completion_pending? -> {:edit, %{form | tab_pending?: true}}
+      form.completion == :pending -> {:edit, %{form | tab_pending?: true}}
       true -> {:edit, complete_path(form, form.completion)}
     end
   end
@@ -84,6 +82,7 @@ defmodule Alto.TUI.WorkspaceForm do
     end
   end
 
+  defp selected(%{suggestion_index: nil}), do: nil
   defp selected(form), do: Enum.at(form.suggestions, form.suggestion_index)
 
   defp refresh(form) do
@@ -92,9 +91,8 @@ defmodule Alto.TUI.WorkspaceForm do
     form = %{
       form
       | revision: make_ref(),
-        choose?: false,
         tab_pending?: false,
-        suggestion_index: 0,
+        suggestion_index: nil,
         error: nil
     }
 
@@ -116,16 +114,13 @@ defmodule Alto.TUI.WorkspaceForm do
       Enum.uniq(Enum.map(saved, &(String.trim_trailing(&1, "/") <> "/")) ++ found)
       |> Enum.take(50)
 
-    index =
-      if form.choose?, do: Enum.find_index(suggestions, &(&1 == selected(form))), else: nil
+    selected = selected(form)
 
     next = %{
       form
       | suggestions: suggestions,
-        suggestion_index: index || 0,
-        choose?: not is_nil(index),
-        completion: completion,
-        completion_pending?: result == :pending,
+        suggestion_index: Enum.find_index(suggestions, &(&1 == selected)),
+        completion: if(result == :pending, do: :pending, else: completion),
         tab_pending?: false
     }
 
@@ -155,7 +150,7 @@ defmodule Alto.TUI.WorkspaceForm do
 
     enter_hint =
       cond do
-        form.choose? -> "Enter opens selected folder"
+        form.suggestion_index -> "Enter opens selected folder"
         path(form) == "" -> "Type a folder path"
         true -> "Enter opens typed path"
       end
@@ -177,9 +172,9 @@ defmodule Alto.TUI.WorkspaceForm do
          # Keep the marker gutter fixed when keyboard selection becomes active.
          items:
            Enum.with_index(form.suggestions, fn folder, index ->
-             if(form.choose? and index == form.suggestion_index, do: "› ", else: "  ") <> folder
+             if(index == form.suggestion_index, do: "› ", else: "  ") <> folder
            end),
-         selected: if(form.choose?, do: form.suggestion_index, else: nil),
+         selected: form.suggestion_index,
          highlight_style: %Style{fg: :black, bg: :light_blue},
          style: bg
        }, %{inner | y: inner.y + 4, height: max(button_row - 4, 0)}},
@@ -210,7 +205,7 @@ defmodule Alto.TUI.WorkspaceForm do
   def click(form, row, column, height \\ 18) do
     button_row = max(height - 5, 4)
     visible = max(button_row - 4, 0)
-    offset = max(form.suggestion_index - visible + 1, 0)
+    offset = max((form.suggestion_index || 0) - visible + 1, 0)
 
     cond do
       row == button_row and column in 0..14 ->
@@ -223,7 +218,7 @@ defmodule Alto.TUI.WorkspaceForm do
         {:create, path(form)}
 
       row >= 4 and row < button_row and row - 4 + offset < length(form.suggestions) ->
-        key(%{form | suggestion_index: row - 4 + offset, choose?: true}, %Key{code: "tab"})
+        key(%{form | suggestion_index: row - 4 + offset}, %Key{code: "tab"})
 
       true ->
         {:edit, form}

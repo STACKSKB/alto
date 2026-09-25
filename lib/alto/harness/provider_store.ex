@@ -68,9 +68,9 @@ defmodule Alto.Harness.ProviderStore do
     end
   end
 
-  @doc "Provider options with a saved key merged only at the execution boundary."
-  @spec runtime_options(ProviderProfile.t(), keyword()) :: keyword()
-  def runtime_options(%ProviderProfile{} = profile, opts \\ []) do
+  @doc "Resolve the provider spec with credentials at the execution boundary."
+  @spec resolve(ProviderProfile.t(), keyword()) :: {module(), keyword()}
+  def resolve(%ProviderProfile{provider: {module, options}} = profile, opts \\ []) do
     record =
       case Credentials.load(path(opts)) do
         {:ok, credentials} -> Map.get(credentials.providers, profile.credential_id, %{})
@@ -79,9 +79,12 @@ defmodule Alto.Harness.ProviderStore do
 
     api_key = environment_key(profile) || Map.get(record, "api_key")
 
-    profile.options
-    |> maybe_put(:base_url, Map.get(record, "base_url"))
-    |> maybe_put(:api_key, api_key)
+    options =
+      options
+      |> maybe_put(:base_url, Map.get(record, "base_url"))
+      |> maybe_put(:api_key, api_key)
+
+    {module, options}
   end
 
   defp saved_profile(id, %{"type" => @kind} = record), do: [profile(id, record)]
@@ -91,19 +94,20 @@ defmodule Alto.Harness.ProviderStore do
     %ProviderProfile{
       id: id,
       label: Map.get(record, "label", id),
-      module: Alto.Providers.OpenAICompatible,
-      options: [base_url: Map.get(record, "base_url", @openrouter_url), timeout: 120_000],
+      provider:
+        {Alto.Providers.OpenAICompatible,
+         [base_url: Map.get(record, "base_url", @openrouter_url), timeout: 120_000]},
       models: :discover,
       default_model: Map.get(record, "model"),
       credential_id: id
     }
   end
 
-  defp decorate(profile, record) when is_map(record) do
+  defp decorate(%{provider: {module, options}} = profile, record) when is_map(record) do
     %{
       profile
       | label: Map.get(record, "label", profile.label),
-        options: maybe_put(profile.options, :base_url, Map.get(record, "base_url")),
+        provider: {module, maybe_put(options, :base_url, Map.get(record, "base_url"))},
         default_model: Map.get(record, "model", profile.default_model)
     }
   end

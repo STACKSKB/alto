@@ -19,7 +19,6 @@ defmodule Alto.Effect do
           | :run_tool
           | :run_tools
           | :invoke_tool
-          | :spawn_agent
           | :spawn_agents
   @type t :: %__MODULE__{kind: kind(), data: map()}
 
@@ -65,9 +64,6 @@ defmodule Alto.Effect do
   """
   @spec invoke_tool(map()) :: t()
   def invoke_tool(call), do: new(:invoke_tool, call)
-
-  @spec spawn_agent(map()) :: t()
-  def spawn_agent(request), do: new(:spawn_agent, request)
 
   @doc "Run a bounded batch of child requests and report ordered subagent outcomes."
   @spec spawn_agents(map()) :: t()

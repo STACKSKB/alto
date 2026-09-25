@@ -58,7 +58,7 @@ defmodule Alto.Usage do
       )
 
     total =
-      optional_integer(usage, ~w(total_tokens total_token_count totalTokenCount), input + output)
+      integer(usage, ~w(total_tokens total_token_count totalTokenCount), input + output)
 
     %__MODULE__{
       input_tokens: input,
@@ -124,7 +124,7 @@ defmodule Alto.Usage do
   def from_map(map) when is_map(map) do
     map = normalize_keys(map)
     input_tokens = integer(map, ~w(input_tokens))
-    last_input_tokens = optional_integer(map, ~w(last_input_tokens), input_tokens)
+    last_input_tokens = integer(map, ~w(last_input_tokens), input_tokens)
     cached_input_tokens = min(integer(map, ~w(cached_input_tokens)), input_tokens)
     last_cached_input_tokens = min(integer(map, ~w(last_cached_input_tokens)), last_input_tokens)
 
@@ -156,7 +156,7 @@ defmodule Alto.Usage do
     %__MODULE__{
       input_tokens: input,
       output_tokens: output,
-      total_tokens: optional_integer(total, ~w(totalTokens), input + output),
+      total_tokens: integer(total, ~w(totalTokens), input + output),
       cached_input_tokens: cached,
       last_input_tokens: last_input,
       last_cached_input_tokens: last_cached,
@@ -169,36 +169,23 @@ defmodule Alto.Usage do
 
   defp nested_integer(map, parents, children) do
     Enum.find_value(parents, 0, fn parent ->
-      case value(map, parent) do
+      case Map.get(map, parent) do
         nested when is_map(nested) -> nested |> normalize_keys() |> integer(children)
         _other -> nil
       end
     end)
   end
 
-  defp integer(map, keys) do
-    Enum.find_value(keys, 0, fn key ->
-      case value(map, key) do
+  defp integer(map, keys, default \\ 0) do
+    Enum.find_value(keys, default, fn key ->
+      case Map.get(map, key) do
         n when is_integer(n) and n >= 0 -> n
         _other -> nil
       end
     end)
   end
 
-  defp optional_integer(map, keys, default) do
-    if Enum.any?(keys, fn key ->
-         case value(map, key) do
-           n when is_integer(n) and n >= 0 -> true
-           _other -> false
-         end
-       end),
-       do: integer(map, keys),
-       else: default
-  end
-
-  defp present?(map, keys), do: Enum.any?(keys, &(not is_nil(value(map, &1))))
-
-  defp value(map, key), do: Map.get(map, key)
+  defp present?(map, keys), do: Enum.any?(keys, &(not is_nil(Map.get(map, &1))))
 
   defp normalize_keys(map) do
     string_keys = for {key, value} when is_binary(key) <- map, into: %{}, do: {key, value}

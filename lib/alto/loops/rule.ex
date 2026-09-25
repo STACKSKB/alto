@@ -28,12 +28,11 @@ defmodule Alto.Loops.Rule do
   alias Alto.Loop.Spec
   alias Alto.Transition
 
-  defstruct [:arguments, steps: [], index: 1, results: []]
+  defstruct [:arguments, index: 1, results: []]
 
   @type step :: binary() | %{optional(:tool) => binary(), optional(:arguments) => term()}
   @type t :: %__MODULE__{
           arguments: map(),
-          steps: [step()],
           index: pos_integer(),
           results: [term()]
         }
@@ -42,8 +41,8 @@ defmodule Alto.Loops.Rule do
   def init(task, %Spec{} = spec) do
     with {:ok, steps} <- steps(spec),
          {:ok, arguments} <- decode_task(task) do
-      state = %__MODULE__{steps: steps, arguments: arguments}
-      Transition.continue(state, [invoke(state)])
+      state = %__MODULE__{arguments: arguments}
+      Transition.continue(state, [invoke(state, hd(steps))])
     else
       {:error, reason} -> Transition.error(%__MODULE__{}, reason)
     end
@@ -51,16 +50,20 @@ defmodule Alto.Loops.Rule do
 
   @impl true
   def handle_event(
-        %Event{type: :tool_completed, data: %{call_id: call_id} = data},
+        %Event{type: :tool_completed, data: %{call_id: call_id, value: value}},
         %__MODULE__{} = state,
-        _spec
+        spec
       ) do
     if call_id == call_id(state) do
-      state = %{state | results: [Map.get(data, :value, Map.get(data, :output)) | state.results]}
+      state = %{state | results: [value | state.results]}
 
-      case next_step(state) do
-        {:ok, state} -> Transition.continue(state, [invoke(state)])
-        :done -> Transition.stop(state, Enum.reverse(state.results))
+      case Enum.at(spec.driver_options[:steps], state.index) do
+        nil ->
+          Transition.stop(state, Enum.reverse(state.results))
+
+        step ->
+          next = %{state | index: state.index + 1}
+          Transition.continue(next, [invoke(next, step)])
       end
     else
       Transition.continue(state)
@@ -70,10 +73,14 @@ defmodule Alto.Loops.Rule do
   def handle_event(
         %Event{type: :tool_failed, data: %{call_id: call_id, error: error}},
         %__MODULE__{} = state,
-        _spec
+        spec
       ) do
     if call_id == call_id(state) do
-      Transition.error(state, {:rule_step_failed, state.index, current_tool(state), error})
+      Transition.error(
+        state,
+        {:rule_step_failed, state.index,
+         current_tool(Enum.at(spec.driver_options[:steps], state.index - 1)), error}
+      )
     else
       Transition.continue(state)
     end
@@ -82,46 +89,20 @@ defmodule Alto.Loops.Rule do
   def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: Transition.continue(state)
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) do
-    with {:ok, spec_steps} <- steps(spec),
-         true <- is_list(state.steps) and state.steps != [],
-         true <- Enum.all?(state.steps, &valid_step?/1),
-         true <- is_integer(state.index) and state.index >= 1,
-         true <- state.index + length(state.steps) - 1 == length(spec_steps),
-         true <- is_map(state.arguments),
-         true <- is_list(state.results) do
-      {:ok, %{arguments: state.arguments, index: state.index, results: state.results}}
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) when map_size(state) == 4 do
+    with {:ok, steps} <- steps(spec),
+         true <- is_integer(state.index) and state.index >= 1 and state.index <= length(steps),
+         true <- is_map(state.arguments) and is_list(state.results) do
+      {:ok, state}
     else
       _ -> {:error, :invalid_checkpoint}
     end
   end
+
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
   @impl true
-  def load_checkpoint(
-        checkpoint,
-        %Spec{} = spec
-      )
-      when is_map(checkpoint) do
-    with true <- Map.keys(checkpoint) |> Enum.sort() == [:arguments, :index, :results],
-         arguments <- checkpoint.arguments,
-         index <- checkpoint.index,
-         results <- checkpoint.results,
-         true <- is_map(arguments) and is_integer(index) and index >= 1 and is_list(results),
-         {:ok, steps} <- steps(spec),
-         true <- index <= length(steps) do
-      remaining = Enum.drop(steps, index - 1)
-
-      if remaining == [],
-        do: {:error, :invalid_checkpoint},
-        else:
-          {:ok,
-           %__MODULE__{arguments: arguments, steps: remaining, index: index, results: results}}
-    else
-      _ -> {:error, :invalid_checkpoint}
-    end
-  end
-
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
   ## Internals
 
@@ -166,20 +147,20 @@ defmodule Alto.Loops.Rule do
   defp decode_task(task) when is_map(task), do: {:ok, task}
   defp decode_task(_task), do: {:error, :invalid_task}
 
-  defp invoke(%__MODULE__{} = state) do
+  defp invoke(%__MODULE__{} = state, step) do
     Effect.invoke_tool(%{
       id: call_id(state),
-      name: current_tool(state),
-      arguments: current_arguments(state)
+      name: current_tool(step),
+      arguments: current_arguments(step, state)
     })
   end
 
   defp call_id(%__MODULE__{index: index}), do: "rule-" <> Integer.to_string(index)
 
-  defp current_tool(%__MODULE__{steps: [step | _rest]}) when is_binary(step), do: step
-  defp current_tool(%__MODULE__{steps: [%{tool: tool} | _rest]}), do: tool
+  defp current_tool(step) when is_binary(step), do: step
+  defp current_tool(%{tool: tool}), do: tool
 
-  defp current_arguments(%__MODULE__{steps: [step | _rest], arguments: task_arguments} = state) do
+  defp current_arguments(step, %__MODULE__{arguments: task_arguments} = state) do
     case step do
       %{arguments: :task} ->
         task_arguments
@@ -194,9 +175,4 @@ defmodule Alto.Loops.Rule do
         task_arguments
     end
   end
-
-  defp next_step(%__MODULE__{steps: [_current | rest]} = state) when rest != [],
-    do: {:ok, %{state | steps: rest, index: state.index + 1}}
-
-  defp next_step(%__MODULE__{steps: [_current | _rest]}), do: :done
 end

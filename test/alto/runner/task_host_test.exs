@@ -59,13 +59,37 @@ defmodule Alto.Runner.TaskHostTest do
     refute_receive {:alto_runner_result, ^ref, _}
   end
 
-  test "a crashed lifecycle host still delivers one terminal notification" do
+  test "a crashed lifecycle host terminates its worker and delivers one terminal notification" do
     {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
+    worker = :sys.get_state(handle.pid).task.pid
+    worker_ref = Process.monitor(worker)
+    on_exit(fn -> Process.exit(worker, :kill) end)
     {:ok, ref} = TaskHost.subscribe(handle)
     Process.exit(handle.pid, :kill)
     assert_receive {:alto_runner_result, ^ref, {:error, {:run_process_failed, :killed}, result}}
     assert result.verdict == :unknown
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 500
     refute_receive {:alto_runner_result, ^ref, _}
+  end
+
+  test "dead subscribers release their completion registrations while the run continues" do
+    {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
+    on_exit(fn -> TaskHost.terminate(handle) end)
+    subscriber = spawn(fn -> Process.sleep(:infinity) end)
+    assert {:ok, _} = TaskHost.subscribe(handle, subscriber)
+    assert map_size(:sys.get_state(handle.pid).waiters) == 1
+    Process.exit(subscriber, :kill)
+
+    assert Enum.any?(1..100, fn _ ->
+             if :sys.get_state(handle.pid).waiters == %{} do
+               true
+             else
+               Process.sleep(5)
+               false
+             end
+           end)
+
+    assert {:error, :await_timeout} = TaskHost.await(handle, 0)
   end
 
   test "forced termination reports uncertain execution and releases observers" do

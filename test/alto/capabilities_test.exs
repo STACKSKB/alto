@@ -1,6 +1,20 @@
 defmodule Alto.CapabilitiesTest do
   use ExUnit.Case, async: true
 
+  test "capability resolution normalizes specs and rejects malformed options before invocation" do
+    module = Alto.Command.Executors.Unsandboxed
+    contract = Alto.Command.Executor
+    assert Alto.Capabilities.resolve(module, contract) == {:ok, {module, []}}
+
+    assert Alto.Capabilities.resolve({module, custom: true}, contract) ==
+             {:ok, {module, custom: true}}
+
+    for spec <- [{module, [123]}, {module, %{}}, {module, nil}, {String, []}, {42, []}, "module"] do
+      assert Alto.Capabilities.resolve(spec, contract) ==
+               {:error, {:invalid_capability, contract, spec}}
+    end
+  end
+
   test "inspection excludes secrets and reflects option-based tools and hidden capabilities" do
     config =
       Alto.Config.new(

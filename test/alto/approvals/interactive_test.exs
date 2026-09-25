@@ -55,16 +55,8 @@ defmodule Alto.Approvals.InteractiveTest do
   end
 
   describe "decision" do
-    test "y approves" do
-      assert :approve = decide("y\n", plain_request())
-    end
-
-    test "yes approves" do
-      assert :approve = decide("yes\n", plain_request())
-    end
-
     test "approval input is case-insensitive and trimmed" do
-      for answer <- ["Y", "YES", "  y  ", " yes "] do
+      for answer <- ["y", "yes", "Y", "YES", "  y  ", " yes "] do
         assert :approve = decide(answer <> "\n", plain_request())
       end
     end

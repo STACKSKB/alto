@@ -18,33 +18,41 @@ defmodule Alto.PromptTest do
     end
   end
 
+  defmodule NamedTool do
+    def name(opts), do: Keyword.get(opts, :name, :read_file)
+  end
+
+  test "coding prompts use the configured name/1 tool contract" do
+    assert Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [NamedTool]}, []) =~ "read-only"
+
+    assert Alto.Prompts.Coding.build(
+             %{cwd: "/workspace", tools: [{NamedTool, name: :write_file}]},
+             []
+           ) =~ "Workspace editing tools are enabled"
+  end
+
   test "describes capabilities from the actual tool registry" do
-    prompt = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles])
+    prompt = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [ListFiles]}, [])
 
     assert prompt =~ "read-only"
     assert prompt =~ "Command execution is disabled"
     refute prompt =~ "edit_file"
 
-    no_tools = Alto.Prompt.coding_agent("/workspace", tools: [])
+    no_tools = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: []}, [])
     assert no_tools =~ "No workspace tools are available"
 
-    writable = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles, EditFile, RunCommand])
+    writable =
+      Alto.Prompts.Coding.build(
+        %{cwd: "/workspace", tools: [ListFiles, EditFile, RunCommand]},
+        []
+      )
+
     assert writable =~ "Workspace editing tools are enabled"
     assert writable =~ "command executor configured by the harness"
 
-    command_only = Alto.Prompt.coding_agent("/workspace", tools: [RunCommand])
+    command_only = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [RunCommand]}, [])
     refute command_only =~ "read-only"
     assert command_only =~ "command executor configured by the harness"
-  end
-
-  test "the default CLI read-only tool set renders the read-only guidance" do
-    alias Alto.Tools.ReadFile
-    alias Alto.Tools.SearchFiles
-
-    prompt = Alto.Prompt.coding_agent("/workspace", tools: [ListFiles, ReadFile, SearchFiles])
-
-    assert prompt =~ "This run is read-only"
-    assert prompt =~ "Command execution is disabled"
   end
 
   test "chat and coding builders share the same runtime prompt boundary" do
@@ -106,18 +114,13 @@ defmodule Alto.PromptTest do
     assert prompt =~ "project instructions truncated"
   end
 
-  test "accepts a prompt function and rejects ambiguous configuration" do
-    assert {:ok, "cwd=/tmp\n"} =
-             Alto.Prompt.build(fn context -> "cwd=#{context.cwd}\n" end, %{
-               cwd: "/tmp",
-               tools: []
-             })
+  test "accepts literal text and disabled prompts" do
+    assert {:ok, nil} = Alto.Prompt.build(nil, %{})
+    assert {:ok, nil} = Alto.Prompt.build("", %{})
 
-    assert {:error, :conflicting_prompt_options, _result} =
-             Alto.run("hello",
-               provider: AnswerProvider,
-               prompt: Alto.Prompts.Chat,
-               system_prompt: "other"
-             )
+    assert {:ok, _} =
+             Alto.run("hello", provider: {AnswerProvider, test_pid: self()}, prompt: "literal")
+
+    assert_receive {:request, %{messages: [%{"role" => "system", "content" => "literal"} | _]}}
   end
 end

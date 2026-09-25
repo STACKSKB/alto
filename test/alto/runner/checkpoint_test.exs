@@ -1,37 +1,30 @@
 defmodule Alto.Runner.CheckpointTest do
   use ExUnit.Case, async: false
-  alias Alto.OperationLog
   alias Alto.Runner.{Checkpoint, Serial}
 
   defmodule First do
-    @behaviour Alto.Tool
-    def name, do: :first
-    def schema, do: %{description: "First", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    use Alto.Tool, name: :first, execution_mode: :exclusive, approval: :never
+    def schema(_opts), do: %{description: "First", parameters: %{type: "object", properties: %{}}}
 
-    def run(_, context) do
+    def run(_, context, _opts) do
       File.write!(Path.join(context.cwd, "first"), "1", [:append])
       {:ok, "first"}
     end
-
-    def run(arguments, context, _opts), do: run(arguments, context)
   end
 
   defmodule Guarded do
-    @behaviour Alto.Tool
-    def name, do: :guarded
-    def schema, do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    use Alto.Tool, name: :guarded, execution_mode: :exclusive, approval: :required
 
-    def prepare(_, context) do
+    def schema(_opts),
+      do: %{description: "Guarded", parameters: %{type: "object", properties: %{}}}
+
+    def prepare(_, context, _opts) do
       File.write!(Path.join(context.cwd, "preparations"), "1", [:append])
       value = File.read!(Path.join(context.cwd, "input"))
-      {:ok, %{value: value}, %{value: value}}
+      {:ok, %{value: value}, %{value: value, prepared_by: self()}}
     end
 
-    def run_prepared(prepared, context) do
+    def run_prepared(prepared, context, _opts) do
       File.write!(Path.join(context.cwd, "guarded"), prepared.value, [:append])
       {:ok, prepared.value}
     end
@@ -111,6 +104,7 @@ defmodule Alto.Runner.CheckpointTest do
   } do
     assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
     assert suspended.checkpoint["request"]["tool"] == "guarded"
+    assert %{"$inspect" => _} = suspended.checkpoint["request"]["details"]["prepared_by"]
     assert File.read!(Path.join(dir, "first")) == "1"
     refute File.exists?(Path.join(dir, "guarded"))
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
@@ -127,13 +121,20 @@ defmodule Alto.Runner.CheckpointTest do
     dir: dir,
     opts: opts
   } do
+    owner = self()
+
     opts =
       opts
       |> Keyword.put(:loop, Alto.default_loop())
       |> Keyword.put(:provider, {Provider, owner: self()})
+      |> Keyword.put(:prompt, fn _context ->
+        send(owner, :prompt_built)
+        "Saved system prompt"
+      end)
 
     assert {:error, :approval_suspended, suspended} = Serial.run("do the work", opts)
     assert_receive {:model_request, _}
+    assert_receive :prompt_built
     assert suspended.checkpoint["request"]["call_id"] == "guarded-call"
 
     assert {:ok, completed} =
@@ -146,6 +147,8 @@ defmodule Alto.Runner.CheckpointTest do
     assert completed.model_requests == 2
     assert completed.usage.total_tokens == 11
     assert_receive {:model_request, messages}
+    assert hd(messages) == %{"role" => "system", "content" => "Saved system prompt"}
+    refute_receive :prompt_built, 50
     assert Enum.count(messages, &(&1["role"] == "tool")) == 2
     assert File.read!(Path.join(dir, "first")) == "1"
     refute_receive {:model_request, _}, 50
@@ -164,7 +167,7 @@ defmodule Alto.Runner.CheckpointTest do
     assert File.read!(Path.join(dir, "first")) == "1"
   end
 
-  test "changed configuration and nonportable data fail before dispatch", %{dir: dir, opts: opts} do
+  test "changed configuration fails before dispatch", %{dir: dir, opts: opts} do
     {:error, :approval_suspended, result} = Serial.run("{}", opts)
 
     changed =
@@ -174,12 +177,6 @@ defmodule Alto.Runner.CheckpointTest do
 
     assert {:error, :checkpoint_mismatch, _} = Serial.run("{}", changed)
     refute File.exists?(Path.join(dir, "guarded"))
-
-    for value <- [self(), make_ref(), fn -> :ok end] do
-      assert {:error, _} = Checkpoint.encode(%{value: value})
-    end
-
-    assert {:error, _} = Checkpoint.decode(Base.encode64(:erlang.term_to_binary(self())))
   end
 
   test "a stuck custom checkpoint callback is bounded and never dispatches the tool", %{
@@ -203,7 +200,7 @@ defmodule Alto.Runner.CheckpointTest do
     assert {:ok, run} = Alto.Runner.Execution.Setup.open("{}", opts)
 
     assert_raise RuntimeError, "checkpoint programmer error", fn ->
-      Alto.Runner.Checkpoint.restore(run, suspended.checkpoint, :approve, opts)
+      Checkpoint.restore(run, suspended.checkpoint, :approve, opts)
     end
   end
 
@@ -248,69 +245,5 @@ defmodule Alto.Runner.CheckpointTest do
 
     assert File.read!(Path.join(dir, "guarded")) == "originaloriginal"
     refute File.exists?(Path.join(dir, "first"))
-  end
-
-  test "checkpoint resumes after the configured journal store is restarted", %{
-    opts: opts,
-    dir: dir
-  } do
-    ledger_dir = Path.join(dir, "journal")
-    ledger_opts = [id: "checkpoint-journal", name: nil, dir: ledger_dir]
-    ledger = start_supervised!({OperationLog, ledger_opts}, id: :checkpoint_journal)
-
-    with_journal = fn store ->
-      Keyword.put(
-        opts,
-        :loop,
-        Alto.rule_loop(
-          steps: ["guarded"],
-          subagents: Alto.Subagents.bounded(journal: store)
-        )
-      )
-    end
-
-    assert {:error, :approval_suspended, suspended} = Serial.run("{}", with_journal.(ledger))
-    stop_supervised!(:checkpoint_journal)
-    restarted = start_supervised!({OperationLog, ledger_opts}, id: :checkpoint_journal)
-
-    assert {:ok, result} =
-             Serial.run(
-               "{}",
-               Keyword.put(
-                 with_journal.(restarted),
-                 :checkpoint,
-                 {suspended.checkpoint, :approve}
-               )
-             )
-
-    assert result.verdict == :completed
-  end
-
-  test "checkpoint rejects a different configured journal store", %{opts: opts, dir: dir} do
-    first_dir = Path.join(dir, "first-journal")
-    second_dir = Path.join(dir, "second-journal")
-    first_opts = [id: "checkpoint-journal", name: nil, dir: first_dir]
-    second_opts = [id: "checkpoint-journal", name: nil, dir: second_dir]
-    first = start_supervised!({OperationLog, first_opts}, id: :checkpoint_journal_first)
-    second = start_supervised!({OperationLog, second_opts}, id: :checkpoint_journal_second)
-
-    with_journal = fn store ->
-      Keyword.put(
-        opts,
-        :loop,
-        Alto.rule_loop(
-          steps: ["guarded"],
-          subagents: Alto.Subagents.bounded(journal: store)
-        )
-      )
-    end
-
-    assert {:error, :approval_suspended, suspended} = Serial.run("{}", with_journal.(first))
-
-    assert {:error, :checkpoint_mismatch, _} =
-             Serial.run(
-               "{}",
-               Keyword.put(with_journal.(second), :checkpoint, {suspended.checkpoint, :approve})
-             )
   end
 end

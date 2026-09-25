@@ -78,10 +78,6 @@ ripwire_tools =
   end
 
 Alto.Config.new(
-  codex_backend: [
-    command: System.get_env("CODEX_BIN") || "codex",
-    model: System.get_env("ALTO_CODEX_MODEL")
-  ],
   provider_profiles: [
     [
       id: "openrouter",
@@ -114,7 +110,11 @@ Alto.Config.new(
     ] ++ if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++ fff_tools ++ ripwire_tools,
   tui_backends: [
     alto: {Alto.TUI.Backends.Native, label: "Alto native"},
-    codex: {Alto.TUI.Backends.Codex, label: "Codex · ChatGPT"}
+    codex:
+      {Alto.TUI.Backends.Codex,
+       label: "Codex · ChatGPT",
+       command: System.get_env("CODEX_BIN") || "codex",
+       model: System.get_env("ALTO_CODEX_MODEL")}
   ],
   tool_presenter: {Alto.ToolDisplay, []},
   approval: Alto.Approvals.Interactive,

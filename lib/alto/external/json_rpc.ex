@@ -1,6 +1,39 @@
 defmodule Alto.External.JSONRPC do
   @moduledoc false
 
+  alias Alto.External.Process, as: ExternalProcess
+
+  def normalize_options(opts, schema) do
+    opts = Keyword.put_new(opts, :cwd, File.cwd!())
+
+    with {:ok, opts} <- NimbleOptions.validate(opts, schema),
+         true <- opts[:command] != "" or {:error, :empty_external_command},
+         true <- File.dir?(opts[:cwd]) or {:error, {:invalid_working_directory, opts[:cwd]}},
+         executable when is_binary(executable) <-
+           ExternalProcess.resolve_executable(opts[:command]) ||
+             {:error, {:external_executable_not_found, opts[:command]}} do
+      {:ok, Keyword.put(opts, :command, executable)}
+    else
+      {:error, _} = error -> error
+    end
+  end
+
+  def state(opts, protocol_state) when is_map(protocol_state) do
+    Map.merge(
+      %{
+        opts: opts,
+        process: nil,
+        buffer: "",
+        phase: :starting,
+        next_id: 1,
+        pending: %{},
+        ready_waiters: [],
+        initialize_timer: nil
+      },
+      protocol_state
+    )
+  end
+
   def start_link(module, opts),
     do: GenServer.start_link(module, opts, name: Keyword.get(opts, :name))
 
@@ -12,11 +45,135 @@ defmodule Alto.External.JSONRPC do
     }
   end
 
+  def ensure_started(module, opts) do
+    # Keyword lookup uses the first occurrence; option order is not client identity.
+    identity = opts |> Enum.reverse() |> Map.new() |> :erlang.term_to_binary([:deterministic])
+    key = {module, :crypto.hash(:sha256, identity)}
+    name = {:via, Registry, {Alto.External.Registry, key}}
+    child = {module, Keyword.put(opts, :name, name)}
+
+    case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
+      {:ok, pid} ->
+        await_startup(pid, opts, module)
+
+      {:error, {:already_started, pid}} ->
+        await_startup(pid, opts, module)
+
+      {:error, reason} ->
+        {:error, {:external_client_failed, module, :start, reason}}
+    end
+  catch
+    :exit, reason -> {:error, {:external_client_failed, module, :supervisor, reason}}
+  end
+
+  defp await_startup(pid, opts, module) do
+    GenServer.call(pid, :await_ready, call_timeout(Keyword.fetch!(opts, :startup_timeout)))
+  catch
+    :exit, reason -> {:error, {:external_client_failed, module, :ready, reason}}
+  end
+
+  def call_timeout(:infinity), do: :infinity
+  def call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
+
+  def open(state, opener, initialize) do
+    case opener.(state.opts) do
+      {:ok, process} ->
+        state = %{state | process: process}
+
+        case initialize.(state) do
+          {:ok, state} -> {:ok, arm_startup_timeout(state)}
+          {:error, reason} -> {:error, reason, state}
+        end
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
+
   def format_status(status) do
     Map.update(status, :state, %{}, fn state ->
       %{phase: state.phase, pending_count: map_size(state.pending)}
     end)
     |> Map.put(:message, :redacted)
+  end
+
+  def await_ready(%{phase: :ready} = state, _from, _limit_error),
+    do: {:reply, {:ok, self()}, state}
+
+  def await_ready(%{phase: {:failed, reason}} = state, _from, _limit_error),
+    do: {:reply, {:error, reason}, state}
+
+  def await_ready(state, from, limit_error) do
+    limit = Keyword.fetch!(state.opts, :max_ready_waiters)
+
+    if length(state.ready_waiters) >= limit do
+      {:reply, {:error, {limit_error, limit}}, state}
+    else
+      monitor = Process.monitor(elem(from, 0))
+      {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
+    end
+  end
+
+  def ready(state) do
+    cancel_timer(state.initialize_timer)
+
+    Enum.each(state.ready_waiters, fn {from, monitor} ->
+      demonitor(elem(from, 0), monitor)
+      GenServer.reply(from, {:ok, self()})
+    end)
+
+    %{state | phase: :ready, ready_waiters: [], initialize_timer: nil}
+  end
+
+  def arm_startup_timeout(state) do
+    timer =
+      Process.send_after(
+        self(),
+        :initialize_timeout,
+        Keyword.fetch!(state.opts, :startup_timeout)
+      )
+
+    %{state | initialize_timer: timer}
+  end
+
+  def handle_transport(message, state, handle_message, fail_all) do
+    case transport_event(message, state, handle_message) do
+      {:ok, state} -> {:noreply, state}
+      {:error, reason, state} -> {:stop, reason, fail_all.(state, reason)}
+    end
+  end
+
+  defp transport_event({port, {:data, data}}, %{process: %{port: port}} = state, handler),
+    do: ingest(state, data, :json_rpc_message_limit, &consume_lines(&1, handler))
+
+  defp transport_event({port, {:exit_status, status}}, %{process: %{port: port}} = state, _),
+    do: {:error, {:json_rpc_process_exit, status}, state}
+
+  defp transport_event({:EXIT, port, reason}, %{process: %{port: port}} = state, _),
+    do: {:error, {:json_rpc_process_exit, reason}, state}
+
+  defp transport_event(:initialize_timeout, %{phase: :starting} = state, _),
+    do: {:error, {:json_rpc_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}, state}
+
+  defp transport_event(_, state, _), do: {:ok, state}
+
+  def ingest(state, data, limit_error, consume)
+      when is_binary(data) and is_function(consume, 1) do
+    buffer = state.buffer <> data
+    limit = Keyword.fetch!(state.opts, :max_message_bytes)
+
+    if byte_size(buffer) > limit,
+      do: {:error, {limit_error, limit}, state},
+      else: consume.(%{state | buffer: buffer})
+  end
+
+  def close(%{process: nil}), do: :ok
+
+  def close(%{process: process}) do
+    ExternalProcess.close(process)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   def request(state, method, params, reply, owner, timeout, limit_error) do
@@ -33,7 +190,8 @@ defmodule Alto.External.JSONRPC do
         id = state.next_id
         payload = %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
 
-        with :ok <- send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes)) do
+        with :ok <-
+               send_payload(state, payload) do
           pending = %{
             reply: reply,
             owner: owner,
@@ -46,15 +204,29 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  def consume_lines(state, handle_line) do
+  def consume_lines(state, handle_message) do
     case :binary.split(state.buffer, "\n") do
       [_rest] ->
         {:ok, state}
 
       [line, rest] ->
         with {:ok, state} <-
-               handle_line.(String.trim_trailing(line, "\r"), %{state | buffer: rest}),
-             do: consume_lines(state, handle_line)
+               decode_line(
+                 String.trim_trailing(line, "\r"),
+                 %{state | buffer: rest},
+                 handle_message
+               ),
+             do: consume_lines(state, handle_message)
+    end
+  end
+
+  defp decode_line("", state, _handle_message), do: {:ok, state}
+
+  defp decode_line(line, state, handle_message) do
+    case JSON.decode(line) do
+      {:ok, message} when is_map(message) -> handle_message.(message, state)
+      {:ok, _other} -> {:error, :json_rpc_message_not_object, state}
+      {:error, error} -> {:error, {:json_rpc_invalid_json, Exception.message(error)}, state}
     end
   end
 
@@ -67,6 +239,34 @@ defmodule Alto.External.JSONRPC do
         release(entry)
         callback.(entry.reply, message, %{state | pending: pending})
     end
+  end
+
+  def expire(state, id, reply_timeout) do
+    {:ok, state} =
+      settle(state, id, nil, fn reply, _, state ->
+        reply_timeout.(reply)
+        {:ok, state}
+      end)
+
+    {:noreply, state}
+  end
+
+  def drop_owner(state, monitor, owner, cancel) do
+    {owned, pending} =
+      Enum.split_with(state.pending, fn {_id, entry} ->
+        entry.monitor == monitor and entry.owner == owner
+      end)
+
+    Enum.each(owned, fn {id, entry} ->
+      cancel.(id)
+      release(entry)
+    end)
+
+    %{
+      state
+      | pending: Map.new(pending),
+        ready_waiters: Enum.reject(state.ready_waiters, fn {_from, ref} -> ref == monitor end)
+    }
   end
 
   def release(%{timer: timer, owner: owner, monitor: monitor}) do
@@ -109,12 +309,13 @@ defmodule Alto.External.JSONRPC do
   def remaining(:infinity), do: :infinity
   def remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
-  def send(port, payload, max_bytes) do
+  def send_payload(state, payload) do
+    max_bytes = Keyword.fetch!(state.opts, :max_message_bytes)
     data = JSON.encode!(payload) <> "\n"
 
     cond do
       byte_size(data) > max_bytes -> {:error, {:json_rpc_message_limit, max_bytes}}
-      Port.command(port, data, [:nosuspend]) -> :ok
+      Port.command(state.process.port, data, [:nosuspend]) -> :ok
       true -> {:error, :transport_busy}
     end
   rescue

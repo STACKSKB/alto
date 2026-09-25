@@ -43,9 +43,37 @@ defmodule Alto.Storage do
     timeout = Keyword.get(opts, :timeout, @default_lock_timeout)
     lock_path = Path.expand(path)
 
-    with :ok <- ensure_lock_file(lock_path),
-         {:ok, port} <- open_lock(lock_path, timeout) do
-      {:ok, port}
+    with :ok <- ensure_lock_file(lock_path), do: open_lock(lock_path, timeout)
+  end
+
+  @doc "Replay under a lifetime lock, then transfer ownership to the new server."
+  def start_server(module, state, load, opts) do
+    with {:ok, lock} <-
+           acquire(state.path <> ".lock", timeout: Keyword.get(opts, :lock_timeout, 5_000)) do
+      result =
+        with {:ok, loaded} <- load.(state),
+             {:ok, pid} <-
+               GenServer.start_link(module, %{loaded | lock: lock},
+                 name: Keyword.get(opts, :name, module)
+               ) do
+          case connect(lock, pid) do
+            :ok ->
+              {:ok, pid}
+
+            {:error, _} = error ->
+              GenServer.stop(pid)
+              error
+          end
+        end
+
+      case result do
+        {:ok, _pid} ->
+          result
+
+        error ->
+          release(lock)
+          error
+      end
     end
   end
 
@@ -67,10 +95,7 @@ defmodule Alto.Storage do
     if File.dir?(dir) do
       if Keyword.get(opts, :owned, false), do: File.chmod(dir, 0o700), else: :ok
     else
-      with :ok <- File.mkdir_p(dir),
-           :ok <- File.chmod(dir, 0o700) do
-        :ok
-      end
+      with :ok <- File.mkdir_p(dir), do: File.chmod(dir, 0o700)
     end
   end
 
@@ -91,10 +116,7 @@ defmodule Alto.Storage do
   end
 
   defp ensure_lock_file(path) do
-    with :ok <- ensure_private_dir(Path.dirname(path)),
-         :ok <- ensure_private_file(path) do
-      :ok
-    end
+    with :ok <- ensure_private_dir(Path.dirname(path)), do: ensure_private_file(path)
   end
 
   defp open_lock(path, timeout) do

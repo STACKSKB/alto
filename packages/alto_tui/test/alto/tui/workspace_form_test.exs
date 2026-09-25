@@ -261,7 +261,7 @@ defmodule Alto.TUI.WorkspaceFormTest do
     form = WorkspaceForm.suggest(form, {:ok, %{folders: ["/home/"], completion: "/home/"}})
     assert WorkspaceForm.path(form) == "/home/"
     assert form.revision != revision
-    assert form.completion_pending?
+    assert form.completion == :pending
     refute form.tab_pending?
 
     form =

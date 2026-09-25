@@ -4,7 +4,7 @@ defmodule Alto.Runner.DurableDeadlineTest do
   alias Alto.OperationLog
   alias Alto.Runner.Budget
   alias Alto.Runner.Budget.Account
-  alias Alto.Subagents.Journal
+  alias Alto.Subagents.Continuation
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-deadline-#{System.unique_integer([:positive])}")
@@ -28,13 +28,13 @@ defmodule Alto.Runner.DurableDeadlineTest do
   end
 
   test "a suspended journal ledger is bounded by its absolute deadline", %{ledger: ledger} do
-    assert {:ok, batch} = Journal.open(ledger, "batch", ["child"])
+    assert {:ok, batch} = Continuation.open(ledger, "batch", ["child"])
     deadline = System.monotonic_time(:millisecond) + 50
     stalled = %{batch | deadline: deadline}
     :sys.suspend(ledger)
     started = System.monotonic_time(:millisecond)
 
-    assert {:error, :run_timeout} = Journal.read(stalled)
+    assert {:error, :run_timeout} = Continuation.read(stalled)
     assert System.monotonic_time(:millisecond) - started < 250
     :sys.resume(ledger)
   end
@@ -80,7 +80,7 @@ defmodule Alto.Runner.DurableDeadlineTest do
     # Manual admission lets initialization settle before the ledger is stalled.
     {:ok, handle} =
       Alto.start(%{},
-        runner: Alto.Runner.Stepped,
+        runner: Alto.Runner.Serial,
         runner_options: [mode: :manual, controller: self()],
         loop: Alto.rule_loop(steps: ["missing_tool"]),
         budget_account: account,
@@ -91,7 +91,7 @@ defmodule Alto.Runner.DurableDeadlineTest do
     :sys.suspend(ledger)
 
     try do
-      Alto.Runner.Stepped.advance(ticket)
+      Alto.Runner.Serial.advance(ticket)
       assert {:error, :await_timeout} = Alto.await(handle, 20)
       Alto.cancel(handle, :storage_stalled)
       assert {:error, {:cancelled, :storage_stalled}, _} = Alto.await(handle, 500)

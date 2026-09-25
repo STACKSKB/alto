@@ -172,7 +172,15 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     manager: manager
   } do
     outside = Path.join(dir, "tracked.txt")
-    agents = [%{id: "one", task: %{content: "child\n"}, cwd: dir, loop: Alto.loop(WriteLoop)}]
+    spoofed = %{id: "one", task: %{content: "child\n"}, cwd: dir, loop: Alto.loop(WriteLoop)}
+
+    assert {:error, {:invalid_spawn_agents, _}, _} =
+             Alto.run(%{agents: [spoofed]}, run_opts(manager, dir))
+
+    refute File.exists?(outside)
+    assert Path.wildcard(Path.join(manager.root, "ws-*/checkout")) == []
+
+    agents = [Map.delete(spoofed, :cwd)]
     assert {:ok, result} = Alto.run(%{agents: agents}, run_opts(manager, dir))
     assert {:completed, [%{status: :ok, workspace: workspace}]} = result.output
     assert File.read!(Path.join(source, "tracked.txt")) == "base\n"

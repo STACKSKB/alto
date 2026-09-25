@@ -4,11 +4,8 @@ defmodule Alto.Runner.HistoryBoundariesTest do
   use ExUnit.Case, async: false
 
   defmodule Tick do
-    @behaviour Alto.Tool
-    def name, do: :tick
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    use Alto.Tool, name: :tick, execution_mode: :exclusive, approval: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     def run(_, _, opts) do
       send(opts[:owner], :tick)

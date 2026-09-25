@@ -3,65 +3,46 @@ defmodule Alto.Providers.Anthropic.Stream do
 
   alias Alto.Event
 
-  @default_max_bytes 2_000_000
   @valid_stop_reasons ["end_turn", "tool_use", "stop_sequence"]
 
-  defstruct content: [],
-            reasoning: [],
-            blocks: %{},
+  defstruct blocks: %{},
             block_order: [],
             usage: nil,
             stop_reason: nil,
             stop_sequence: nil,
             message_started?: false,
             message_stopped?: false,
-            error: nil,
-            bytes: 0,
-            max_bytes: @default_max_bytes
+            error: nil
 
   @type t :: %__MODULE__{
-          content: iodata(),
-          reasoning: iodata(),
           blocks: map(),
           block_order: [non_neg_integer()],
           usage: map() | nil,
           stop_reason: binary() | nil,
           message_stopped?: boolean(),
-          error: term() | nil,
-          bytes: non_neg_integer(),
-          max_bytes: pos_integer()
+          error: term() | nil
         }
 
-  @spec new(pos_integer()) :: t()
-  def new(max_bytes \\ @default_max_bytes)
-      when is_integer(max_bytes) and max_bytes > 0,
-      do: %__MODULE__{max_bytes: max_bytes}
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
 
   @spec consume(t(), binary(), (Event.t() -> any())) :: t()
   def consume(%__MODULE__{error: error} = state, _payload, _sink) when not is_nil(error),
     do: state
 
   def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
-    bytes = state.bytes + byte_size(payload)
+    case JSON.decode(payload) do
+      {:ok, %{"type" => _type} = event} ->
+        consume_event(state, event, sink)
 
-    if bytes > state.max_bytes do
-      %{state | bytes: bytes, error: {:model_response_too_large, state.max_bytes}}
-    else
-      state = %{state | bytes: bytes}
+      {:ok, %{"error" => error}} ->
+        %{state | error: {:provider_error, error}}
 
-      case JSON.decode(payload) do
-        {:ok, %{"type" => _type} = event} ->
-          consume_event(state, event, sink)
+      {:ok, other} ->
+        %{state | error: {:unexpected_stream_payload, other}}
 
-        {:ok, %{"error" => error}} ->
-          %{state | error: {:provider_error, error}}
-
-        {:ok, other} ->
-          %{state | error: {:unexpected_stream_payload, other}}
-
-        {:error, _error} ->
-          %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
-      end
+      {:error, _error} ->
+        %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
     end
   end
 
@@ -79,10 +60,11 @@ defmodule Alto.Providers.Anthropic.Stream do
 
     blocks
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, state}, fn {block, index}, {:ok, state} ->
-      case put_response_block(state, index, block, sink) do
-        {:ok, state} -> {:cont, {:ok, state}}
-        {:error, reason} -> {:halt, {:error, reason}}
+    |> Alto.Result.reduce(state, fn {block, index}, state ->
+      with {:ok, value} <- new_block(block),
+           {:ok, _complete} <- finalize_block(value) do
+        emit_block(value, sink)
+        {:ok, put_block(state, index, value)}
       end
     end)
   end
@@ -96,26 +78,10 @@ defmodule Alto.Providers.Anthropic.Stream do
   def result(%__MODULE__{} = state) do
     with :ok <- valid_final_response(state),
          {:ok, blocks} <- finalize_blocks(state) do
-      {texts, thinking, calls, content} =
-        Enum.reduce(blocks, {[], [], [], []}, fn block, {texts, thinking, calls, content} ->
-          case block do
-            %{"type" => "text", "text" => text} ->
-              {[text | texts], thinking, calls, [block | content]}
-
-            %{"type" => "thinking", "thinking" => text} ->
-              {texts, [text | thinking], calls, [block | content]}
-
-            %{"type" => "redacted_thinking"} ->
-              {texts, thinking, calls, [block | content]}
-
-            %{"type" => "tool_use"} ->
-              {texts, thinking, [tool_call(block) | calls], [block | content]}
-          end
-        end)
-
-      message = texts |> Enum.reverse() |> Enum.join()
-      reasoning = thinking |> Enum.reverse() |> Enum.join("\n")
-      calls = Enum.reverse(calls)
+      by_type = Enum.group_by(blocks, & &1["type"])
+      message = Enum.map_join(Map.get(by_type, "text", []), & &1["text"])
+      reasoning = Enum.map_join(Map.get(by_type, "thinking", []), "\n", & &1["thinking"])
+      calls = Enum.map(Map.get(by_type, "tool_use", []), &tool_call/1)
 
       {:ok,
        %{
@@ -124,9 +90,9 @@ defmodule Alto.Providers.Anthropic.Stream do
          usage: state.usage,
          reasoning: reasoning,
          provider_fields:
-           if(thinking == [],
-             do: %{},
-             else: %{"alto_anthropic_content" => Enum.reverse(content), "reasoning" => reasoning}
+           if(Map.has_key?(by_type, "thinking"),
+             do: %{"alto_anthropic_content" => blocks, "reasoning" => reasoning},
+             else: %{}
            )
        }}
     end
@@ -186,7 +152,7 @@ defmodule Alto.Providers.Anthropic.Stream do
        when is_integer(index) do
     case Map.get(state.blocks, index) do
       nil -> %{state | error: {:unexpected_stream_chunk, :content_block_without_start}}
-      block -> %{state | blocks: Map.put(state.blocks, index, Map.put(block, :stopped?, true))}
+      _block -> state
     end
   end
 
@@ -196,34 +162,25 @@ defmodule Alto.Providers.Anthropic.Stream do
   defp consume_event(state, %{"type" => type}, _sink),
     do: %{state | error: {:unexpected_stream_event, type}}
 
-  defp new_block(%{"type" => "text"} = block) do
-    text = block["text"] || ""
+  defp new_block(%{"type" => "text", "text" => text}) when is_binary(text),
+    do: {:ok, %{"type" => "text", "text" => text}}
 
-    if is_binary(text),
-      do: {:ok, %{type: "text", text: text}},
-      else: {:error, :unsupported_anthropic_content}
-  end
-
-  defp new_block(%{"type" => "thinking"} = block) do
-    thinking = block["thinking"] || ""
+  defp new_block(%{"type" => "thinking", "thinking" => thinking} = block)
+       when is_binary(thinking) do
     signature = block["signature"]
 
-    if is_binary(thinking) and (is_nil(signature) or is_binary(signature)),
-      do: {:ok, %{type: "thinking", text: thinking, signature: signature || ""}},
+    if is_nil(signature) or is_binary(signature),
+      do: {:ok, %{"type" => "thinking", "thinking" => thinking, "signature" => signature || ""}},
       else: {:error, :unsupported_anthropic_content}
   end
 
   defp new_block(%{"type" => "redacted_thinking", "data" => data}) when is_binary(data),
-    do: {:ok, %{type: "redacted_thinking", data: data}}
+    do: {:ok, %{"type" => "redacted_thinking", "data" => data}}
 
-  defp new_block(%{"type" => "tool_use", "id" => id, "name" => name} = block)
-       when is_binary(id) and id != "" and is_binary(name) and name != "" do
-    input = block["input"]
-
-    if is_nil(input) or is_map(input),
-      do: {:ok, %{type: "tool_use", id: id, name: name, input: input || %{}, chunks: []}},
-      else: {:error, :unsupported_anthropic_content}
-  end
+  defp new_block(%{"type" => "tool_use", "id" => id, "name" => name, "input" => input})
+       when is_binary(id) and id != "" and is_binary(name) and name != "" and is_map(input),
+       do:
+         {:ok, %{"type" => "tool_use", "id" => id, "name" => name, "input" => input, chunks: []}}
 
   defp new_block(_), do: {:error, :unsupported_anthropic_content}
 
@@ -235,84 +192,42 @@ defmodule Alto.Providers.Anthropic.Stream do
     }
   end
 
-  defp consume_delta(state, index, block, %{"type" => "text_delta", "text" => text}, sink)
-       when block.type == "text" and is_binary(text) do
-    sink.(Event.live(:model_delta, %{text: text}))
-    update_block(state, index, %{block | text: block.text <> text})
+  @delta_fields %{
+    "text_delta" => {"text", "text", :model_delta},
+    "thinking_delta" => {"thinking", "thinking", :model_reasoning_delta},
+    "signature_delta" => {"thinking", "signature", nil},
+    "input_json_delta" => {"tool_use", "partial_json", nil}
+  }
+
+  defp consume_delta(state, index, block, delta, sink) do
+    with {type, field, event} <- @delta_fields[delta["type"]],
+         true <- block["type"] == type,
+         text when is_binary(text) <- delta[field] do
+      if event, do: sink.(Event.live(event, %{text: text}))
+
+      updated =
+        if field == "partial_json",
+          do: %{block | chunks: [text | block.chunks]},
+          else: Map.update!(block, field, &(&1 <> text))
+
+      update_block(state, index, updated)
+    else
+      _ -> %{state | error: :unsupported_anthropic_content}
+    end
   end
-
-  defp consume_delta(state, index, block, %{"type" => "thinking_delta", "thinking" => text}, sink)
-       when block.type == "thinking" and is_binary(text) do
-    sink.(Event.live(:model_reasoning_delta, %{text: text}))
-    update_block(state, index, %{block | text: block.text <> text})
-  end
-
-  defp consume_delta(
-         state,
-         index,
-         block,
-         %{"type" => "signature_delta", "signature" => signature},
-         _sink
-       )
-       when block.type == "thinking" and is_binary(signature),
-       do: update_block(state, index, %{block | signature: block.signature <> signature})
-
-  defp consume_delta(
-         state,
-         index,
-         block,
-         %{"type" => "input_json_delta", "partial_json" => json},
-         _sink
-       )
-       when block.type == "tool_use" and is_binary(json),
-       do: update_block(state, index, %{block | chunks: [json | block.chunks]})
-
-  defp consume_delta(state, _index, _block, _delta, _sink),
-    do: %{state | error: :unsupported_anthropic_content}
 
   defp update_block(state, index, block),
     do: %{state | blocks: Map.put(state.blocks, index, block)}
 
-  defp put_response_block(state, index, %{"type" => "text", "text" => text}, sink)
-       when is_binary(text) do
-    if text != "", do: sink.(Event.live(:model_delta, %{text: text}))
-    {:ok, put_block(state, index, %{type: "text", text: text})}
+  defp emit_block(%{"type" => "text", "text" => text}, sink) when text != "" do
+    sink.(Event.live(:model_delta, %{text: text}))
   end
 
-  defp put_response_block(
-         state,
-         index,
-         %{"type" => "thinking", "thinking" => text, "signature" => signature},
-         sink
-       )
-       when is_binary(text) and is_binary(signature) do
-    if text != "", do: sink.(Event.live(:model_reasoning_delta, %{text: text}))
-    {:ok, put_block(state, index, %{type: "thinking", text: text, signature: signature})}
+  defp emit_block(%{"type" => "thinking", "thinking" => text}, sink) when text != "" do
+    sink.(Event.live(:model_reasoning_delta, %{text: text}))
   end
 
-  defp put_response_block(state, index, %{"type" => "redacted_thinking", "data" => data}, _sink)
-       when is_binary(data),
-       do: {:ok, put_block(state, index, %{type: "redacted_thinking", data: data})}
-
-  defp put_response_block(
-         state,
-         index,
-         %{"type" => "tool_use", "id" => id, "name" => name, "input" => input},
-         _sink
-       )
-       when is_binary(id) and id != "" and is_binary(name) and name != "" and is_map(input),
-       do:
-         {:ok,
-          put_block(state, index, %{
-            type: "tool_use",
-            id: id,
-            name: name,
-            input: input,
-            chunks: []
-          })}
-
-  defp put_response_block(_state, _index, _block, _sink),
-    do: {:error, :unsupported_anthropic_content}
+  defp emit_block(_block, _sink), do: :ok
 
   defp valid_final_response(%__MODULE__{message_started?: false}),
     do: {:error, :incomplete_model_response}
@@ -330,28 +245,22 @@ defmodule Alto.Providers.Anthropic.Stream do
     do: {:error, {:incomplete_model_response, reason}}
 
   defp finalize_blocks(state) do
-    Enum.reduce_while(state.block_order, {:ok, []}, fn index, {:ok, acc} ->
-      case finalize_block(Map.fetch!(state.blocks, index)) do
-        {:ok, block} -> {:cont, {:ok, [block | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, blocks} -> {:ok, Enum.reverse(blocks)}
-      error -> error
-    end
+    Alto.Result.traverse(state.block_order, &finalize_block(Map.fetch!(state.blocks, &1)))
   end
 
-  defp finalize_block(%{type: "text", text: text}), do: {:ok, %{"type" => "text", "text" => text}}
+  defp finalize_block(%{"type" => "text"} = block), do: {:ok, block}
 
-  defp finalize_block(%{type: "thinking", text: text, signature: signature})
+  defp finalize_block(
+         %{"type" => "thinking", "thinking" => text, "signature" => signature} = block
+       )
        when is_binary(text) and is_binary(signature) and signature != "",
-       do: {:ok, %{"type" => "thinking", "thinking" => text, "signature" => signature}}
+       do: {:ok, block}
 
-  defp finalize_block(%{type: "redacted_thinking", data: data}),
-    do: {:ok, %{"type" => "redacted_thinking", "data" => data}}
+  defp finalize_block(%{"type" => "redacted_thinking"} = block), do: {:ok, block}
 
-  defp finalize_block(%{type: "tool_use", id: id, name: name, input: input, chunks: chunks}) do
+  defp finalize_block(
+         %{"type" => "tool_use", "id" => id, "input" => input, chunks: chunks} = block
+       ) do
     json =
       if chunks == [],
         do: JSON.encode!(input),
@@ -359,7 +268,7 @@ defmodule Alto.Providers.Anthropic.Stream do
 
     case JSON.decode(json) do
       {:ok, value} when is_map(value) ->
-        {:ok, %{"type" => "tool_use", "id" => id, "name" => name, "input" => value}}
+        {:ok, block |> Map.delete(:chunks) |> Map.put("input", value)}
 
       _ ->
         {:error, {:invalid_tool_arguments, id}}

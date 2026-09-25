@@ -20,11 +20,15 @@ defmodule Alto.InputTest do
     assert {:ok, second} = Alto.Input.put(input, "hi", :steer)
     assert {:error, :input_capacity} = Alto.Input.put(input, "x")
     assert :ok = Alto.Input.claim(input)
+    assert {:error, :input_in_use} = Alto.Input.take(input)
     assert %{id: ^second} = Alto.Input.peek(input, [:steer])
     assert %{id: ^first} = Alto.Input.peek(input, [:follow_up])
     assert :ok = Alto.Input.ack(input, second)
     assert [%{id: ^first}] = Alto.Input.list(input)
     assert :ok = Alto.Input.release(input)
+    assert {:ok, %{id: ^first, text: "one", mode: :follow_up}} = Alto.Input.take(input)
+    assert :empty = Alto.Input.take(input)
+    assert {:ok, _} = Alto.Input.put(input, "12345")
   end
 
   test "follow-ups continue the same run under the original model budget" do
@@ -80,7 +84,7 @@ defmodule Alto.InputTest do
                input: input,
                provider: {Provider, owner: self()},
                max_transcript_bytes: 500,
-               system_prompt: "system"
+               prompt: "system"
              )
 
     assert length(Alto.Input.list(input)) == 1

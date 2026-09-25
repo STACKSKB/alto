@@ -67,6 +67,29 @@ defmodule Alto.External.MCP.ClientTest do
     %{root: root, server: server}
   end
 
+  test "FFF specs use MCP server options and the active workspace", %{root: root, server: server} do
+    specs = Alto.Tools.FFF.tools(command: server, startup_timeout: 5_000, request_timeout: 5_000)
+    assert {:ok, tools, _definitions} = Alto.Tool.Registry.build(specs)
+    assert Enum.sort(Map.keys(tools)) == ["fff_find_files", "fff_grep", "fff_multi_grep"]
+    context = %Alto.Tool.Context{session_id: "fff", cwd: root}
+
+    for {module, opts} <- specs do
+      arguments =
+        if opts[:remote_name] == "multi_grep",
+          do: %{"patterns" => ["needle"]},
+          else: %{"query" => "needle"}
+
+      assert {:ok, %{"content" => [%{"text" => encoded}]}} =
+               module.run(arguments, context, opts)
+
+      assert JSON.decode!(encoded) == arguments
+    end
+
+    {_module, opts} = hd(specs)
+    assert {:ok, client} = Client.ensure_started(Keyword.put(opts[:server], :cwd, root))
+    Client.stop(client)
+  end
+
   test "retains one initialized stdio server and calls its advertised tools", %{
     root: root,
     server: server
@@ -75,15 +98,13 @@ defmodule Alto.External.MCP.ClientTest do
 
     assert {:ok, client} = Client.ensure_started(opts)
     on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
-    assert {:ok, same_client} = Client.ensure_started(opts)
+    assert {:ok, same_client} = Client.ensure_started(Enum.reverse(opts))
     assert client == same_client
 
     assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client, 5_000)
 
-    assert {:ok, %{"content" => [%{"text" => encoded}]}} =
+    assert {:ok, _result} =
              Client.call_tool(client, "echo", %{"hello" => "world"}, 5_000)
-
-    assert JSON.decode!(encoded) == %{"hello" => "world"}
   end
 
   test "reports missing executables without hanging startup", %{root: root} do
@@ -146,10 +167,14 @@ defmodule Alto.External.MCP.ClientTest do
     on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
 
     caller = spawn(fn -> Client.call_tool(client, "echo", %{"hello" => "world"}, 5_000) end)
-    Process.sleep(25)
+    assert eventually(fn -> map_size(:sys.get_state(client).pending) == 1 end)
+    [request] = Map.values(:sys.get_state(client).pending)
     Process.exit(caller, :kill)
 
     assert eventually(fn -> File.exists?(cancellation) end)
+    assert :sys.get_state(client).pending == %{}
+    assert Process.read_timer(request.timer) == false
+    assert {:ok, _} = Client.call_tool(client, "echo", %{"next" => true}, 5_000)
   end
 
   test "configured MCP tool instances expose dynamic Alto names and schemas", %{

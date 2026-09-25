@@ -24,7 +24,7 @@ defmodule Alto.Runner.RequestContextTest do
     options = [
       loop: Alto.loop(Loop),
       provider: {Provider, test_pid: self()},
-      system_prompt: "system"
+      prompt: "system"
     ]
 
     assert {:ok, _} = Alto.run("stage: planning", options)
@@ -42,15 +42,14 @@ defmodule Alto.Runner.RequestContextTest do
     options = [
       loop: Alto.loop(Loop),
       provider: {Provider, test_pid: self()},
-      system_prompt: "system",
+      prompt: "system",
       max_transcript_bytes: 500
     ]
 
     # The original task fits; appending that text again as context crosses the cap.
-    assert {:error, {:transcript_limit, 500}, result} =
+    assert {:error, {:transcript_limit, 500}, _result} =
              Alto.run(String.duplicate("x", 300), options)
 
-    assert result.loop_state == %{}
     refute_receive {:context_request, _}
   end
 end

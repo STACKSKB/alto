@@ -3,9 +3,6 @@ defmodule Alto.ToolDisplay do
 
   @behaviour Alto.ToolPresentation
   @impl true
-  def result(value, _options), do: Alto.Display.result(value)
-
-  @impl true
   def summary(name, arguments, _opts), do: summary(name, arguments)
 
   def summary(name, arguments) do
@@ -37,7 +34,7 @@ defmodule Alto.ToolDisplay do
   def entry(type, data) do
     name = get(data, "name") || "tool"
     title = get(data, "summary") || summary(name, get(data, "arguments"))
-    output = get(data, "value") || get(data, "output")
+    output = Map.get(data, :value, Map.get(data, "value"))
 
     case to_string(type) do
       "tool_started" ->
@@ -153,7 +150,9 @@ defmodule Alto.ToolDisplay do
 
   defp get(map, key) when is_map(map) do
     Map.get(map, key) ||
-      Enum.find_value(map, fn {k, v} -> if is_atom(k) and Atom.to_string(k) == key, do: v end)
+      Enum.find_value(Map.to_list(map), fn {k, v} ->
+        if is_atom(k) and Atom.to_string(k) == key, do: v
+      end)
   end
 
   defp get(_, _), do: nil

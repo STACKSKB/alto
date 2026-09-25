@@ -10,10 +10,9 @@ defmodule Alto.TUI.State do
   @max_entries_per_task 2_000
   @max_cached_tasks 12
 
-  @enforce_keys [:textarea, :config, :run_options, :catalog_opts]
+  @enforce_keys [:textarea, :run_options, :catalog_opts]
   defstruct [
     :textarea,
-    :config,
     :run_options,
     :credentials_path,
     :selected_project_id,
@@ -61,7 +60,7 @@ defmodule Alto.TUI.State do
     pending_approvals: [],
     backend_state: %{},
     runs: %{},
-    queued_messages: %{},
+    input_routes: %{},
     inputs: %{},
     usage: %{},
     catalog_opts: []
@@ -106,7 +105,6 @@ defmodule Alto.TUI.State do
             if(opts[:test_mode], do: fn _ -> :ok end, else: &Alto.TUI.Clipboard.write/1)
           ),
         clipboard_read: Keyword.get(opts, :clipboard_read, &Alto.TUI.Clipboard.read/0),
-        config: config,
         run_options: run_options,
         credentials_path: credentials_path,
         catalog_opts: catalog_opts,
@@ -145,9 +143,7 @@ defmodule Alto.TUI.State do
 
   @doc "Visible execution stage and recovery controls for the selected task."
   def run_label(state) do
-    queued? =
-      Map.has_key?(state.queued_messages, state.selected_task_id) or
-        input_pending?(state, state.selected_task_id)
+    queued? = input_pending?(state, state.selected_task_id)
 
     case Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end) do
       nil ->
@@ -178,11 +174,16 @@ defmodule Alto.TUI.State do
   def model_metadata(state) do
     models =
       case Alto.TUI.Backend.ui(state, :models) do
-        :pass -> Map.get(state.models, state.selected_provider_id, [])
-        models -> models
+        :pass ->
+          profile = selected_profile(state)
+          Map.get(state.models, state.selected_provider_id, (profile && profile.models) || [])
+
+        models ->
+          models
       end
 
-    Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
+    if is_list(models),
+      do: Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
   end
 
   def effort_choices(state), do: Alto.Reasoning.efforts(model_metadata(state))
@@ -201,9 +202,11 @@ defmodule Alto.TUI.State do
         {run_label(state), Map.get(run, :started_at_ms)}
 
       nil ->
+        activity = Alto.TUI.Backend.ui(state, :activity)
+
         cond do
-          Alto.TUI.Backend.ui(state, :activity) not in [:pass, nil] ->
-            {Alto.TUI.Backend.ui(state, :activity), state.activity_started_ms}
+          activity not in [:pass, nil] ->
+            {activity, state.activity_started_ms}
 
           MapSet.size(state.model_loading) > 0 ->
             {"loading model catalog", state.activity_started_ms}
@@ -312,16 +315,16 @@ defmodule Alto.TUI.State do
   end
 
   def select_task(%__MODULE__{} = state, id) do
-    if Enum.any?(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
-      task = Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id))
+    case Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
+      nil ->
+        state
 
-      state
-      |> Map.put(:selected_task_id, id)
-      |> Map.put(:transcript_follow?, true)
-      |> sync_backend(task)
-      |> hydrate_selected()
-    else
-      state
+      task ->
+        state
+        |> Map.put(:selected_task_id, id)
+        |> Map.put(:transcript_follow?, true)
+        |> sync_backend(task)
+        |> hydrate_selected()
     end
   end
 
@@ -377,14 +380,8 @@ defmodule Alto.TUI.State do
   defp pending_entries(state) do
     pending =
       case Map.get(state.inputs, state.selected_task_id) do
-        nil ->
-          case Map.get(state.queued_messages, state.selected_task_id) do
-            nil -> []
-            queued -> [%{text: queued.prompt, mode: :follow_up}]
-          end
-
-        input ->
-          Alto.Input.list(input)
+        nil -> []
+        input -> Alto.Input.list(input)
       end
 
     Enum.map(pending, fn entry ->
@@ -402,8 +399,7 @@ defmodule Alto.TUI.State do
 
   def append_entry(%__MODULE__{} = state, task_id, entry) do
     key = task_id || :scratch
-    entries = bounded_entries(Map.get(state.entries, key, []) ++ [entry])
-    %{state | entries: Map.put(state.entries, key, entries)} |> evict_inactive_caches()
+    put_entries(state, key, Map.get(state.entries, key, []) ++ [entry])
   end
 
   def upsert_entry(%__MODULE__{} = state, task_id, key, entry) do
@@ -418,8 +414,7 @@ defmodule Alto.TUI.State do
         entries ++ [tagged]
       end
 
-    %{state | entries: Map.put(state.entries, task_key, bounded_entries(entries))}
-    |> evict_inactive_caches()
+    put_entries(state, task_key, entries)
   end
 
   def append_assistant_delta(%__MODULE__{} = state, task_id, text, kind \\ :assistant) do
@@ -432,19 +427,20 @@ defmodule Alto.TUI.State do
         {_last, _rest} -> entries ++ [%{kind: kind, text: text}]
       end
 
-    %{state | entries: Map.put(state.entries, key, bounded_entries(entries))}
-    |> evict_inactive_caches()
+    put_entries(state, key, entries)
   end
 
   def put_task(%__MODULE__{} = state, task) do
-    project_id = task["project_id"]
+    state = update_task_record(state, task)
+    %{state | selected_project_id: task["project_id"], selected_task_id: task["id"]}
+  end
 
-    tasks =
-      Map.update(state.tasks, project_id, [task], fn items ->
-        [task | Enum.reject(items, &(&1["id"] == task["id"]))]
-      end)
-
-    %{state | tasks: tasks, selected_project_id: project_id, selected_task_id: task["id"]}
+  @doc "Persist task changes and refresh their cached record without changing selection."
+  def update_task(state, task_id, changes) do
+    case Catalog.update_task(task_id, changes, state.catalog_opts) do
+      {:ok, task} -> update_task_record(state, task)
+      {:error, _reason} -> state
+    end
   end
 
   @doc "Replace a task record without changing the front end's current selection."
@@ -473,14 +469,11 @@ defmodule Alto.TUI.State do
   def current_usage(%__MODULE__{} = state),
     do: Map.get(state.usage, state.selected_task_id, Usage.new())
 
-  @doc "Execution backend persisted with a task; legacy tasks are native Alto tasks."
   def task_backend(%{"backend" => backend}) when is_binary(backend) do
     String.to_existing_atom(backend)
   rescue
     ArgumentError -> :unavailable
   end
-
-  def task_backend(_task), do: :alto
 
   def focus_next(%__MODULE__{} = state, direction \\ :next) do
     step = if direction == :previous, do: -1, else: 1
@@ -587,46 +580,30 @@ defmodule Alto.TUI.State do
   defp hydrate_selected(%__MODULE__{selected_task_id: nil} = state), do: state
 
   defp hydrate_selected(%__MODULE__{} = state) do
-    state
-    |> hydrate_selected_entries()
-    |> hydrate_selected_usage()
-  end
+    task = selected_task(state)
+    session_id = task && task["conversation_id"]
+    backend = task && task_backend(task)
 
-  defp hydrate_selected_entries(state) do
-    if Map.has_key?(state.entries, state.selected_task_id) do
-      state
-    else
-      case selected_task(state) do
-        %{"session_id" => session_id} when is_binary(session_id) ->
-          entries = load_session_entries(session_id, state.catalog_opts)
-          put_entries(state, state.selected_task_id, entries)
+    entries =
+      Map.put_new_lazy(state.entries, state.selected_task_id, fn ->
+        if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend),
+          do: session_id |> load_session_entries(state.catalog_opts) |> bounded_entries(),
+          else: []
+      end)
 
-        _other ->
-          put_entries(state, state.selected_task_id, [])
-      end
-    end
-  end
+    usage =
+      Map.put_new_lazy(state.usage, state.selected_task_id, fn ->
+        if is_binary(session_id) and
+             Alto.TUI.Backend.ui(
+               %{state | selected_backend: backend, entries: entries},
+               :session_usage?
+             ) ==
+               true,
+           do: load_session_usage(session_id, state.catalog_opts),
+           else: Usage.new()
+      end)
 
-  defp hydrate_selected_usage(state) do
-    if Map.has_key?(state.usage, state.selected_task_id) do
-      state
-    else
-      usage =
-        case selected_task(state) do
-          %{"session_id" => session_id} = task when is_binary(session_id) ->
-            if Alto.TUI.Backend.ui(
-                 %{state | selected_backend: task_backend(task)},
-                 :durable_input?
-               ) == true,
-               do: load_session_usage(session_id, state.catalog_opts),
-               else: Usage.new()
-
-          _other ->
-            Usage.new()
-        end
-
-      put_usage(state, state.selected_task_id, usage)
-    end
+    %{state | entries: entries, usage: usage} |> evict_inactive_caches()
   end
 
   defp load_session_entries(session_id, opts) do
@@ -651,9 +628,6 @@ defmodule Alto.TUI.State do
       {:ok, %{usage: event_usage}} when is_map(event_usage) ->
         Usage.merge(usage, Usage.from_map(event_usage))
 
-      {:ok, %{"usage" => event_usage}} when is_map(event_usage) ->
-        Usage.merge(usage, Usage.from_map(event_usage))
-
       _other ->
         usage
     end
@@ -662,11 +636,9 @@ defmodule Alto.TUI.State do
   defp merge_record_usage(_record, usage), do: usage
 
   defp load_tasks(projects, opts) do
-    Enum.reduce_while(projects, {:ok, %{}}, fn project, {:ok, acc} ->
-      case Catalog.tasks(project["id"], opts) do
-        {:ok, tasks} -> {:cont, {:ok, Map.put(acc, project["id"], tasks)}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
+    Alto.Result.reduce(projects, %{}, fn project, acc ->
+      with {:ok, tasks} <- Catalog.tasks(project["id"], opts),
+           do: {:ok, Map.put(acc, project["id"], tasks)}
     end)
   end
 
@@ -708,9 +680,9 @@ defmodule Alto.TUI.State do
     |> Map.reject(fn {_id, models} -> models == [] end)
   end
 
-  defp sync_backend(state, task) do
-    backend = task_backend(task)
+  def sync_backend(state, task) when is_map(task), do: sync_backend(state, task_backend(task))
 
+  def sync_backend(state, backend) when is_atom(backend) do
     state = %{state | selected_backend: backend}
 
     model =

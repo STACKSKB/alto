@@ -4,13 +4,23 @@ defmodule Alto.Persistence.Retained do
   Alto.OperationLog.
 
   Domain modules own packet validation and state transitions. This module only
-  bounds calls by an absolute monotonic deadline and provides the common
-  intent-convergence and compare-and-swap operations.
+  bounds calls by an absolute monotonic deadline and provides atomic initialization,
+  compare-and-swap, and deterministic lifecycle completion.
   """
 
   alias Alto.OperationLog
 
   @default_call_timeout 5_000
+
+  @doc "Validate options for a retained-record lookup and return its deadline."
+  def deadline(opts) do
+    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
+      deadline = Keyword.get(opts, :deadline, :infinity)
+      with :ok <- deadline_ok(deadline), do: {:ok, deadline}
+    else
+      {:error, :invalid_retained_options}
+    end
+  end
 
   def deadline_ok(:infinity), do: :ok
 
@@ -34,98 +44,53 @@ defmodule Alto.Persistence.Retained do
          do: OperationLog.recovery(ledger, key, call_timeout(deadline))
   end
 
-  @doc "List retained operation keys under the supplied absolute deadline."
-  def keys(ledger, deadline \\ :infinity) do
+  @doc "Read one consistent set of operation views under the supplied deadline."
+  def entries(ledger, deadline \\ :infinity) do
     with :ok <- deadline_ok(deadline),
-         do: OperationLog.keys(ledger, call_timeout(deadline))
+         do: OperationLog.entries(ledger, :all, call_timeout(deadline))
   end
 
-  @doc "Converge concurrent creation attempts on one immutable intent."
-  def ensure_intent(ledger, key, tool, inbox, recovery, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline) do
-      case read(ledger, key, deadline) do
-        {:error, :not_found} ->
-          case OperationLog.record_intent(
-                 ledger,
-                 key,
-                 tool,
-                 inbox,
-                 recovery,
-                 call_timeout(deadline)
-               ) do
-            :ok -> read(ledger, key, deadline)
-            {:error, :intent_conflict} -> read(ledger, key, deadline)
-            {:error, _} = error -> error
-          end
-
-        other ->
-          other
-      end
-    end
+  @doc "Create an internal checkpoint atomically, or read the existing record."
+  def ensure_checkpoint(ledger, key, tool, recovery, attempt, packet, deadline \\ :infinity) do
+    with :ok <- deadline_ok(deadline),
+         :ok <-
+           OperationLog.retain(
+             ledger,
+             key,
+             tool,
+             recovery,
+             attempt,
+             packet,
+             call_timeout(deadline)
+           ),
+         do: read(ledger, key, deadline)
   end
 
   @doc "Apply a replacement at an exact retained revision."
   def cas(ledger, key, expected_revision, replacement, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         {:ok, entry} <-
-           OperationLog.update_checkpoint(
-             ledger,
-             key,
-             expected_revision,
-             replacement,
-             call_timeout(deadline)
-           ) do
-      {:ok, entry}
+    with :ok <- deadline_ok(deadline) do
+      OperationLog.update_checkpoint(
+        ledger,
+        key,
+        expected_revision,
+        replacement,
+        call_timeout(deadline)
+      )
     end
   end
 
-  def resume(ledger, key, expected_revision, decision, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         result <-
-           OperationLog.resume_checkpoint(
-             ledger,
-             key,
-             expected_revision,
-             decision,
-             call_timeout(deadline)
-           ) do
-      result
-    end
-  end
-
-  def record_attempt(ledger, key, attempt, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         result <- OperationLog.record_attempt(ledger, key, attempt, call_timeout(deadline)) do
-      result
-    end
-  end
-
-  def record_checkpoint(ledger, key, attempt, packet, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         result <-
-           OperationLog.record_checkpoint(
-             ledger,
-             key,
-             attempt,
-             packet,
-             call_timeout(deadline)
-           ) do
-      result
-    end
-  end
-
-  def record_outcome(ledger, key, attempt, class, evidence, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         result <-
-           OperationLog.record_outcome(
-             ledger,
-             key,
-             attempt,
-             class,
-             evidence,
-             call_timeout(deadline)
-           ) do
-      result
+  @doc "Retire a checkpoint atomically after validating its viewed revision."
+  def retire(ledger, key, revision, decision, attempt, evidence, deadline \\ :infinity) do
+    with :ok <- deadline_ok(deadline) do
+      OperationLog.retire_checkpoint(
+        ledger,
+        key,
+        revision,
+        decision,
+        attempt,
+        evidence,
+        call_timeout(deadline)
+      )
     end
   end
 end

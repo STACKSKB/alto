@@ -13,16 +13,13 @@ defmodule Alto.Config do
     :input,
     :loop,
     :provider,
-    :provider_options,
     :provider_profiles,
-    :codex_backend,
     :tools,
     :model_tools,
     :approval,
     :checkpoint_version,
     :continuation_store,
     :prompt,
-    :system_prompt,
     :project_instructions,
     :max_steps,
     :max_effects,
@@ -59,15 +56,17 @@ defmodule Alto.Config do
     narrow_context_fullscreen_below: [type: {:in, 0..300}],
     approval_auto_open: [type: :boolean]
   ]
-  @tui_schema NimbleOptions.new!(@tui_options)
-  @tui_errors %{
-    type_to_compose: "must be a boolean",
-    narrow_context: "must be :adaptive, :drawer, or :fullscreen",
-    narrow_context_width: "must be an integer from 40 to 100",
-    narrow_context_fullscreen_below: "must be an integer from 0 to 300",
-    approval_auto_open: "must be a boolean"
-  }
-
+  @schema NimbleOptions.new!(
+            Keyword.merge(Enum.map(@allowed_options, &{&1, [type: :any]}),
+              tui: [type: :keyword_list, keys: @tui_options],
+              sessions: [
+                type: {:or, [nil, :boolean, {:keyword_list, session_dir: [type: :string]}]}
+              ],
+              queue: [type: {:or, [nil, :keyword_list]}],
+              runs: [type: {:map, :string, :keyword_list}],
+              listeners: [type: {:list, {:custom, __MODULE__, :listener_spec, []}}]
+            )
+          )
   @enforce_keys [:run_options]
   defstruct [:run_options]
 
@@ -78,55 +77,35 @@ defmodule Alto.Config do
   def new(run_options \\ [])
 
   def new(run_options) do
-    validate_keys!(run_options, @allowed_options, "Alto")
-    validate_tui_options!(Keyword.get(run_options, :tui, []))
-    %__MODULE__{run_options: run_options}
+    validate_unique!(run_options, "Alto")
+    validate_unique!(Keyword.get(run_options, :tui, []), "Alto TUI")
+    %__MODULE__{run_options: NimbleOptions.validate!(run_options, @schema)}
   end
 
-  defp validate_keys!(options, allowed, label) do
-    unless is_list(options) and Keyword.keyword?(options),
+  defp validate_unique!(options, label) do
+    unless Keyword.keyword?(options),
       do: raise(ArgumentError, "#{label} configuration must be a keyword list")
 
     keys = Keyword.keys(options)
-    unknown = Enum.reject(keys, &(&1 in allowed)) |> Enum.uniq()
 
-    cond do
-      unknown != [] ->
-        raise ArgumentError, "unknown #{label} configuration options: #{inspect(unknown)}"
-
-      length(keys) != MapSet.size(MapSet.new(keys)) ->
-        raise ArgumentError, "#{label} configuration options must be unique"
-
-      true ->
-        :ok
-    end
+    if length(keys) != MapSet.size(MapSet.new(keys)),
+      do: raise(ArgumentError, "#{label} configuration options must be unique")
   end
 
-  defp validate_tui_options!(options) do
-    validate_keys!(options, Keyword.keys(@tui_options), "Alto TUI")
-
-    case NimbleOptions.validate(options, @tui_schema) do
-      {:ok, _} ->
-        :ok
-
-      {:error, %NimbleOptions.ValidationError{key: key}} ->
-        raise ArgumentError, "Alto TUI #{inspect(key)} #{@tui_errors[key]}"
-    end
+  @doc false
+  def listener_spec({module, opts}) when is_atom(module) and is_list(opts) do
+    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
+         function_exported?(module, :start_link, 1),
+       do: {:ok, {module, opts}},
+       else: {:error, "expected a listener module with start_link/1 and keyword options"}
   end
+
+  def listener_spec(_),
+    do: {:error, "expected a listener module with start_link/1 and keyword options"}
 
   @doc "Return the validated runner options stored in a configuration."
   @spec run_options(t()) :: keyword()
   def run_options(%__MODULE__{run_options: run_options}), do: run_options
-
-  @doc "Classify whether provider selection is explicit or uses the CLI default."
-  @spec provider_mode(t()) :: :default | :none | {:configured, term()}
-  def provider_mode(%__MODULE__{run_options: run_options}) do
-    case Keyword.fetch(run_options, :provider) do
-      :error -> :default
-      {:ok, nil} -> :none
-      {:ok, provider} -> {:configured, provider}
-    end
-  end
 
   @doc "Evaluate a trusted Elixir configuration file."
   @spec load(Path.t()) :: {:ok, t()} | {:error, term()}

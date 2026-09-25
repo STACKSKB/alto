@@ -92,6 +92,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
   test "keeps drawer controls pinned while details scrolls and accepts a narrow click", context do
     state = pending_state(context, {80, 24})
     assert state.details_drawer_open?
+    assert state.details_drawer_auto_opened?
+    assert state.focus == :details
     scrolled = %{state | details_scroll: 100}
     {buffer, _terminal} = render(scrolled, 80, 24)
 
@@ -102,6 +104,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), scrolled)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
+    refute decided.details_drawer_open?
+    assert decided.focus == :composer
   end
 
   test "dragging approval labels does not select UI text or send a decision", context do
@@ -253,9 +257,23 @@ defmodule Alto.TUI.ApprovalControlsTest do
     end
   end
 
-  defp pending_state(context, dimensions) do
+  test "disabled auto-open leaves a narrow approval queued behind the context indicator",
+       context do
+    config =
+      context.config.run_options
+      |> Keyword.put(:tui, approval_auto_open: false)
+      |> Alto.Test.TUI.config()
+
+    state = pending_state(context, {80, 24}, config)
+    refute state.details_drawer_open?
+    assert state.focus == :composer
+    {buffer, _terminal} = render(state, 80, 24)
+    assert buffer =~ "D:REQ"
+  end
+
+  defp pending_state(context, dimensions, config \\ nil) do
     assert {:ok, state} =
-             State.new(context.config,
+             State.new(config || context.config,
                project: context.root,
                path: context.catalog,
                credentials_path: Path.join(context.root, "credentials.json")

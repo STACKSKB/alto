@@ -21,8 +21,8 @@ Provider and streaming retry tests cover the shared HTTP integration.
 SQLite remains a separate storage migration, not part of the parser replacement.
 Exqlite could replace physical locking, atomic updates and crash recovery, but
 Alto would still need its queue leases, revision fences, operation outcomes and
-continuation identities. Existing JSONL readers and retained logs would require
-an explicit migration and export contract before selecting a database backend.
+continuation identities. Alto is pre-release, so existing JSONL files need no
+migration if a database backend replaces them.
 
 [Exqlite's documentation](https://exqlite.hexdocs.pm/readme.html) describes native
 calls on dirty NIF schedulers and precompiled artifacts or native builds. That
@@ -33,6 +33,5 @@ with Alto's acknowledgement and recovery guarantees.
 
 Decision for this refactor: retain the storage format and share its JSONL framing
 and existing durable-write machinery. No Exqlite adapter has been implemented or
-benchmarked, and no storage migration is claimed. A later adapter evaluation
-should run the existing cross-VM and crash tests against both backends before a
-format or default changes.
+benchmarked. A later adapter evaluation should run the existing cross-VM and
+crash tests against the candidate before a format or default changes.

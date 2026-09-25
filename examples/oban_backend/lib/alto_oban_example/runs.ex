@@ -3,19 +3,16 @@ defmodule AltoObanExample.Runs do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :process_event
+    def name(_opts), do: :process_event
 
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
 
     @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(arguments, context), do: run(arguments, context, [])
+    def approval(_opts), do: :never
 
     @impl true
     def run(arguments, _context, _opts) do

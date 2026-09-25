@@ -159,7 +159,7 @@ defmodule Alto.Listeners.UnixSocket do
   ## transport through `Alto.Listeners.Connection`.
 
   defp client_init(socket, registry, max_line_bytes) do
-    Connection.init_client(registry, max_line_bytes, fn line -> :gen_tcp.send(socket, line) end)
+    Enum.each(Connection.hello_lines(registry, max_line_bytes), &:gen_tcp.send(socket, &1))
 
     :inet.setopts(socket, active: :once)
     Registry.pull(registry, self(), Connection.pull_batch())
@@ -174,7 +174,10 @@ defmodule Alto.Listeners.UnixSocket do
       {:tcp, ^socket, data} ->
         case take_lines(buffer <> data, max_line_bytes, []) do
           {:ok, buffer, lines} ->
-            Enum.each(lines, &Connection.run_command(&1, registry, send_line, max_line_bytes))
+            Enum.each(lines, fn line ->
+              Enum.each(Connection.command_lines(line, registry, max_line_bytes), send_line)
+            end)
+
             :inet.setopts(socket, active: :once)
             client_loop(socket, registry, max_line_bytes, buffer)
 
@@ -204,7 +207,11 @@ defmodule Alto.Listeners.UnixSocket do
         client_loop(socket, registry, max_line_bytes, buffer)
 
       {:alto_notification, notification} ->
-        Connection.emit(notification, registry, max_line_bytes, send_line)
+        Enum.each(
+          Connection.notification_lines(notification, registry, max_line_bytes),
+          send_line
+        )
+
         client_loop(socket, registry, max_line_bytes, buffer)
     end
   end

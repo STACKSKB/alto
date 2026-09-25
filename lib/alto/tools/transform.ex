@@ -27,11 +27,6 @@ defmodule Alto.Tools.Transform do
   def wrap(tool, transform) when is_function(transform, 2),
     do: {__MODULE__, [tool: tool, transform: transform]}
 
-  def wrap(tool, opts) when is_list(opts) do
-    transform = Keyword.fetch!(opts, :transform)
-    wrap(tool, transform)
-  end
-
   @impl true
   def name(opts), do: callback(opts, :name)
 
@@ -42,7 +37,10 @@ defmodule Alto.Tools.Transform do
   def execution_mode(opts), do: callback(opts, :execution_mode)
 
   @impl true
-  def approval(opts), do: Alto.Tool.requirement(module(opts), inner_opts(opts))
+  def approval(opts) do
+    {module, inner_opts} = inner_tool(opts)
+    Alto.Tool.requirement(module, inner_opts)
+  end
 
   @impl true
   def prepare(arguments, context, opts) when is_map(arguments) do
@@ -53,16 +51,18 @@ defmodule Alto.Tools.Transform do
   end
 
   @impl true
-  def run_prepared({__MODULE__, :prepared, prepared}, context, opts),
-    do: run_inner_prepared(prepared, context, opts)
-
-  def run_prepared({__MODULE__, :raw, arguments}, context, opts),
-    do: run_inner_raw(arguments, context, opts)
+  def run_prepared({__MODULE__, callback, value}, context, opts)
+      when callback in [:run, :run_prepared] do
+    {module, inner_opts} = inner_tool(opts)
+    apply(module, callback, [value, context, inner_opts])
+  end
 
   def run_prepared(_other, _context, _opts), do: {:error, :invalid_transformed_prepared}
 
-  defp callback(opts, callback),
-    do: Alto.Tool.callback(module(opts), callback, inner_opts(opts))
+  defp callback(opts, callback) do
+    {module, inner_opts} = inner_tool(opts)
+    Alto.Tool.callback(module, callback, inner_opts)
+  end
 
   defp transform(arguments, context, opts) do
     transform = Keyword.fetch!(opts, :transform)
@@ -81,26 +81,13 @@ defmodule Alto.Tools.Transform do
   defp approval_details(details, _transformed), do: details
 
   defp prepare_inner(arguments, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
+    {module, inner_opts} = inner_tool(opts)
 
-    case preparation(module) do
-      :arity2 ->
-        case module.prepare(arguments, context) do
-          {:ok, prepared, details} ->
-            {:ok, {__MODULE__, :prepared, prepared}, details}
-
-          {:error, _reason} = error ->
-            error
-
-          other ->
-            {:error, {:invalid_tool_prepare_return, other}}
-        end
-
-      :arity3 ->
+    case Alto.Tool.preparation(module) do
+      {:ok, :prepared} ->
         case module.prepare(arguments, context, inner_opts) do
           {:ok, prepared, details} ->
-            {:ok, {__MODULE__, :prepared, prepared}, details}
+            {:ok, {__MODULE__, :run_prepared, prepared}, details}
 
           {:error, _reason} = error ->
             error
@@ -109,61 +96,15 @@ defmodule Alto.Tools.Transform do
             {:error, {:invalid_tool_prepare_return, other}}
         end
 
-      :none ->
-        {:ok, {__MODULE__, :raw, arguments}, %{}}
+      {:ok, :none} ->
+        {:ok, {__MODULE__, :run, arguments}, %{}}
+
+      {:error, _} = error ->
+        error
     end
   end
 
-  defp preparation(module) do
-    prepare2? = function_exported?(module, :prepare, 2)
-    prepared2? = function_exported?(module, :run_prepared, 2)
-    prepare3? = function_exported?(module, :prepare, 3)
-    prepared3? = function_exported?(module, :run_prepared, 3)
-
-    cond do
-      prepare2? and prepared2? ->
-        :arity2
-
-      prepare3? and prepared3? ->
-        :arity3
-
-      prepare2? or prepared2? or prepare3? or prepared3? ->
-        raise ArgumentError, "wrapped tool has incomplete preparation callbacks"
-
-      true ->
-        :none
-    end
-  end
-
-  defp run_inner_prepared(prepared, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
-
-    case preparation(module) do
-      :arity2 -> module.run_prepared(prepared, context)
-      :arity3 -> module.run_prepared(prepared, context, inner_opts)
-      :none -> {:error, :invalid_transformed_prepared}
-    end
-  end
-
-  defp run_inner_raw(arguments, context, opts) do
-    module = module(opts)
-    inner_opts = inner_opts(opts)
-
-    if inner_opts == [],
-      do: module.run(arguments, context),
-      else: module.run(arguments, context, inner_opts)
-  end
-
-  defp module(opts) do
-    {module, _opts} = normalize(Keyword.fetch!(opts, :tool))
-    module
-  end
-
-  defp inner_opts(opts) do
-    {_module, inner_opts} = normalize(Keyword.fetch!(opts, :tool))
-    inner_opts
-  end
+  defp inner_tool(opts), do: normalize(Keyword.fetch!(opts, :tool))
 
   defp normalize({module, opts}) when is_atom(module) and is_list(opts), do: {module, opts}
   defp normalize(module) when is_atom(module), do: {module, []}

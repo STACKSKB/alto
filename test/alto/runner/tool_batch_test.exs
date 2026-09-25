@@ -2,11 +2,8 @@ defmodule Alto.Runner.ToolBatchTest do
   use ExUnit.Case, async: true
 
   defmodule Read do
-    @behaviour Alto.Tool
-    def name, do: :read
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    use Alto.Tool, name: :read, execution_mode: :parallel, approval: :never
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
 
     def prepare(args, _context, opts) do
       send(opts[:test_pid], {:prepared, args["value"]})
@@ -27,11 +24,8 @@ defmodule Alto.Runner.ToolBatchTest do
   end
 
   defmodule Write do
-    @behaviour Alto.Tool
-    def name, do: :write
-    def schema, do: Read.schema()
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    use Alto.Tool, name: :write, execution_mode: :exclusive, approval: :required
+    def schema(_), do: Read.schema([])
 
     def run(args, _context, opts) do
       send(opts[:test_pid], {:write, args["value"]})
@@ -261,5 +255,27 @@ defmodule Alto.Runner.ToolBatchTest do
     assert result.verdict == :unknown
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.call_id == "a"))
     assert Enum.any?(result.events, &(&1.type == :tool_completed and &1.data.call_id == "b"))
+  end
+
+  test "oversize parallel results use the same uncertain classification as serial dispatch" do
+    huge = String.duplicate("x", 10_000)
+
+    assert {:ok, result} =
+             Alto.run(
+               "read",
+               options([call("big", %{value: huge})], max_tool_result_bytes: 100)
+             )
+
+    assert result.verdict == :unknown
+
+    assert Enum.any?(result.events, fn
+             %{type: :tool_failed, data: %{call_id: "big", outcome: :unknown, error: error}} ->
+               match?({:tool_result_too_large, _}, error)
+
+             _ ->
+               false
+           end)
+
+    refute inspect(result.events) =~ huge
   end
 end

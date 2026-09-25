@@ -10,25 +10,17 @@ defmodule Alto.CLI.Onboarding do
           {:ok, %{api_key: String.t(), model: String.t()}} | {:error, term()}
   def resolve(opts) do
     input = Keyword.get(opts, :input, :standard_io)
-    output = Keyword.get(opts, :output, :standard_error)
-    interactive? = Keyword.get(opts, :interactive, terminal?(input))
-    force? = Keyword.get(opts, :force, false)
-    credentials_path = Keyword.get(opts, :credentials_path, Credentials.default_path())
 
-    with {:ok, credentials} <- Credentials.load(credentials_path),
-         {:ok, api_key, credentials} <-
-           resolve_api_key(credentials, opts[:api_key], force?, interactive?, input, output),
-         {:ok, model, _credentials} <-
-           resolve_model(
-             credentials,
-             opts[:model],
-             api_key,
-             force?,
-             interactive?,
-             input,
-             output,
-             opts
-           ) do
+    opts =
+      opts
+      |> Keyword.put_new(:input, input)
+      |> Keyword.put_new(:output, :standard_error)
+      |> Keyword.put_new(:interactive, terminal?(input))
+
+    with {:ok, credentials} <-
+           Credentials.load(Keyword.get(opts, :credentials_path, Credentials.default_path())),
+         {:ok, api_key, credentials} <- resolve_api_key(credentials, opts),
+         {:ok, model} <- resolve_model(credentials, Keyword.put(opts, :api_key, api_key)) do
       {:ok, %{api_key: api_key, model: model}}
     end
   end
@@ -48,56 +40,54 @@ defmodule Alto.CLI.Onboarding do
     _kind, _reason -> false
   end
 
-  defp resolve_api_key(credentials, supplied, false, _interactive?, _input, _output)
-       when is_binary(supplied) and supplied != "" do
-    {:ok, supplied, credentials}
-  end
-
-  defp resolve_api_key(credentials, _supplied, false, interactive?, input, output) do
-    case Credentials.get(credentials, @provider_id, "api_key") do
-      key when is_binary(key) ->
-        {:ok, key, credentials}
-
-      nil when interactive? ->
-        prompt_for_api_key(credentials, nil, false, input, output)
-
-      nil ->
-        {:error,
-         "OpenRouter API key required; set OPENROUTER_API_KEY or run `alto --setup` in a terminal"}
+  defp configured_value(credentials, key, opts) do
+    unless Keyword.get(opts, :force, false) do
+      case Keyword.get(opts, key) do
+        value when is_binary(value) and value != "" -> value
+        _ -> Credentials.get(credentials, @provider_id, Atom.to_string(key))
+      end
     end
   end
 
-  defp resolve_api_key(credentials, supplied, force?, true, input, output) do
-    fallback = Credentials.get(credentials, @provider_id, "api_key") || supplied
-    prompt_for_api_key(credentials, fallback, force?, input, output)
+  defp resolve_api_key(credentials, opts) do
+    case configured_value(credentials, :api_key, opts) do
+      nil ->
+        if opts[:interactive] do
+          prompt_for_api_key(credentials, opts)
+        else
+          {:error,
+           "OpenRouter API key required; set OPENROUTER_API_KEY or run `alto --setup` in a terminal"}
+        end
+
+      key ->
+        {:ok, key, credentials}
+    end
   end
 
-  defp resolve_api_key(_credentials, _supplied, _force?, false, _input, _output) do
-    {:error,
-     "OpenRouter API key required; set OPENROUTER_API_KEY or run `alto --setup` in a terminal"}
-  end
+  defp prompt_for_api_key(credentials, opts) do
+    fallback =
+      if opts[:force], do: Credentials.get(credentials, @provider_id, "api_key") || opts[:api_key]
 
-  defp prompt_for_api_key(credentials, fallback, allow_fallback?, input, output) do
-    suffix = if allow_fallback? and fallback, do: " (Enter keeps the current key)", else: ""
-    IO.write(output, "OpenRouter API key#{suffix}: ")
+    suffix = if fallback, do: " (Enter keeps the current key)", else: ""
+    IO.write(opts[:output], "OpenRouter API key#{suffix}: ")
 
-    case :io.get_password(input) do
+    case :io.get_password(opts[:input]) do
       value when is_list(value) or is_binary(value) ->
         entered = value |> IO.iodata_to_binary() |> String.trim()
-        key = if entered == "" and allow_fallback?, do: fallback, else: entered
 
-        if is_binary(key) and key != "" do
-          if entered == "" do
-            {:ok, key, credentials}
-          else
+        cond do
+          entered == "" and is_binary(fallback) and fallback != "" ->
+            {:ok, fallback, credentials}
+
+          entered == "" ->
+            {:error, "OpenRouter API key cannot be empty"}
+
+          true ->
             with {:ok, credentials} <-
-                   Credentials.put(credentials, @provider_id, %{"api_key" => key}) do
-              IO.puts(output, "Saved OpenRouter credentials to #{credentials.path}")
-              {:ok, key, credentials}
+                   Credentials.put(credentials, @provider_id, %{"api_key" => entered}) do
+              IO.puts(opts[:output], "Saved OpenRouter credentials to #{credentials.path}")
+              {:ok, entered, credentials}
             end
-          end
-        else
-          {:error, "OpenRouter API key cannot be empty"}
         end
 
       :eof ->
@@ -108,54 +98,34 @@ defmodule Alto.CLI.Onboarding do
     end
   end
 
-  defp resolve_model(
-         credentials,
-         supplied,
-         _api_key,
-         false,
-         _interactive?,
-         _input,
-         _output,
-         _opts
-       )
-       when is_binary(supplied) and supplied != "" do
-    {:ok, supplied, credentials}
-  end
-
-  defp resolve_model(credentials, _supplied, api_key, false, interactive?, input, output, opts) do
-    case Credentials.get(credentials, @provider_id, "model") do
-      model when is_binary(model) -> {:ok, model, credentials}
-      nil -> discover_model(credentials, api_key, interactive?, input, output, opts)
+  defp resolve_model(credentials, opts) do
+    case configured_value(credentials, :model, opts) do
+      nil -> discover_model(credentials, opts)
+      model -> {:ok, model}
     end
   end
 
-  defp resolve_model(credentials, _supplied, api_key, true, interactive?, input, output, opts) do
-    discover_model(credentials, api_key, interactive?, input, output, opts)
-  end
+  defp discover_model(credentials, opts) do
+    if opts[:interactive] do
+      {provider, provider_options} = Keyword.fetch!(opts, :provider)
+      IO.puts(opts[:output], "Fetching available models from OpenRouter…")
 
-  defp discover_model(_credentials, _api_key, false, _input, _output, _opts) do
-    {:error, "model required; set --model or ALTO_MODEL, or run `alto --setup` in a terminal"}
-  end
+      provider_options = Keyword.put(provider_options, :api_key, opts[:api_key])
 
-  defp discover_model(credentials, api_key, true, input, output, opts) do
-    provider = Keyword.fetch!(opts, :provider)
-    IO.puts(output, "Fetching available models from OpenRouter…")
-
-    provider_options =
-      opts
-      |> Keyword.get(:provider_options, [])
-      |> Keyword.put(:api_key, api_key)
-
-    with true <- Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),
-         {:ok, models} <- provider.list_models(provider_options),
-         {:ok, model} <- select_model(models, input, output),
-         {:ok, credentials} <-
-           Credentials.put(credentials, @provider_id, %{"model" => model}) do
-      IO.puts(output, "Selected #{model}")
-      {:ok, model, credentials}
+      with true <-
+             Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),
+           {:ok, models} <- provider.list_models(provider_options),
+           {:ok, model} <- select_model(models, opts[:input], opts[:output]),
+           {:ok, _credentials} <-
+             Credentials.put(credentials, @provider_id, %{"model" => model}) do
+        IO.puts(opts[:output], "Selected #{model}")
+        {:ok, model}
+      else
+        false -> {:error, {:model_discovery_not_supported, provider}}
+        {:error, reason} -> {:error, reason}
+      end
     else
-      false -> {:error, {:model_discovery_not_supported, provider}}
-      {:error, reason} -> {:error, reason}
+      {:error, "model required; set --model or ALTO_MODEL, or run `alto --setup` in a terminal"}
     end
   end
 

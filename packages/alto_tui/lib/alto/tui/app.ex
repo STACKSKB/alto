@@ -6,7 +6,7 @@ defmodule Alto.TUI.App do
   alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Backend, Selection, State, View, WorkspaceForm}
+  alias Alto.TUI.{Menu, Backend, Selection, State, TextForm, View, WorkspaceForm}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -153,7 +153,7 @@ defmodule Alto.TUI.App do
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
     if overlay.kind in [:provider_form, :model_form] do
-      {:noreply, insert_form_text(state, content)}
+      {:noreply, text_form_result(state, TextForm.paste(overlay, content))}
     else
       {:noreply, filter_overlay(state, overlay.filter <> content)}
     end
@@ -235,14 +235,10 @@ defmodule Alto.TUI.App do
   end
 
   defp route_event(%Key{code: "enter", modifiers: modifiers} = key, %{focus: :composer} = state) do
-    if "shift" in modifiers do
-      forward_textarea(state, key)
-    else
-      if "ctrl" in modifiers do
-        {:noreply, submit(state, :steer)}
-      else
-        {:noreply, submit(state)}
-      end
+    cond do
+      "shift" in modifiers -> forward_textarea(state, key)
+      "ctrl" in modifiers -> {:noreply, submit(state, :steer)}
+      true -> {:noreply, submit(state)}
     end
   end
 
@@ -304,7 +300,11 @@ defmodule Alto.TUI.App do
         if MapSet.member?(Map.get(run, :approval_ids, MapSet.new()), request.id), do: id
       end)
 
-    pending = %{local_id: local_id, request: request, waiter: waiter}
+    pending = %{
+      local_id: local_id,
+      request: request,
+      respond: &send(waiter, {:alto_approval_decision, request.id, &1})
+    }
 
     {:noreply, show_pending_approval(state, pending, "approval required · F8 approve / F9 deny")}
   end
@@ -331,30 +331,17 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_info({:alto_tui_send_queued, task_id}, state) do
-    {:noreply, send_queued(state, task_id)}
-  end
-
   def handle_info({:alto_tui_send_input, task_id}, state) do
-    {:noreply, send_native_input(state, task_id)}
+    {:noreply, send_input(state, task_id)}
   end
 
   # Completion is a runner notification, independent of its implementation.
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
-    case find_run(state, ref: ref) do
-      nil -> {:noreply, state, render?: false}
-      {local_id, run} -> {:noreply, finish_run(state, local_id, run, result)}
-    end
+    finish_runner_message(state, [ref: ref], result)
   end
 
   def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
-    case find_run(state, monitor: monitor) do
-      nil ->
-        {:noreply, state, render?: false}
-
-      {local_id, run} ->
-        {:noreply, finish_run(state, local_id, run, {:error, {:run_exited, reason}})}
-    end
+    finish_runner_message(state, [monitor: monitor], {:error, {:run_exited, reason}})
   end
 
   def handle_info(:prepare_backend, state), do: {:noreply, prepare_selected_backend(state)}
@@ -363,6 +350,13 @@ defmodule Alto.TUI.App do
     case Backend.message(state, message) do
       :pass -> {:noreply, state, render?: false}
       result -> result
+    end
+  end
+
+  defp finish_runner_message(state, matcher, result) do
+    case find_run(state, matcher) do
+      nil -> {:noreply, state, render?: false}
+      {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
     end
   end
 
@@ -381,11 +375,7 @@ defmodule Alto.TUI.App do
 
       prompt == "" and not task_running?(state, state.selected_task_id) and
           State.input_pending?(state, state.selected_task_id) ->
-        send_native_input(state, state.selected_task_id)
-
-      prompt == "" and not task_running?(state, state.selected_task_id) and
-          Map.has_key?(state.queued_messages, state.selected_task_id) ->
-        send_queued(state, state.selected_task_id)
+        send_input(state, state.selected_task_id)
 
       prompt == "" ->
         %{state | notice: "write a message first"}
@@ -402,50 +392,35 @@ defmodule Alto.TUI.App do
   end
 
   defp queue_message(state, prompt, mode) do
-    if Backend.ui(state, :durable_input?) == true,
-      do: queue_native_input(state, state.selected_task_id, prompt, mode),
-      else: queue_message_legacy(state, prompt)
+    if mode == :steer and Backend.ui(state, :steering?) != true,
+      do: %{state | notice: "this backend cannot steer · press Enter to queue a follow-up"},
+      else: queue_input(state, state.selected_task_id, prompt, mode)
   end
 
-  defp queue_message_legacy(state, prompt) do
-    cond do
-      Map.has_key?(state.queued_messages, state.selected_task_id) ->
-        %{state | notice: "one message already queued · draft kept · Esc stops current run"}
-
-      map_size(state.queued_messages) >= 32 or byte_size(prompt) > 64_000 ->
-        %{state | notice: "queued message limit reached · draft kept"}
-
-      true ->
-        submission = %{prompt: prompt, selection: Map.take(state, @submission_selection)}
-        ExRatatui.textarea_set_value(state.textarea, "")
-
-        state
-        |> Map.update!(:queued_messages, &Map.put(&1, state.selected_task_id, submission))
-        |> Map.put(:notice, "message queued for the next turn · Esc stops current run")
-    end
-  end
-
-  defp queue_native_input(state, task_id, prompt, mode) do
-    with {:ok, state} <- ensure_native_input(state, task_id),
+  defp queue_input(state, task_id, prompt, mode) do
+    with :ok <- input_route_available(state, task_id),
+         {:ok, state} <- ensure_input(state, task_id),
          input <- Map.fetch!(state.inputs, task_id),
          :ok <- one_follow_up_available(input, mode),
-         {:ok, input_id} <- Alto.Input.put(input, prompt, mode) do
+         {:ok, _input_id} <- Alto.Input.put(input, prompt, mode) do
       ExRatatui.textarea_set_value(state.textarea, "")
 
       state
-      |> Map.update!(
-        :queued_messages,
-        &Map.put_new(&1, task_id, %{
-          prompt: prompt,
-          selection: Map.take(state, @submission_selection),
-          mode: mode,
-          input_id: input_id
-        })
-      )
+      |> Map.update!(:input_routes, fn routes ->
+        route =
+          Map.get_lazy(routes, task_id, fn ->
+            %{selection: Map.take(state, @submission_selection)}
+          end)
+
+        Map.put(routes, task_id, route)
+      end)
       |> Map.put(:notice, input_notice(mode))
     else
       {:error, :follow_up_pending} ->
         %{state | notice: "one message already queued · draft kept · Esc stops current run"}
+
+      {:error, :pending_task_capacity} ->
+        %{state | notice: "queued message limit reached · draft kept"}
 
       {:error, reason} ->
         %{state | notice: "input not accepted: #{human_error(reason)} · draft kept"}
@@ -463,7 +438,13 @@ defmodule Alto.TUI.App do
   defp input_notice(:steer), do: "steering message accepted · Enter queues a follow-up"
   defp input_notice(:follow_up), do: "message queued for the next turn · Esc stops current run"
 
-  defp ensure_native_input(state, task_id) do
+  defp input_route_available(state, task_id) do
+    if Map.has_key?(state.input_routes, task_id) or map_size(state.input_routes) < 32,
+      do: :ok,
+      else: {:error, :pending_task_capacity}
+  end
+
+  defp ensure_input(state, task_id) do
     case Map.get(state.inputs, task_id) do
       input when is_pid(input) ->
         {:ok, state}
@@ -476,36 +457,45 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp ensure_input_for_task(state, task) do
-    if Backend.ui(%{state | selected_backend: State.task_backend(task)}, :durable_input?) == true,
-      do: ensure_native_input(state, task["id"]),
-      else: {:ok, state}
-  end
+  defp ensure_input_for_task(state, task), do: ensure_input(state, task["id"])
 
-  defp send_native_input(state, task_id) do
+  defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
       {false, input} when is_pid(input) and map_size(state.runs) < 32 ->
-        case take_native_input(input) do
+        case Alto.Input.take(input) do
           :empty ->
             state
 
-          :busy ->
+          {:error, :input_in_use} ->
             # Completion is delivered before the supervised runner releases
             # the channel. Retry after that handoff so accepted input survives
             # the completion race instead of crashing or being dropped.
-            retry_native_input(state, task_id)
+            retry_input(state, task_id)
 
           {:ok, entry} ->
+            route = Map.get(state.input_routes, task_id, %{})
+
+            foreground =
+              Map.take(state, @submission_selection ++ [:transcript_scroll, :transcript_follow?])
+
             draft = ExRatatui.textarea_get_value(state.textarea)
-            next = submit_backend(state, entry.text)
+
+            next =
+              state |> Map.merge(Map.get(route, :selection, %{})) |> submit_backend(entry.text)
+
             ExRatatui.textarea_set_value(state.textarea, draft)
+            next = Map.merge(next, foreground)
 
             if task_running?(next, task_id) do
-              %{next | queued_messages: Map.delete(next.queued_messages, task_id)}
+              clear_input_route(next, task_id)
             else
               case Alto.Input.put(input, entry.text, entry.mode) do
-                {:ok, _} ->
-                  %{next | notice: "input retained · Enter sends"}
+                {:ok, _id} ->
+                  %{
+                    next
+                    | input_routes: Map.put(next.input_routes, task_id, route),
+                      notice: "input retained · Enter sends"
+                  }
 
                 {:error, reason} ->
                   %{next | notice: "input unavailable: #{human_error(reason)} · draft kept"}
@@ -517,90 +507,37 @@ defmodule Alto.TUI.App do
         end
 
       {false, _input} ->
-        %{state | notice: "no native input is available for this task"}
+        %{state | notice: "no input is available for this task"}
 
       _ ->
         state
     end
   end
 
-  defp take_native_input(input) do
-    case Alto.Input.claim(input) do
-      :ok ->
-        try do
-          case Alto.Input.peek(input, [:steer, :follow_up]) do
-            nil ->
-              :empty
-
-            {:error, reason} ->
-              {:error, reason}
-
-            entry ->
-              case Alto.Input.ack(input, entry.id) do
-                :ok -> {:ok, entry}
-                {:error, reason} -> {:error, reason}
-              end
-          end
-        after
-          Alto.Input.release(input)
-        end
-
-      {:error, :input_in_use} ->
-        :busy
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp retry_native_input(state, task_id) do
+  defp retry_input(state, task_id) do
     Process.send_after(self(), {:alto_tui_send_input, task_id}, 10)
     %{state | notice: "input pending · Enter sends"}
   end
 
-  defp send_queued(state, task_id) do
-    case {task_running?(state, task_id), Map.get(state.queued_messages, task_id)} do
-      {false, %{prompt: prompt, selection: selection}} when map_size(state.runs) < 32 ->
-        draft = ExRatatui.textarea_get_value(state.textarea)
-
-        foreground =
-          Map.take(state, @submission_selection ++ [:transcript_scroll, :transcript_follow?])
-
-        next = state |> Map.merge(selection) |> submit_backend(prompt)
-        ExRatatui.textarea_set_value(state.textarea, draft)
-        next = Map.merge(next, foreground)
-
-        if task_running?(next, task_id),
-          do: %{next | queued_messages: Map.delete(next.queued_messages, task_id)},
-          else: next
-
-      {false, %{}} ->
-        %{state | notice: "too many active runs · queued message paused (Enter sends)"}
-
-      _ ->
-        state
-    end
-  end
-
   def finish_queued(state, task_id, true) do
-    cond do
-      State.input_pending?(state, task_id) ->
-        send(self(), {:alto_tui_send_input, task_id})
-        %{state | notice: state.notice <> " · input retained (Enter sends)"}
-
-      Map.has_key?(state.queued_messages, task_id) ->
-        send(self(), {:alto_tui_send_queued, task_id})
-        state
-
-      true ->
-        state
+    if State.input_pending?(state, task_id) do
+      send(self(), {:alto_tui_send_input, task_id})
+      %{state | notice: state.notice <> " · input retained (Enter sends)"}
+    else
+      state
     end
   end
 
   def finish_queued(state, task_id, false) do
-    if Map.has_key?(state.queued_messages, task_id) or State.input_pending?(state, task_id),
+    if State.input_pending?(state, task_id),
       do: %{state | notice: state.notice <> " · queued message paused (Enter sends)"},
       else: state
+  end
+
+  defp clear_input_route(state, task_id) do
+    if State.input_pending?(state, task_id),
+      do: state,
+      else: %{state | input_routes: Map.delete(state.input_routes, task_id)}
   end
 
   defp stop_active_run(state, run) do
@@ -625,8 +562,7 @@ defmodule Alto.TUI.App do
     profile = State.selected_profile(state)
 
     cond do
-      is_nil(profile) and
-          Alto.Config.provider_mode(state.config) != :none ->
+      is_nil(profile) and Keyword.fetch(state.run_options, :provider) != {:ok, nil} ->
         %{state | notice: "choose a provider before sending"}
 
       not is_nil(profile) and (is_nil(state.selected_model) or state.selected_model == "") ->
@@ -637,7 +573,22 @@ defmodule Alto.TUI.App do
              {:ok, state} <- ensure_input_for_task(state, task),
              {:ok, run_options} <- run_options(state, profile),
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
-          attach_started_run(state, task, prompt, handle, completion_ref, local_id)
+          attach_run(
+            state,
+            local_id,
+            %{
+              kind: :alto,
+              adapter: Backend.lookup(state.run_options, state.selected_backend),
+              handle: handle,
+              task_id: task["id"],
+              ref: completion_ref,
+              phase: "starting",
+              approval_ids: MapSet.new(),
+              started_at_ms: System.system_time(:millisecond)
+            },
+            prompt,
+            "run started"
+          )
         else
           {:error, reason} -> %{state | notice: "cannot start: #{human_error(reason)}"}
         end
@@ -681,30 +632,15 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp attach_started_run(state, task, prompt, handle, completion_ref, local_id) do
-    run = %{
-      kind: :alto,
-      adapter: Backend.lookup(state.run_options, state.selected_backend),
-      handle: handle,
-      task_id: task["id"],
-      ref: completion_ref,
-      phase: "starting",
-      approval_ids: MapSet.new(),
-      started_at_ms: System.system_time(:millisecond)
-    }
-
+  def attach_run(state, local_id, run, prompt, notice) do
     ExRatatui.textarea_set_value(state.textarea, "")
 
-    state =
-      case Catalog.update_task(task["id"], %{"status" => "active"}, state.catalog_opts) do
-        {:ok, updated} -> State.update_task_record(state, updated)
-        {:error, _reason} -> state
-      end
+    state = sync_run_task(state, run)
 
     state
-    |> State.append_entry(task["id"], %{kind: :user, text: prompt})
-    |> Map.update!(:runs, &Map.put(&1, local_id, run))
-    |> Map.put(:notice, "run started")
+    |> State.append_entry(run.task_id, %{kind: :user, text: prompt})
+    |> Map.update!(:runs, &Map.put(&1, local_id, Map.put(run, :local_id, local_id)))
+    |> Map.put(:notice, notice)
     |> Map.put(:transcript_scroll, 0)
     |> Map.put(:transcript_follow?, true)
   end
@@ -745,7 +681,6 @@ defmodule Alto.TUI.App do
         state.run_options
         |> Keyword.drop([
           :provider_profiles,
-          :codex_backend,
           :tui,
           :listeners,
           :queue,
@@ -762,9 +697,7 @@ defmodule Alto.TUI.App do
         end
 
       opts =
-        if Backend.ui(state, :durable_input?) == true,
-          do: Keyword.put(opts, :input, Map.get(state.inputs, state.selected_task_id)),
-          else: opts
+        Keyword.put(opts, :input, Map.get(state.inputs, state.selected_task_id))
 
       {:ok, opts}
     else
@@ -798,7 +731,7 @@ defmodule Alto.TUI.App do
         credentials_path: state.credentials_path
       )
 
-    options = maybe_context_window(options, selected_model_metadata(state, profile))
+    options = maybe_context_window(options, State.model_metadata(state))
 
     options =
       if effort = State.selected_effort(state),
@@ -807,22 +740,6 @@ defmodule Alto.TUI.App do
 
     {module, options}
   end
-
-  defp selected_model_metadata(state, profile) do
-    state.models
-    |> Map.get(profile.id, profile.models)
-    |> case do
-      models when is_list(models) ->
-        Enum.find(models, &model_id_matches?(&1, state.selected_model))
-
-      _other ->
-        nil
-    end
-  end
-
-  defp model_id_matches?(%{id: id}, selected), do: id == selected
-  defp model_id_matches?(%{"id" => id}, selected), do: id == selected
-  defp model_id_matches?(_, _), do: false
 
   defp maybe_context_window(options, %{context_window: value})
        when is_integer(value) and value > 0,
@@ -834,7 +751,7 @@ defmodule Alto.TUI.App do
 
   defp maybe_context_window(options, _metadata), do: options
 
-  defp finish_run(state, local_id, run, result) do
+  defp finish_runner_result(state, local_id, _run, result) do
     {status, session_id, entry, notice, persistence} =
       case result do
         {:ok, completed} ->
@@ -850,25 +767,45 @@ defmodule Alto.TUI.App do
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
 
-    changes = %{"status" => status}
-    changes = if session_id, do: Map.put(changes, "session_id", session_id), else: changes
+    finish_run(state, local_id, status,
+      session_id: session_id,
+      entry: entry,
+      notice: notice,
+      continue?: status == "completed" and not match?({:degraded, _}, persistence)
+    )
+  end
 
-    state =
-      case Catalog.update_task(run.task_id, changes, state.catalog_opts) do
-        {:ok, task} -> State.update_task_record(state, task)
-        {:error, _reason} -> state
-      end
+  def finish_run(state, local_id, status, opts \\ []) do
+    run = Map.fetch!(state.runs, local_id)
+    changes = %{"status" => status} |> maybe_change("conversation_id", opts[:session_id])
 
-    state = if entry, do: State.append_entry(state, run.task_id, entry), else: state
+    state = State.update_task(state, run.task_id, changes)
+
+    state = if opts[:entry], do: State.append_entry(state, run.task_id, opts[:entry]), else: state
 
     state
     |> drop_run(local_id)
-    |> Map.put(:notice, notice)
-    |> finish_queued(
-      run.task_id,
-      status == "completed" and not match?({:degraded, _}, persistence)
-    )
+    |> Map.put(:notice, opts[:notice])
+    |> finish_queued(run.task_id, Keyword.get(opts, :continue?, status == "completed"))
   end
+
+  def update_run(state, local_id, changes) when is_binary(local_id) do
+    update_in(state.runs[local_id], &Map.merge(&1, Map.new(changes)))
+  end
+
+  def update_run(state, %{local_id: id}, changes), do: update_run(state, id, changes)
+
+  def sync_run_task(state, run) do
+    changes =
+      %{"status" => "active"}
+      |> maybe_change("backend", run[:backend_id] && Atom.to_string(run.backend_id))
+      |> maybe_change("conversation_id", run[:thread_id])
+
+    State.update_task(state, run.task_id, changes)
+  end
+
+  defp maybe_change(map, _key, nil), do: map
+  defp maybe_change(map, key, value), do: Map.put(map, key, value)
 
   defp persistence_feedback(entry, notice, {:degraded, errors}) do
     warning = %{kind: :error, text: "persistence degraded", detail: human_error(errors)}
@@ -930,13 +867,8 @@ defmodule Alto.TUI.App do
   defp do_ingest_event(state, task_id, %Event{type: :model_delta, data: %{text: text}}),
     do: State.append_assistant_delta(state, task_id, text)
 
-  defp do_ingest_event(state, task_id, %Event{type: :input_received, data: %{id: id, text: text}}) do
-    queued = Map.get(state.queued_messages, task_id)
-
-    state =
-      if is_map(queued) and queued[:input_id] == id,
-        do: %{state | queued_messages: Map.delete(state.queued_messages, task_id)},
-        else: state
+  defp do_ingest_event(state, task_id, %Event{type: :input_received, data: %{text: text}}) do
+    state = clear_input_route(state, task_id)
 
     # Native input continues within the same run, bypassing attach_started_run.
     # Insert its user turn before any response deltas can extend the previous one.
@@ -958,7 +890,10 @@ defmodule Alto.TUI.App do
     State.upsert_entry(state, task_id, key, entry)
   end
 
-  defp do_ingest_event(state, task_id, %Event{type: :context_handoff_created, data: data}) do
+  defp do_ingest_event(state, task_id, %Event{
+         type: :context_compacted,
+         data: %{strategy: :handoff} = data
+       }) do
     files = data |> Map.get(:files, %{}) |> Map.values() |> Enum.join(" · ")
     next = Map.get(data, :next_step, "")
 
@@ -995,31 +930,15 @@ defmodule Alto.TUI.App do
           )
         end)
 
-        overlay = %{
-          kind: kind,
-          title: "models · loading #{profile.label}…",
-          index: 0,
-          filter: "",
-          all_items: [%{label: "Loading model catalog…", value: nil}],
-          items: [%{label: "Loading model catalog…", value: nil}]
-        }
+        overlay =
+          Menu.new(kind, "models · loading #{profile.label}…", [
+            %{label: "Loading model catalog…", value: nil}
+          ])
 
         %{state | overlay: overlay, model_loading: MapSet.put(state.model_loading, profile.id)}
 
       {:ok, title, items, selected} ->
-        index = Enum.find_index(items, &(&1.value == selected)) || 0
-
-        %{
-          state
-          | overlay: %{
-              kind: kind,
-              title: title,
-              index: index,
-              filter: "",
-              all_items: items,
-              items: items
-            }
-        }
+        %{state | overlay: Menu.new(kind, title, items, selected)}
 
       {:error, reason} ->
         %{state | notice: reason}
@@ -1031,15 +950,10 @@ defmodule Alto.TUI.App do
       [] ->
         profile = State.selected_profile(state)
 
-        cond do
-          profile &&
-            not Map.has_key?(state.models, profile.id) &&
-              not MapSet.member?(state.model_loading, profile.id) ->
-            {:load, profile}
-
-          true ->
-            {:error, "This model does not advertise effort selection"}
-        end
+        if profile && not Map.has_key?(state.models, profile.id) &&
+             not MapSet.member?(state.model_loading, profile.id),
+           do: {:load, profile},
+           else: {:error, "This model does not advertise effort selection"}
 
       choices ->
         {:ok, "reasoning effort · next turn",
@@ -1066,7 +980,7 @@ defmodule Alto.TUI.App do
 
     configure =
       case State.selected_profile(state) do
-        %{module: Alto.Providers.OpenAICompatible} = profile ->
+        %{provider: {Alto.Providers.OpenAICompatible, _}} = profile ->
           [%{label: "⚙ Configure #{profile.label}…", value: {:configure_provider, profile.id}}]
 
         _other ->
@@ -1127,19 +1041,14 @@ defmodule Alto.TUI.App do
   defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
     do: workspace_form_result(state, WorkspaceForm.key(form, key))
 
-  defp overlay_key(%{overlay: %{kind: :provider_form}} = state, key),
-    do: provider_form_key(state, key)
-
-  defp overlay_key(%{overlay: %{kind: :model_form}} = state, key),
-    do: model_form_key(state, key)
+  defp overlay_key(%{overlay: %{kind: kind} = form} = state, key)
+       when kind in [:provider_form, :model_form],
+       do: text_form_result(state, TextForm.key(form, key))
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
 
-  defp overlay_key(state, %Key{code: code}) when code in ["up", "k"],
-    do: move_overlay(state, -1)
-
-  defp overlay_key(state, %Key{code: code}) when code in ["down", "j"],
-    do: move_overlay(state, 1)
+  defp overlay_key(state, %Key{code: code}) when code in ["up", "k", "down", "j"],
+    do: move_overlay(state, if(code in ["up", "k"], do: -1, else: 1))
 
   defp overlay_key(state, %Key{code: "enter"}), do: select_overlay(state)
 
@@ -1161,30 +1070,14 @@ defmodule Alto.TUI.App do
 
   defp overlay_key(state, _key), do: state
 
-  defp filter_overlay(state, filter) do
-    normalized = String.downcase(filter)
+  defp filter_overlay(state, filter),
+    do: %{state | overlay: Menu.filter(state.overlay, filter)}
 
-    items =
-      Enum.filter(
-        state.overlay.all_items,
-        &String.contains?(String.downcase(&1.label), normalized)
-      )
+  defp move_overlay(state, delta),
+    do: %{state | overlay: Menu.move(state.overlay, delta)}
 
-    title = state.overlay.title |> String.split(" · filter:", parts: 2) |> hd()
-    title = if filter == "", do: title, else: title <> " · filter: " <> filter
-    %{state | overlay: %{state.overlay | filter: filter, items: items, index: 0, title: title}}
-  end
-
-  defp move_overlay(%{overlay: %{items: []}} = state, _delta), do: state
-
-  defp move_overlay(state, delta) do
-    count = length(state.overlay.items)
-    index = rem(state.overlay.index + delta + count, count)
-    %{state | overlay: %{state.overlay | index: index}}
-  end
-
-  defp select_overlay(%{overlay: %{items: items, index: index}} = state) do
-    case Enum.at(items, index) do
+  defp select_overlay(%{overlay: overlay} = state) do
+    case Enum.at(Menu.items(overlay), overlay.index) do
       nil ->
         state
 
@@ -1255,21 +1148,17 @@ defmodule Alto.TUI.App do
   defp apply_selection(state, :model, value),
     do: %{state | selected_model: value, overlay: nil, notice: "model: #{value}"}
 
-  defp apply_selection(state, :project, value),
-    do:
-      state
-      |> State.select_project(value)
-      |> prepare_selected_backend()
-      |> Map.put(:overlay, nil)
-      |> Map.put(:notice, "workspace switched")
+  defp apply_selection(state, kind, value) when kind in [:project, :task] do
+    {selected, notice} =
+      case kind do
+        :project -> {State.select_project(state, value), "workspace switched"}
+        :task -> {State.select_task(state, value), "task switched"}
+      end
 
-  defp apply_selection(state, :task, value),
-    do:
-      state
-      |> State.select_task(value)
-      |> prepare_selected_backend()
-      |> Map.put(:overlay, nil)
-      |> Map.put(:notice, "task switched")
+    selected
+    |> prepare_selected_backend()
+    |> Map.merge(%{overlay: nil, notice: notice})
+  end
 
   defp handle_mouse(state, %Mouse{kind: "down", button: "left", x: x, y: y}) do
     {width, height} = state.dimensions
@@ -1353,20 +1242,13 @@ defmodule Alto.TUI.App do
           min(max(state.details_scroll + delta, 0), View.details_bottom_scroll(state))
     }
 
-  defp navigate(state, %Key{code: code}) when code in ["down", "j"] do
-    case state.focus do
-      :rail -> move_rail(state, 1)
-      :transcript -> scroll_transcript(state, 1)
-      :details -> scroll_details(state, 1)
-      _other -> state
-    end
-  end
+  defp navigate(state, %Key{code: code}) when code in ["down", "j", "up", "k"] do
+    delta = if code in ["down", "j"], do: 1, else: -1
 
-  defp navigate(state, %Key{code: code}) when code in ["up", "k"] do
     case state.focus do
-      :rail -> move_rail(state, -1)
-      :transcript -> scroll_transcript(state, -1)
-      :details -> scroll_details(state, -1)
+      :rail -> move_rail(state, delta)
+      :transcript -> scroll_transcript(state, delta)
+      :details -> scroll_details(state, delta)
       _other -> state
     end
   end
@@ -1443,28 +1325,14 @@ defmodule Alto.TUI.App do
     do: %{state | notice: "no pending approval"}
 
   defp decide_approval(%{pending_approvals: [pending | rest]} = state, decision) do
-    case pending do
-      %{respond: respond} when is_function(respond, 1) ->
-        respond.(decision)
-
-      %{waiter: waiter, request: request} ->
-        send(waiter, {:alto_approval_decision, request.id, decision})
-    end
+    pending.respond.(decision)
 
     next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
-    cond do
-      rest != [] and next.details_drawer_open? ->
-        %{next | focus: :details}
-
-      rest == [] and next.details_drawer_auto_opened? ->
-        State.close_details_drawer(next)
-
-      next.details_drawer_open? ->
-        %{next | focus: :details}
-
-      true ->
-        %{next | focus: :composer}
+    if rest == [] and next.details_drawer_auto_opened? do
+      State.close_details_drawer(next)
+    else
+      %{next | focus: if(next.details_drawer_open?, do: :details, else: :composer)}
     end
   end
 
@@ -1479,10 +1347,7 @@ defmodule Alto.TUI.App do
       not next.approval_auto_open? ->
         State.ensure_visible_focus(next)
 
-      State.details_pane_visible?(next) ->
-        %{next | focus: :details}
-
-      next.details_drawer_open? ->
+      State.details_pane_visible?(next) or next.details_drawer_open? ->
         %{next | focus: :details}
 
       true ->
@@ -1514,11 +1379,7 @@ defmodule Alto.TUI.App do
   defp active_run(state),
     do: Enum.find(state.runs, fn {_id, run} -> run.task_id == state.selected_task_id end)
 
-  defp cancel_run(%{adapter: {:ok, module, opts}, cancellation: :run} = run),
-    do: module.cancel(run, :user, opts)
-
-  defp cancel_run(%{adapter: {:ok, module, opts}, handle: handle}),
-    do: module.cancel(handle, :user, opts)
+  defp cancel_run(%{adapter: {:ok, module, opts}} = run), do: module.cancel(run, :user, opts)
 
   defp cancel_run(_run), do: :ok
 
@@ -1540,7 +1401,7 @@ defmodule Alto.TUI.App do
   end
 
   defp put_overlay_index(state, row) do
-    index = row |> max(0) |> min(max(length(state.overlay.items) - 1, 0))
+    index = row |> max(0) |> min(max(length(Menu.items(state.overlay)) - 1, 0))
     %{state | overlay: %{state.overlay | index: index}}
   end
 
@@ -1548,7 +1409,7 @@ defmodule Alto.TUI.App do
     profile = Enum.find(state.profiles, &(&1.id == profile_id))
 
     configure =
-      if profile && profile.module == Alto.Providers.OpenAICompatible do
+      if match?(%{provider: {Alto.Providers.OpenAICompatible, _}}, profile) do
         [
           %{
             label: "Configure #{profile.label} credentials…",
@@ -1574,15 +1435,8 @@ defmodule Alto.TUI.App do
 
     %{
       state
-      | overlay: %{
-          kind: :model_error,
-          title: "model catalog unavailable",
-          message: message,
-          index: 0,
-          filter: "",
-          all_items: items,
-          items: items
-        },
+      | overlay:
+          Menu.new(:model_error, "model catalog unavailable", items) |> Map.put(:message, message),
         notice: "model catalog needs attention"
     }
   end
@@ -1601,36 +1455,39 @@ defmodule Alto.TUI.App do
     profile = Enum.find(state.profiles, &(&1.id == profile_id))
     new? = is_nil(profile)
 
-    defaults = %{
-      id: (profile && profile.id) || "",
-      label: (profile && profile.label) || "",
-      base_url: (profile && Keyword.get(profile.options, :base_url)) || "",
-      api_key: "",
-      model: (profile && profile.default_model) || ""
-    }
-
-    fields =
-      Enum.map([:id, :label, :base_url, :api_key, :model], fn key ->
-        input = ExRatatui.text_input_new()
-        ExRatatui.text_input_set_value(input, Map.fetch!(defaults, key))
-        %{key: key, input: input, locked?: key == :id and not new?}
-      end)
-
     stored? = profile && ProviderStore.api_key_saved?(profile, credentials_opts(state))
+
+    key_placeholder =
+      if(stored? == true,
+        do: "(saved — leave blank to keep)",
+        else: "(optional for local providers)"
+      )
+
+    fields = [
+      {:id, "ID", profile && profile.id, [locked?: not new?]},
+      {:label, "Name", profile && profile.label, []},
+      {:base_url, "Base URL", profile && Keyword.get(elem(profile.provider, 1), :base_url), []},
+      {:api_key, "API key", "", [secret?: true, placeholder: key_placeholder]},
+      {:model, "Default model", profile && profile.default_model, []}
+    ]
 
     %{
       state
-      | overlay: %{
-          kind: :provider_form,
-          title: if(new?, do: "add provider", else: "configure #{profile.label}"),
-          fields: fields,
-          field_index: if(new?, do: 0, else: 3),
-          existing_id: profile_id,
-          key_saved?: stored? == true,
-          error: nil,
-          after_save:
-            if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
-        },
+      | overlay:
+          TextForm.new(
+            :provider_form,
+            if(new?, do: "add provider", else: "configure #{profile.label}"),
+            fields,
+            intro: "Credentials are saved privately outside the workspace.",
+            hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
+            buttons: ["[ Save provider ]", "[ Cancel ]"],
+            prefix_width: 16,
+            width_percent: 72,
+            height_percent: 66,
+            field_index: if(new?, do: 0, else: 3),
+            after_save:
+              if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
+          ),
         notice: nil
     }
   end
@@ -1673,101 +1530,42 @@ defmodule Alto.TUI.App do
   end
 
   defp open_model_form(state, profile_id) do
-    input = ExRatatui.text_input_new()
-
     %{
       state
       | selected_provider_id: profile_id,
-        overlay: %{
-          kind: :model_form,
-          title: "exact model ID",
-          input: input,
-          profile_id: profile_id,
-          error: nil
-        }
+        overlay:
+          TextForm.new(
+            :model_form,
+            "exact model ID",
+            [{:model, "Model ID", "", []}],
+            intro: "Use the provider's exact model identifier.",
+            hint: "Enter use · Esc",
+            buttons: ["[ Use model ]", "[ Cancel ]"],
+            prefix_width: 12,
+            width_percent: 62,
+            height_percent: 42,
+            button_gap: 1,
+            profile_id: profile_id
+          )
     }
   end
 
-  defp provider_form_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
+  defp text_form_result(state, :cancel), do: %{state | overlay: nil}
+  defp text_form_result(state, {:edit, form}), do: %{state | overlay: form}
 
-  defp provider_form_key(state, %Key{code: "s", modifiers: modifiers}) do
-    if "ctrl" in modifiers, do: save_provider_form(state), else: edit_provider_field(state, "s")
-  end
+  defp text_form_result(%{overlay: %{kind: :provider_form}} = state, :submit),
+    do: save_provider_form(state)
 
-  defp provider_form_key(state, %Key{code: code}) when code in ["tab", "down"] do
-    move_form_field(state, 1)
-  end
+  defp text_form_result(%{overlay: %{kind: :model_form} = form} = state, :submit) do
+    model = form |> TextForm.value() |> String.trim()
 
-  defp provider_form_key(state, %Key{code: code}) when code in ["back_tab", "up"] do
-    move_form_field(state, -1)
-  end
-
-  defp provider_form_key(state, %Key{code: "enter"}) do
-    if state.overlay.field_index == length(state.overlay.fields) - 1,
-      do: save_provider_form(state),
-      else: move_form_field(state, 1)
-  end
-
-  defp provider_form_key(state, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] or code in ["backspace", "delete", "left", "right", "home", "end"] do
-      edit_provider_field(state, code)
-    else
-      state
-    end
-  end
-
-  defp model_form_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
-
-  defp model_form_key(state, %Key{code: "enter"}) do
-    model = state.overlay.input |> ExRatatui.text_input_get_value() |> String.trim()
-
-    if model == "" do
-      put_in(state.overlay.error, "model ID is required")
-    else
-      %{state | selected_model: model, overlay: nil, notice: "model: #{model}"}
-    end
-  end
-
-  defp model_form_key(state, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] or code in ["backspace", "delete", "left", "right", "home", "end"] do
-      ExRatatui.text_input_handle_key(state.overlay.input, code)
-    end
-
-    state
-  end
-
-  defp move_form_field(state, delta) do
-    count = length(state.overlay.fields)
-    index = rem(state.overlay.field_index + delta + count, count)
-    put_in(state.overlay.field_index, index)
-  end
-
-  defp edit_provider_field(state, code) do
-    field = Enum.at(state.overlay.fields, state.overlay.field_index)
-
-    unless field.locked? do
-      ExRatatui.text_input_handle_key(field.input, code)
-    end
-
-    put_in(state.overlay.error, nil)
-  end
-
-  defp insert_form_text(%{overlay: %{kind: :provider_form}} = state, content) do
-    field = Enum.at(state.overlay.fields, state.overlay.field_index)
-    unless field.locked?, do: ExRatatui.text_input_insert_str(field.input, content)
-    put_in(state.overlay.error, nil)
-  end
-
-  defp insert_form_text(%{overlay: %{kind: :model_form}} = state, content) do
-    ExRatatui.text_input_insert_str(state.overlay.input, content)
-    put_in(state.overlay.error, nil)
+    if model == "",
+      do: put_in(state.overlay.error, "model ID is required"),
+      else: %{state | selected_model: model, overlay: nil, notice: "model: #{model}"}
   end
 
   defp save_provider_form(state) do
-    attrs =
-      Map.new(state.overlay.fields, fn field ->
-        {field.key, ExRatatui.text_input_get_value(field.input)}
-      end)
+    attrs = TextForm.values(state.overlay)
 
     api_key_field = Enum.find(state.overlay.fields, &(&1.key == :api_key))
 
@@ -1800,22 +1598,9 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp handle_overlay_click(%{overlay: %{kind: :provider_form}} = state, row) do
-    cond do
-      row in 2..6 -> put_in(state.overlay.field_index, row - 2)
-      row == 8 -> save_provider_form(state)
-      row == 9 -> %{state | overlay: nil}
-      true -> state
-    end
-  end
-
-  defp handle_overlay_click(%{overlay: %{kind: :model_form}} = state, row) do
-    cond do
-      row == 5 -> model_form_key(state, %Key{code: "enter"})
-      row == 6 -> %{state | overlay: nil}
-      true -> state
-    end
-  end
+  defp handle_overlay_click(%{overlay: %{kind: kind} = form} = state, row)
+       when kind in [:provider_form, :model_form],
+       do: text_form_result(state, TextForm.click(form, row))
 
   defp handle_overlay_click(state, row),
     do: state |> put_overlay_index(row - overlay_list_offset(state.overlay)) |> select_overlay()
@@ -1845,8 +1630,7 @@ defmodule Alto.TUI.App do
 
       true ->
         state = persist_task_backend(state, task, backend)
-        model = backend_model(state, backend)
-        next = %{state | selected_backend: backend, selected_model: model, overlay: nil}
+        next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 
         select_backend_ui(%{next | notice: "backend: #{backend}"})
     end
@@ -1855,36 +1639,17 @@ defmodule Alto.TUI.App do
   defp task_backend_locked?(nil), do: false
 
   defp task_backend_locked?(task),
-    do: is_binary(task["session_id"]) or is_binary(task["backend_thread_id"])
+    do: is_binary(task["conversation_id"])
 
   defp persist_task_backend(state, nil, _backend), do: state
 
-  defp persist_task_backend(state, task, backend) do
-    case Catalog.update_task(
-           task["id"],
-           %{"backend" => Atom.to_string(backend)},
-           state.catalog_opts
-         ) do
-      {:ok, updated} -> State.update_task_record(state, updated)
-      {:error, _reason} -> state
-    end
-  end
+  defp persist_task_backend(state, task, backend),
+    do: State.update_task(state, task["id"], %{"backend" => Atom.to_string(backend)})
 
   defp select_backend_ui(state) do
     case Backend.ui(state, :selected) do
       :pass -> state
       next -> next
-    end
-  end
-
-  defp backend_model(state, backend) do
-    case Backend.ui(%{state | selected_backend: backend}, :model) do
-      :pass ->
-        profile = State.selected_profile(state)
-        profile && profile.default_model
-
-      model ->
-        model
     end
   end
 
@@ -1899,12 +1664,16 @@ defmodule Alto.TUI.App do
 
   defp merge_saved_profile(nil, saved), do: saved
 
-  defp merge_saved_profile(prior, saved) do
+  defp merge_saved_profile(
+         %{provider: {module, options}} = prior,
+         %{provider: {_, saved_options}} = saved
+       ) do
     %{
       prior
       | label: saved.label,
         default_model: saved.default_model,
-        options: Keyword.put(prior.options, :base_url, Keyword.fetch!(saved.options, :base_url))
+        provider:
+          {module, Keyword.put(options, :base_url, Keyword.fetch!(saved_options, :base_url))}
     }
   end
 

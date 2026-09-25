@@ -2,7 +2,6 @@ defmodule Alto.Workspaces.GitPatch do
   @moduledoc false
   alias Alto.Workspaces.Git
   alias Alto.Workspaces
-  alias Alto.DurableLog
 
   @max_manifest_bytes 32_000
   @max_files 256
@@ -18,13 +17,7 @@ defmodule Alto.Workspaces.GitPatch do
          {:ok, reverse} <-
            Git.command(target, ["apply", "--reverse", "--numstat", "-z", "--", patch_path], opts),
          {:ok, paths} <- paths(forward <> reverse),
-         {:ok, files} <- snapshots(target, paths),
-         {:ok, _} <-
-           Git.command(
-             target,
-             ["apply", "--check", "--whitespace=nowarn", "--", patch_path],
-             opts
-           ) do
+         {:ok, files} <- snapshots(target, paths) do
       prepared = %{
         "version" => 1,
         "engine" => engine(),
@@ -33,9 +26,7 @@ defmodule Alto.Workspaces.GitPatch do
         "files" => files
       }
 
-      with :ok <- manifest_bound(prepared),
-           :ok <- verify(prepared, patch_path, opts),
-           do: {:ok, prepared}
+      with :ok <- verify(prepared, patch_path, opts), do: {:ok, prepared}
     end
   end
 
@@ -94,30 +85,21 @@ defmodule Alto.Workspaces.GitPatch do
   end
 
   defp paths(output) do
-    output
-    |> String.split(<<0>>, trim: true)
-    |> Enum.reduce_while({:ok, []}, fn record, {:ok, paths} ->
-      case String.split(record, "\t", parts: 3) do
-        [_added, _removed, path] ->
-          case valid_path(path) do
-            :ok -> {:cont, {:ok, [path | paths]}}
-            error -> {:halt, error}
-          end
+    with {:ok, paths} <-
+           Alto.Result.traverse(String.split(output, <<0>>, trim: true), fn record ->
+             case String.split(record, "\t", parts: 3) do
+               [_added, _removed, path] ->
+                 with :ok <- valid_path(path), do: {:ok, path}
 
-        _ ->
-          {:halt, {:error, :invalid_patch_stat}}
-      end
-    end)
-    |> case do
-      {:ok, paths} ->
-        paths = paths |> Enum.uniq() |> Enum.sort()
+               _ ->
+                 {:error, :invalid_patch_stat}
+             end
+           end) do
+      paths = paths |> Enum.uniq() |> Enum.sort()
 
-        if length(paths) in 1..@max_files,
-          do: {:ok, paths},
-          else: {:error, :patch_file_count_exceeded}
-
-      error ->
-        error
+      if length(paths) in 1..@max_files,
+        do: {:ok, paths},
+        else: {:error, :patch_file_count_exceeded}
     end
   end
 
@@ -199,29 +181,11 @@ defmodule Alto.Workspaces.GitPatch do
     end
   end
 
-  defp file_digest(path, remaining) do
-    with {:ok, io} <- File.open(path, [:read, :raw, :binary]) do
-      try do
-        digest_chunks(io, :crypto.hash_init(:sha256), remaining)
-      after
-        File.close(io)
-      end
-    end
-  end
-
-  defp digest_chunks(io, state, remaining) do
-    case IO.binread(io, min(remaining + 1, 64_000)) do
-      :eof ->
-        {:ok, Base.encode16(:crypto.hash_final(state), case: :lower)}
-
-      bytes when is_binary(bytes) and byte_size(bytes) <= remaining ->
-        digest_chunks(io, :crypto.hash_update(state, bytes), remaining - byte_size(bytes))
-
-      bytes when is_binary(bytes) ->
-        {:error, :patch_target_too_large}
-
-      error ->
-        error
+  defp file_digest(path, limit) do
+    case Alto.BoundedFile.digest(path, limit) do
+      {:ok, %{fingerprint: fingerprint}} -> {:ok, Base.encode16(fingerprint, case: :lower)}
+      {:error, {:too_large, _, _}} -> {:error, :patch_target_too_large}
+      error -> error
     end
   end
 
@@ -257,7 +221,7 @@ defmodule Alto.Workspaces.GitPatch do
   end
 
   defp sync_parents(dir, root) do
-    with :ok <- if(File.dir?(dir), do: DurableLog.sync_directory(dir), else: :ok) do
+    with :ok <- if(File.dir?(dir), do: Alto.AtomicFile.sync_directory(dir), else: :ok) do
       if dir == root, do: :ok, else: sync_parents(Path.dirname(dir), root)
     end
   end

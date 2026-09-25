@@ -11,7 +11,7 @@ Alto.Config.new(
 ```
 
 `Alto.Effect.run_tools(calls, concurrency)` exposes the same mechanism to other
-trusted loops. Both shipped execution hosts understand the effect. The default
+trusted loops. The built-in execution host handles the effect. The default
 loop still emits serial calls unless configured otherwise.
 
 Only tools declaring both `execution_mode: :parallel` and `approval: :never`
@@ -32,7 +32,10 @@ middleware in that order. Effects requested by these handlers execute after
 the group settles. This is an explicit semantic boundary: ordinary individual
 tool effects retain their existing interleaved hook behavior.
 
-Cancellation terminates outstanding workers and records their uncertain
-outcomes. Hard coordinator death terminates workers through ownership monitors.
-Tools are not automatically retried. Approval checkpoints occur at serial
+Single calls and groups use the same bounded worker coordinator. Cancellation
+retains outcomes already delivered and terminates outstanding workers, recording
+one `tool_failed` event with an `:unknown` outcome for each unresolved operation.
+Those operation events carry call and operation identities; `run_cancelled`
+records the cancellation reason. Hard coordinator death terminates workers
+through ownership monitors. Tools are not automatically retried. Approval checkpoints occur at serial
 barriers and retain the remaining batch groups.

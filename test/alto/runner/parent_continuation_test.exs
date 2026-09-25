@@ -2,8 +2,8 @@ defmodule Alto.Runner.ParentContinuationTest do
   use ExUnit.Case, async: false
 
   alias Alto.{Effect, Event, OperationLog, Transition}
-  alias Alto.Runner.Budget.Account
-  alias Alto.Subagents.{Continuation, Journal}
+  alias Alto.Runner.{Budget.Account, Checkpoint}
+  alias Alto.Subagents.Continuation
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
@@ -46,10 +46,9 @@ defmodule Alto.Runner.ParentContinuationTest do
   end
 
   defmodule IntegrateTool do
-    @behaviour Alto.Tool
-    def name, do: :integrate
+    use Alto.Tool, name: :integrate, execution_mode: :exclusive, approval: :never
 
-    def schema,
+    def schema(_opts),
       do: %{
         description: "Record one parent integration.",
         parameters: %{
@@ -59,10 +58,7 @@ defmodule Alto.Runner.ParentContinuationTest do
         }
       }
 
-    def execution_mode, do: :exclusive
-    def approval, do: :never
-
-    def run(%{"value" => value}, _context) do
+    def run(%{"value" => value}, _context, _opts) do
       send(:persistent_term.get({__MODULE__, :observer}), {:integrated, value})
       {:ok, %{integrated: value}}
     end
@@ -134,13 +130,11 @@ defmodule Alto.Runner.ParentContinuationTest do
             Alto.Subagents.bounded(
               max_depth: 1,
               max_children: 4,
-              max_concurrency: 1,
-              journal: ledgers.children
+              max_concurrency: 1
             )
         ),
       tools: [IntegrateTool],
       continuation_store: ledgers.parent,
-      continuation_key: "trusted-parent",
       checkpoint_version: "v1",
       budget_account: ledgers.account,
       max_effects: 50,
@@ -161,42 +155,31 @@ defmodule Alto.Runner.ParentContinuationTest do
     {cell, identity}
   end
 
-  test "both schedulers run a retained parent boundary and claim its frame once", %{dir: dir} do
-    for runner <- [Alto.Runner.Serial, Alto.Runner.Stepped] do
-      suffix = if runner == Alto.Runner.Serial, do: "serial", else: "stepped"
-      ledgers = ledgers(dir, suffix)
+  test "the scheduler runs a retained parent boundary and claim its frame once", %{dir: dir} do
+    runner = Alto.Runner.Serial
+    ledgers = ledgers(dir, "serial")
 
-      agents = [
-        %{id: "first", task: "one", loop: Alto.loop(ReturnLoop)},
-        %{id: "second", task: "two", loop: Alto.loop(ReturnLoop)}
-      ]
+    agents = [
+      %{id: "first", task: "one", loop: Alto.loop(ReturnLoop)},
+      %{id: "second", task: "two", loop: Alto.loop(ReturnLoop)}
+    ]
 
-      assert {:ok, result} = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
-      assert Enum.map(result.output.results, & &1.id) == ["first", "second"]
-      assert_receive {:integrated, "joined"}, 2_000
-      refute_receive {:integrated, _}, 50
+    assert {:ok, result} = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
+    assert Enum.map(result.output.results, & &1.id) == ["first", "second"]
+    assert_receive {:integrated, "joined"}, 2_000
+    refute_receive {:integrated, _}, 50
 
-      {cell, identity} = only_cell!(ledgers.parent)
-      assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
+    {cell, identity} = only_cell!(ledgers.parent)
+    assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
 
-      assert {:error, :continuation_already_claimed} =
-               Continuation.claim(cell, elem(Continuation.read(cell), 1).revision)
+    assert {:error, :continuation_already_claimed} =
+             Continuation.claim(cell, elem(Continuation.read(cell), 1).revision)
 
-      assert {:error, :continuation_already_claimed, _} =
-               Alto.run(:ignored, opts(ledgers, dir, runner, continuation: identity))
+    assert {:error, :continuation_already_claimed, _} =
+             Alto.run(:ignored, opts(ledgers, dir, runner, continuation: identity))
 
-      [child_key] = OperationLog.keys(ledgers.children)
-      {:ok, child_entry} = OperationLog.recovery(ledgers.children, child_key)
-
-      {:ok, journal} =
-        Journal.restore(ledgers.children, %{
-          "key" => child_key,
-          "generation" => child_entry.recovery["generation"]
-        })
-
-      assert {:ok, %{packet: %{"join" => receipt}}} = Journal.read(journal)
-      assert receipt["continuation"] == identity
-    end
+    assert {:ok, %{results: results}} = Continuation.join(cell)
+    assert Enum.map(results, &elem(&1, 0)) == ["first", "second"]
   end
 
   test "settled history persists resolved native effects before parent capture", %{dir: dir} do
@@ -237,13 +220,13 @@ defmodule Alto.Runner.ParentContinuationTest do
     child_monitor = Process.monitor(worker)
     send(provider, :release)
     assert_receive {:DOWN, ^child_monitor, :process, ^worker, :normal}, 2_000
-    assert {:ok, journal} = Journal.restore(ledgers.children, journal_identity)
-    assert {:ok, %{results: [{"worker", saved}]}} = Journal.join(journal)
+    assert {:ok, journal} = Continuation.restore(ledgers.parent, journal_identity)
+    assert {:ok, %{results: [{"worker", saved}]}} = Continuation.join(journal)
     assert saved.output == "retained output"
     assert saved.model_requests == 1
 
     {cell, identity} = only_cell!(ledgers.parent)
-    assert {:ok, %{phase: :pending}} = Continuation.read(cell)
+    assert {:ok, %{phase: :children}} = Continuation.read(cell)
     parent_monitor = Process.monitor(parent_worker)
     Process.exit(parent_worker, :kill)
     assert_receive {:DOWN, ^parent_monitor, :process, ^parent_worker, :killed}, 2_000
@@ -257,9 +240,10 @@ defmodule Alto.Runner.ParentContinuationTest do
       )
 
     {:ok, cell} = Continuation.restore(ledgers.parent, identity)
-    assert {:ok, %{phase: :pending}} = Continuation.read(cell)
-    {:ok, journal} = Journal.restore(ledgers.children, journal_identity)
-    assert {:ok, %{results: [{"worker", ^saved}]}} = Journal.join(journal)
+    assert {:ok, %{phase: :children}} = Continuation.read(cell)
+    {:ok, journal} = Continuation.restore(ledgers.parent, journal_identity)
+    assert {:ok, %{results: [{"worker", ^saved}]}} = Continuation.join(journal)
+    assert {:error, :child_already_admitted} = Continuation.dispatch(journal, "worker")
 
     assert {:ok, result} = Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
     assert [%{id: "worker", output: "retained output"}] = result.output.results
@@ -294,7 +278,9 @@ defmodule Alto.Runner.ParentContinuationTest do
     assert_receive {:journal, journal_identity}, 2_000
     assert_receive {:child_entered, provider, worker}, 2_000
     {cell, identity} = only_cell!(ledgers.parent)
-    assert {:ok, %{phase: :pending} = pending} = Continuation.read(cell)
+    assert {:ok, %{phase: :children} = pending} = Continuation.read(cell)
+    assert {:ok, %{run: %{op_seq: 1}}} = Checkpoint.decode(pending.parent["state"])
+    assert String.ends_with?(cell.key, ":op-1")
     parent_worker = Alto.Test.Runner.worker(parent)
     parent_monitor = Process.monitor(parent_worker)
     Process.exit(parent_worker, :kill)
@@ -306,9 +292,9 @@ defmodule Alto.Runner.ParentContinuationTest do
 
     assert result.checkpoint["continuation"] == identity
     assert Continuation.read(cell) == {:ok, pending}
-    assert {:ok, journal} = Journal.restore(ledgers.children, journal_identity)
-    assert {:error, {:child_pending, "worker", "dispatched"}} = Journal.join(journal)
-    assert {:error, :child_already_admitted} = Journal.dispatch(journal, "worker")
+    assert {:ok, journal} = Continuation.restore(ledgers.parent, journal_identity)
+    assert {:error, {:child_pending, "worker", "dispatched"}} = Continuation.join(journal)
+    assert {:error, :child_already_admitted} = Continuation.dispatch(journal, "worker")
     refute_receive {:child_entered, _, _}, 50
     refute_receive {:integrated, _}, 50
   end

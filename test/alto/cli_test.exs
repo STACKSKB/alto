@@ -70,22 +70,17 @@ defmodule Alto.CLITest do
   end
 
   defmodule ProviderlessTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :providerless_echo, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :providerless_echo
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def run(arguments, _context, _opts), do: {:ok, arguments}
+  end
 
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(arguments, _context), do: {:ok, arguments}
+  defmodule CustomListener do
+    def start_link(_opts), do: {:error, :custom_listener_reached}
   end
 
   setup do
@@ -139,7 +134,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -163,7 +158,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.NoToolsProvider,
         tools: [Alto.Tools.ListFiles],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -181,7 +176,7 @@ defmodule Alto.CLITest do
       """
       Alto.Config.new(
         provider: Alto.CLITest.DefaultToolsProvider,
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -200,7 +195,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.StreamingProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -219,7 +214,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -239,7 +234,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -261,7 +256,7 @@ defmodule Alto.CLITest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["providerless_echo"]),
         tools: [Alto.CLITest.ProviderlessTool],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -331,7 +326,7 @@ defmodule Alto.CLITest do
       """
       Alto.Config.new(
         provider: nil,
-        system_prompt: nil,
+        prompt: nil,
         listeners: [],
         runs: %{
           "rule" => [
@@ -365,7 +360,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.ModelReportingProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -408,7 +403,7 @@ defmodule Alto.CLITest do
       Alto.Config.new(
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
-        system_prompt: nil
+        prompt: nil
       )
       """
     )
@@ -417,55 +412,15 @@ defmodule Alto.CLITest do
              Alto.CLI.run(["--config", path, "--serve", "--port", "99999"])
   end
 
-  test "serve rejects unknown listener modules", %{root: root} do
+  test "serve accepts a composed listener module", %{root: root} do
     path = Path.join(root, "config.exs")
 
     File.write!(
       path,
-      """
-      Alto.Config.new(
-        provider: Alto.CLITest.AnswerProvider,
-        listeners: [{String, []}]
-      )
-      """
+      "Alto.Config.new(provider: Alto.CLITest.AnswerProvider, listeners: [{Alto.CLITest.CustomListener, []}])"
     )
 
-    assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid listeners"
-  end
-
-  test "serve rejects a non-list listeners value", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      """
-      Alto.Config.new(
-        provider: Alto.CLITest.AnswerProvider,
-        listeners: :nope
-      )
-      """
-    )
-
-    assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid listeners"
-  end
-
-  test "serve rejects an invalid sessions value", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      """
-      Alto.Config.new(
-        provider: Alto.CLITest.AnswerProvider,
-        listeners: [],
-        sessions: "yes"
-      )
-      """
-    )
-
-    assert {:error, message} = Alto.CLI.run(["--config", path, "--serve"])
-    assert message =~ "invalid sessions"
+    assert {:error, "Custom listener reached"} =
+             Alto.CLI.run(["--config", path, "--serve"])
   end
 end

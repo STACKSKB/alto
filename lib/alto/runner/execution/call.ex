@@ -1,9 +1,76 @@
 defmodule Alto.Runner.Execution.Call do
   @moduledoc "Bounded, cancellable participant invocation used by runner hosts."
 
-  defdelegate run(fun, timeout, cancel_ref),
-    to: Alto.Runner.Execution.Support,
-    as: :supervised_call
+  @doc "Start a supervised participant that is terminated if its calling process dies."
+  def start(fun) when is_function(fun, 0) do
+    owner = self()
 
-  defdelegate cancellation(cancel_ref), to: Alto.Runner.Execution.Support
+    Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn ->
+      guard_owner(owner)
+      fun.()
+    end)
+  end
+
+  @doc "Run a participant under the task supervisor with a deadline and cancellation."
+  def run(_fun, timeout, _cancel_ref) when timeout <= 0, do: {:error, :timeout}
+
+  def run(fun, timeout, cancel_ref) when is_function(fun, 0) do
+    task = start(fun)
+    await(task, System.monotonic_time(:millisecond) + max(timeout, 0), cancel_ref)
+  end
+
+  defp guard_owner(owner) when is_pid(owner) do
+    worker = self()
+    guardian = spawn_link(fn -> owner_guard(owner, worker) end)
+
+    receive do
+      {:alto_owner_guard_ready, ^guardian} -> :ok
+    end
+  end
+
+  defp await(%Task{ref: ref} = task, deadline, cancel_ref) do
+    receive do
+      {^ref, value} ->
+        Process.demonitor(ref, [:flush])
+        {:ok, value}
+
+      {:DOWN, ^ref, :process, _, reason} ->
+        {:error, reason}
+
+      {:alto_cancel, ^cancel_ref, reason} when not is_nil(cancel_ref) ->
+        Task.shutdown(task, :brutal_kill)
+        {:cancelled, reason}
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, :timeout}
+    end
+  end
+
+  @doc "Read one cooperative cancellation message, if present."
+  def cancellation(nil), do: :continue
+
+  def cancellation(ref) do
+    receive do
+      {:alto_cancel, ^ref, reason} -> {:cancelled, reason}
+    after
+      0 -> :continue
+    end
+  end
+
+  defp owner_guard(owner, worker) do
+    owner_ref = Process.monitor(owner)
+    worker_ref = Process.monitor(worker)
+
+    if Process.alive?(owner) do
+      send(worker, {:alto_owner_guard_ready, self()})
+
+      receive do
+        {:DOWN, ^owner_ref, :process, _, _} -> Process.exit(worker, :kill)
+        {:DOWN, ^worker_ref, :process, _, _} -> :ok
+      end
+    else
+      Process.exit(worker, :kill)
+    end
+  end
 end

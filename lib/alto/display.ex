@@ -73,7 +73,6 @@ defmodule Alto.Display do
       true ->
         case decoded(value) do
           {:ok, data} -> render(data, mode, depth + 1)
-          :invalid_diagnostic -> "Diagnostic details are unavailable"
           :plain -> if(mode == :error, do: error_text(clean(value)), else: value)
         end
     end
@@ -89,13 +88,18 @@ defmodule Alto.Display do
 
   defp render(%Alto.Credentials{}, _, _), do: "Credentials hidden"
 
-  defp render(%Alto.Content{blocks: blocks}, mode, depth),
-    do: Enum.map_join(blocks, "\n", &render(&1, mode, depth + 1))
+  defp render(%Alto.Content{blocks: blocks}, mode, depth) do
+    Enum.map_join(blocks, "\n", fn
+      %{"type" => "text", "text" => text} ->
+        render(text, :text, depth + 1)
 
-  defp render(%Alto.Content.Text{text: text}, _, _), do: text
+      %{"type" => "image", "media_type" => type, "width" => width, "height" => height} ->
+        "Image · #{type} · #{width} × #{height}"
 
-  defp render(%Alto.Content.Image{media_type: type, width: width, height: height}, _, _),
-    do: "Image · #{type} · #{width} × #{height}"
+      other ->
+        render(other, mode, depth + 1)
+    end)
+  end
 
   defp render(%_{} = value, mode, depth), do: render(Map.from_struct(value), mode, depth + 1)
 
@@ -216,75 +220,15 @@ defmodule Alto.Display do
         key
       )
 
-  # Decode only complete data literals from machine-generated results. No evaluation,
-  # function calls, or creation of atoms from untrusted diagnostic strings.
+  # Structured diagnostics use JSON. All other strings remain literal text.
   defp decoded(text) do
-    value = String.trim(text)
-
-    cond do
-      byte_size(value) > @limit ->
-        if String.starts_with?(value, ["%", "{", "["]), do: :invalid_diagnostic, else: :plain
-
-      String.starts_with?(value, ["{", "["]) ->
-        case JSON.decode(value) do
-          {:ok, parsed} when is_map(parsed) or is_list(parsed) -> {:ok, parsed}
-          _ -> literal(value)
-        end
-
-      String.starts_with?(value, "%") ->
-        literal(value)
-
-      true ->
-        :plain
-    end
-  end
-
-  defp literal(text) do
-    if String.starts_with?(text, ["%{", "{:"]) or Regex.match?(~r/^%[A-Z][\w.]*\{/, text) do
-      with {:ok, ast} <- Code.string_to_quoted(text, existing_atoms_only: true),
-           {:ok, value} <- data_literal(ast) do
-        {:ok, value}
-      else
-        _ -> :invalid_diagnostic
+    if byte_size(text) <= @limit do
+      case JSON.decode(text) do
+        {:ok, value} when is_map(value) or is_list(value) -> {:ok, value}
+        _ -> :plain
       end
     else
       :plain
-    end
-  end
-
-  defp data_literal({:%{}, _, pairs}) do
-    with {:ok, pairs} <- literals(pairs), do: {:ok, Map.new(pairs)}
-  end
-
-  defp data_literal({:%, _, [_module, map]}), do: data_literal(map)
-
-  defp data_literal({:{}, _, items}) do
-    with {:ok, items} <- literals(items), do: {:ok, List.to_tuple(items)}
-  end
-
-  defp data_literal({:-, _, [n]}) when is_number(n), do: {:ok, -n}
-
-  defp data_literal({a, b}) do
-    with {:ok, a} <- data_literal(a), {:ok, b} <- data_literal(b), do: {:ok, {a, b}}
-  end
-
-  defp data_literal(items) when is_list(items), do: literals(items)
-
-  defp data_literal(value) when is_binary(value) or is_number(value) or is_atom(value),
-    do: {:ok, value}
-
-  defp data_literal(_), do: :error
-
-  defp literals(items) do
-    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, values} ->
-      case data_literal(item) do
-        {:ok, value} -> {:cont, {:ok, [value | values]}}
-        _ -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-      error -> error
     end
   end
 
@@ -300,12 +244,5 @@ defmodule Alto.Display do
     )
   end
 
-  defp bound(text, limit) when byte_size(text) <= limit, do: text
-
-  defp bound(text, limit) do
-    case String.split_at(text, limit) do
-      {head, ""} -> head
-      {head, _rest} -> head <> "…"
-    end
-  end
+  defp bound(text, limit), do: Alto.Text.truncate(text, limit, "…")
 end

@@ -1,5 +1,6 @@
 defmodule Alto.Providers.StreamEnvelope do
   @moduledoc false
+  alias Alto.Providers.HTTPOptions
   alias Alto.Providers.SSE
 
   @state_key :alto_stream_envelope
@@ -7,7 +8,7 @@ defmodule Alto.Providers.StreamEnvelope do
   def post(config, body, headers, decoder, sink) do
     initial = %{
       sse: SSE.new(config.max_event_bytes),
-      completion: decoder.new(config.max_response_bytes),
+      completion: decoder.new(),
       response_bytes: 0,
       error: nil,
       error_body: [],
@@ -21,25 +22,23 @@ defmodule Alto.Providers.StreamEnvelope do
       if next.error, do: {:halt, {request, response}}, else: {:cont, {request, response}}
     end
 
-    options =
-      Keyword.merge(config.req_options,
-        url: config.endpoint,
-        body: JSON.encode!(body),
-        headers: headers,
-        into: into,
-        raw: true,
-        retry: false,
-        receive_timeout: config.timeout,
-        request_timeout: config.timeout
-      )
-
-    case Req.post(options) do
+    case Req.post(
+           HTTPOptions.request_options(config, headers, body: JSON.encode!(body), into: into)
+         ) do
       {:ok, response} ->
         state = Req.Response.get_private(response, @state_key, initial)
         result(state, response.status, decoder, sink)
 
       {:error, reason} ->
         {:error, {:transport_error, reason}}
+    end
+  end
+
+  def decode_error_body(body) do
+    case JSON.decode(body) do
+      {:ok, %{"error" => error}} -> error
+      {:ok, decoded} -> decoded
+      {:error, _} -> body
     end
   end
 
@@ -90,14 +89,7 @@ defmodule Alto.Providers.StreamEnvelope do
   defp result(state, status, _, _) do
     body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
 
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
+    {:error, {:http_error, status, decode_error_body(body)}}
   end
 
   defp finish(state, decoder, sink) do

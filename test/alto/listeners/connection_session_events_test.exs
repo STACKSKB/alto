@@ -26,7 +26,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
     {:error, _} = Alto.Session.decode_term(hd(page.events)["data"])
     {:ok, registry} = Alto.FrontEnd.Registry.start_link(name: nil,
       session_dir: #{inspect(dir)}, config_resolver: fn _ -> {:error, :unknown} end)
-    Alto.Listeners.Connection.run_command(#{inspect(command)}, registry, &IO.write/1)
+    Enum.each(Alto.Listeners.Connection.command_lines(#{inspect(command)}, registry), &IO.write/1)
     """
 
     paths = Path.wildcard(Path.join([Mix.Project.build_path(), "lib", "*", "ebin"]))
@@ -91,8 +91,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
         "limit" => 1
       })
 
-    Connection.run_command(line, name, fn output -> send(self(), {:line, output}) end)
-    assert_receive {:line, output}
+    [output] = Connection.command_lines(line, name)
     reply = JSON.decode!(IO.iodata_to_binary(output))
     assert reply["type"] == "ok"
     assert length(reply["events"]) == 1
@@ -108,9 +107,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
     on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
     line = JSON.encode!(%{"v" => 1, "type" => "runs", "id" => "c-runs"})
-    Connection.run_command(line, name, fn output -> send(self(), {:line, output}) end)
-
-    assert_receive {:line, output}
+    [output] = Connection.command_lines(line, name)
 
     assert JSON.decode!(IO.iodata_to_binary(output)) == %{
              "v" => 1,
@@ -159,7 +156,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
     on_exit(fn -> File.rm_rf!(dir) end)
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     message = %{"role" => "user", "content" => String.duplicate("x", 4_000)}
-    :ok = Session.write_transcript(id, [message], 4_000, session_dir: dir)
+    {:ok, _snapshot} = Session.persist_settled(id, [message], 4_000, session_dir: dir)
 
     pid =
       start_supervised!(
@@ -174,8 +171,7 @@ defmodule Alto.Listeners.ConnectionSessionEventsTest do
         "session_id" => id
       })
 
-    Connection.run_command(line, pid, fn output -> send(self(), {:line, output}) end, 512)
-    assert_receive {:line, output}
+    [output] = Connection.command_lines(line, pid, 512)
     reply = JSON.decode!(IO.iodata_to_binary(output))
     assert reply["type"] == "error"
     assert reply["id"] == "bounded"

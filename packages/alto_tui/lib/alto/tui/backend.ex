@@ -6,6 +6,7 @@ defmodule Alto.TUI.Backend do
   Runner adapters implement `start/4` and `cancel/3`. Interactive adapters
   implement `ui/3` and `cancel/3`, owning their connection and protocol lifecycle.
   Optional UI contributions receive `:prepare`, `:selected`, `:model`,
+  `:steering?`, `:session_usage?`,
   `{:submit, prompt}`, `{:overlay, kind}`, `{:select, value}` and
   `{:message, message}`. Return `:pass` to use ordinary terminal behavior.
   Message contributions use the application's `handle_info` return contract;
@@ -21,7 +22,7 @@ defmodule Alto.TUI.Backend do
   """
   @callback start(map(), String.t(), keyword(), keyword()) ::
               {:ok, Alto.Runner.Handle.t()} | {:error, term()}
-  @callback cancel(term(), term(), keyword()) :: term()
+  @callback cancel(map(), term(), keyword()) :: term()
   @callback ui(term(), map(), keyword()) :: term()
   @optional_callbacks start: 4, ui: 3
 
@@ -31,6 +32,13 @@ defmodule Alto.TUI.Backend do
     case Keyword.fetch(configured(options), id) do
       {:ok, {module, opts}} -> {:ok, module, opts}
       :error -> {:error, {:backend_unavailable, id}}
+    end
+  end
+
+  def runner?(options, id) do
+    case lookup(options, id) do
+      {:ok, module, _opts} -> function_exported?(module, :start, 4)
+      _ -> false
     end
   end
 

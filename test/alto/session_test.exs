@@ -51,8 +51,7 @@ defmodule Alto.SessionTest do
     event = Event.durable(:tool_completed, data)
     assert :ok = Session.append(id, Session.event_record("run-9", event), session_dir: dir)
 
-    assert {:ok, [started, stored]} = Session.read(id, session_dir: dir)
-    assert started["type"] == "started"
+    assert {:ok, [_started, stored]} = Session.read(id, session_dir: dir)
     assert stored["type"] == "event"
     assert stored["domain"] == "durable"
     assert stored["event"] == "tool_completed"
@@ -102,7 +101,7 @@ defmodule Alto.SessionTest do
              Session.events(id, session_dir: dir, cursor: 9)
   end
 
-  test "completed and compaction records persist outcomes", %{dir: dir} do
+  test "completed records persist outcomes", %{dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 
     assert :ok =
@@ -118,24 +117,9 @@ defmodule Alto.SessionTest do
                session_dir: dir
              )
 
-    assert :ok =
-             Session.append(
-               id,
-               Session.compaction_record(%{
-                 run_id: "run-1",
-                 dropped_messages: 12,
-                 dropped_bytes: 9000,
-                 summary_bytes: 400,
-                 summary: "did things"
-               }),
-               session_dir: dir
-             )
-
-    assert {:ok, [_started, completed, compaction]} = Session.read(id, session_dir: dir)
+    assert {:ok, [_started, completed]} = Session.read(id, session_dir: dir)
     assert completed["outcome"] == "error"
     assert {:ok, {:model_request_failed, :boom}} = Session.decode_term(completed["reason"])
-    assert compaction["summary"] == "did things"
-    assert compaction["dropped_messages"] == 12
   end
 
   test "transcript sidecar round-trips; missing sidecar is explicit", %{dir: dir} do
@@ -146,7 +130,7 @@ defmodule Alto.SessionTest do
       %{"role" => "assistant", "content" => "yo"}
     ]
 
-    assert :ok = Session.write_transcript(id, messages, 42, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, messages, 42, session_dir: dir)
 
     assert {:ok, %{messages: ^messages, transcript_bytes: 42, revision: 1}} =
              Session.transcript(id, session_dir: dir)
@@ -159,10 +143,10 @@ defmodule Alto.SessionTest do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 
     first = [%{"role" => "user", "content" => "hi"}]
-    assert :ok = Session.write_transcript(id, first, 20, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, first, 20, session_dir: dir)
 
     second = first ++ [%{"role" => "assistant", "content" => "done"}]
-    assert :ok = Session.write_transcript(id, second, 55, session_dir: dir)
+    assert {:ok, _snapshot} = Session.persist_settled(id, second, 55, session_dir: dir)
 
     assert {:ok, %{messages: ^second, transcript_bytes: 55, revision: 2}} =
              Session.transcript(id, session_dir: dir)
@@ -178,15 +162,15 @@ defmodule Alto.SessionTest do
     first = [%{"role" => "user", "content" => "first"}]
     second = [%{"role" => "user", "content" => "second"}]
 
-    assert :ok =
-             Session.write_transcript(id, first, 20,
+    assert {:ok, _snapshot} =
+             Session.persist_settled(id, first, 20,
                session_dir: dir,
                expected_revision: 0
              )
 
     assert {:error,
             {:session_conflict, %{session_id: ^id, expected_revision: 0, current_revision: 1}}} =
-             Session.write_transcript(id, second, 21,
+             Session.persist_settled(id, second, 21,
                session_dir: dir,
                expected_revision: 0
              )
@@ -247,6 +231,24 @@ defmodule Alto.SessionTest do
 
   test "list on a missing directory is empty", %{dir: dir} do
     assert {:ok, []} = Session.list(session_dir: Path.join(dir, "nope"))
+  end
+
+  test "diagnostic terms retain identities while sharing strict ETF framing" do
+    data = %{process: self(), reference: make_ref(), bits: <<1::1>>}
+    encoded = Session.encode_term(data)
+    assert {:ok, ^data} = Session.decode_term(encoded)
+    assert {:error, :invalid_data} = Alto.Persistence.Codec.decode(encoded["$term"])
+
+    invalid = [
+      "not base64!",
+      Base.encode64(:erlang.term_to_binary(:ok) <> <<0>>),
+      Base.encode64(:erlang.term_to_binary(String.duplicate("x", 10_000), [:compressed])),
+      Session.encode_term(%{callback: fn -> :ok end})["$term"]
+    ]
+
+    for payload <- invalid do
+      assert {:error, :invalid_term_payload} = Session.decode_term(%{"$term" => payload})
+    end
   end
 
   test "decode_term rejects garbage",

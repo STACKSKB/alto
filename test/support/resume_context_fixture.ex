@@ -2,19 +2,16 @@ defmodule Alto.Test.ResumeContextFixture do
   # Each new tool suffix fits the window, but the complete serialized history
   # does not. Only genuine counts from successful provider turns let it grow.
   defmodule PayloadTool do
-    @behaviour Alto.Tool
-    def name, do: :payload
+    use Alto.Tool, name: :payload, execution_mode: :parallel, approval: :never
 
-    def schema do
+    def schema(_) do
       %{
         description: "Return authored test text.",
         parameters: %{type: "object", properties: %{}, required: []}
       }
     end
 
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(_, _), do: {:ok, %{text: String.duplicate("x", 1_800)}}
+    def run(_, _, _), do: {:ok, %{text: String.duplicate("x", 1_800)}}
   end
 
   defmodule Provider do
@@ -52,7 +49,8 @@ defmodule Alto.Test.ResumeContextFixture do
   end
 
   defmodule Reducer do
-    @behaviour Alto.Context.Compaction
-    def reduce(_, _, _), do: {:ok, "Earlier authored test work summarized."}
+    @behaviour Alto.Context.Reducer
+    def compact(_, _, _),
+      do: {:ok, %{content: "Earlier authored test work summarized.", data: %{}}}
   end
 end

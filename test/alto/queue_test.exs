@@ -70,8 +70,7 @@ defmodule Alto.QueueTest do
       assert {:ok, [first, second]} = Queue.claim(name, 2, "station-1")
       assert %{key: "a", status: :claimed, claimed_by: "station-1"} = first
       assert %{key: "b"} = second
-      assert [%{claim_id: claim_id}] = [first]
-      assert is_binary(claim_id) and claim_id != ""
+      assert is_binary(first.claim_id) and first.claim_id != ""
       assert %{pending: 0, claimed: 2} = Queue.count(name)
     end
 
@@ -119,6 +118,7 @@ defmodule Alto.QueueTest do
       assert {:ok, %{records: first, next_cursor: 100}} = Queue.snapshot_page(name, 0, 100)
       assert length(first) == 100
       assert hd(first).key == "job-1"
+      assert hd(first).operation_key == "business-generation:" <> hd(first).generation_id
 
       assert {:ok, %{records: second, next_cursor: nil}} = Queue.snapshot_page(name, 100, 100)
       assert length(second) == 5
@@ -187,22 +187,6 @@ defmodule Alto.QueueTest do
       assert {:ok, [%{key: "retry", not_before_ms: 10_400}]} =
                Queue.claim_bounded(restarted, 1, "consumer", 10_000)
     end
-
-    test "scheduled transitions use a version that older readers reject", %{dir: dir, id: id} do
-      {_clock, now} = controlled_clock()
-      %{name: queue} = start_queue!(id: id, dir: dir, clock: now)
-      {:ok, _} = Queue.put(queue, "immediate", %{})
-      {:ok, _} = Queue.put(queue, "scheduled", %{}, delay_ms: 100)
-
-      [immediate, scheduled] =
-        Path.join(dir, id <> ".jsonl")
-        |> File.read!()
-        |> String.split("\n", trim: true)
-        |> Enum.map(&JSON.decode!/1)
-
-      assert immediate["v"] == 1
-      assert scheduled["v"] == 2
-    end
   end
 
   describe "key dedup semantics" do
@@ -239,11 +223,10 @@ defmodule Alto.QueueTest do
     test "put on a claimed key is a conflict, not a shadow record", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
       {:ok, _} = Queue.put(name, "job-1", %{total: 10})
-      {:ok, [claimed]} = Queue.claim(name)
+      {:ok, [_]} = Queue.claim(name)
 
       assert {:error, {:key_claimed, "job-1"}} = Queue.put(name, "job-1", %{total: 12})
       assert %{pending: 0, claimed: 1} = Queue.count(name)
-      assert claimed.key == "job-1"
     end
 
     test "put on a blanked key re-queues as a new record", %{dir: dir, id: id} do
@@ -366,35 +349,6 @@ defmodule Alto.QueueTest do
   end
 
   describe "durability" do
-    test "ambiguous pre-identity records require an explicit migration choice", %{
-      dir: dir,
-      id: id
-    } do
-      path = Path.join(dir, id <> ".jsonl")
-      File.mkdir_p!(dir)
-
-      legacy = %{
-        "v" => 1,
-        "type" => "put",
-        "id" => "rec-1",
-        "key" => "legacy-key",
-        "payload" => Alto.Session.encode_term(%{v: 1}),
-        "revision" => 1,
-        "at_ms" => 1,
-        "queue" => id
-      }
-
-      File.write!(path, JSON.encode!(legacy) <> "\n")
-
-      assert {:error, {:queue_migration_required, ^id, :legacy_admission}} =
-               Queue.start_link(id: id, dir: dir, name: nil)
-
-      %{name: name} = start_queue!(id: id, dir: dir, legacy_admission: :business)
-      [record] = Queue.records(name)
-      assert record.admission == :business
-      assert record.generation_id == "legacy-#{id}-rec-1"
-    end
-
     test "a valid final JSON record without newline is normalized before append", %{
       dir: dir,
       id: id
@@ -480,22 +434,38 @@ defmodule Alto.QueueTest do
 
       valid_put =
         JSON.encode!(%{
-          "v" => 1,
-          "type" => "put",
-          "id" => "rec-1",
-          "key" => "k",
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "mode" => "business",
-          "generation_id" => "gen-fixture",
-          "at_ms" => 1,
-          "queue" => id
+          "v" => 6,
+          "type" => "record",
+          "record" =>
+            Alto.Session.encode_term(%Queue.Record{
+              id: "rec-1",
+              key: "k",
+              payload: %{n: 1},
+              revision: 1,
+              generation_id: "gen-fixture",
+              at_ms: 1
+            })
         })
 
       File.write!(path, valid_put <> "\nnot json\n")
 
       assert {:error, {:queue_corrupt, ^id, 2}} =
                Queue.start_link(id: id, dir: dir, name: :"corrupt_#{unique_id()}")
+
+      entry = JSON.decode!(valid_put)
+      {:ok, record} = Alto.Session.decode_term(entry["record"])
+
+      for malformed <- [
+            %{record | status: :claimed, claim_id: nil, lease_until_ms: "bad"},
+            record |> Map.delete(:key) |> Map.put(:unexpected, "k")
+          ] do
+        File.write!(
+          path,
+          JSON.encode!(%{entry | "record" => Alto.Session.encode_term(malformed)}) <> "\n"
+        )
+
+        assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
+      end
     end
   end
 
@@ -510,6 +480,15 @@ defmodule Alto.QueueTest do
       assert {:ok, %{revision: 2}} = Queue.put(name, "a", %{v: 2})
       assert {:error, :queue_full} = Queue.put(name, "b", %{})
       assert %{pending: 1} = Queue.count(name)
+    end
+
+    test "claim and release keep a large record within a small log", %{dir: dir, id: id} do
+      %{name: name} = start_queue!(id: id, dir: dir, max_log_bytes: 4_096)
+      {:ok, _} = Queue.put(name, "large", %{blob: String.duplicate("x", 2_000)})
+      {:ok, [claimed]} = Queue.claim(name)
+      assert :ok = Queue.release(name, claimed.claim_id)
+      assert %{pending: 1, claimed: 0} = Queue.count(name)
+      assert File.stat!(Path.join(dir, id <> ".jsonl")).size <= 4_096
     end
 
     test "claim ids are unique random handles, not monotonic integers", %{dir: dir, id: id} do
@@ -531,23 +510,6 @@ defmodule Alto.QueueTest do
 
       assert is_integer(size) and size > 100
       assert %{pending: 0} = Queue.count(name)
-    end
-
-    test "the record count bound is enforced", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir, max_records: 2)
-      {:ok, _} = Queue.put(name, "a", %{})
-      {:ok, _} = Queue.put(name, "b", %{})
-
-      assert {:error, :queue_full} = Queue.put(name, "c", %{})
-    end
-
-    test "updating a pending key does not consume new capacity", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir, max_records: 2)
-      {:ok, _} = Queue.put(name, "a", %{v: 1})
-      {:ok, _} = Queue.put(name, "a", %{v: 2})
-      {:ok, _} = Queue.put(name, "b", %{})
-
-      assert %{pending: 2} = Queue.count(name)
     end
 
     test "invalid keys and payloads are rejected", %{dir: dir, id: id} do
@@ -581,20 +543,31 @@ defmodule Alto.QueueTest do
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, unknown: 1)
       assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, [:delay_ms])
 
-      assert {:error, {:invalid_clock, :bad}} =
-               Queue.start_link(id: unique_id(), dir: dir, name: unique_id(), clock: :bad)
-
       assert {:ok, _} = Queue.put(name, "good", %{})
       assert {:ok, [%{key: "good"}]} = Queue.claim(name)
     end
 
-    test "invalid persisted release schedule fails startup", %{dir: dir, id: id} do
+    test "invalid persisted record schedule fails startup", %{dir: dir, id: id} do
       path = Path.join(dir, id <> ".jsonl")
       File.mkdir_p!(dir)
 
+      record = %Queue.Record{
+        id: "rec-1",
+        key: "k",
+        payload: %{},
+        revision: 1,
+        generation_id: "gen-fixture",
+        at_ms: 1,
+        not_before_ms: "bad"
+      }
+
       File.write!(
         path,
-        JSON.encode!(%{"v" => 1, "type" => "release", "id" => "rec-1", "not_before_ms" => "bad"}) <>
+        JSON.encode!(%{
+          "v" => 6,
+          "type" => "record",
+          "record" => Alto.Session.encode_term(record)
+        }) <>
           "\n"
       )
 

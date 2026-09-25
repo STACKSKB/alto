@@ -2,26 +2,37 @@ defmodule Alto.DisplayTest do
   use ExUnit.Case, async: true
   alias Alto.Display
 
+  test "typed content displays media metadata without expanding its payload" do
+    image = Alto.Content.image("image/png", "hidden-base64-payload", 12, 8)
+    content = Alto.Content.new([Alto.Content.text("A diagram"), image])
+
+    assert Alto.Display.result(content) == "A diagram\nImage · image/png · 12 × 8"
+    assert Alto.Display.result(image) =~ "hidden-base64-payload"
+  end
+
   test "redacts known credentials in displayed text" do
-    for secret <- [
-          "sk-example_secret",
-          "ghp_example_secret",
-          "Bearer opaque",
-          "Authorization: Basic dXNlcjpwYXNz",
-          "x-api-key: opaque",
-          "?api_key=opaque"
+    for {secret, value} <- [
+          {"sk-example_secret", "example_secret"},
+          {"ghp_example_secret", "example_secret"},
+          {"Bearer opaque", "opaque"},
+          {"Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"},
+          {"x-api-key: opaque", "opaque"},
+          {"?api_key=opaque", "opaque"}
         ] do
       text = Display.error(secret)
       assert text =~ "[REDACTED]"
-      refute text =~ "example_secret"
-      refute text =~ "opaque"
-      refute text =~ "dXNlcjpwYXNz"
+      refute text =~ value
     end
   end
 
-  test "does not mark short multibyte text as truncated" do
-    text = String.duplicate("😀", 2_001)
-    assert Display.error(text) == text
+  test "bounds multibyte text by UTF-8 bytes without clipping a character" do
+    fitting = String.duplicate("😀", 2_000)
+    assert Display.error(fitting) == fitting
+
+    truncated = Display.error(fitting <> "😀")
+    assert String.valid?(truncated)
+    assert byte_size(truncated) <= 8_000
+    assert String.ends_with?(truncated, "…")
   end
 
   test "provider errors retain the cause and useful fields without Elixir syntax" do
@@ -53,12 +64,20 @@ defmodule Alto.DisplayTest do
              "does not support model discovery"
   end
 
-  test "tool results and legacy serialized failures use labeled fields" do
-    text = Display.result(~s({"exit_code":1,"stderr":"No such file","error":"{:error, :enoent}"}))
+  test "tool results and structured failures use labeled fields" do
+    text =
+      Display.result(
+        JSON.encode!(%{
+          exit_code: 1,
+          stderr: "No such file",
+          error: Alto.Protocol.encode_term({:error, :enoent})
+        })
+      )
+
     assert text =~ "Exit code: 1"
     assert text =~ "Stderr: No such file"
     assert text =~ "File or folder not found"
-    text = Display.error(inspect(%{reason: {:error, :eacces}, path: "/tmp/project"}))
+    text = Display.error(%{reason: {:error, :eacces}, path: "/tmp/project"})
     assert text =~ "Permission denied"
     assert text =~ "Path: /tmp/project"
     refute text =~ "%{"
@@ -68,10 +87,10 @@ defmodule Alto.DisplayTest do
   test "readable display does not evaluate diagnostics or create atoms" do
     target = Path.join(System.tmp_dir!(), "alto-display-#{System.unique_integer([:positive])}")
     text = ~s|%{message: File.write!(#{inspect(target)}, "bad")}|
-    assert Display.error(text) == "Diagnostic details are unavailable"
+    assert Display.error(text) == text
     refute File.exists?(target)
     unknown = "untrusted_display_atom_#{System.unique_integer([:positive])}"
-    assert Display.error("%{" <> unknown <> ": 1}") == "Diagnostic details are unavailable"
+    assert Display.error("%{" <> unknown <> ": 1}") == "%{" <> unknown <> ": 1}"
     assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
     assert Display.error(%{"$inspect" => "#PID<0.1.0>"}) == "Diagnostic details are unavailable"
   end

@@ -6,11 +6,13 @@ defmodule Alto.Workspaces.Git do
   alias Alto.Command
   alias Alto.Tool.Context
 
-  @default_source_bytes 512 * 1_024 * 1_024
-  @default_max_files 20_000
-  @default_checkout_bytes 128 * 1_024 * 1_024
-  @default_patch_bytes 1_000_000
-  @default_timeout 120_000
+  @options_schema NimbleOptions.new!(
+                    max_source_bytes: [type: :pos_integer, default: 512 * 1_024 * 1_024],
+                    max_files: [type: :pos_integer, default: 20_000],
+                    max_checkout_bytes: [type: :pos_integer, default: 128 * 1_024 * 1_024],
+                    max_patch_bytes: [type: {:in, 1..1_000_000}, default: 1_000_000],
+                    timeout_ms: [type: {:in, 1..120_000}, default: 120_000]
+                  )
 
   @doc false
   def command(cwd, args, opts \\ []) do
@@ -20,17 +22,13 @@ defmodule Alto.Workspaces.Git do
   @doc false
   def integration_target(repo, opts \\ []) do
     with {:ok, limits} <- limits(opts),
-         {:ok, root} <- repository_root(repo, limits),
-         :ok <- bounded_tree(Path.join(root, ".git"), limits.max_source_bytes, limits.max_files),
-         :ok <- reject_alternates(root),
-         :ok <- reject_source_filters(root, limits),
-         {:ok, head} <- git(root, ["rev-parse", "--verify", "HEAD^{commit}"], limits),
+         {:ok, root, head} <- source_head(repo, limits),
          {:ok, config} <- git(root, ["config", "--includes", "--null", "--list"], limits),
          {:ok, stat} <- File.stat(root) do
       {:ok,
        %{
          "root" => root,
-         "head" => String.trim(head),
+         "head" => head,
          "inode" => stat.inode,
          "device" => stat.major_device,
          "config_sha256" => Base.encode16(:crypto.hash(:sha256, config), case: :lower)
@@ -41,13 +39,9 @@ defmodule Alto.Workspaces.Git do
   @spec snapshot(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     with {:ok, limits} <- limits(opts),
-         {:ok, root} <- repository_root(repo, limits),
-         :ok <- bounded_tree(Path.join(root, ".git"), limits.max_source_bytes, limits.max_files),
-         :ok <- reject_alternates(root),
-         :ok <- reject_source_filters(root, limits),
-         {:ok, commit} <- git(root, ["rev-parse", "--verify", "HEAD^{commit}"], limits),
+         {:ok, root, commit} <- source_head(repo, limits),
          {:ok, tree} <- git(root, ["rev-parse", "--verify", "HEAD^{tree}"], limits),
-         {:ok, _} <- checkout_size(root, String.trim(commit), limits.max_checkout_bytes, limits),
+         {:ok, _} <- checkout_size(root, commit, limits.max_checkout_bytes, limits),
          {:ok, status} <-
            git(
              root,
@@ -55,27 +49,20 @@ defmodule Alto.Workspaces.Git do
              limits
            ),
          true <- String.trim(status) == "" or {:error, :source_dirty} do
-      {:ok,
-       %{"source" => root, "base_commit" => String.trim(commit), "base_tree" => String.trim(tree)}}
-    else
-      false -> {:error, :source_dirty}
-      {:error, _} = error -> error
+      {:ok, %{"source" => root, "base_commit" => commit, "base_tree" => String.trim(tree)}}
     end
   end
 
   @spec checkout(map(), Path.t(), keyword()) :: :ok | {:error, term()}
   def checkout(snapshot, destination, opts \\ [])
       when is_map(snapshot) and is_binary(destination) do
+    root = Path.expand(destination)
+    git_dir = root <> ".git"
+
     with {:ok, limits} <- limits(opts),
          {:ok, snapshot} <- validate_snapshot(snapshot),
          :ok <- ordinary_repository(snapshot["source"]),
-         :ok <-
-           bounded_tree(
-             Path.join(snapshot["source"], ".git"),
-             limits.max_source_bytes,
-             limits.max_files
-           ),
-         :ok <- reject_alternates(snapshot["source"]),
+         :ok <- bounded_source(snapshot["source"], limits),
          {:ok, _} <-
            checkout_size(
              snapshot["source"],
@@ -83,13 +70,12 @@ defmodule Alto.Workspaces.Git do
              limits.max_checkout_bytes,
              limits
            ),
-         :ok <- reject_new_path(destination),
-         :ok <- reject_new_path(Path.expand(destination) <> ".git"),
-         :ok <- File.mkdir_p(Path.dirname(Path.expand(destination))),
-         git_dir <- Path.expand(destination) <> ".git",
+         :ok <- reject_new_path(root),
+         :ok <- reject_new_path(git_dir),
+         :ok <- File.mkdir_p(Path.dirname(root)),
          {:ok, _} <-
            git(
-             Path.dirname(Path.expand(destination)),
+             Path.dirname(root),
              [
                "clone",
                "--local",
@@ -99,22 +85,20 @@ defmodule Alto.Workspaces.Git do
                git_dir,
                "--template=/dev/null",
                snapshot["source"],
-               Path.expand(destination)
+               root
              ],
              limits
            ),
-         :ok <- verify_git_pointer(Path.expand(destination), git_dir),
+         :ok <- verify_git_pointer(root, git_dir),
          {:ok, _} <-
            workspace_git(
-             Path.expand(destination),
+             root,
              git_dir,
              ["checkout", "--detach", snapshot["base_commit"]],
              limits
            ),
-         :ok <- verify_checkout(Path.expand(destination), snapshot, limits, git_dir) do
+         :ok <- verify_checkout(root, snapshot, limits, git_dir) do
       :ok
-    else
-      {:error, _} = error -> error
     end
   end
 
@@ -148,9 +132,6 @@ defmodule Alto.Workspaces.Git do
       if byte_size(patch) <= limits.max_patch_bytes,
         do: {:ok, patch},
         else: {:error, :patch_too_large}
-    else
-      false -> {:error, :wrong_workspace}
-      {:error, _} = error -> error
     end
   end
 
@@ -178,37 +159,29 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp limits(opts) do
-    defaults = [
-      max_source_bytes: @default_source_bytes,
-      max_files: @default_max_files,
-      max_checkout_bytes: @default_checkout_bytes,
-      max_patch_bytes: @default_patch_bytes,
-      timeout_ms: @default_timeout
-    ]
-
-    if Keyword.keyword?(opts) and Keyword.keys(opts) -- Keyword.keys(defaults) == [] do
-      values = Keyword.merge(defaults, opts)
-
-      with :ok <- positive(values[:max_source_bytes], :max_source_bytes),
-           :ok <- positive(values[:max_files], :max_files),
-           :ok <- positive(values[:max_checkout_bytes], :max_checkout_bytes),
-           :ok <- positive(values[:max_patch_bytes], :max_patch_bytes),
-           :ok <- positive(values[:timeout_ms], :timeout_ms),
-           true <- values[:timeout_ms] <= @default_timeout or {:error, :invalid_timeout},
-           true <-
-             values[:max_patch_bytes] <= @default_patch_bytes or {:error, :invalid_patch_limit} do
-        {:ok, Map.new(values)}
-      else
-        false -> {:error, :invalid_workspace_limits}
-        {:error, _} = error -> error
-      end
+    if Keyword.keyword?(opts) do
+      with {:ok, values} <- NimbleOptions.validate(opts, @options_schema),
+           do: {:ok, Map.new(values)}
     else
       {:error, :invalid_workspace_options}
     end
   end
 
-  defp positive(value, _name) when is_integer(value) and value > 0, do: :ok
-  defp positive(_, name), do: {:error, {:invalid_workspace_limit, name}}
+  defp source_head(repo, limits) do
+    with {:ok, root} <- repository_root(repo, limits),
+         :ok <- bounded_source(root, limits),
+         :ok <- reject_source_filters(root, limits),
+         {:ok, head} <- git(root, ["rev-parse", "--verify", "HEAD^{commit}"], limits) do
+      {:ok, root, String.trim(head)}
+    end
+  end
+
+  defp bounded_source(root, limits) do
+    with :ok <- bounded_tree(Path.join(root, ".git"), limits.max_source_bytes, limits.max_files),
+         :ok <- reject_alternates(root) do
+      :ok
+    end
+  end
 
   defp repository_root(repo, limits) do
     root = Path.expand(repo)
@@ -219,9 +192,6 @@ defmodule Alto.Workspaces.Git do
          {:ok, reported} <- git(root, ["rev-parse", "--show-toplevel"], limits),
          true <- Path.expand(String.trim(reported)) == root or {:error, :not_repository} do
       {:ok, root}
-    else
-      false -> {:error, :repository_not_found}
-      {:error, _} = error -> error
     end
   end
 
@@ -256,9 +226,6 @@ defmodule Alto.Workspaces.Git do
          :ok <- reject_symlink_components(source),
          true <- File.dir?(source) or {:error, :invalid_snapshot} do
       {:ok, snapshot}
-    else
-      false -> {:error, :invalid_snapshot}
-      {:error, _} = error -> error
     end
   end
 
@@ -272,9 +239,6 @@ defmodule Alto.Workspaces.Git do
          true <- String.trim(head) == snapshot["base_commit"] or {:error, :stale_workspace},
          true <- String.trim(tree) == snapshot["base_tree"] or {:error, :stale_workspace} do
       :ok
-    else
-      false -> {:error, :stale_workspace}
-      {:error, _} = error -> error
     end
   end
 
@@ -304,7 +268,6 @@ defmodule Alto.Workspaces.Git do
          true <- File.dir?(git_dir) or {:error, :invalid_git_pointer} do
       :ok
     else
-      false -> {:error, :invalid_git_pointer}
       {:ok, _} -> {:error, :invalid_git_pointer}
       {:error, _} = error -> error
     end
@@ -312,8 +275,7 @@ defmodule Alto.Workspaces.Git do
 
   defp checkout_size(root, commit, max, limits) do
     with {:ok, output} <- git(root, ["ls-tree", "-r", "-l", "--full-tree", commit], limits),
-         {:ok, total} <- parse_tree_sizes(output, max, limits.max_files),
-         do: {:ok, total}
+         do: parse_tree_sizes(output, max, limits.max_files)
   end
 
   defp parse_tree_sizes(output, max, max_files) do
@@ -365,33 +327,27 @@ defmodule Alto.Workspaces.Git do
       if length(paths) > limits.max_files do
         {:error, :source_too_large}
       else
-        Enum.reduce_while(paths, {:ok, 0}, fn relative, {:ok, bytes} ->
+        Alto.Result.reduce(paths, 0, fn relative, bytes ->
           path = Path.expand(relative, root)
 
-          result =
-            with :ok <- reject_symlink_components(path) do
-              case File.lstat(path) do
-                {:ok, %{type: :regular, size: size}}
-                when bytes + size <= limits.max_checkout_bytes ->
-                  {:ok, bytes + size}
+          with :ok <- reject_symlink_components(path) do
+            case File.lstat(path) do
+              {:ok, %{type: :regular, size: size}}
+              when bytes + size <= limits.max_checkout_bytes ->
+                {:ok, bytes + size}
 
-                {:error, :enoent} ->
-                  {:ok, bytes}
+              {:error, :enoent} ->
+                {:ok, bytes}
 
-                {:ok, %{type: :directory}} ->
-                  {:error, :submodule_unsupported}
+              {:ok, %{type: :directory}} ->
+                {:error, :submodule_unsupported}
 
-                {:ok, _} ->
-                  {:error, :source_too_large}
+              {:ok, _} ->
+                {:error, :source_too_large}
 
-                {:error, reason} ->
-                  {:error, reason}
-              end
+              {:error, reason} ->
+                {:error, reason}
             end
-
-          case result do
-            {:ok, next} -> {:cont, {:ok, next}}
-            error -> {:halt, error}
           end
         end)
         |> case do
@@ -403,31 +359,25 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp bounded_tree(path, max_bytes, max_files) do
-    case walk(path, 0, 0, max_bytes, max_files) do
-      {:ok, _, _} -> :ok
-      {:error, _} = error -> error
-    end
+    with {:ok, _counts} <- walk(path, {0, 0}, max_bytes, max_files), do: :ok
   end
 
-  defp walk(path, bytes, files, max_bytes, max_files) do
+  defp walk(path, {bytes, files}, max_bytes, max_files) do
     case File.lstat(path) do
       {:ok, %File.Stat{type: :symlink}} ->
         {:error, :symlink_unsupported}
 
       {:ok, %File.Stat{type: :regular, size: size}}
       when bytes + size <= max_bytes and files + 1 <= max_files ->
-        {:ok, bytes + size, files + 1}
+        {:ok, {bytes + size, files + 1}}
 
       {:ok, %File.Stat{type: :regular}} ->
         {:error, :source_too_large}
 
       {:ok, %File.Stat{type: :directory}} ->
         with {:ok, entries} <- File.ls(path) do
-          Enum.reduce_while(entries, {:ok, bytes, files}, fn entry, {:ok, b, f} ->
-            case walk(Path.join(path, entry), b, f, max_bytes, max_files) do
-              {:ok, b, f} -> {:cont, {:ok, b, f}}
-              {:error, _} = error -> {:halt, error}
-            end
+          Alto.Result.reduce(entries, {bytes, files}, fn entry, counts ->
+            walk(Path.join(path, entry), counts, max_bytes, max_files)
           end)
         else
           {:error, reason} -> {:error, {:source_read_failed, reason}}
@@ -456,27 +406,10 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp reject_symlink_components(path) do
-    expanded = Path.expand(path)
-
-    {root, parts} =
-      if String.starts_with?(expanded, "/"),
-        do: {"/", Path.split(expanded) |> tl()},
-        else: {"", Path.split(expanded)}
-
-    parts
-    |> Enum.reduce_while({:ok, root}, fn part, {:ok, prefix} ->
-      current = if prefix == "/", do: "/" <> part, else: Path.join(prefix, part)
-
-      case File.lstat(current) do
-        {:ok, %File.Stat{type: :symlink}} -> {:halt, {:error, :symlink_unsupported}}
-        {:ok, _} -> {:cont, {:ok, current}}
-        {:error, :enoent} -> {:cont, {:ok, current}}
-        {:error, reason} -> {:halt, {:error, {:path_stat_failed, reason}}}
-      end
-    end)
-    |> case do
-      {:ok, _} -> :ok
-      error -> error
+    case Alto.Workspaces.safe_path(path) do
+      {:error, :workspace_path_symlink} -> {:error, :symlink_unsupported}
+      {:error, reason} -> {:error, {:path_stat_failed, reason}}
+      :ok -> :ok
     end
   end
 

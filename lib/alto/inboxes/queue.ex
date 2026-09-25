@@ -1,8 +1,8 @@
 defmodule Alto.Inboxes.Queue do
   @moduledoc """
-  Compatibility adapter from `Alto.Inbox` to the lightweight JSONL queue.
+  Built-in `Alto.Inbox` adapter for the JSONL queue.
 
-  This remains available for database-free deployments. A separately installed
+  It supports database-free deployments. A separately installed
   Oban adapter can implement `Alto.Inbox` without becoming a core dependency.
   """
 

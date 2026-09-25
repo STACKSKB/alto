@@ -154,37 +154,27 @@ defmodule Alto.Runner.Budget do
     end
   end
 
-  defp validate_snapshot(snapshot) do
-    required = [
-      "effects_used",
-      "model_requests_used",
-      "max_effects",
-      "max_model_requests",
-      "remaining_ms"
-    ]
+  defp validate_snapshot(
+         %{
+           "effects_used" => effects,
+           "model_requests_used" => models,
+           "max_effects" => max_effects,
+           "max_model_requests" => max_models,
+           "remaining_ms" => remaining
+         } = snapshot
+       )
+       when is_integer(effects) and effects >= 0 and effects <= @max_uint64 and
+              is_integer(models) and models >= 0 and models <= @max_uint64 and
+              is_integer(remaining) and remaining >= 0 do
+    expected_size = if Map.has_key?(snapshot, "account"), do: 6, else: 5
 
-    expected = if Map.has_key?(snapshot, "account"), do: ["account" | required], else: required
-
-    if Enum.sort(Map.keys(snapshot)) != Enum.sort(expected) or
-         not valid_account_identity?(Map.get(snapshot, "account")) do
-      {:error, :invalid_snapshot}
-    else
-      fields = Enum.map(required, &Map.fetch!(snapshot, &1))
-
-      case fields do
-        [effects, models, max_effects, max_models, remaining]
-        when is_integer(effects) and effects >= 0 and effects <= @max_uint64 and
-               is_integer(models) and models >= 0 and models <= @max_uint64 and
-               is_integer(max_effects) and max_effects >= 1 and max_effects <= @max_uint64 and
-               is_integer(max_models) and max_models >= 1 and max_models <= @max_uint64 and
-               is_integer(remaining) and remaining >= 0 ->
-          :ok
-
-        _ ->
-          {:error, :invalid_snapshot}
-      end
-    end
+    if map_size(snapshot) == expected_size and valid_cap?(max_effects) and
+         valid_cap?(max_models) and valid_account_identity?(Map.get(snapshot, "account")),
+       do: :ok,
+       else: {:error, :invalid_snapshot}
   end
+
+  defp validate_snapshot(_), do: {:error, :invalid_snapshot}
 
   defp valid_account_identity?(nil), do: true
 

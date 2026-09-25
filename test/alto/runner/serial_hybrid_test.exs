@@ -4,12 +4,9 @@ defmodule Alto.Runner.SerialHybridTest do
   alias Alto.{Effect, Event, Session, Transition}
 
   defmodule NativeTool do
-    @behaviour Alto.Tool
-    def name, do: :native
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
-    def run(arguments, _context), do: {:ok, arguments}
+    use Alto.Tool, name: :native, execution_mode: :parallel, approval: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+    def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
   defmodule NativeModelNativeModelLoop do

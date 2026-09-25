@@ -4,56 +4,11 @@ defmodule Alto.FrontEnd.RegistryTest do
   alias Alto.Event
   alias Alto.FrontEnd.Registry
   alias Alto.Session
+  alias Alto.TestSupport.EchoTool
+  alias Alto.TestSupport.GuardedEchoTool
 
   @approval_timeout_ms 300
   @receive_timeout 2_000
-
-  defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
-  end
-
-  defmodule GuardedEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :required
-
-    @impl true
-    def run(arguments, _context), do: EchoTool.run(arguments, nil)
-  end
 
   defmodule ToolThenAnswerProvider do
     @behaviour Alto.Provider
@@ -150,18 +105,17 @@ defmodule Alto.FrontEnd.RegistryTest do
     registry
   end
 
-  test "capacity schemas preserve public validation errors and allow zero capacities" do
+  test "startup accepts zero capacity and validates command names" do
     resolver = fn _ -> {:ok, []} end
     assert {:ok, state} = Registry.init(config_resolver: resolver, max_active_runs: 0)
     assert state.max_active_runs == 0
 
-    for {key, error} <- [
-          max_active_runs: {:invalid_option, :max_active_runs, -1},
-          max_claim_bytes: {:invalid_max_claim_bytes, -1},
-          max_finished_runs: {:invalid_max_finished_runs, -1},
-          command_timeout: {:invalid_option, :command_timeout, -1}
+    for {key, value} <- [
+          commands: %{"" => fn _ -> :ok end},
+          commands: %{job: fn _ -> :ok end}
         ] do
-      assert {:stop, ^error} = Registry.init([{:config_resolver, resolver}, {key, -1}])
+      assert {:stop, %NimbleOptions.ValidationError{key: ^key}} =
+               Registry.init([{:config_resolver, resolver}, {key, value}])
     end
   end
 
@@ -239,8 +193,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, session_dir: root)
     {:ok, session_id} = Session.create("first prompt", %{}, session_dir: root)
 
-    :ok =
-      Session.write_transcript(
+    {:ok, _snapshot} =
+      Session.persist_settled(
         session_id,
         [
           %{"role" => "user", "content" => "first"},
@@ -266,7 +220,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, session_dir: root)
     {:ok, session_id} = Session.create("prompt", %{}, session_dir: root)
     messages = Enum.map(1..101, &%{"role" => "user", "content" => Integer.to_string(&1)})
-    :ok = Session.write_transcript(session_id, messages, 0, session_dir: root)
+    {:ok, _snapshot} = Session.persist_settled(session_id, messages, 0, session_dir: root)
 
     assert {:ok, %{messages: page, truncated: true}} =
              Registry.session_transcript(registry, session_id)
@@ -314,7 +268,7 @@ defmodule Alto.FrontEnd.RegistryTest do
            ]
 
     assert Enum.any?(events, fn {_seq, event} ->
-             event.type == :tool_completed and event.data[:output] == ~s({"echo":"hello"})
+             event.type == :tool_completed and event.data[:value] == %{echo: "hello"}
            end)
 
     assert Enum.any?(events, fn {_seq, event} -> event.type == :model_started end)
@@ -354,7 +308,6 @@ defmodule Alto.FrontEnd.RegistryTest do
     # Approval handles are globally unique operation ids; the provider
     # call id is correlation only.
     assert request.call_id == "call-1"
-    assert request.operation_id == request.id
     assert request.run_id == run_id
     assert String.starts_with?(request.id, run_id <> ":op-")
     assert request.tool == "echo"
@@ -422,7 +375,6 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     for {run_id, request} <- approvals do
       assert request.run_id == run_id
-      assert request.operation_id == request.id
       assert String.starts_with?(request.id, run_id <> ":op-")
       decision = if run_id == first_run, do: :approve, else: {:deny, :second_run}
       assert :ok = Registry.approval_response(registry, request.id, decision)
@@ -606,7 +558,6 @@ defmodule Alto.FrontEnd.RegistryTest do
       id: "run-missing:op-1",
       run_id: "run-missing",
       call_id: "call-1",
-      operation_id: "run-missing:op-1",
       tool: "echo",
       arguments: %{"value" => "hello"},
       execution_mode: :exclusive

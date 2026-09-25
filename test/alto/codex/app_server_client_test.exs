@@ -47,7 +47,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
               {nil, state}
             "thread/read" ->
               if message["params"]["threadId"] == "thr-tools" do
-                items = [%{"type" => "commandExecution", "command" => "ls -la", "aggregatedOutput" => "file.txt"},
+                items = [%{"type" => "commandExecution", "command" => "ls -la", "aggregatedOutput" => "file.txt", "status" => "failed", "exitCode" => 2},
                   %{"type" => "fileChange", "changes" => [%{"path" => "file.txt", "kind" => "added"}]},
                   %{"type" => "mcpToolCall", "server" => "test", "tool" => "lookup", "result" => %{"error" => %{"message" => "Not available", "code" => 503}}}]
                 {%{"id" => id, "result" => %{"thread" => %{"turns" => [%{"items" => items}]}}}, state}
@@ -76,7 +76,10 @@ defmodule Alto.Codex.AppServer.ClientTest do
     opts = [command: server, args: [], cwd: root, startup_timeout: 5_000, request_timeout: 5_000]
 
     assert {:ok, client} = Client.ensure_started(opts)
-    assert {:ok, ^client} = Client.ensure_started(opts)
+    assert {:ok, ^client} = Client.ensure_started(Enum.reverse(opts))
+    assert {:ok, isolated} = Client.ensure_started(Keyword.put(opts, :instance, :isolated))
+    refute isolated == client
+    GenServer.stop(isolated)
     assert :ok = Client.subscribe(client)
 
     assert {:ok, %{"account" => %{"type" => "chatgpt", "planType" => "pro"}}} =
@@ -121,6 +124,8 @@ defmodule Alto.Codex.AppServer.ClientTest do
 
     assert {:ok, [command, file, mcp]} = Backend.history(client, "thr-tools")
     assert command.text == "command · ls -la"
+    assert command.detail =~ "Status: Failed"
+    assert command.detail =~ "Exit Code: 2"
     assert file.detail =~ "Path: file.txt"
     assert mcp.detail =~ "Message: Not available"
 
@@ -129,6 +134,15 @@ defmodule Alto.Codex.AppServer.ClientTest do
       refute entry.detail =~ "%{"
       refute entry.detail =~ "=>"
     end
+
+    assert command ==
+             Backend.item_entry(%{
+               "type" => "commandExecution",
+               "command" => "ls -la",
+               "aggregatedOutput" => "file.txt",
+               "status" => "failed",
+               "exitCode" => 2
+             })
   end
 
   test "approval levels map to Codex policy and sandbox independently", _context do
@@ -141,7 +155,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
   end
 
   test "reports a missing Codex executable without hanging", %{root: root} do
-    assert {:error, {:codex_executable_not_found, _}} =
+    assert {:error, {:external_executable_not_found, _}} =
              Client.ensure_started(command: "alto-missing-codex", cwd: root, startup_timeout: 100)
   end
 end

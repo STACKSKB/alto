@@ -9,6 +9,7 @@ defmodule Alto.Runner.TaskHost do
   """
   use GenServer
   alias Alto.Runner.Result
+  alias Alto.Runner.Execution.Call
 
   defmodule Handle do
     @moduledoc false
@@ -62,7 +63,7 @@ defmodule Alto.Runner.TaskHost do
         send(caller, {:subscribed, ref, {:ok, ref}})
 
         receive do
-          {:alto_runner_result, ^ref, outcome} ->
+          {^ref, outcome} ->
             send(subscriber, {:alto_runner_result, ref, outcome})
 
           {:DOWN, ^host_ref, :process, _, reason} ->
@@ -91,17 +92,15 @@ defmodule Alto.Runner.TaskHost do
   @impl true
   def init({fun, owner}) do
     cancel_ref = make_ref()
-    task = Task.Supervisor.async_nolink(Alto.TaskSupervisor, fn -> fun.(cancel_ref) end)
+    task = Call.start(fn -> fun.(cancel_ref) end)
 
     {:ok,
      %{
        task: task,
        cancel_ref: cancel_ref,
        result: nil,
-       subscribers: [],
        waiters: %{},
-       owner: if(owner, do: Process.monitor(owner)),
-       expiry: nil
+       owner: if(owner, do: Process.monitor(owner))
      }}
   end
 
@@ -113,22 +112,20 @@ defmodule Alto.Runner.TaskHost do
 
   def handle_call({:await, timeout}, from, state)
       when timeout == :infinity or (is_integer(timeout) and timeout > 0) do
-    ref = Process.monitor(elem(from, 0))
-    timer = if timeout != :infinity, do: Process.send_after(self(), {:wait_expired, ref}, timeout)
-    {:noreply, put_in(state.waiters[ref], {from, timer})}
+    {:noreply, register_waiter(state, from, timeout)}
   end
 
   def handle_call({:subscribe, pid, ref}, _from, state) when is_pid(pid) do
     cond do
       state.result != nil ->
-        send(pid, {:alto_runner_result, ref, state.result})
+        GenServer.reply({pid, ref}, state.result)
         {:reply, :ok, state}
 
-      length(state.subscribers) >= 1024 ->
+      map_size(state.waiters) >= 1024 ->
         {:reply, {:error, :subscriber_capacity}, state}
 
       true ->
-        {:reply, :ok, %{state | subscribers: [{pid, ref} | state.subscribers]}}
+        {:reply, :ok, register_waiter(state, {pid, ref}, :infinity)}
     end
   end
 
@@ -193,19 +190,21 @@ defmodule Alto.Runner.TaskHost do
   def handle_info(:expire, state), do: {:stop, :normal, state}
   def handle_info(_, state), do: {:noreply, state}
 
-  defp complete(state, outcome) do
-    Enum.each(state.subscribers, fn {pid, ref} ->
-      send(pid, {:alto_runner_result, ref, outcome})
-    end)
+  defp register_waiter(state, from, timeout) do
+    ref = Process.monitor(elem(from, 0))
+    timer = if timeout != :infinity, do: Process.send_after(self(), {:wait_expired, ref}, timeout)
+    put_in(state.waiters[ref], {from, timer})
+  end
 
+  defp complete(state, outcome) do
     Enum.each(state.waiters, fn {ref, {from, timer}} ->
       Process.demonitor(ref, [:flush])
       cancel_timer(timer)
       GenServer.reply(from, outcome)
     end)
 
-    expiry = Process.send_after(self(), :expire, 60_000)
-    %{state | result: outcome, subscribers: [], waiters: %{}, expiry: expiry}
+    Process.send_after(self(), :expire, 60_000)
+    %{state | result: outcome, waiters: %{}}
   end
 
   defp cancel_timer(nil), do: :ok

@@ -9,10 +9,9 @@ defmodule Alto.Retry do
   def validate(nil), do: :ok
 
   def validate({module, opts}) when is_atom(module) and is_list(opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :decide, 3),
-       do: :ok,
-       else: {:error, :invalid_retry_policy}
+    if Keyword.keyword?(opts) and Alto.Capabilities.implements?(module, __MODULE__),
+      do: :ok,
+      else: {:error, :invalid_retry_policy}
   end
 
   def validate(_), do: {:error, :invalid_retry_policy}

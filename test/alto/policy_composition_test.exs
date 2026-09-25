@@ -43,15 +43,9 @@ defmodule Alto.PolicyCompositionTest do
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
-    def init(kind, _) do
+    def init(_task, _) do
       agent = %{id: "child", task: "work", loop: Alto.loop(Alto.PolicyCompositionTest.ChildLoop)}
-
-      effect =
-        if kind == :single,
-          do: Alto.Effect.spawn_agent(agent),
-          else: Alto.Effect.spawn_agents(%{agents: [agent]})
-
-      Alto.Transition.continue(nil, [effect])
+      Alto.Transition.continue(nil, [Alto.Effect.spawn_agents(%{agents: [agent]})])
     end
 
     def handle_event(event, state, _), do: Alto.Transition.stop(state, event.type)
@@ -71,10 +65,9 @@ defmodule Alto.PolicyCompositionTest do
     refute_receive {:limits_called, _}
   end
 
-  test "limits and both admission paths are cancellable" do
+  test "limits and admission are cancellable" do
     for {kind, phase, message} <- [
           {:batch, :limits, :limits_called},
-          {:single, :admit, :admission_called},
           {:batch, :admit, :admission_called}
         ] do
       loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: phase})
@@ -115,7 +108,7 @@ defmodule Alto.PolicyCompositionTest do
     {:ok, budget} = Alto.Runner.Budget.new([])
 
     run = %{
-      policy: Alto.Subagents.Policy.limits!(policy),
+      child_limits: Alto.Subagents.Policy.limits!(policy),
       budget: budget,
       tool_timeout: 1_000,
       cancel_ref: nil,
@@ -139,8 +132,7 @@ defmodule Alto.PolicyCompositionTest do
              )
   end
 
-  test "schemas reject invalid built-in context options and custom limits" do
-    assert_raise NimbleOptions.ValidationError, fn -> Alto.Context.window(reserve_output: -1) end
+  test "invalid custom subagent policy is rejected" do
     assert {:error, :invalid_subagent_policy} = Alto.Subagents.Policy.validate({String, []})
   end
 

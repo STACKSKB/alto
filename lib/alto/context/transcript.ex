@@ -2,17 +2,19 @@ defmodule Alto.Context.Transcript do
   @moduledoc "Pure provider-history validation and conversation-safe compaction boundaries."
 
   @doc "Validate call/reply correlation. In-progress histories may retain unanswered calls."
-  def validate(messages, opts \\ [])
-
-  def validate(messages, opts) when is_list(messages) do
-    with {:ok, pending} <- Enum.reduce_while(messages, {:ok, %{}}, &consume/2) do
+  def validate(messages, opts \\ []) do
+    with {:ok, pending} <- pending_calls(messages) do
       if pending == %{} or Keyword.get(opts, :allow_pending, false),
         do: :ok,
         else: {:error, {:unanswered_tool_calls, Map.keys(pending)}}
     end
   end
 
-  def validate(_, _), do: {:error, :invalid_messages}
+  @doc "Validate history and return counts of unanswered calls in its final batch."
+  def pending_calls(messages) when is_list(messages),
+    do: Alto.Result.reduce(messages, %{}, &consume/2)
+
+  def pending_calls(_), do: {:error, :invalid_messages}
 
   @doc "Keep at least the requested recent messages, moving the split back to a complete boundary."
   def split(messages, keep, keep_initial \\ 0) do
@@ -22,48 +24,39 @@ defmodule Alto.Context.Transcript do
         rest -> {[], rest}
       end
 
-    {initial, rest} = take_initial(rest, keep_initial)
-    system = system ++ initial
-    target = max(length(rest) - keep, 0)
-
-    {boundary, _pending} =
-      rest
-      |> Enum.take(target)
-      |> Enum.with_index(1)
-      |> Enum.reduce({0, %{}}, fn {message, index}, {boundary, pending} ->
-        case consume(message, {:ok, pending}) do
-          {:cont, {:ok, next}} -> {if(next == %{}, do: index, else: boundary), next}
-          {:halt, _error} -> {boundary, pending}
-        end
-      end)
-
-    {middle, recent} = Enum.split(rest, boundary)
-    {system, middle, recent}
+    boundaries = complete_boundaries(rest)
+    initial_end = Enum.find(Enum.reverse(boundaries), &(&1 >= keep_initial)) || length(rest)
+    target = max(length(rest) - keep, initial_end)
+    middle_end = max(initial_end, Enum.find(boundaries, &(&1 <= target)))
+    {initial, rest} = Enum.split(rest, initial_end)
+    {middle, recent} = Enum.split(rest, middle_end - initial_end)
+    {system ++ initial, middle, recent}
   end
 
-  defp take_initial(messages, count) do
-    {boundary, _pending} =
+  # Newest first, including the empty prefix. A call group contributes a
+  # boundary only once every reply has arrived.
+  defp complete_boundaries(messages) do
+    {boundaries, _pending} =
       messages
       |> Enum.with_index(1)
-      |> Enum.reduce_while({0, %{}}, fn {message, index}, {_boundary, pending} = acc ->
-        if index > count and pending == %{} do
-          {:halt, acc}
-        else
-          case consume(message, {:ok, pending}) do
-            {:cont, {:ok, next}} -> {:cont, {index, next}}
-            _ -> {:halt, acc}
-          end
+      |> Enum.reduce_while({[0], %{}}, fn {message, index}, {boundaries, pending} = acc ->
+        case consume(message, pending) do
+          {:ok, next} ->
+            {:cont, {if(next == %{}, do: [index | boundaries], else: boundaries), next}}
+
+          {:error, _} ->
+            {:halt, acc}
         end
       end)
 
-    Enum.split(messages, boundary)
+    boundaries
   end
 
   def bytes(messages), do: Enum.reduce(messages, 0, &(byte_size(JSON.encode!(&1)) + &2))
 
   @doc "Close unanswered calls from an interrupted run without replaying their effects."
   def close_interrupted(messages) do
-    with {:ok, pending} <- Enum.reduce_while(messages, {:ok, %{}}, &consume/2) do
+    with {:ok, pending} <- pending_calls(messages) do
       replies =
         for {id, count} <- Enum.sort(pending), _ <- List.duplicate(nil, count) do
           %{
@@ -82,34 +75,34 @@ defmodule Alto.Context.Transcript do
     end
   end
 
-  defp consume(%{"role" => "assistant", "tool_calls" => calls}, {:ok, pending})
+  defp consume(%{"role" => "assistant", "tool_calls" => calls}, pending)
        when is_list(calls) do
     if pending != %{} do
-      {:halt, {:error, {:unanswered_tool_calls, Map.keys(pending)}}}
+      {:error, {:unanswered_tool_calls, Map.keys(pending)}}
     else
-      Enum.reduce_while(calls, {:cont, {:ok, %{}}}, fn
-        %{"id" => id}, {:cont, {:ok, acc}} when is_binary(id) and id != "" ->
-          {:cont, {:cont, {:ok, Map.update(acc, id, 1, &(&1 + 1))}}}
+      Alto.Result.reduce(calls, %{}, fn
+        %{"id" => id}, acc when is_binary(id) and id != "" ->
+          {:ok, Map.update(acc, id, 1, &(&1 + 1))}
 
         _, _ ->
-          {:halt, {:halt, {:error, :invalid_tool_call}}}
+          {:error, :invalid_tool_call}
       end)
     end
   end
 
-  defp consume(%{"role" => "tool", "tool_call_id" => id}, {:ok, pending}) do
+  defp consume(%{"role" => "tool", "tool_call_id" => id}, pending) do
     case pending do
-      %{^id => 1} -> {:cont, {:ok, Map.delete(pending, id)}}
-      %{^id => n} -> {:cont, {:ok, Map.put(pending, id, n - 1)}}
-      _ -> {:halt, {:error, {:orphan_tool_reply, id}}}
+      %{^id => 1} -> {:ok, Map.delete(pending, id)}
+      %{^id => n} -> {:ok, Map.put(pending, id, n - 1)}
+      _ -> {:error, {:orphan_tool_reply, id}}
     end
   end
 
-  defp consume(%{"role" => role}, {:ok, pending}) when role in ["system", "user", "assistant"] do
+  defp consume(%{"role" => role}, pending) when role in ["system", "user", "assistant"] do
     if pending == %{},
-      do: {:cont, {:ok, pending}},
-      else: {:halt, {:error, {:unanswered_tool_calls, Map.keys(pending)}}}
+      do: {:ok, pending},
+      else: {:error, {:unanswered_tool_calls, Map.keys(pending)}}
   end
 
-  defp consume(_, _), do: {:halt, {:error, :invalid_message}}
+  defp consume(_, _), do: {:error, :invalid_message}
 end

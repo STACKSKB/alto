@@ -26,13 +26,14 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: true,
                input: input,
                output: output,
-               provider: CatalogProvider,
-               provider_options: [
-                 models: [
-                   %{id: "anthropic/claude", name: "Claude", context_length: 200_000},
-                   %{id: "openai/gpt", name: "GPT", context_length: 128_000}
-                 ]
-               ]
+               provider:
+                 {CatalogProvider,
+                  [
+                    models: [
+                      %{id: "anthropic/claude", name: "Claude", context_length: 200_000},
+                      %{id: "openai/gpt", name: "GPT", context_length: 128_000}
+                    ]
+                  ]}
              )
 
     {_input, body} = StringIO.contents(output)
@@ -59,8 +60,7 @@ defmodule Alto.CLI.OnboardingTest do
              Onboarding.resolve(
                credentials_path: context.credentials_path,
                interactive: false,
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
   end
 
@@ -71,12 +71,44 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: false,
                api_key: "environment-key",
                model: "environment/model",
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
 
     assert {:ok, credentials} = Credentials.load(context.credentials_path)
     assert credentials.providers == %{}
+  end
+
+  test "forced setup keeps a saved key on Enter but selects a new model", context do
+    {:ok, credentials} = Credentials.load(context.credentials_path)
+
+    {:ok, _} =
+      Credentials.put(credentials, "openrouter", %{
+        "api_key" => "saved-key",
+        "model" => "old/model"
+      })
+
+    {:ok, input} = StringIO.open("\n1\n")
+    {:ok, output} = StringIO.open("")
+
+    assert {:ok, %{api_key: "saved-key", model: "new/model"}} =
+             Onboarding.resolve(
+               credentials_path: context.credentials_path,
+               force: true,
+               interactive: true,
+               api_key: "supplied-key",
+               model: "supplied/model",
+               input: input,
+               output: output,
+               provider: {CatalogProvider, models: [%{id: "new/model", name: "New"}]}
+             )
+
+    {:ok, saved} = Credentials.load(context.credentials_path)
+    assert Credentials.get(saved, "openrouter", "api_key") == "saved-key"
+    assert Credentials.get(saved, "openrouter", "model") == "new/model"
+    {_input, body} = StringIO.contents(output)
+    assert body =~ "Enter keeps the current key"
+    refute body =~ "saved-key"
+    refute body =~ "supplied-key"
   end
 
   test "fails clearly when onboarding is required without a terminal", context do
@@ -84,8 +116,7 @@ defmodule Alto.CLI.OnboardingTest do
              Onboarding.resolve(
                credentials_path: context.credentials_path,
                interactive: false,
-               provider: CatalogProvider,
-               provider_options: []
+               provider: {CatalogProvider, []}
              )
 
     assert message =~ "OPENROUTER_API_KEY"
@@ -108,8 +139,7 @@ defmodule Alto.CLI.OnboardingTest do
                interactive: true,
                input: input,
                output: output,
-               provider: CatalogProvider,
-               provider_options: [models: models]
+               provider: {CatalogProvider, models: models}
              )
   end
 end

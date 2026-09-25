@@ -78,7 +78,7 @@ defmodule Alto.Tools.ExternalToolsTest do
              GitMutate.prepare(%{"action" => "stage", "paths" => ["sample.txt"]}, context)
 
     assert details.command.args |> List.last() == ":(top,literal)sample.txt"
-    assert prepared.invocation.executable =~ "git"
+    assert prepared.approval_details.command.executable =~ "git"
   end
 
   test "Git rejects option-shaped refs and absolute or parent pathspecs", %{context: context} do

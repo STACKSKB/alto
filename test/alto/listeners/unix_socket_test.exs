@@ -3,79 +3,13 @@ defmodule Alto.Listeners.UnixSocketTest do
 
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.UnixSocket
+  alias Alto.TestSupport.EchoTool
+  alias Alto.TestSupport.GuardedEchoTool
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   # Generous for parallel-test load; the fail-closed timeout path is pinned
   # by the registry tests with a tight, controlled bound.
   @approval_timeout_ms 5_000
-
-  defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
-  end
-
-  defmodule GuardedEchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :required
-
-    @impl true
-    def run(arguments, _context), do: EchoTool.run(arguments, nil)
-  end
-
-  # The request's own messages tell the provider which phase of the loop it
-  # is in; no per-run test pid is needed over the wire.
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, _sink, _opts) do
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
-    end
-  end
 
   defmodule BlockingProvider do
     @behaviour Alto.Provider
@@ -148,7 +82,7 @@ defmodule Alto.Listeners.UnixSocketTest do
 
     Process.exit(acceptor, :kill)
 
-    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}
+    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}, 5_000
     refute File.exists?(path)
   end
 
@@ -238,7 +172,6 @@ defmodule Alto.Listeners.UnixSocketTest do
     assert request_envelope["run_id"] == run_id
     assert request_envelope["request"]["call_id"] == "call-1"
     assert request_envelope["request"]["run_id"] == run_id
-    assert request_envelope["request"]["operation_id"] == request_envelope["request"]["id"]
 
     assert request_envelope["request"]["tool"] == "echo"
 

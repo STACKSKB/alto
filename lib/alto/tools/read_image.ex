@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadImage do
   @moduledoc "Bounded, workspace-confined PNG/JPEG reads for vision-capable models."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :read_image, execution_mode: :parallel, approval: :never
 
   alias Alto.Content
   alias Alto.BoundedFile
@@ -9,57 +9,49 @@ defmodule Alto.Tools.ReadImage do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @default_max_encoded_bytes 1_000_000
   @hard_max_encoded_bytes 8_000_000
-  @default_max_dimension 8_192
   @hard_max_dimension 16_384
-  @default_max_pixels 20_000_000
   @hard_max_pixels 40_000_000
 
-  @impl true
-  def name, do: :read_image
+  @options_schema [
+    max_encoded_bytes: [
+      type: {:in, 1..@hard_max_encoded_bytes},
+      default: 1_000_000
+    ],
+    max_dimension: [type: {:in, 1..@hard_max_dimension}, default: 8_192],
+    max_pixels: [type: {:in, 1..@hard_max_pixels}, default: 20_000_000],
+    processor: [type: :any, default: nil]
+  ]
 
   @impl true
-  def schema do
-    %{
-      description:
-        "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute image path."
-          },
-          max_width: %{
-            type: "integer",
-            minimum: 1,
-            maximum: @hard_max_dimension,
-            description: "Optional maximum output width in pixels."
-          },
-          max_height: %{
-            type: "integer",
-            minimum: 1,
-            maximum: @hard_max_dimension,
-            description: "Optional maximum output height in pixels."
-          }
+  def schema(_opts \\ []) do
+    Alto.Tool.object_schema(
+      "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute image path."
         },
-        required: ["path"],
-        additionalProperties: false
-      }
-    }
+        max_width: %{
+          type: "integer",
+          minimum: 1,
+          maximum: @hard_max_dimension,
+          description: "Optional maximum output width in pixels."
+        },
+        max_height: %{
+          type: "integer",
+          minimum: 1,
+          maximum: @hard_max_dimension,
+          description: "Optional maximum output height in pixels."
+        }
+      },
+      ["path"]
+    )
   end
 
   @impl true
-  def execution_mode, do: :parallel
+  def run(arguments, context, opts \\ [])
 
-  @impl true
-  def approval, do: :never
-
-  @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
-
-  @impl true
   def run(arguments, %Context{} = context, opts) when is_map(arguments) do
     path = Map.get(arguments, "path")
     requested_width = Map.get(arguments, "max_width")
@@ -93,66 +85,17 @@ defmodule Alto.Tools.ReadImage do
 
   def run(_arguments, _context, _opts), do: {:error, :image_arguments_must_be_object}
 
-  defp config(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      max_encoded_bytes = Keyword.get(opts, :max_encoded_bytes, @default_max_encoded_bytes)
-      max_dimension = Keyword.get(opts, :max_dimension, @default_max_dimension)
-      max_pixels = Keyword.get(opts, :max_pixels, @default_max_pixels)
-      processor = Keyword.get(opts, :processor)
-
-      unknown =
-        Keyword.keys(opts) -- [:max_encoded_bytes, :max_dimension, :max_pixels, :processor]
-
-      cond do
-        unknown != [] ->
-          {:error, {:unknown_image_options, unknown}}
-
-        not is_integer(max_encoded_bytes) or max_encoded_bytes <= 0 or
-            max_encoded_bytes > @hard_max_encoded_bytes ->
-          {:error, {:invalid_max_encoded_bytes, max_encoded_bytes}}
-
-        not is_integer(max_dimension) or max_dimension <= 0 or
-            max_dimension > @hard_max_dimension ->
-          {:error, {:invalid_max_dimension, max_dimension}}
-
-        not is_integer(max_pixels) or max_pixels <= 0 or max_pixels > @hard_max_pixels ->
-          {:error, {:invalid_max_pixels, max_pixels}}
-
-        true ->
-          with {:ok, processor} <- normalize_processor(processor) do
-            {:ok,
-             %{
-               max_encoded_bytes: max_encoded_bytes,
-               max_dimension: max_dimension,
-               max_pixels: max_pixels,
-               processor: processor
-             }}
-          end
-      end
-    else
-      {:error, {:invalid_image_options, opts}}
+  defp config(opts) do
+    with {:ok, config} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_image_options),
+         {:ok, processor} <- normalize_processor(config.processor) do
+      {:ok, %{config | processor: processor}}
     end
   end
-
-  defp config(opts), do: {:error, {:invalid_image_options, opts}}
 
   defp normalize_processor(nil), do: {:ok, nil}
 
-  defp normalize_processor({module, opts}) when is_atom(module) and is_list(opts) do
-    validate_processor(module, opts)
-  end
-
-  defp normalize_processor(module) when is_atom(module), do: validate_processor(module, [])
-  defp normalize_processor(processor), do: {:error, {:invalid_image_processor, processor}}
-
-  defp validate_processor(module, opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :resize, 5) do
-      {:ok, {module, opts}}
-    else
-      {:error, {:invalid_image_processor, {module, opts}}}
-    end
-  end
+  defp normalize_processor(spec), do: Alto.Capabilities.resolve(spec, Alto.Image.Processor)
 
   defp validate_requested_dimensions(width, height) do
     if valid_optional_dimension?(width) and valid_optional_dimension?(height),

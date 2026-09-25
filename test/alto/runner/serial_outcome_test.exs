@@ -5,14 +5,12 @@ defmodule Alto.Runner.SerialOutcomeTest do
   The runner tags `tool_completed` (`:completed`) and `tool_failed`
   (`:rejected_before_dispatch` / `:failed_known` / `:unknown`) without
   changing event types, loop behavior, or tool return values. Cancellation
-  after dispatch preserves uncertainty in the `run_cancelled` event's
-  `in_flight` evidence; the runner never retries a tool.
+  after dispatch preserves uncertainty in the operation's `tool_failed` event; the runner never retries a tool.
   """
 
   use ExUnit.Case, async: true
 
   alias Alto.Effect
-  alias Alto.Effect.Outcome
   alias Alto.Event
   alias Alto.Transition
 
@@ -39,55 +37,37 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule OkTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :ok_tool, execution_mode: :parallel, approval: :never
     @impl true
-    def name, do: :ok_tool
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode, do: :parallel
-    @impl true
-    def approval, do: :never
-    @impl true
-    def run(_args, _ctx), do: {:ok, %{done: true}}
+    def run(_args, _ctx, _opts), do: {:ok, %{done: true}}
   end
 
   defmodule GuardedOkTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :ok_tool
+    def name(_opts), do: :ok_tool
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
     @impl true
-    def run(_args, _ctx), do: {:ok, %{done: true}}
+    def run(_args, _ctx, _opts), do: {:ok, %{done: true}}
   end
 
   defmodule FlakyTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :flaky, execution_mode: :exclusive, approval: :never
     @impl true
-    def name, do: :flaky
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode, do: :exclusive
-    @impl true
-    def approval, do: :never
-    @impl true
-    def run(_args, _ctx), do: {:error, :boom}
+    def run(_args, _ctx, _opts), do: {:error, :boom}
   end
 
   defmodule CommitThenTimeoutTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :committer, execution_mode: :exclusive, approval: :never
     @impl true
-    def name, do: :committer
-    @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode, do: :exclusive
-    @impl true
-    def approval, do: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -97,15 +77,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule CommitThenCrashTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :crasher, execution_mode: :exclusive, approval: :never
     @impl true
-    def name, do: :crasher
-    @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode, do: :exclusive
-    @impl true
-    def approval, do: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
     def run(_args, _ctx, opts) do
       send(Keyword.fetch!(opts, :test_pid), :committed)
@@ -114,17 +88,11 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule BlockingTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :blocker, execution_mode: :exclusive, approval: :never
     @impl true
-    def name, do: :blocker
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
     @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    @impl true
-    def execution_mode, do: :exclusive
-    @impl true
-    def approval, do: :never
-    @impl true
-    def run(_args, _ctx), do: receive(do: (:never -> {:ok, :done}))
+    def run(_args, _ctx, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
   defmodule BlockingApproval do
@@ -133,24 +101,6 @@ defmodule Alto.Runner.SerialOutcomeTest do
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), :approval_entered)
       receive(do: (:never -> :approve))
-    end
-  end
-
-  describe "vocabulary" do
-    test "five classes, decided? singles out unknown" do
-      assert Outcome.classes() == [
-               :completed,
-               :rejected_before_dispatch,
-               :failed_known,
-               :unknown,
-               :requires_operator
-             ]
-
-      assert Outcome.decided?(:completed)
-      assert Outcome.decided?(:rejected_before_dispatch)
-      assert Outcome.decided?(:failed_known)
-      assert Outcome.decided?(:requires_operator)
-      refute Outcome.decided?(:unknown)
     end
   end
 
@@ -289,16 +239,11 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
 
-      assert %{
-               reason: :operator_stop,
-               in_flight: %{
-                 call_id: "op-1",
-                 name: "blocker",
-                 outcome: :unknown
-               }
-             } = cancelled.data
+      assert %{reason: :operator_stop} = cancelled.data
+      assert [failed] = Enum.filter(result.events, &(&1.type == :tool_failed))
+      assert %{call_id: "op-1", name: "blocker", outcome: :unknown} = failed.data
+      assert is_binary(failed.data.operation_id)
 
-      assert is_binary(cancelled.data.in_flight.operation_id)
       assert result.verdict == :unknown
     end
 
@@ -315,7 +260,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
       assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle, 5_000)
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
-      assert %{reason: :operator_stop, in_flight: nil} = cancelled.data
+      assert %{reason: :operator_stop} = cancelled.data
+      refute Enum.any?(result.events, &(&1.type == :tool_failed))
     end
   end
 

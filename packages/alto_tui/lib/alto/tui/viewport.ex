@@ -16,6 +16,12 @@ defmodule Alto.TUI.Viewport do
              scroll: {0, 0}
          }, rect}
 
+      {%Paragraph{text: text, wrap: false, scroll: {offset, horizontal}} = widget, rect}
+      when is_binary(text) and byte_size(text) > 4096 ->
+        inner = SelectionRegions.content_rect(widget, rect)
+        visible = text |> String.split("\n") |> Enum.slice(offset, max(inner.height, 0))
+        {%{widget | text: Enum.join(visible, "\n"), scroll: {0, horizontal}}, rect}
+
       {%Paragraph{text: text, wrap: true, scroll: {offset, 0}, alignment: :left} = widget, rect}
       when is_binary(text) and byte_size(text) > 4096 ->
         inner = SelectionRegions.content_rect(widget, rect)
@@ -32,7 +38,11 @@ defmodule Alto.TUI.Viewport do
     do: max(length(lines) - max(height, 1), 0)
 
   def bottom(text, width, height),
-    do: max(tuple_size(rows(text, max(width, 1))) - max(height, 1), 0)
+    do:
+      max(
+        tuple_size(rows(String.trim_trailing(text), max(width, 1))) - max(height, 1),
+        0
+      )
 
   def rows(text, width) do
     key = {__MODULE__, :documents}

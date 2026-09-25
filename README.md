@@ -58,11 +58,11 @@ trusted, configured tool steps without making a model request:
 defmodule EchoTool do
   @behaviour Alto.Tool
 
-  def name, do: :echo
-  def schema, do: %{parameters: %{type: "object", properties: %{}}}
-  def execution_mode, do: :parallel
-  def approval, do: :never
-  def run(arguments, _context), do: {:ok, arguments}
+  def name(_opts), do: :echo
+  def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+  def execution_mode(_opts), do: :parallel
+  def approval(_opts), do: :never
+  def run(arguments, _context, _opts), do: {:ok, arguments}
 end
 
 {:ok, result} =
@@ -206,9 +206,8 @@ bounded to 1 MB. Symlink paths and repository filters remain unsupported.
 
 ### Replaceable execution hosts
 
-The default `Alto.Runner.Serial` and the optional `Alto.Runner.Stepped` compose
-shared execution components. Select a host with `runner:` in `Alto.Config` or
+The default `Alto.Runner.Serial` composes shared execution components. Select a host with `runner:` in `Alto.Config` or
 run options. Handles are opaque and results use `Alto.Runner.Result`; registry
 and TUI integrations consume completion notifications instead of inspecting
-Tasks. Stepped can also wait for a one-use admission ticket before each effect.
-See [runners and migration](docs/runners.md) for contracts and examples.
+Tasks. Serial can optionally wait for a one-use admission ticket before each effect.
+See [execution hosts](docs/runners.md) for contracts and examples.

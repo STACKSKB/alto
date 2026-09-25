@@ -1,52 +1,14 @@
 defmodule Alto.Runner.Execution.Transcript do
-  @moduledoc "Bounded conversation state with optional summary, handoff, or custom compaction."
-  alias Alto.{Event, Session, Usage}
+  @moduledoc """
+  Bounded conversation operations with optional compaction.
+
+  Functions update the supplied map directly, so standalone callers may pass
+  any map containing the fields needed by the selected operation.
+  """
+  alias Alto.{Event, Usage}
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Events
-
-  defmodule State do
-    @moduledoc "Transcript, model-compaction capabilities, and retained events."
-    defstruct [
-      :tool_definitions,
-      :model_tools,
-      :request_model_tools,
-      :messages_rev,
-      :transcript_bytes,
-      :max_transcript_bytes,
-      :compaction,
-      :compacted?,
-      :compaction_count,
-      :session,
-      :session_dir,
-      :provider,
-      :provider_timeout,
-      :budget,
-      :cancel_ref,
-      :event_sink,
-      :max_steps,
-      :model_requests,
-      :usage,
-      :run_id,
-      :events
-    ]
-  end
-
-  @fields Map.keys(State.__struct__()) -- [:__struct__, :run_id, :events]
-
-  @doc false
-  def project(run),
-    do:
-      struct!(
-        State,
-        Map.take(run, @fields)
-        |> Map.put(:run_id, run.tool_context.session_id)
-        |> Map.put(:events, Events.project(run))
-      )
-
-  @doc false
-  def merge(run, %State{} = state),
-    do: run |> Map.merge(Map.take(state, @fields)) |> Events.merge(state.events)
 
   def append(run, message) do
     message_bytes = byte_size(JSON.encode!(message))
@@ -93,7 +55,7 @@ defmodule Alto.Runner.Execution.Transcript do
       required_headroom > run.max_transcript_bytes ->
         {:error, insufficient_headroom(run, run.transcript_bytes, required_headroom), run}
 
-      compaction_count(run) >= max_compactions(run) ->
+      run.compaction_count >= max_compactions(run) ->
         {:error, {:compaction_limit, max_compactions(run)}, run}
 
       true ->
@@ -142,45 +104,47 @@ defmodule Alto.Runner.Execution.Transcript do
       true ->
         input = reduction_input(run, pinned, middle, recent, text, reason)
 
-        with {:ok, {module, opts}} <- Alto.Context.Reducer.resolve(run.compaction[:strategy]) do
-          execute_reducer(run, input, module, opts, required_headroom)
-        else
-          {:error, reason} -> record_compact_failed(run, reason)
-        end
+        {module, opts} = Keyword.fetch!(run.compaction, :strategy)
+        execute_reducer(run, input, module, opts, required_headroom)
     end
   end
 
   defp reduction_input(run, pinned, middle, recent, text, reason) do
-    count = compaction_count(run) + 1
+    count = run.compaction_count + 1
+    run_id = run.tool_context.session_id
 
     %{
       pinned: pinned,
       middle: middle,
       recent: recent,
       text: text,
-      middle_bytes: transcript_part_bytes(middle),
+      middle_bytes: Transcript.bytes(middle),
       tools: reduction_tools(run),
       request_mode: run.compaction[:request_mode],
       max_summary_bytes: run.compaction[:max_summary_bytes],
       max_handoff_bytes: run.compaction[:max_handoff_bytes],
       session: run.session,
-      run_id: run.run_id,
+      run_id: run_id,
       reason: reason,
       count: count,
-      artifact_id: if(count == 1, do: run.run_id, else: run.run_id <> "-context-#{count}"),
+      artifact_id: if(count == 1, do: run_id, else: run_id <> "-context-#{count}"),
       artifact_options:
         [session_dir: run.session_dir] ++
           if(run.compaction[:artifact_dir],
             do: [artifact_dir: run.compaction[:artifact_dir]],
             else: []
-          ),
-      notify: fn event -> notify(run.event_sink, event) end
+          )
     }
   end
 
   defp execute_reducer(run, input, module, opts, headroom) do
+    Alto.Events.notify(
+      run.event_sink,
+      Event.live(:context_compacting, %{dropped_messages: length(input.middle)})
+    )
+
     outcome =
-      supervised_call(
+      Alto.Runner.Execution.Call.run(
         fn ->
           {:ok, accounting} = Agent.start_link(fn -> {0, Usage.new()} end)
 
@@ -204,23 +168,18 @@ defmodule Alto.Runner.Execution.Transcript do
       )
 
     case outcome do
-      {:ok, {{:ok, product}, {requests, usage}}} ->
+      {:ok, {result, {requests, usage}}} ->
         run = %{
           run
           | usage: Usage.merge(run.usage, usage),
             model_requests: run.model_requests + requests
         }
 
-        apply_product(run, input, product, headroom, 0)
-
-      {:ok, {{:error, reason}, {requests, usage}}} ->
-        run = %{
-          run
-          | usage: Usage.merge(run.usage, usage),
-            model_requests: run.model_requests + requests
-        }
-
-        record_compact_failed(run, reason)
+        case result do
+          {:ok, product} -> apply_product(run, input, product, headroom)
+          {:error, reason} -> record_compact_failed(run, reason)
+          other -> record_compact_failed(run, {:compaction_failed, other})
+        end
 
       {:cancelled, reason} ->
         {:error, {:cancelled, reason}, run}
@@ -259,25 +218,20 @@ defmodule Alto.Runner.Execution.Transcript do
   defp apply_product(
          run,
          input,
-         %{content: content, data: data, events: events, records: records} = product,
-         headroom,
-         requests
+         %{content: content, data: data} = product,
+         headroom
        )
-       when is_binary(content) and content != "" and is_map(data) and is_list(events) and
-              is_list(records) do
+       when is_binary(content) and content != "" and is_map(data) do
     replacement = input.pinned ++ [%{"role" => "user", "content" => content}] ++ input.recent
 
-    with true <-
-           String.valid?(content) and Enum.all?(events, &is_atom/1) and
-             Enum.all?(records, &is_map/1),
+    with true <- String.valid?(content),
          true <- valid_product_size?(product, run.compaction[:max_input_bytes]),
          {:ok, run, count} <-
            apply_replacement(
              run,
              replacement,
-             transcript_part_bytes(replacement),
-             headroom,
-             requests
+             Transcript.bytes(replacement),
+             headroom
            ) do
       data =
         Map.merge(data, %{
@@ -288,27 +242,14 @@ defmodule Alto.Runner.Execution.Transcript do
           kept_messages: length(input.recent)
         })
 
-      run =
-        Enum.reduce(events ++ [:context_compacted], run, fn type, run ->
-          record_event(run, Event.durable(type, data))
-        end)
-
-      run =
-        Enum.reduce(records, run, fn record, run ->
-          case Session.append(run.session, record, session_dir_opt(run)) do
-            :ok -> run
-            {:error, reason} -> add_persistence_error(run, reason)
-          end
-        end)
-
-      {:ok, run}
+      {:ok, Events.record(run, Event.durable(:context_compacted, data))}
     else
       false -> record_compact_failed(run, :invalid_compaction_result)
       {:error, reason} -> record_compact_failed(run, reason)
     end
   end
 
-  defp apply_product(run, _input, _product, _headroom, _requests),
+  defp apply_product(run, _input, _product, _headroom),
     do: record_compact_failed(run, :invalid_compaction_result)
 
   defp valid_product_size?(product, limit) do
@@ -317,7 +258,7 @@ defmodule Alto.Runner.Execution.Transcript do
     _ -> false
   end
 
-  defp apply_replacement(run, replacement, bytes, required_headroom, model_requests) do
+  defp apply_replacement(run, replacement, bytes, required_headroom) do
     cond do
       bytes >= run.transcript_bytes ->
         {:error,
@@ -327,14 +268,12 @@ defmodule Alto.Runner.Execution.Transcript do
         {:error, insufficient_headroom(run, bytes, required_headroom)}
 
       true ->
-        count = compaction_count(run) + 1
+        count = run.compaction_count + 1
 
         run = %{
           run
           | messages_rev: Enum.reverse(replacement),
             transcript_bytes: bytes,
-            model_requests: run.model_requests + model_requests,
-            compacted?: true,
             compaction_count: count
         }
 
@@ -356,22 +295,11 @@ defmodule Alto.Runner.Execution.Transcript do
 
   defp take_compaction_model(run), do: Budget.take_model(run.budget)
 
-  defp compaction_count(run) do
-    case Map.get(run, :compaction_count) do
-      count when is_integer(count) and count >= 0 -> count
-      _ -> if(Map.get(run, :compacted?, false), do: 1, else: 0)
-    end
-  end
-
   defp max_compactions(run), do: Keyword.get(run.compaction, :max_compactions, 1)
 
   defp record_compact_failed(run, reason) do
-    run = record_event(run, Event.durable(:context_compact_failed, %{error: reason}))
+    run = Events.record(run, Event.durable(:context_compact_failed, %{error: reason}))
     {:error, reason, run}
-  end
-
-  defp transcript_part_bytes(messages) do
-    Enum.reduce(messages, 0, fn message, total -> total + byte_size(JSON.encode!(message)) end)
   end
 
   defp reduction_parts(run) do
@@ -394,20 +322,11 @@ defmodule Alto.Runner.Execution.Transcript do
     end
   end
 
-  defp record_event(run, event), do: %{run | events: Events.record(run.events, event)}
-
-  defp add_persistence_error(run, reason),
-    do: %{run | events: Events.add_persistence_error(run.events, reason)}
-
-  defp session_dir_opt(run), do: [session_dir: run.session_dir]
-  defp supervised_call(fun, timeout, ref), do: Alto.Runner.Execution.Call.run(fun, timeout, ref)
   # Internal reducer output is not an assistant answer. Keep progress observable
   # without leaking JSON artifacts (or reducer reasoning) into the conversation.
   defp compaction_sink(sink) do
     fn event ->
-      notify(sink, Event.live(:context_compaction_progress, %{event: event.type}))
+      Alto.Events.notify(sink, Event.live(:context_compaction_progress, %{event: event.type}))
     end
   end
-
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 end

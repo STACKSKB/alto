@@ -52,18 +52,6 @@ defmodule Alto.QueueAdmissionTest do
 
       assert {:error, {:key_claimed, "src:del-1"}} = Queue.admit(name, "src:del-1", %{})
     end
-
-    test "put keeps business upsert semantics alongside admit", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-
-      # Business keys still update in place.
-      {:ok, _} = Queue.put(name, "job-1", %{total: 10})
-      assert {:ok, %{revision: 2}} = Queue.put(name, "job-1", %{total: 12})
-
-      # Delivery keys never update.
-      {:ok, _} = Queue.admit(name, "src:del-9", %{n: 1})
-      assert {:error, :duplicate} = Queue.admit(name, "src:del-9", %{n: 2})
-    end
   end
 
   describe "completed window" do
@@ -152,16 +140,17 @@ defmodule Alto.QueueAdmissionTest do
 
       good =
         JSON.encode!(%{
-          "v" => 1,
-          "type" => "put",
-          "id" => "rec-1",
-          "key" => "k",
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "mode" => "business",
-          "generation_id" => "gen-fixture",
-          "at_ms" => 1,
-          "queue" => id
+          "v" => 6,
+          "type" => "record",
+          "record" =>
+            Alto.Session.encode_term(%Queue.Record{
+              id: "rec-1",
+              key: "k",
+              payload: %{n: 1},
+              revision: 1,
+              generation_id: "gen-fixture",
+              at_ms: 1
+            })
         })
 
       # Torn tail: bytes with no trailing newline that do not decode.
@@ -203,35 +192,6 @@ defmodule Alto.QueueAdmissionTest do
     end
   end
 
-  describe "old-log import" do
-    test "pre-namespace logs load with live work intact", %{dir: dir, id: id} do
-      path = Path.join(dir, id <> ".jsonl")
-      File.mkdir_p!(dir)
-
-      put = fn rec_id, key ->
-        JSON.encode!(%{
-          "v" => 1,
-          "type" => "put",
-          "id" => rec_id,
-          "key" => key,
-          "payload" => Alto.Session.encode_term(%{n: 1}),
-          "revision" => 1,
-          "at_ms" => 1,
-          "queue" => id
-        })
-      end
-
-      File.write!(path, put.("rec-1", "del-1") <> "\n" <> put.("rec-2", "job-9") <> "\n")
-
-      assert {:error, {:queue_migration_required, ^id, :legacy_admission}} =
-               Queue.start_link(id: id, dir: dir, name: nil)
-
-      %{name: name} = start_queue!(id: id, dir: dir, legacy_admission: :business)
-      assert %{pending: 2} = Queue.count(name)
-      assert {:ok, [_, _]} = Queue.claim(name, 2)
-    end
-  end
-
   describe "claim_bounded" do
     test "budgets encoded bytes as well as count, oldest first", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
@@ -247,6 +207,24 @@ defmodule Alto.QueueAdmissionTest do
       assert {:ok, fitting} = Queue.claim_bounded(name, 5, nil, 2 + 2 * one_size + 1)
       assert length(fitting) == 2
       assert %{pending: 1, claimed: 4} = Queue.count(name)
+    end
+
+    test "a fitting prefix does not inspect records beyond the first oversized record", %{
+      dir: dir,
+      id: id
+    } do
+      %{name: name} = start_queue!(id: id, dir: dir)
+      {:ok, _} = Queue.put(name, "small", %{text: "deliverable"})
+      {:ok, _} = Queue.put(name, "big", %{text: String.duplicate("x", 5_000)})
+      {:ok, invalid} = Queue.put(name, "invalid", %{text: <<255>>})
+
+      assert {:ok, [%{key: "small"} = claimed]} = Queue.claim_bounded(name, 3, nil, 1_000)
+      assert %{pending: 2, claimed: 1} = Queue.count(name)
+      assert :ok = Queue.ack(name, claimed.claim_id)
+      assert :ok = Queue.cancel(name, "big")
+      assert {:error, {:queue_unencodable, id}} = Queue.claim_bounded(name, 1, nil, 1_000)
+      assert id == invalid.id
+      assert %{pending: 1, claimed: 0} = Queue.count(name)
     end
 
     test "a lone oversized head leases nothing and names the record", %{dir: dir, id: id} do

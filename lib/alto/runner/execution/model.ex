@@ -1,36 +1,19 @@
 defmodule Alto.Runner.Execution.Model do
-  @moduledoc "The provider transport boundary shared by execution hosts."
+  @moduledoc """
+  Provider transport over a capability map containing budget, cancellation,
+  provider timeout/retry policy, and event-sink fields from the execution run.
+  Providers receive only the request, stream sink, and configured options.
+  """
 
   alias Alto.Event
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
   alias Alto.Context.Policy
 
-  defmodule Capabilities do
-    @moduledoc "The bounded capabilities required for one provider request."
-    @enforce_keys [:budget, :cancel_ref, :provider_timeout, :provider_retries, :event_sink]
-    defstruct [
-      :budget,
-      :cancel_ref,
-      :provider_timeout,
-      :provider_retries,
-      :event_sink,
-      retry_policy: nil
-    ]
-
-    @type t :: %__MODULE__{
-            budget: Budget.t(),
-            cancel_ref: reference() | nil,
-            provider_timeout: pos_integer(),
-            provider_retries: non_neg_integer(),
-            event_sink: (Event.t() -> term()) | nil
-          }
-  end
-
   @doc "Check a request against a provider's context window and reserve output."
-  @spec check_context(map(), term(), module(), keyword(), Capabilities.t()) ::
+  @spec check_context(map(), term(), module(), keyword(), map()) ::
           {:ok, map()} | {:error, term()}
-  def check_context(request, policy, provider, provider_opts, %Capabilities{} = caps) do
+  def check_context(request, policy, provider, provider_opts, caps) do
     checked =
       Call.run(
         fn ->
@@ -95,37 +78,30 @@ defmodule Alto.Runner.Execution.Model do
   def reserve_output(request, _budget), do: {:ok, request}
 
   @doc "Stream a model request with bounded transient-error retries before any output is delivered."
-  @spec stream(module(), map(), function(), keyword(), Capabilities.t(), pos_integer()) ::
+  @spec stream(module(), map(), function(), keyword(), map(), pos_integer()) ::
           {:ok, {:ok, map() | term()} | {:error, term()} | term()}
           | {:error, term()}
           | {:cancelled, term()}
-  def stream(provider, request, sink, provider_opts, %Capabilities{} = caps, step)
+  def stream(provider, request, sink, provider_opts, caps, step)
       when is_atom(provider) and is_function(sink, 1) and is_integer(step) and step > 0 do
-    stream_with_retries(provider, request, sink, provider_opts, caps, step)
+    budget = caps.budget
+
+    invoke = fn attempt_sink ->
+      with :ok <- Budget.take_model(budget),
+           do: provider.stream(request, attempt_sink, provider_opts)
+    end
+
+    attempt_stream(invoke, sink, caps, step, 1)
   end
 
-  @doc "Public name for the retrying transport operation."
-  def stream_with_retries(provider, request, sink, provider_opts, %Capabilities{} = caps, step) do
-    attempt_stream(
-      provider,
-      request,
-      sink,
-      provider_opts,
-      caps,
-      step,
-      1,
-      caps.provider_retries + 1
-    )
-  end
-
-  defp attempt_stream(provider, request, sink, provider_opts, caps, step, attempt, max_attempts) do
+  defp attempt_stream(invoke, sink, caps, step, attempt) do
     case Call.cancellation(caps.cancel_ref) do
       {:cancelled, reason} ->
         {:cancelled, reason}
 
       :continue ->
-        # Shared with the provider call process; retain streaming without buffering
-        # bodies or replaying output already delivered by a failed attempt.
+        # Shared with the provider process: output is delivered immediately,
+        # and any delivery prevents a retry even if the attempt later fails.
         delivered = :atomics.new(1, [])
 
         attempt_sink = fn event ->
@@ -135,100 +111,51 @@ defmodule Alto.Runner.Execution.Model do
 
         outcome =
           Call.run(
-            fn ->
-              with :ok <- Budget.take_model(caps.budget),
-                   do: provider.stream(request, attempt_sink, provider_opts)
-            end,
+            fn -> invoke.(attempt_sink) end,
             Budget.timeout(caps.budget, caps.provider_timeout),
             caps.cancel_ref
           )
 
-        maybe_retry_stream(
-          outcome,
-          provider,
-          request,
-          sink,
-          provider_opts,
-          caps,
-          step,
-          attempt,
-          max_attempts,
-          :atomics.get(delivered, 1) == 1
-        )
-    end
-  end
+        decision =
+          case outcome do
+            {:ok, {:error, reason}} when attempt <= caps.provider_retries ->
+              if :atomics.get(delivered, 1) == 0,
+                do: retry_decision(caps, reason, attempt),
+                else: :stop
 
-  defp maybe_retry_stream(
-         {:ok, {:error, reason}} = outcome,
-         provider,
-         request,
-         sink,
-         provider_opts,
-         caps,
-         step,
-         attempt,
-         max_attempts,
-         delivered?
-       ) do
-    decision =
-      if not delivered? and attempt < max_attempts,
-        do: retry_decision(caps, reason, attempt),
-        else: :stop
+            _ ->
+              :stop
+          end
 
-    case decision do
-      {:retry, delay, kind} ->
-        notify(
-          caps.event_sink,
-          Event.live(:model_retry, %{
-            step: step,
-            attempt: attempt,
-            max_attempts: max_attempts,
-            kind: kind
-          })
-        )
-
-        case sleep_backoff(delay, caps.cancel_ref, caps.budget) do
-          :ok ->
-            attempt_stream(
-              provider,
-              request,
-              sink,
-              provider_opts,
-              caps,
-              step,
-              attempt + 1,
-              max_attempts
+        case decision do
+          {:retry, delay, kind} ->
+            Alto.Events.notify(
+              caps.event_sink,
+              Event.live(:model_retry, %{
+                step: step,
+                attempt: attempt,
+                max_attempts: caps.provider_retries + 1,
+                kind: kind
+              })
             )
+
+            with :ok <- sleep_backoff(delay, caps.cancel_ref, caps.budget),
+                 do: attempt_stream(invoke, sink, caps, step, attempt + 1)
 
           {:cancelled, reason} ->
             {:cancelled, reason}
+
+          :stop ->
+            outcome
         end
-
-      {:cancelled, reason} ->
-        {:cancelled, reason}
-
-      :stop ->
-        outcome
     end
   end
 
-  defp maybe_retry_stream(
-         outcome,
-         _provider,
-         _request,
-         _sink,
-         _opts,
-         _caps,
-         _step,
-         _attempt,
-         _max,
-         _delivered?
-       ),
-       do: outcome
-
   defp retry_decision(caps, reason, attempt) do
+    policy = caps.retry_policy
+
     case Call.run(
-           fn -> Alto.Retry.decide(caps.retry_policy, reason, attempt) end,
+           fn -> Alto.Retry.decide(policy, reason, attempt) end,
            Budget.timeout(caps.budget, caps.provider_timeout),
            caps.cancel_ref
          ) do
@@ -239,21 +166,10 @@ defmodule Alto.Runner.Execution.Model do
   end
 
   defp sleep_backoff(delay, cancel_ref, budget) do
-    sleep_until(System.monotonic_time(:millisecond) + Budget.timeout(budget, delay), cancel_ref)
-  end
-
-  defp sleep_until(deadline, cancel_ref) do
-    if System.monotonic_time(:millisecond) >= deadline do
-      :ok
-    else
-      Process.sleep(50)
-
-      case Call.cancellation(cancel_ref) do
-        {:cancelled, reason} -> {:cancelled, reason}
-        :continue -> sleep_until(deadline, cancel_ref)
-      end
+    receive do
+      {:alto_cancel, ^cancel_ref, reason} when not is_nil(cancel_ref) -> {:cancelled, reason}
+    after
+      Budget.timeout(budget, delay) -> :ok
     end
   end
-
-  defp notify(sink, event), do: Alto.Runner.Execution.Support.notify(sink, event)
 end

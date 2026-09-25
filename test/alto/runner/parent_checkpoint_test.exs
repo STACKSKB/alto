@@ -4,7 +4,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
   alias Alto.{Effect, OperationLog, Usage}
   alias Alto.Runner.{Budget, Checkpoint}
   alias Alto.Runner.Budget.Account
-  alias Alto.Subagents.Journal
 
   defmodule Loop do
     @behaviour Alto.Loop
@@ -31,7 +30,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, account} = Account.open(ledger, "tree", max_effects: 50, max_model_requests: 20)
     opts = [budget_account: account, max_effects: 50, max_model_requests: 20, run_timeout: 10_000]
     {:ok, budget} = Budget.new(opts)
-    {:ok, journal} = Journal.open(ledger, "children:root:op-1", ["worker"])
     messages = [%{"role" => "user", "content" => "original task"}]
 
     run = %{
@@ -53,7 +51,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
       op_seq: 1,
       pending_provider_calls: %{},
       request_model_tools: nil,
-      compacted?: false,
       compaction_count: 0,
       resolved_operations: [],
       persistence_errors: [{:earlier_write, :unavailable}],
@@ -71,13 +68,13 @@ defmodule Alto.Runner.ParentCheckpointTest do
       approval_timeout: 1_000
     }
 
-    pending = %{kind: :children, journal: Journal.identity(journal), ids: ["worker"]}
+    pending = %{kind: :children, ids: ["worker"]}
     %{run: run, pending: pending, opts: opts, dir: dir}
   end
 
   test "round trip preserves parent state and tail without an approval request", context do
     %{run: run, pending: pending, opts: opts} = context
-    run = %{run | compacted?: true, compaction_count: 2}
+    run = %{run | compaction_count: 2}
     tail = [Effect.request_model(%{context_message: "integrate"})]
     assert :ok = Budget.take(run.budget)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
@@ -87,8 +84,9 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
     assert same_packet["fingerprint"] == packet["fingerprint"]
     assert packet["kind"] == "parent"
-    assert packet["stage"] == "children"
     refute Map.has_key?(packet, "request")
+    refute Map.has_key?(packet, "usage")
+    refute Map.has_key?(packet, "agent_identity")
     packet = packet |> JSON.encode!() |> JSON.decode!()
 
     # Children can spend shared reservations after the pending parent is saved.
@@ -119,7 +117,9 @@ defmodule Alto.Runner.ParentCheckpointTest do
              Checkpoint.capture_parent(restored, %{kind: :frame}, [], {:stop, "done"})
 
     assert ready["expires_at_ms"] <= expiry
-    assert ready["stage"] == "frame"
+
+    assert {:ok, _, %{pending: %{kind: :frame}}} =
+             Checkpoint.restore_parent(restored, ready, opts)
 
     expired = replace_expiry(packet, System.system_time(:millisecond) - 1)
     assert {:error, :run_timeout} = Checkpoint.restore_parent(run, expired, opts)
@@ -165,34 +165,33 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
   test "unavailable durable policy resources fail capture and restore", context do
     %{run: run, pending: pending, opts: opts} = context
-    missing = Alto.Subagents.bounded(journal: :missing_checkpoint_journal)
-    unavailable = %{run | spec: %{run.spec | subagents: missing}}
+    unavailable = %{run | continuation_store: :missing_checkpoint_store}
 
-    assert {:error, {:durable_identity_unavailable, _}} =
+    assert {:error, :parent_checkpoint_store_unavailable} =
              Checkpoint.capture_parent(unavailable, pending, [], :continue)
 
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
-    assert {:error, {:durable_identity_unavailable, _}} =
+    assert {:error, :parent_checkpoint_store_unavailable} =
              Checkpoint.restore_parent(unavailable, packet, opts)
 
     dead = spawn(fn -> :ok end)
     ref = Process.monitor(dead)
     assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
 
-    for nested <- [Alto.Subagents.bounded(journal: dead), {HostChildPolicy, journal: dead}] do
-      nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
+    manager = Alto.Workspaces.new(root: Path.join(context.dir, "workers"), ledger: dead)
+    nested = {HostChildPolicy, workspaces: manager}
+    nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
 
-      assert {:error, {:durable_identity_unavailable, _}} =
-               Checkpoint.capture_parent(nested_options, pending, [], :continue)
-    end
+    assert {:error, {:durable_identity_unavailable, _}} =
+             Checkpoint.capture_parent(nested_options, pending, [], :continue)
   end
 
   test "keyword policy state normalizes resource identity just like a built-in struct" do
     resource = fn _ -> %{id: "stable-ledger"} end
 
-    assert Alto.Subagents.Policy.fingerprint({HostChildPolicy, journal: :first}, resource) ==
-             Alto.Subagents.Policy.fingerprint({HostChildPolicy, journal: :second}, resource)
+    assert Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :first}, resource) ==
+             Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :second}, resource)
   end
 
   test "restored authority is the intersection of saved and current ceilings", context do
@@ -224,13 +223,27 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
     for changed <- [
-          Map.put(packet, "stage", "frame"),
           Map.put(packet, "session_id", "other"),
           Map.put(packet, "expires_at_ms", packet["expires_at_ms"] + 1),
-          put_in(packet, ["authority", "max_steps"], 100),
           put_in(packet, ["budget", "effects_used"], 0.5)
         ] do
       assert {:error, _} = Checkpoint.restore_parent(run, changed, opts)
+    end
+
+    refute Map.has_key?(packet, "stage")
+    refute Map.has_key?(packet, "store")
+    refute Map.has_key?(packet, "authority")
+    {:ok, saved} = Checkpoint.decode(packet["state"])
+
+    for changed <- [
+          put_in(saved, [:pending, :kind], :invalid),
+          put_in(saved, [:binding, :store], %{}),
+          put_in(saved, [:binding, :authority, :max_steps], -1),
+          put_in(saved, [:run, :usage], %{run.usage | input_tokens: -1}),
+          put_in(saved, [:run, :agent_identity], %{root_run_id: "root", path: ["child"]})
+        ] do
+      {:ok, encoded} = Checkpoint.encode(changed)
+      assert {:error, _} = Checkpoint.restore_parent(run, %{packet | "state" => encoded}, opts)
     end
 
     assert {:error, _} =
@@ -250,9 +263,10 @@ defmodule Alto.Runner.ParentCheckpointTest do
     for intent <- [pending, %{kind: :frame}] do
       assert {:ok, packet} = Checkpoint.capture_parent(run, intent, [], :continue)
 
-      assert :ok =
-               Alto.Session.write_transcript(run.session, run.messages_rev, run.transcript_bytes,
-                 session_dir: run.session_dir
+      assert {:ok, _snapshot} =
+               Alto.Session.persist_settled(run.session, run.messages_rev, run.transcript_bytes,
+                 session_dir: run.session_dir,
+                 allow_pending: true
                )
 
       assert {:error, :checkpoint_mismatch} = Checkpoint.restore_parent(run, packet, opts)

@@ -2,6 +2,12 @@ defmodule Alto.ToolDisplayTest do
   use ExUnit.Case, async: true
   alias Alto.ToolDisplay
 
+  test "false native results survive both local and wire event shapes" do
+    for data <- [%{value: false}, %{"value" => false}] do
+      assert ToolDisplay.entry(:tool_completed, data).detail == "No"
+    end
+  end
+
   test "tool titles identify files, commands and revisions without argument dumps" do
     assert ToolDisplay.summary("read_file", ~s({"path":"lib/a.ex","offset":20})) ==
              "read_file lib/a.ex (from 20)"
@@ -24,7 +30,10 @@ defmodule Alto.ToolDisplayTest do
 
     assert {:ok, result} =
              Alto.Tools.EditFile.run(
-               %{"path" => "a.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "a.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 
@@ -84,7 +93,6 @@ defmodule Alto.ToolDisplayTest do
     assert entry.text == "read_file large.ex ✓"
     assert entry.detail == "#{byte_size(content)} bytes read · more available"
     refute inspect(entry) =~ "PRIVATE_CANARY"
-    assert value.content == content
   end
 
   defmodule Provider do

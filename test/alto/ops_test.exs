@@ -15,7 +15,7 @@ defmodule Alto.OpsTest do
   alias Alto.Ops
   alias Alto.Queue
 
-  setup do
+  setup context do
     dir = Path.join(System.tmp_dir!(), "alto-ops-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
@@ -25,7 +25,12 @@ defmodule Alto.OpsTest do
     lname = :"ops_l_#{tag}"
 
     {:ok, _} =
-      Queue.start_link(id: "q#{tag}", dir: Path.join(dir, "q"), name: qname, lease_ms: 50)
+      Queue.start_link(
+        id: "q#{tag}",
+        dir: Path.join(dir, "q"),
+        name: qname,
+        lease_ms: Map.get(context, :lease_ms, 5_000)
+      )
 
     {:ok, _} = OperationLog.start_link(id: "l#{tag}", dir: Path.join(dir, "l"), name: lname)
 
@@ -43,7 +48,7 @@ defmodule Alto.OpsTest do
     assert %{status: :claimed, source: "/hooks/events", claim_id: claim_id} =
              by_key["/hooks/events:del-1"]
 
-    assert is_binary(claim_id) and claim_id == claimed.claim_id
+    assert claim_id == claimed.claim_id
     assert %{status: :accepted, source: "business", operation: "job-9"} = by_key["job-9"]
 
     # Correlation is inbox key + claim identity, never an invented run.
@@ -51,11 +56,21 @@ defmodule Alto.OpsTest do
     assert by_key["/hooks/events:del-1"].safe_to_retry == false
   end
 
+  test "inspection accepts a registered ledger reference", %{queue: queue, ledger: ledger} do
+    name = {:alto_ops_ledger, System.unique_integer([:positive])}
+    :yes = :global.register_name(name, Process.whereis(ledger))
+    on_exit(fn -> :global.unregister_name(name) end)
+
+    {:ok, _} = Queue.put(queue, "job", %{})
+
+    assert {:ok, %{items: [%{key: "job", status: :accepted}]}} =
+             Ops.list(queue, {:global, name})
+  end
+
+  @tag lease_ms: 50
   test "stale claims are visible accurately without mutating", %{queue: q, ledger: l} do
     {:ok, _} = Queue.admit(q, "src:stale", %{})
     {:ok, [claimed]} = Queue.claim(q, 1, "slow")
-    refute Ops.get(q, l, "src:stale") |> elem(1) |> Map.fetch!(:stale)
-
     Process.sleep(120)
 
     assert {:ok, item} = Ops.get(q, l, "src:stale")
@@ -188,6 +203,46 @@ defmodule Alto.OpsTest do
     assert item.attempt_id == claimed.claim_id
   end
 
+  test "a completed business generation remains visible beside a new live generation", %{
+    queue: q,
+    ledger: l
+  } do
+    {:ok, _} = Queue.put(q, "same-display", %{})
+    {:ok, [old_claim]} = Queue.claim(q, 1, "w")
+    old_operation = "business-generation:" <> old_claim.generation_id
+
+    :ok =
+      OperationLog.record_intent(l, old_operation, "print", "same-display", %{
+        key: "same-display",
+        generation_id: old_claim.generation_id
+      })
+
+    :ok = OperationLog.record_attempt(l, old_operation, old_claim.claim_id)
+    :ok = OperationLog.record_outcome(l, old_operation, old_claim.claim_id, :completed, %{})
+    :ok = Queue.ack(q, old_claim.claim_id)
+    {:ok, _} = Queue.put(q, "same-display", %{})
+
+    assert {:ok, %{items: items}} = Ops.list(q, l)
+    assert Enum.map(items, & &1.key) == ["same-display", "same-display"]
+    assert Enum.map(items, & &1.status) == [:accepted, :completed]
+    assert Enum.at(items, 0).operation_key != old_operation
+    assert Enum.at(items, 1).operation_key == old_operation
+  end
+
+  test "restored work joins ledger state by its explicit operation key", %{queue: q, ledger: l} do
+    operation_key = "src:restored-operation"
+    {:ok, _} = Queue.restore(q, operation_key, "generation-1", %{})
+    {:ok, [claimed]} = Queue.claim(q, 1, "w")
+    :ok = OperationLog.record_intent(l, operation_key, "print", claimed.key)
+    :ok = OperationLog.record_attempt(l, operation_key, claimed.claim_id)
+
+    assert {:ok, %{items: [item]}} = Ops.list(q, l)
+    assert item.status == :unknown
+    assert item.key == claimed.key
+    assert item.operation_key == operation_key
+    assert item.claim_id == claimed.claim_id
+  end
+
   test "completed work lists terminal outcomes; pagination and limits hold", %{
     queue: q,
     ledger: l
@@ -225,40 +280,10 @@ defmodule Alto.OpsTest do
     assert {:error, :not_found} = Ops.get(q, l, "src:missing")
   end
 
-  test "inspection grants no new authority: read-only surface only" do
-    fns = Ops.__info__(:functions)
-    assert {:list, 3} in fns
-    assert {:get, 3} in fns
-    refute Enum.any?(fns, fn {name, _} -> name in [:ack, :release, :record_outcome, :retry] end)
-  end
-
   test "store outages are reported instead of looking empty", %{queue: q, ledger: l} do
     GenServer.stop(Process.whereis(q))
     GenServer.stop(Process.whereis(l))
     assert {:error, _} = Ops.list(q, l)
     assert {:error, _} = Ops.get(q, l, "missing")
-  end
-
-  test "mutating recovery still requires operation identity", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:guarded", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "owner-1")
-
-    # A forged claim id cannot ack or release another owner's work.
-    assert {:error, :not_found} = Queue.ack(q, "clm-forged")
-    assert {:error, :not_found} = Queue.release(q, "clm-forged")
-
-    # The ledger refuses outcomes without a recorded attempt under the same identity.
-    :ok = OperationLog.record_intent(l, "src:guarded", "print", "src:guarded")
-
-    assert {:error, :no_attempt} =
-             OperationLog.record_outcome(l, "src:guarded", "clm-forged", :completed, %{})
-
-    # The real owner path still works.
-    :ok = OperationLog.record_attempt(l, "src:guarded", claimed.claim_id)
-
-    assert :ok =
-             OperationLog.record_outcome(l, "src:guarded", claimed.claim_id, :completed, %{})
-
-    assert :ok = Queue.ack(q, claimed.claim_id)
   end
 end

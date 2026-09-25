@@ -52,10 +52,8 @@ defmodule Alto.Providers.StreamEnvelopeTest do
         req_options: [adapter: fn _ -> raise "adapter defect" end]
       ]
 
-      assert {:error, {:provider_exception, %RuntimeError{message: "adapter defect"}, stack}} =
+      assert {:error, {:provider_exception, %RuntimeError{message: "adapter defect"}, _stack}} =
                provider.stream(%{messages: [], tools: []}, fn _ -> :ok end, options)
-
-      assert is_list(stack)
     end
   end
 end

@@ -24,7 +24,9 @@ defmodule Alto.WorkspacesTest do
 
     def diff(_snapshot, _path, _opts), do: {:ok, "reviewed patch\n"}
 
-    def prepare_apply(source, patch_path, patch_sha256, _opts) do
+    def prepare_apply(source, patch_path, patch_sha256, opts) do
+      fail_if_requested(opts, :prepare_apply)
+
       {:ok,
        %{
          "engine" => "fake",
@@ -38,15 +40,28 @@ defmodule Alto.WorkspacesTest do
           source,
           %{"engine" => "fake", "source" => target, "patch_sha256" => sha},
           patch_path,
-          _opts
+          opts
         ) do
+      fail_if_requested(opts, :verify_apply)
+
       if source == target and is_binary(sha) and File.exists?(patch_path),
         do: :ok,
         else: {:error, :invalid_fake_patch_target}
     end
 
-    def apply(_source, %{"engine" => "fake", "patch_sha256" => sha}, _patch_path, _opts) do
+    def apply(_source, %{"engine" => "fake", "patch_sha256" => sha}, _patch_path, opts) do
+      fail_if_requested(opts, :apply)
       {:ok, %{"engine" => "fake", "applied_sha256" => sha}}
+    end
+
+    defp fail_if_requested(opts, stage) do
+      if opts[:failure_stage] == stage do
+        case opts[:failure_kind] do
+          :raise -> raise "backend failed"
+          :throw -> throw(:backend_failed)
+          :exit -> exit(:backend_failed)
+        end
+      end
     end
   end
 
@@ -78,6 +93,42 @@ defmodule Alto.WorkspacesTest do
   end
 
   defp owner(path), do: %{root_run_id: "root", path: [path]}
+
+  for stage <- [:prepare_apply, :verify_apply, :apply], kind <- [:raise, :throw, :exit] do
+    @tag failure_stage: stage, failure_kind: kind
+    test "#{stage} #{kind} respects the dispatch boundary", %{
+      manager: manager,
+      snapshot: snapshot,
+      failure_stage: stage,
+      failure_kind: kind
+    } do
+      manager = %{manager | backend_options: [failure_stage: stage, failure_kind: kind]}
+      {:ok, ready} = Workspaces.create(manager, snapshot, owner("failure"))
+      {:ok, frozen} = Workspaces.freeze(manager, ready.id, ready.revision)
+
+      result =
+        with {:ok, prepared} <- Workspaces.prepare_apply(manager, frozen.id, frozen.revision) do
+          Workspaces.apply(manager, prepared)
+        end
+
+      tag =
+        if stage == :apply, do: :workspace_application_failed, else: :workspace_integration_failed
+
+      reason = if kind == :raise, do: {tag, "backend failed"}, else: {tag, kind, :backend_failed}
+      verdict = if stage == :apply, do: :unknown, else: :error
+      assert result == {verdict, reason}
+
+      if stage == :apply do
+        assert {:ok, %{status: "in_progress"} = retained} = Workspaces.get(manager, frozen.id)
+        assert retained.revision > frozen.revision
+
+        assert {:error, :workspace_not_applicable} =
+                 Workspaces.prepare_apply(manager, retained.id, retained.revision)
+      else
+        assert {:ok, ^frozen} = Workspaces.get(manager, frozen.id)
+      end
+    end
+  end
 
   test "rejected resume admission preserves the workspace and can be retried", %{
     manager: m,

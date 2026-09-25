@@ -4,9 +4,9 @@ defmodule Alto.Input do
 
   `:steer` messages are delivered before the next model request, once dispatched
   tools settle. `:follow_up` messages are delivered when the loop would finish.
-  Entries remain queued until execution acknowledges their insertion. A host
-  owns the channel lifetime and can reuse it across runs; channels are not
-  serialized into execution checkpoints.
+  Entries remain queued until execution acknowledges their insertion or an idle
+  host takes the next turn. A host owns the channel lifetime and can reuse it
+  across runs; channels are not serialized into execution checkpoints.
   """
   use GenServer
 
@@ -18,6 +18,9 @@ defmodule Alto.Input do
   def peek(channel, modes, timeout \\ 5_000), do: GenServer.call(channel, {:peek, modes}, timeout)
   def ack(channel, id, timeout \\ 5_000), do: GenServer.call(channel, {:ack, id}, timeout)
   def list(channel), do: GenServer.call(channel, :list)
+
+  @doc "Atomically consume the oldest entry while no runner owns the channel."
+  def take(channel), do: GenServer.call(channel, :take)
 
   @impl true
   def init(opts) do
@@ -100,6 +103,13 @@ defmodule Alto.Input do
   end
 
   def handle_call({:ack, _}, _, state), do: {:reply, {:error, :not_input_owner}, state}
+
+  def handle_call(:take, _from, %{owner: nil, entries: [entry | rest]} = state),
+    do:
+      {:reply, {:ok, entry}, %{state | entries: rest, bytes: state.bytes - byte_size(entry.text)}}
+
+  def handle_call(:take, _from, %{owner: nil} = state), do: {:reply, :empty, state}
+  def handle_call(:take, _from, state), do: {:reply, {:error, :input_in_use}, state}
 
   def handle_call(:list, _from, state), do: {:reply, state.entries, state}
 

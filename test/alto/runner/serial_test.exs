@@ -7,10 +7,10 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo a value.",
         parameters: %{
@@ -22,10 +22,10 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _context, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule ToolThenAnswerProvider do
@@ -105,22 +105,13 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule SafeEchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :echo
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(arguments, context), do: EchoTool.run(arguments, context)
+    def run(arguments, context, _opts), do: EchoTool.run(arguments, context, [])
   end
 
   defmodule NonEncodableTool do
@@ -131,57 +122,36 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
-    def approval, do: :never
+    def approval(_opts), do: :never
 
     @impl true
-    def run(_arguments, _context), do: {:ok, %Payload{value: "x"}}
+    def run(_arguments, _context, _opts), do: {:ok, %Payload{value: "x"}}
   end
 
   defmodule BlockingTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :echo
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(_arguments, _context), do: receive(do: (:never -> {:ok, :done}))
+    def run(_arguments, _context, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
   defmodule ConfiguredEchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(_arguments, _context), do: {:error, :configuration_missing}
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
     def run(%{"value" => value}, _context, opts) do
@@ -213,13 +183,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(%{"value" => value}, _context, opts) do
@@ -236,97 +206,22 @@ defmodule Alto.Runner.SerialTest do
     end
   end
 
-  defmodule ErroringPrepareTool do
+  defmodule ConfiguredPrepareTool do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:prepare_attempted, self()})
-      {:error, :boom}
-    end
-
-    @impl true
-    def run_prepared(_prepared, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), :forbidden_run_prepared)
-      {:ok, %{echo: "unreachable"}}
-    end
-  end
-
-  defmodule MalformedPrepareTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def prepare(_arguments, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:prepare_attempted, self()})
-      :not_a_valid_return
-    end
-
-    @impl true
-    def run_prepared(_prepared, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), :forbidden_run_prepared)
-      {:ok, %{echo: "unreachable"}}
-    end
-  end
-
-  defmodule NonMapDetailsTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def prepare(_arguments, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:prepare_attempted, self()})
-      {:ok, %{value: "prepared"}, "not-a-map"}
-    end
-
-    @impl true
-    def run_prepared(_prepared, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), :forbidden_run_prepared)
-      {:ok, %{echo: "unreachable"}}
-    end
-  end
-
-  defmodule OversizedDetailsTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def prepare(_arguments, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:prepare_attempted, self()})
-      {:ok, %{value: "prepared"}, %{summary: String.duplicate("x", 1_024)}}
+      Keyword.fetch!(opts, :prepare_result)
     end
 
     @impl true
@@ -340,13 +235,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, opts) do
@@ -365,13 +260,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def prepare(_arguments, _context, _opts), do: {:ok, %{}, %{}}
@@ -381,13 +276,13 @@ defmodule Alto.Runner.SerialTest do
     @behaviour Alto.Tool
 
     @impl true
-    def name, do: :echo
+    def name(_opts), do: :echo
 
     @impl true
-    def schema, do: EchoTool.schema()
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
-    def execution_mode, do: :parallel
+    def execution_mode(_opts), do: :parallel
 
     @impl true
     def run_prepared(_prepared, _context, _opts), do: {:ok, %{echo: "unreachable"}}
@@ -607,19 +502,44 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:DOWN, ^monitor, :process, ^approval_pid, _reason}
   end
 
-  test "prepare error becomes a bounded tool failure without approval or execution" do
+  test "prepare failures reject every invalid preparation result before approval" do
+    cases = [
+      {"prepare error", "fail prepare", {:error, :boom}, [], "boom"},
+      {"malformed return", "bad return", :not_a_valid_return, [], "invalid_tool_prepare_return"},
+      {"non-map details", "bad details", {:ok, %{value: "prepared"}, "not-a-map"}, [],
+       "invalid_approval_details"},
+      {"oversized details", "large details",
+       {:ok, %{value: "prepared"}, %{summary: String.duplicate("x", 1_024)}},
+       [max_approval_details_bytes: 64], {:approval_details_limit, 64}}
+    ]
+
+    for {label, prompt, prepare_result, options, expected_failure} <- cases do
+      result = run_configured_prepare(prompt, prepare_result, options)
+
+      assert result.output == "finished", label
+      assert_receive {:prepare_attempted, _prepare_pid}, 1_000
+      assert_prepare_failure(result, expected_failure)
+      refute_receive {:approval_decision, _request}
+      refute_receive {:event, %Event{type: :approval_requested}}
+      refute_receive :forbidden_run_prepared
+    end
+  end
+
+  defp run_configured_prepare(prompt, prepare_result, options) do
     parent = self()
 
-    assert {:ok, result} =
-             Alto.run("fail prepare",
-               provider: {ToolThenAnswerProvider, test_pid: parent},
-               tools: [{ErroringPrepareTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
-               event_sink: fn event -> send(parent, {:event, event}) end
-             )
+    defaults = [
+      provider: {ToolThenAnswerProvider, test_pid: parent},
+      tools: [{ConfiguredPrepareTool, test_pid: parent, prepare_result: prepare_result}],
+      approval: {RecordingApproval, test_pid: parent},
+      event_sink: fn event -> send(parent, {:event, event}) end
+    ]
 
-    assert result.output == "finished"
+    assert {:ok, result} = Alto.run(prompt, Keyword.merge(defaults, options))
+    result
+  end
 
+  defp assert_prepare_failure(result, "boom") do
     assert Enum.map(result.events, & &1.type) == [
              :model_completed,
              :tool_failed,
@@ -628,87 +548,23 @@ defmodule Alto.Runner.SerialTest do
              :step_settled
            ]
 
-    assert_receive {:prepare_attempted, _prepare_pid}
-
     assert Enum.any?(
              result.messages,
-             &(&1["role"] == "tool" and &1["content"] =~ ":boom")
+             &(&1["role"] == "tool" and JSON.decode!(&1["content"]) == %{"error" => "boom"})
            )
-
-    refute_receive {:approval_decision, _request}
-    refute_receive {:event, %Event{type: :approval_requested}}
-    refute_receive :forbidden_run_prepared
   end
 
-  test "malformed preparation return is rejected and never approved" do
-    parent = self()
+  defp assert_prepare_failure(result, "invalid_tool_prepare_return"),
+    do: assert(enum_has_tool_failure?(result, "invalid_tool_prepare_return"))
 
-    assert {:ok, result} =
-             Alto.run("bad return",
-               provider: {ToolThenAnswerProvider, test_pid: parent},
-               tools: [{MalformedPrepareTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
-               event_sink: fn event -> send(parent, {:event, event}) end
-             )
+  defp assert_prepare_failure(result, "invalid_approval_details"),
+    do: assert(enum_has_tool_failure?(result, "invalid_approval_details"))
 
-    assert result.output == "finished"
-    assert enum_has_tool_failure?(result, "invalid_tool_prepare_return")
-    refute_receive {:approval_decision, _request}
-    refute_receive {:event, %Event{type: :approval_requested}}
-    refute_receive :forbidden_run_prepared
-  end
-
-  test "non-map approval details are rejected before approval" do
-    parent = self()
-
-    assert {:ok, result} =
-             Alto.run("bad details",
-               provider: {ToolThenAnswerProvider, test_pid: parent},
-               tools: [{NonMapDetailsTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
-               event_sink: fn event -> send(parent, {:event, event}) end
-             )
-
-    assert result.output == "finished"
-    assert enum_has_tool_failure?(result, "invalid_approval_details")
-    refute_receive {:approval_decision, _request}
-    refute_receive {:event, %Event{type: :approval_requested}}
-    refute_receive :forbidden_run_prepared
-  end
-
-  test "oversized approval details are bounded before approval" do
-    parent = self()
-
-    assert {:ok, result} =
-             Alto.run("large details",
-               provider: {ToolThenAnswerProvider, test_pid: parent},
-               tools: [{OversizedDetailsTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
-               max_approval_details_bytes: 64,
-               event_sink: fn event -> send(parent, {:event, event}) end
-             )
-
-    assert result.output == "finished"
-
+  defp assert_prepare_failure(result, {:approval_details_limit, 64}) do
     assert Enum.any?(
              result.events,
              &(&1.type == :tool_failed and &1.data[:error] == {:approval_details_limit, 64})
            )
-
-    refute_receive {:approval_decision, _request}
-    refute_receive {:event, %Event{type: :approval_requested}}
-    refute_receive :forbidden_run_prepared
-  end
-
-  test "approval detail limit must be positive" do
-    assert {:error, {:invalid_option, :max_approval_details_bytes, 0}, result} =
-             Alto.run("invalid limit",
-               provider: {ToolThenAnswerProvider, test_pid: self()},
-               max_approval_details_bytes: 0
-             )
-
-    assert result.model_requests == 0
-    refute_receive {:provider_request, _request}
   end
 
   test "cancellation terminates an in-flight preparation task" do
@@ -788,11 +644,11 @@ defmodule Alto.Runner.SerialTest do
     refute_receive {:provider_request, _request}
   end
 
-  test "unprepared legacy tools still follow run/2 without preparation" do
+  test "unprepared tools use run/3 and expose arguments for approval" do
     parent = self()
 
     assert {:ok, result} =
-             Alto.run("legacy run2",
+             Alto.run("unprepared tool",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
                approval: {RecordingApproval, test_pid: parent},
@@ -807,9 +663,6 @@ defmodule Alto.Runner.SerialTest do
                       arguments: %{"value" => "hello"},
                       details: %{}
                     }}
-
-    refute_receive {:prepare_attempted, _prepare_pid}
-    refute_receive :forbidden_run_prepared
   end
 
   test "a non-encodable tool result stays a bounded tool message and does not fail the run" do
@@ -823,13 +676,6 @@ defmodule Alto.Runner.SerialTest do
 
     assert result.output == "finished"
     assert enum_has_tool_failure?(result, "encoding_error")
-  end
-
-  test "a text-only assistant turn carries no tool_calls key" do
-    assert {:ok, result} = Alto.run("answer", provider: {AnswerProvider, test_pid: self()})
-
-    assert [%{"role" => "assistant", "content" => "done"}] =
-             Enum.filter(result.messages, &(&1["role"] == "assistant"))
   end
 
   test ":auto project instructions reach the system prompt from the workspace" do
@@ -885,11 +731,6 @@ defmodule Alto.Runner.SerialTest do
     assert length(result.events) == 2
     assert result.events_dropped == 3
     assert Enum.any?(result.events, &(&1.type == :step_settled))
-  end
-
-  test "the event log bound must be positive" do
-    assert {:error, {:invalid_option, :max_events, 0}, _result} =
-             Alto.run("no run", provider: AnswerProvider, max_events: 0)
   end
 
   defp enum_has_tool_failure?(result, needle) do

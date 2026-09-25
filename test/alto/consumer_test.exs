@@ -14,6 +14,8 @@ defmodule Alto.ConsumerTest do
   alias Alto.OperationLog
   alias Alto.Queue
 
+  defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
+
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-consumer-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -53,18 +55,13 @@ defmodule Alto.ConsumerTest do
     assert {:decided, :completed, _} = OperationLog.status(l, "src:del-1")
   end
 
-  test "retry releases with a counted attempt, then completes", %{queue: q, ledger: l} do
+  test "retry releases and advances the handler attempt number", %{queue: q, ledger: l} do
     {:ok, _} = Queue.admit(q, "src:del-1", %{})
     test_pid = self()
 
-    handler = fn _payload, _ctx ->
-      send(test_pid, :ran)
-
-      receive do
-        :allow_done -> :done
-      after
-        0 -> {:retry, :downstream_busy}
-      end
+    handler = fn _payload, ctx ->
+      send(test_pid, {:ran, ctx.attempt})
+      {:retry, :downstream_busy}
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
@@ -72,10 +69,12 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:released]} = Consumer.poll(c)
     assert %{pending: 1, claimed: 0} = Queue.count(q)
     assert 1 = OperationLog.attempts(l, "src:del-1")
+    assert_received {:ran, 1}
 
     # Second poll retries under the same identity.
     assert {:handled, [:released]} = Consumer.poll(c)
     assert 2 = OperationLog.attempts(l, "src:del-1")
+    assert_received {:ran, 2}
   end
 
   test "attempts beyond the bound park for an operator", %{queue: q, ledger: l} do
@@ -94,24 +93,18 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:released]} = Consumer.poll(c)
     assert {:handled, [:parked]} = Consumer.poll(c)
 
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
     assert %{pending: 0, claimed: 0} = Queue.count(q)
     assert {:decided, :requires_operator, _} = OperationLog.status(l, "src:del-1")
   end
 
   test "unknown short-run outcomes park before any repeat", %{queue: q, ledger: l} do
     defmodule SleepyTool do
-      @behaviour Alto.Tool
+      use Alto.Tool, name: :sleepy, execution_mode: :exclusive, approval: :never
       @impl true
-      def name, do: :sleepy
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
       @impl true
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
-      @impl true
-      def execution_mode, do: :exclusive
-      @impl true
-      def approval, do: :never
-      @impl true
-      def run(_args, _ctx) do
+      def run(_args, _ctx, _opts) do
         Process.sleep(5_000)
         {:ok, :unreachable}
       end
@@ -145,9 +138,9 @@ defmodule Alto.ConsumerTest do
           tool_timeout: 50
         )
 
-      case Consumer.worst_outcome(result.events) do
+      case result.verdict do
         :unknown -> {:park, :unknown_tool_outcome}
-        :failed -> {:failed, :known}
+        class when class in [:failed_known, :rejected_before_dispatch] -> {:failed, :known}
         :completed -> :done
         :empty -> {:failed, :no_tools_ran}
       end
@@ -157,7 +150,7 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
 
     # Parked on first sight: the effect ran once, never twice.
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
     assert %{pending: 0, claimed: 0} = Queue.count(q)
   end
 
@@ -229,7 +222,7 @@ defmodule Alto.ConsumerTest do
     assert_received {:ran, claim_b}
     assert claim_a != claim_b
     assert %{pending: 0, claimed: 0} = Queue.count(q)
-    assert [] = OperationLog.list_open(l)
+    assert [] = entry_keys(OperationLog.entries(l, :open))
   end
 
   test "duplicate deliveries reach the consumer once", %{queue: q, ledger: l} do
@@ -357,7 +350,7 @@ defmodule Alto.ConsumerTest do
     test_pid = self()
 
     blocker = fn _payload, _ctx ->
-      send(test_pid, :work_started)
+      send(test_pid, {:work_started, self()})
       Process.sleep(5_000)
       :done
     end
@@ -372,12 +365,15 @@ defmodule Alto.ConsumerTest do
       )
 
     poller = spawn(fn -> Consumer.poll(c1) end)
-    assert_receive :work_started, 2_000
+    assert_receive {:work_started, handler}, 2_000
+    {:ok, %{current_attempt: first_attempt}} = OperationLog.recovery(l, "src:del-1")
+    monitor = Process.monitor(handler)
     # A true crash: unlike GenServer.stop/3 (which politely waits out the
     # in-flight call), :kill preempts it mid-dispatch.
     Process.unlink(c1)
     Process.exit(c1, :kill)
     Process.exit(poller, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^handler, _}, 2_000
 
     # The lease expires; the next owner finds dispatched-without-outcome
     # and parks instead of re-running.
@@ -385,7 +381,11 @@ defmodule Alto.ConsumerTest do
     c2 = start_consumer!(queue: qname, ledger: l, handler: done_handler(self()), by: "heir")
     assert {:handled, [:parked]} = Consumer.poll(c2)
 
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
+
+    assert {:ok, %{current_attempt: ^first_attempt, attempts: 1}} =
+             OperationLog.recovery(l, "src:del-1")
+
     refute_received :handled
   end
 
@@ -397,82 +397,32 @@ defmodule Alto.ConsumerTest do
 
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
-    assert ["src:del-1"] = OperationLog.list_parked(l)
+    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
   end
 
-  test "worst_outcome folds tool events" do
-    completed = %Alto.Event{
-      domain: :durable,
-      type: :tool_completed,
-      data: %{outcome: :completed},
-      at_ms: 0,
-      seq: nil
-    }
+  test "a timed-out handler is terminated before work is parked", %{queue: q, ledger: l} do
+    {:ok, _} = Queue.admit(q, "src:timeout", %{})
+    parent = self()
 
-    failed = %Alto.Event{
-      domain: :durable,
-      type: :tool_failed,
-      data: %{outcome: :failed_known},
-      at_ms: 0,
-      seq: nil
-    }
+    handler = fn _, _ ->
+      send(parent, {:handler, self()})
+      Process.sleep(:infinity)
+    end
 
-    unknown = %Alto.Event{
-      domain: :durable,
-      type: :tool_failed,
-      data: %{outcome: :unknown},
-      at_ms: 0,
-      seq: nil
-    }
+    consumer = start_consumer!(queue: q, ledger: l, handler: handler, handle_timeout: 50)
+    assert {:handled, [:parked]} = Consumer.poll(consumer)
+    assert_received {:handler, pid}
+    refute Process.alive?(pid)
+    assert Process.alive?(consumer)
 
-    other = %Alto.Event{domain: :durable, type: :step_settled, data: %{}, at_ms: 0, seq: nil}
-
-    assert :empty = Consumer.worst_outcome([])
-    assert :empty = Consumer.worst_outcome([other])
-    assert :completed = Consumer.worst_outcome([completed])
-    assert :failed = Consumer.worst_outcome([completed, failed])
-    assert :unknown = Consumer.worst_outcome([failed, unknown, completed])
-
-    cancelled =
-      %Alto.Event{
-        domain: :durable,
-        type: :run_cancelled,
-        data: %{in_flight: %{operation_id: "op", outcome: :unknown}},
-        at_ms: 0,
-        seq: nil
-      }
-
-    assert :unknown = Consumer.worst_outcome([completed, cancelled])
-  end
-
-  test "authoritative run verdict survives bounded event eviction" do
-    result = %Alto.Runner.Result{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
-      events_dropped: 20,
-      verdict: :unknown,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: nil,
-      run_id: "run-authoritative"
-    }
-
-    assert :unknown = Consumer.worst_outcome(result)
+    assert {:decided, :requires_operator, %{park_reason: :handler_timeout}} =
+             OperationLog.status(l, "src:timeout")
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do
     result = %Alto.Runner.Result{
-      output: nil,
-      loop_state: nil,
-      messages: [],
-      events: [],
       events_dropped: 50,
       verdict: :unknown,
-      model_requests: 0,
-      transcript_bytes: 0,
-      session_id: nil,
       run_id: "run-unknown"
     }
 

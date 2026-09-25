@@ -25,10 +25,8 @@ defmodule Alto.Workspaces do
     backend = Keyword.get(opts, :backend, Alto.Workspaces.Git)
     backend_options = Keyword.get(opts, :backend_options, [])
 
-    unless is_atom(backend) and Code.ensure_loaded?(backend) and
-             Enum.all?([snapshot: 2, checkout: 3, diff: 3], fn {f, a} ->
-               function_exported?(backend, f, a)
-             end) and Keyword.keyword?(backend_options),
+    unless Alto.Capabilities.implements?(backend, Alto.Workspaces.Backend) and
+             Keyword.keyword?(backend_options),
            do: raise(ArgumentError, "invalid workspace backend")
 
     %__MODULE__{
@@ -58,7 +56,7 @@ defmodule Alto.Workspaces do
     with {:ok, %Snapshot{source: source, metadata: metadata}} <- normalize_snapshot(snapshot),
          :ok <- valid_identity(identity),
          :ok <- separate_root(manager.root, source) do
-      id = workspace_id(manager, identity)
+      id = workspace_id(identity)
 
       workspace = %{
         "id" => id,
@@ -102,11 +100,11 @@ defmodule Alto.Workspaces do
 
   @doc "Hold the workspace lock throughout worker use; a crashed use remains dispatched."
   def use(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
-    do: use_at(manager, id, revision, fun, "ready")
+    do: use_at(manager, id, revision, fn _ -> {:ok, nil} end, fn ws, _ -> fun.(ws) end, "ready")
 
   @doc "Continue a suspended worker at the exact retained workspace revision."
   def resume(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
-    do: use_at(manager, id, revision, fun, "worked")
+    do: use_at(manager, id, revision, fn _ -> {:ok, nil} end, fn ws, _ -> fun.(ws) end, "worked")
 
   @doc """
   Validate and admit a continuation while holding its workspace lock, before
@@ -120,19 +118,6 @@ defmodule Alto.Workspaces do
   def resume(%__MODULE__{} = manager, id, revision, admit, execute)
       when is_function(admit, 1) and is_function(execute, 2),
       do: use_at(manager, id, revision, admit, execute, "worked")
-
-  defp use_at(manager, id, revision, fun, expected_status) do
-    use_at(
-      manager,
-      id,
-      revision,
-      fn _ -> {:ok, nil} end,
-      fn workspace, _ ->
-        fun.(workspace)
-      end,
-      expected_status
-    )
-  end
 
   defp use_at(manager, id, revision, admit, execute, expected_status) do
     locked(manager, id, fn ->
@@ -221,8 +206,9 @@ defmodule Alto.Workspaces do
          :ok <- integration_supported(manager),
          {:ok, _patch} <- patch(manager, id),
          {:ok, integration} <-
-           backend_prepare_apply(
+           backend_integration(
              manager,
+             :prepare_apply,
              info.workspace["source"],
              info.workspace["patch_path"],
              info.workspace["patch_sha256"]
@@ -270,8 +256,9 @@ defmodule Alto.Workspaces do
         target_locked(manager, info.workspace["source"], fn ->
           with {:ok, _} <- patch(manager, id),
                :ok <-
-                 backend_verify_apply(
+                 backend_integration(
                    manager,
+                   :verify_apply,
                    info.workspace["source"],
                    integration,
                    info.workspace["patch_path"]
@@ -301,11 +288,11 @@ defmodule Alto.Workspaces do
 
   defp apply_dispatched(manager, info, attempt, integration) do
     with {:ok, evidence} <-
-           backend_apply(
-             manager,
+           manager.backend.apply(
              info.workspace["source"],
              integration,
-             info.workspace["patch_path"]
+             info.workspace["patch_path"],
+             manager.backend_options
            ),
          {:ok, updated} <-
            checkpoint(
@@ -340,7 +327,7 @@ defmodule Alto.Workspaces do
              path <- Path.join(manager.root, id),
              :ok <- safe_path(path),
              {:ok, _} <- File.rm_rf(path),
-             :ok <- DurableLog.sync_directory(manager.root),
+             :ok <- Alto.AtomicFile.sync_directory(manager.root),
              :ok <-
                OperationLog.record_outcome(manager.ledger, id, attempt, :completed, %{
                  "status" => "discarded",
@@ -413,10 +400,7 @@ defmodule Alto.Workspaces do
          true <- info.workspace["cwd"] == Path.join([manager.root, id, "checkout"]),
          true <-
            not check_backend? or
-             info.workspace["backend_fingerprint"] in [
-               fingerprint(manager),
-               legacy_fingerprint(manager)
-             ],
+             info.workspace["backend_fingerprint"] == fingerprint(manager),
          :ok <- safe_path(info.workspace["cwd"]) do
       {:ok, info}
     else
@@ -467,19 +451,6 @@ defmodule Alto.Workspaces do
     end
   end
 
-  # Keep accepting persisted/raw provider snapshots while callers migrate to
-  # the explicit source/metadata wrapper. New providers should omit `source`
-  # from their metadata so the manager does not depend on provider fields.
-  defp normalize_snapshot(snapshot) when is_map(snapshot) do
-    with source when is_binary(source) <- snapshot["source"],
-         :ok <- json_map(snapshot),
-         :ok <- separate_root_for_snapshot(source) do
-      {:ok, %Snapshot{source: Path.expand(source), metadata: snapshot}}
-    else
-      _ -> {:error, :invalid_workspace_snapshot}
-    end
-  end
-
   defp normalize_snapshot(_), do: {:error, :invalid_workspace_snapshot}
 
   defp separate_root_for_snapshot(source) do
@@ -500,33 +471,12 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp backend_prepare_apply(manager, source, patch_path, patch_sha256) do
-    manager.backend.prepare_apply(
-      source,
-      patch_path,
-      patch_sha256,
-      manager.backend_options
-    )
+  defp backend_integration(manager, callback, source, input, binding) do
+    Kernel.apply(manager.backend, callback, [source, input, binding, manager.backend_options])
   rescue
     error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
   catch
     kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
-  end
-
-  defp backend_verify_apply(manager, source, integration, patch_path) do
-    manager.backend.verify_apply(source, integration, patch_path, manager.backend_options)
-  rescue
-    error -> {:error, {:workspace_integration_failed, Exception.message(error)}}
-  catch
-    kind, reason -> {:error, {:workspace_integration_failed, kind, reason}}
-  end
-
-  defp backend_apply(manager, source, integration, patch_path) do
-    manager.backend.apply(source, integration, patch_path, manager.backend_options)
-  rescue
-    error -> {:unknown, {:workspace_application_failed, Exception.message(error)}}
-  catch
-    kind, reason -> {:unknown, {:workspace_application_failed, kind, reason}}
   end
 
   @doc false
@@ -550,15 +500,9 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp valid_identity(%{root_run_id: root, path: path} = value) do
-    if map_size(value) == 2 and is_binary(root) and byte_size(root) in 1..256 and
-         String.valid?(root) and is_list(path) and length(path) <= 64 and
-         Enum.all?(path, &(is_binary(&1) and byte_size(&1) in 1..256 and String.valid?(&1))),
-       do: :ok,
-       else: {:error, :invalid_workspace_owner}
+  defp valid_identity(identity) do
+    if Alto.AgentIdentity.valid?(identity), do: :ok, else: {:error, :invalid_workspace_owner}
   end
-
-  defp valid_identity(_), do: {:error, :invalid_workspace_owner}
 
   defp valid_id(id) when is_binary(id) do
     if Regex.match?(~r/\Aws-[0-9a-f]{64}\z/, id), do: :ok, else: {:error, :invalid_workspace_id}
@@ -594,25 +538,10 @@ defmodule Alto.Workspaces do
         )
       )
 
-  defp legacy_fingerprint(manager),
-    do:
-      hash(
-        :erlang.term_to_binary(
-          {manager.backend, manager.backend.module_info(:md5), manager.backend_options}
-        )
-      )
-
   defp hash(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
 
-  defp workspace_id(manager, identity) do
-    current = "ws-" <> hash(:erlang.term_to_binary(identity, [:deterministic]))
-    legacy = "ws-" <> hash(:erlang.term_to_binary(identity))
-
-    case get(manager, legacy) do
-      {:ok, _} -> legacy
-      _ -> current
-    end
-  end
+  defp workspace_id(identity),
+    do: "ws-" <> hash(:erlang.term_to_binary(identity, [:deterministic]))
 
   defp attempt_id, do: "wa-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 end

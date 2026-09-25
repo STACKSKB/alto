@@ -12,18 +12,21 @@ defmodule Alto.Command do
   @spec prepare(map(), Context.t(), keyword()) :: {:ok, Prepared.t()} | {:error, term()}
   def prepare(arguments, %Context{} = context, opts \\ []) do
     with {:ok, {policy, policy_opts}} <-
-           opts |> Keyword.get(:policy, Unrestricted) |> normalize(:policy),
+           opts
+           |> Keyword.get(:policy, Unrestricted)
+           |> Alto.Capabilities.resolve(Alto.Command.Policy),
          {:ok, {executor, executor_opts}} <-
-           opts |> Keyword.get(:executor, Unsandboxed) |> normalize(:executor),
+           opts
+           |> Keyword.get(:executor, Unsandboxed)
+           |> Alto.Capabilities.resolve(Alto.Command.Executor),
          {:ok, invocation} <- prepare_invocation(policy, arguments, context, policy_opts),
          {:ok, execution, executor_details} <-
            prepare_execution(executor, invocation, executor_opts) do
       {:ok,
        %Prepared{
-         invocation: invocation,
          executor: executor,
          execution: execution,
-         approval_details: approval_details(invocation, executor_details)
+         approval_details: %{command: Map.from_struct(invocation), execution: executor_details}
        }}
     end
   end
@@ -47,20 +50,6 @@ defmodule Alto.Command do
     end
   end
 
-  defp approval_details(invocation, executor_details) do
-    %{
-      command: %{
-        requested_program: invocation.requested_program,
-        executable: invocation.executable,
-        args: invocation.args,
-        cwd: invocation.cwd,
-        timeout_ms: invocation.timeout_ms,
-        max_output_bytes: invocation.max_output_bytes
-      },
-      execution: executor_details
-    }
-  end
-
   defp prepare_invocation(policy, arguments, context, opts) do
     case policy.prepare(arguments, context, opts) do
       {:ok, %Invocation{} = invocation} -> {:ok, invocation}
@@ -76,34 +65,6 @@ defmodule Alto.Command do
       {:ok, _execution, details} -> {:error, {:invalid_executor_approval_details, details}}
       {:error, reason} -> {:error, reason}
       other -> {:error, {:invalid_command_executor_return, other}}
-    end
-  end
-
-  defp normalize({module, opts}, kind) when is_atom(module) and is_list(opts),
-    do: validate_component(module, opts, kind)
-
-  defp normalize(module, kind) when is_atom(module), do: validate_component(module, [], kind)
-  defp normalize(other, _kind), do: {:error, {:invalid_command_component, other}}
-
-  defp validate_component(module, opts, :policy) do
-    validate_callback(module, opts, :prepare, 3, :policy)
-  end
-
-  defp validate_component(module, opts, :executor) do
-    with {:ok, component} <- validate_callback(module, opts, :prepare, 2, :executor),
-         true <- function_exported?(module, :execute, 1) do
-      {:ok, component}
-    else
-      false -> {:error, {:invalid_command_component, :executor, module}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp validate_callback(module, opts, function, arity, kind) do
-    if Code.ensure_loaded?(module) and function_exported?(module, function, arity) do
-      {:ok, {module, opts}}
-    else
-      {:error, {:invalid_command_component, kind, module}}
     end
   end
 end

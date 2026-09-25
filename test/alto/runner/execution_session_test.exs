@@ -1,7 +1,6 @@
 defmodule Alto.Runner.Execution.SessionTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Event
   alias Alto.Runner.Execution.Session, as: ExecutionSession
   alias Alto.Runner.Result
   alias Alto.Session, as: DurableSession
@@ -15,14 +14,15 @@ defmodule Alto.Runner.Execution.SessionTest do
   end
 
   defp state(dir, id, opts \\ []) do
-    %ExecutionSession{
+    %{
       session: id,
-      session_id: "run-1",
+      tool_context: %{session_id: "run-1"},
       session_dir: dir,
       resume_snapshot: Keyword.get(opts, :resume_snapshot, true),
       checkpoint_resume: Keyword.get(opts, :checkpoint_resume, false),
       transcript_revision: Keyword.get(opts, :transcript_revision, 0),
-      agent_depth: Keyword.get(opts, :agent_depth, 0)
+      agent_depth: Keyword.get(opts, :agent_depth, 0),
+      max_conversation_bytes: 128_000_000
     }
   end
 
@@ -41,13 +41,11 @@ defmodule Alto.Runner.Execution.SessionTest do
     }
   end
 
-  test "persists durable events, transcript and completion", %{dir: dir} do
+  test "persists transcript and completion", %{dir: dir} do
     id = "sess-events"
     s = state(dir, id)
-    assert :ok = ExecutionSession.persist_event(s, Event.durable(:started, %{"ok" => true}))
     assert {:ok, %{persistence: :ok}} = ExecutionSession.persist_outcome(s, {:ok, result()})
     assert {:ok, records} = DurableSession.read(id, session_dir: dir)
-    assert Enum.count(records, &(&1["type"] == "event")) == 1
     assert Enum.count(records, &(&1["type"] == "completed")) == 1
     assert {:ok, transcript} = DurableSession.transcript(id, session_dir: dir)
     assert transcript.messages == [%{"role" => "user", "content" => "task"}]
@@ -67,15 +65,7 @@ defmodule Alto.Runner.Execution.SessionTest do
   end
 
   test "a run without a session preserves existing persistence degradation" do
-    s = %ExecutionSession{
-      session: nil,
-      session_id: "run-1",
-      session_dir: nil,
-      resume_snapshot: true,
-      checkpoint_resume: false,
-      transcript_revision: 0,
-      agent_depth: 0
-    }
+    s = %{session: nil}
 
     degraded = %{result() | persistence: {:degraded, [:journal_failed]}}
 

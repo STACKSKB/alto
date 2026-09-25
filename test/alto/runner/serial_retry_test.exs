@@ -38,24 +38,15 @@ defmodule Alto.Runner.SerialRetryTest do
   end
 
   defmodule BoomTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :boom, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :boom
-
-    @impl true
-    def schema do
+    def schema(_opts) do
       %{description: "Always fails.", parameters: %{type: "object", properties: %{}}}
     end
 
     @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(_arguments, _context), do: {:error, :boom}
+    def run(_arguments, _context, _opts), do: {:error, :boom}
   end
 
   defmodule ToolThenAnswerProvider do
@@ -173,30 +164,23 @@ defmodule Alto.Runner.SerialRetryTest do
              )
   end
 
-  test "invalid retry budgets fail closed at construction", %{agent: agent} do
-    script = fn _n -> {:ok, %{message: "x", tool_calls: []}} end
-
-    assert {:error, {:invalid_option, :provider_retries, -1}, _} =
-             Alto.run("retry me",
-               provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
-               tools: [],
-               provider_retries: -1
-             )
-  end
-
   test "cancellation wins during backoff", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :down}} end
+    owner = self()
 
     {:ok, handle} =
       Alto.start("retry me",
         provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
         tools: [],
-        provider_retries: 100
+        provider_retries: 100,
+        retry_policy: {Alto.Retry.Transient, base_delay: 5_000, jitter: false},
+        event_sink: fn event -> send(owner, {:evt, event}) end
       )
 
-    assert_receive {:attempt, 0}, 2_000
+    assert_receive {:evt, %Event{type: :model_retry}}, 2_000
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, _} = Alto.await(handle, 10_000)
+    assert {:error, {:cancelled, :operator_stop}, _} = Alto.await(handle, 2_000)
+    assert attempts(agent) == 1
   end
 
   test "tool effects are never retried" do

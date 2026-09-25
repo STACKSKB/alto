@@ -46,14 +46,7 @@ defmodule Alto.OpsProtocolTest do
   end
 
   defp run(line, registry, max_line_bytes \\ 1_048_576) do
-    Connection.run_command(
-      line,
-      registry,
-      fn out -> send(self(), {:line, out}) end,
-      max_line_bytes
-    )
-
-    assert_receive {:line, out}
+    [out] = Connection.command_lines(line, registry, max_line_bytes)
     JSON.decode!(IO.iodata_to_binary(out))
   end
 

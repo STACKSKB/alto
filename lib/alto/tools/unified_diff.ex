@@ -3,10 +3,12 @@ defmodule Alto.Tools.UnifiedDiff do
 
   @context_lines 3
 
-  @spec render(binary(), binary(), binary(), pos_integer()) :: %{
-          content: binary(),
-          truncated: boolean()
-        }
+  @doc "Return a bounded patch, or nil when disabled or the original content was not retained."
+  @spec render(binary(), binary() | nil, binary(), non_neg_integer()) ::
+          %{content: binary(), truncated: boolean()} | nil
+  def render(_path, nil, _updated, _limit), do: nil
+  def render(_path, _before, _updated, 0), do: nil
+
   def render(path, before, updated, limit)
       when is_binary(path) and is_binary(before) and is_binary(updated) and is_integer(limit) and
              limit > 0 do
@@ -20,7 +22,8 @@ defmodule Alto.Tools.UnifiedDiff do
           [hunk_header(hunk) | Enum.map(hunk, &format_record/1)]
         end)
 
-    bound(chunks, limit)
+    {content, truncated?} = take_chunks(chunks, limit, [])
+    %{content: content, truncated: truncated?}
   end
 
   defp split_lines(""), do: []
@@ -43,33 +46,20 @@ defmodule Alto.Tools.UnifiedDiff do
   defp records(before, updated) do
     before
     |> List.myers_difference(updated)
-    |> Enum.reduce({[], 1, 1}, fn {kind, lines}, {records, old_line, new_line} ->
-      {added, old_line, new_line} = tag_lines(kind, lines, old_line, new_line, [])
-      {added ++ records, old_line, new_line}
+    |> Enum.reduce({[], 1, 1}, fn {kind, lines}, acc ->
+      {tag, old_step, new_step} =
+        case kind do
+          :eq -> {:context, 1, 1}
+          :del -> {:delete, 1, 0}
+          :ins -> {:insert, 0, 1}
+        end
+
+      Enum.reduce(lines, acc, fn line, {records, old_line, new_line} ->
+        {[{tag, line, old_line, new_line} | records], old_line + old_step, new_line + new_step}
+      end)
     end)
     |> elem(0)
     |> Enum.reverse()
-  end
-
-  defp tag_lines(_kind, [], old_line, new_line, records),
-    do: {records, old_line, new_line}
-
-  defp tag_lines(:eq, [line | rest], old_line, new_line, records) do
-    tag_lines(:eq, rest, old_line + 1, new_line + 1, [
-      {:context, line, old_line, new_line} | records
-    ])
-  end
-
-  defp tag_lines(:del, [line | rest], old_line, new_line, records) do
-    tag_lines(:del, rest, old_line + 1, new_line, [
-      {:delete, line, old_line, new_line} | records
-    ])
-  end
-
-  defp tag_lines(:ins, [line | rest], old_line, new_line, records) do
-    tag_lines(:ins, rest, old_line, new_line + 1, [
-      {:insert, line, old_line, new_line} | records
-    ])
   end
 
   defp hunk_ranges(records) do
@@ -138,30 +128,23 @@ defmodule Alto.Tools.UnifiedDiff do
       else: [prefix, line, "\n\\ No newline at end of file\n"]
   end
 
-  defp bound(chunks, limit) do
-    {content, truncated?} = take_chunks(chunks, limit, [], false)
-    %{content: content, truncated: truncated?}
-  end
+  defp take_chunks([], _remaining, acc),
+    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
 
-  defp take_chunks([], _remaining, acc, truncated?),
-    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), truncated?}
-
-  defp take_chunks(_chunks, 0, acc, _truncated?),
+  defp take_chunks(_chunks, 0, acc),
     do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), true}
 
-  defp take_chunks([chunk | rest], remaining, acc, truncated?) when is_list(chunk),
-    do: take_chunks(chunk ++ rest, remaining, acc, truncated?)
+  defp take_chunks([chunk | rest], remaining, acc) when is_list(chunk),
+    do: take_chunks(chunk ++ rest, remaining, acc)
 
-  defp take_chunks([chunk | rest], remaining, acc, truncated?) do
+  defp take_chunks([chunk | rest], remaining, acc) do
     size = byte_size(chunk)
 
     if size <= remaining do
-      take_chunks(rest, remaining - size, [chunk | acc], truncated?)
+      take_chunks(rest, remaining - size, [chunk | acc])
     else
-      prefix = utf8_prefix(chunk, remaining)
+      prefix = Alto.Text.prefix(chunk, remaining)
       {Enum.reverse([prefix | acc]) |> IO.iodata_to_binary(), true}
     end
   end
-
-  defp utf8_prefix(content, limit), do: Alto.Text.prefix(content, limit)
 end

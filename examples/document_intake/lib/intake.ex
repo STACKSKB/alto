@@ -166,16 +166,16 @@ defmodule DocumentIntake do
                json <- JSON.encode!(Map.put(record, "schema_version", @schema_version)),
                csv <- csv(record, version),
                :ok <-
-                 Alto.Tools.AtomicWrite.write(
+                 Alto.AtomicFile.write(
                    Path.join(temporary_dir, "document.json"),
                    json <> "\n",
-                   0o600
+                   mode: 0o600
                  ),
                :ok <-
-                 Alto.Tools.AtomicWrite.write(
+                 Alto.AtomicFile.write(
                    Path.join(temporary_dir, "document.csv"),
                    csv,
-                   0o600
+                   mode: 0o600
                  ),
                :ok <- publish_hook(opts, temporary_dir, final_dir),
                :ok <- File.rename(temporary_dir, final_dir) do
@@ -279,36 +279,12 @@ defmodule DocumentIntake do
   end
 
   defp configured_provider(opts) do
-    case Keyword.get(opts, :provider) do
-      {module, provider_opts} = provider when is_atom(module) and is_list(provider_opts) ->
-        provider
+    case Keyword.get(opts, :config) do
+      %Alto.Config{} = config ->
+        Keyword.get(opts, :provider) || Keyword.get(Alto.Config.run_options(config), :provider)
 
-      module when is_atom(module) and not is_nil(module) ->
-        {module, Keyword.get(opts, :provider_options, [])}
-
-      nil ->
-        case Keyword.get(opts, :config) do
-          %Alto.Config{} = config ->
-            config_opts = Alto.Config.run_options(config)
-
-            case Keyword.get(config_opts, :provider) do
-              nil ->
-                nil
-
-              {module, provider_opts} = provider
-              when is_atom(module) and is_list(provider_opts) ->
-                provider
-
-              provider when is_atom(provider) ->
-                {provider, Keyword.get(config_opts, :provider_options, [])}
-            end
-
-          _ ->
-            nil
-        end
-
-      provider ->
-        provider
+      _ ->
+        Keyword.get(opts, :provider)
     end
   end
 
@@ -460,7 +436,7 @@ defmodule DocumentIntake do
   defp candidate_path(dir, identity), do: Path.join(dir, ".document-#{identity}.candidate.json")
 
   defp write_private_json(path, record) do
-    Alto.Tools.AtomicWrite.write(path, JSON.encode!(record) <> "\n", 0o600)
+    Alto.AtomicFile.write(path, JSON.encode!(record) <> "\n", mode: 0o600)
   end
 
   defp bounded_read(path, max) do

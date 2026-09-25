@@ -8,7 +8,9 @@ defmodule Alto.Tools.Ripwire do
   surface out of every model prompt.
   """
 
-  @behaviour Alto.Tool
+  # Every exposed action is analytical. Ripwire may maintain its own index or
+  # cache, but it receives no edit verb through this adapter.
+  use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never
 
   alias Alto.Command
   alias Alto.Command.Invocation
@@ -17,43 +19,24 @@ defmodule Alto.Tools.Ripwire do
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
 
   @impl true
-  def name, do: :ripwire
-
-  @impl true
-  def schema do
-    %{
-      description:
-        "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          action: %{type: "string", enum: @actions},
-          query: %{
-            type: "string",
-            description:
-              "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
-          },
-          top_k: %{type: "integer", minimum: 1, maximum: 100}
+  def schema(_opts \\ []) do
+    Alto.Tool.object_schema(
+      "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
+      %{
+        action: %{type: "string", enum: @actions},
+        query: %{
+          type: "string",
+          description:
+            "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
         },
-        required: ["action"],
-        additionalProperties: false
-      }
-    }
+        top_k: %{type: "integer", minimum: 1, maximum: 100}
+      },
+      ["action"]
+    )
   end
 
   @impl true
-  def execution_mode, do: :parallel
-
-  # Every exposed action is analytical. Ripwire may maintain its own index or
-  # cache, but it receives no edit verb through this adapter.
-  @impl true
-  def approval, do: :never
-
-  @impl true
-  def run(arguments, %Context{} = context), do: run(arguments, context, [])
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     action = Map.get(arguments, "action")
 
     with {:ok, args} <- build_args(arguments),

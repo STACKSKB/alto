@@ -27,6 +27,26 @@ defmodule Alto.QueueCompactionTest do
     end
   end
 
+  test "ordinary replay matches live transitions, including exact owners and the injected clock",
+       c do
+    q = start_supervised!({Queue, c.opts})
+    assert {:ok, _} = Queue.put(q, "update", %{v: 1})
+    assert {:ok, _} = Queue.put(q, "update", %{v: 2}, delay_ms: 50)
+    assert {:ok, _} = Queue.admit(q, "claimed", %{v: {:native, :term}})
+    assert {:ok, [claim]} = Queue.claim(q, 1, %{owner: {:worker, 1}})
+    assert :ok = Queue.release(q, claim.claim_id)
+    assert {:ok, [_]} = Queue.claim(q, 1, %{owner: {:worker, 2}})
+    churn(q, 1..3)
+    assert {:ok, _} = Queue.restore(q, "operation", "generation", %{v: 3})
+    before = Queue.snapshot(q)
+    assert Enum.all?(before, &(&1.at_ms == 1_000))
+    stop_supervised!(Queue)
+
+    q = start_supervised!({Queue, c.opts})
+    assert Queue.snapshot(q) == before
+    assert {:error, :duplicate} = Queue.admit(q, "del-3", %{})
+  end
+
   test "compact and restart preserve all live fields and retained delivery identities", c do
     q = start_supervised!({Queue, c.opts})
     churn(q, 1..20)
@@ -64,7 +84,7 @@ defmodule Alto.QueueCompactionTest do
     churn(q, 1..100)
     assert File.stat!(c.path).size <= 4_000
     [header | _] = c.path |> File.read!() |> String.split("\n", trim: true)
-    assert %{"v" => 3, "type" => "retained_state"} = JSON.decode!(header)
+    assert %{"v" => 6, "type" => "retained_state"} = JSON.decode!(header)
     assert {:ok, ^claimed} = Queue.lookup(q, "live")
     stop_supervised!(Queue)
     q = start_supervised!({Queue, opts})
@@ -91,7 +111,10 @@ defmodule Alto.QueueCompactionTest do
     assert {:ok, _} = Queue.admit(q, "first", %{})
     assert :ok = Queue.cancel_pending(q, "first")
     bytes = File.read!(c.path)
-    assert {:error, {:queue_log_too_large, _, 500}} = Queue.admit(q, "second", %{})
+
+    assert {:error, {:queue_log_too_large, _, 500}} =
+             Queue.admit(q, "second", %{payload: String.duplicate("x", 500)})
+
     assert File.read!(c.path) == bytes
     assert {:error, :duplicate} = Queue.admit(q, "first", %{})
   end

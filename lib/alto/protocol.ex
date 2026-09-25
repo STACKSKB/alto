@@ -24,6 +24,51 @@ defmodule Alto.Protocol do
   @version 1
   @max_inspect_bytes 1_000
   @domains ~w(durable live)
+  @unsupported_fields %{"start_run" => ["overrides"], "session_transcript" => ["limit", "cursor"]}
+  @command_specs %{
+    "runs" => {:runs, []},
+    "sessions" => {:sessions, []},
+    "start_run" =>
+      {:start_run,
+       [
+         {:required, "config", :binary},
+         {:required, "task", :binary},
+         {:optional, "resume", :binary, nil}
+       ]},
+    "session_transcript" => {:session_transcript, [{:required, "session_id", :binary}]},
+    "approval_response" =>
+      {:approval_response,
+       [{:required, "request_id", :binary}, {:required, "decision", :decision}]},
+    "command" => {:command, [{:required, "name", :binary}, {:required, "payload", :map}]},
+    "attach" =>
+      {:attach,
+       [
+         {:optional, "run_id", :binary, nil},
+         {:optional, "from_seq", {:integer, 1}, 1},
+         {:optional, "domains", :domains, [:durable, :live]}
+       ]},
+    "session_events" =>
+      {:session_events,
+       [
+         {:required, "session_id", :binary},
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "run_id", :binary, nil}
+       ]},
+    "cancel" => {:cancel, [{:required, "run_id", :binary}, {:optional, "reason", :binary, nil}]},
+    "queue_claim" =>
+      {:queue_claim, [{:optional, "count", {:integer, 1}, 1}, {:optional, "by", :binary, nil}]},
+    "queue_ack" => {:queue_ack, [{:required, "claim_id", :binary}]},
+    "queue_release" => {:queue_release, [{:required, "claim_id", :binary}]},
+    "ops_list" =>
+      {:ops_list,
+       [
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "filter", :filter, nil}
+       ]},
+    "reload" => {:reload, [{:required, "config", :binary}]}
+  }
 
   @type command ::
           {:attach, String.t(), String.t() | nil, pos_integer(), [atom()]}
@@ -90,19 +135,7 @@ defmodule Alto.Protocol do
 
   defp bounded_inspect(term) do
     inspect(term, pretty: false, limit: 50, printable_limit: @max_inspect_bytes)
-    |> trim_valid(@max_inspect_bytes)
-  end
-
-  defp trim_valid(binary, max) when byte_size(binary) <= max, do: binary
-
-  defp trim_valid(binary, max) do
-    kept = binary_part(binary, 0, max)
-
-    if String.valid?(kept) do
-      kept <> "…"
-    else
-      trim_valid(binary_part(kept, 0, byte_size(kept) - 1), max)
-    end
+    |> Alto.Text.truncate(@max_inspect_bytes, "…")
   end
 
   ## Server → client encoding
@@ -119,15 +152,8 @@ defmodule Alto.Protocol do
           {:ok, iodata()} | {:error, :overflow}
   def event(id, run_id, seq, %Event{} = event, max_line_bytes) do
     encode(
-      %{
-        "type" => "event",
-        "id" => id,
-        "run_id" => run_id,
-        "seq" => seq,
-        "domain" => Atom.to_string(event.domain),
-        "at_ms" => event.at_ms,
-        "event" => %{"type" => Atom.to_string(event.type), "data" => encode_term(event.data)}
-      },
+      event_object(seq, event)
+      |> Map.merge(%{"type" => "event", "id" => id, "run_id" => run_id}),
       max_line_bytes
     )
   end
@@ -164,7 +190,7 @@ defmodule Alto.Protocol do
         "type" => "approval_request",
         "id" => id,
         "run_id" => run_id,
-        "request" => request_object(request)
+        "request" => encode_term(request)
       },
       max_line_bytes
     )
@@ -178,7 +204,7 @@ defmodule Alto.Protocol do
         "type" => "approval_resolved",
         "id" => id,
         "run_id" => run_id,
-        "request" => request_object(request),
+        "request" => encode_term(request),
         "decision" => encode_term(decision)
       },
       max_line_bytes
@@ -252,19 +278,6 @@ defmodule Alto.Protocol do
     }
   end
 
-  defp request_object(%ApprovalRequest{} = request) do
-    %{
-      "id" => request.id,
-      "run_id" => request.run_id,
-      "call_id" => request.call_id,
-      "operation_id" => request.operation_id,
-      "tool" => request.tool,
-      "arguments" => encode_term(request.arguments),
-      "execution_mode" => Atom.to_string(request.execution_mode),
-      "details" => encode_term(request.details)
-    }
-  end
-
   defp encode(payload, max_line_bytes) do
     line = [JSON.encode!(Map.put(payload, "v", @version)), "\n"]
 
@@ -306,194 +319,64 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object("attach", id, object) do
-    with {:ok, run_id} <- optional_binary(object, "run_id"),
-         {:ok, from_seq} <- optional_positive_integer(object, "from_seq"),
-         {:ok, domains} <- optional_domains(object, "domains") do
-      {:ok, {:attach, id, run_id, from_seq, domains}}
-    end
-  end
-
-  defp decode_object("start_run", id, object) do
-    if Map.has_key?(object, "overrides") do
-      {:error, :unsupported}
-    else
-      with {:ok, config} <- required_binary(object, "config"),
-           {:ok, task} <- required_binary(object, "task"),
-           {:ok, resume} <- optional_binary(object, "resume") do
-        {:ok, {:start_run, id, config, task, resume}}
-      end
-    end
-  end
-
-  defp decode_object("runs", id, _object), do: {:ok, {:runs, id}}
-
-  defp decode_object("sessions", id, _object) do
-    {:ok, {:sessions, id}}
-  end
-
-  defp decode_object("session_transcript", id, object) do
-    with {:ok, session_id} <- required_binary(object, "session_id"),
-         :ok <-
-           if(Map.has_key?(object, "limit") or Map.has_key?(object, "cursor"),
-             do: {:error, :unsupported},
-             else: :ok
-           ) do
-      {:ok, {:session_transcript, id, session_id}}
-    end
-  end
-
-  defp decode_object("session_events", id, object) do
-    with {:ok, session_id} <- required_binary(object, "session_id"),
-         {:ok, limit} <- optional_ops_limit(object, "limit"),
-         {:ok, cursor} <- optional_non_negative_integer(object, "cursor"),
-         {:ok, run_id} <- optional_binary(object, "run_id") do
-      {:ok, {:session_events, id, session_id, limit, cursor, run_id}}
-    end
-  end
-
-  defp decode_object("cancel", id, object) do
-    with {:ok, run_id} <- required_binary(object, "run_id"),
-         {:ok, reason} <- optional_binary(object, "reason") do
-      {:ok, {:cancel, id, run_id, reason}}
-    end
-  end
-
-  defp decode_object("approval_response", id, object) do
-    with {:ok, request_id} <- required_binary(object, "request_id"),
-         {:ok, decision} <- decision(object, "decision") do
-      {:ok, {:approval_response, id, request_id, decision}}
-    end
-  end
-
-  defp decode_object("queue_claim", id, object) do
-    with {:ok, count} <- optional_positive_integer(object, "count"),
-         {:ok, by} <- optional_binary(object, "by") do
-      {:ok, {:queue_claim, id, count, by}}
-    end
-  end
-
-  defp decode_object("queue_ack", id, object) do
-    with {:ok, claim_id} <- required_binary(object, "claim_id") do
-      {:ok, {:queue_ack, id, claim_id}}
-    end
-  end
-
-  defp decode_object("queue_release", id, object) do
-    with {:ok, claim_id} <- required_binary(object, "claim_id") do
-      {:ok, {:queue_release, id, claim_id}}
-    end
-  end
-
-  defp decode_object("ops_list", id, object) do
-    with {:ok, limit} <- optional_ops_limit(object, "limit"),
-         {:ok, cursor} <- optional_non_negative_integer(object, "cursor"),
-         {:ok, filter} <- optional_filter(object, "filter") do
-      {:ok, {:ops_list, id, limit, cursor, filter}}
-    end
-  end
-
-  defp decode_object("reload", id, object) do
-    with {:ok, config} <- required_binary(object, "config") do
-      {:ok, {:reload, id, config}}
-    end
-  end
-
   defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, object}}
 
   defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, object}}
 
-  defp decode_object("command", id, object) do
-    with {:ok, name} <- required_binary(object, "name"),
-         payload when is_map(payload) <- Map.get(object, "payload") do
-      {:ok, {:command, id, name, payload}}
-    else
-      _ -> {:error, :invalid}
-    end
-  end
-
-  defp decode_object(_type, id, _object), do: {:error, {:unknown_type, id}}
-
-  defp required_binary(object, key) do
-    case Map.get(object, key) do
-      value when is_binary(value) and value != "" -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_binary(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, nil}
-      value when is_binary(value) -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_positive_integer(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, 1}
-      value when is_integer(value) and value >= 1 -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_non_negative_integer(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, 0}
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_ops_limit(object, key) do
-    case Map.get(object, key) do
-      nil -> {:ok, 20}
-      value when is_integer(value) and value >= 1 -> {:ok, value}
-      _other -> {:error, :invalid}
-    end
-  end
-
-  defp optional_filter(object, key) do
-    case Map.get(object, key) do
-      nil ->
-        {:ok, nil}
-
-      value
-      when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"] ->
-        {:ok, value}
-
-      _other ->
-        {:error, :invalid}
-    end
-  end
-
-  defp optional_domains(object, key) do
-    case Map.get(object, key) do
-      nil ->
-        {:ok, [:durable, :live]}
-
-      domains when is_list(domains) ->
-        if domains != [] and Enum.all?(domains, &(&1 in @domains)) do
-          {:ok, Enum.map(domains, &String.to_existing_atom/1)}
+  defp decode_object(type, id, object) do
+    case @command_specs do
+      %{^type => {command, fields}} ->
+        if Enum.any?(Map.get(@unsupported_fields, type, []), &Map.has_key?(object, &1)) do
+          {:error, :unsupported}
         else
-          {:error, :invalid}
+          with {:ok, values} <- Alto.Result.traverse(fields, &decode_field(object, &1)),
+               do: {:ok, List.to_tuple([command, id | values])}
         end
 
-      _other ->
-        {:error, :invalid}
+      _ ->
+        {:error, {:unknown_type, id}}
     end
   end
 
-  defp decision(object, key) do
+  defp decode_field(object, {:required, key, :binary}),
+    do: validate_field(Map.get(object, key), :nonempty_binary)
+
+  defp decode_field(object, {:required, key, type}),
+    do: validate_field(Map.get(object, key), type)
+
+  defp decode_field(object, {:optional, key, type, default}) do
     case Map.get(object, key) do
-      "approve" ->
-        {:ok, :approve}
-
-      %{"deny" => reason} when is_binary(reason) ->
-        {:ok, {:deny, reason}}
-
-      _other ->
-        {:error, :invalid}
+      nil -> {:ok, default}
+      value -> validate_field(value, type)
     end
   end
+
+  defp validate_field(value, :binary) when is_binary(value), do: {:ok, value}
+
+  defp validate_field(value, {:integer, minimum})
+       when is_integer(value) and value >= minimum,
+       do: {:ok, value}
+
+  defp validate_field(value, :filter)
+       when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"],
+       do: {:ok, value}
+
+  defp validate_field(domains, :domains) when is_list(domains) and domains != [] do
+    if Enum.all?(domains, &(&1 in @domains)) do
+      {:ok, Enum.map(domains, &String.to_existing_atom/1)}
+    else
+      {:error, :invalid}
+    end
+  end
+
+  defp validate_field(value, :nonempty_binary) when is_binary(value) and value != "",
+    do: {:ok, value}
+
+  defp validate_field(value, :map) when is_map(value), do: {:ok, value}
+  defp validate_field("approve", :decision), do: {:ok, :approve}
+
+  defp validate_field(%{"deny" => reason}, :decision) when is_binary(reason),
+    do: {:ok, {:deny, reason}}
+
+  defp validate_field(_value, _type), do: {:error, :invalid}
 end

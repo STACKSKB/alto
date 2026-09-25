@@ -20,7 +20,6 @@ defmodule Alto.TUI.Selection do
     :region,
     :menu,
     :scroll,
-    copy_press: false,
     dragged?: false,
     active?: false,
     highlight: []
@@ -45,7 +44,7 @@ defmodule Alto.TUI.Selection do
 
     cond do
       code == "esc" and selection.menu != nil ->
-        {:handled, %{selection | menu: nil, copy_press: false}}
+        {:handled, %{selection | menu: nil, press: nil}}
 
       code == "esc" and (selection.active? or selection.press != nil) ->
         {:handled, new()}
@@ -102,7 +101,7 @@ defmodule Alto.TUI.Selection do
     do: {:handled, selection}
 
   def event(
-        %{copy_press: true} = selection,
+        %{press: :copy} = selection,
         %Mouse{kind: "up", button: "left", x: x, y: y},
         _,
         _,
@@ -110,15 +109,15 @@ defmodule Alto.TUI.Selection do
       ) do
     if Layout.contains?(selection.menu, x, y),
       do: {:copy, text(selection), new()},
-      else: {:handled, %{selection | copy_press: false, menu: nil}}
+      else: {:handled, %{selection | press: nil, menu: nil}}
   end
 
-  def event(%{copy_press: true} = selection, %Mouse{}, _, _, _), do: {:handled, selection}
+  def event(%{press: :copy} = selection, %Mouse{}, _, _, _), do: {:handled, selection}
 
   def event(selection, %Mouse{kind: "down", button: "left"} = mouse, dimensions, widgets, opts) do
     cond do
       Layout.contains?(selection.menu, mouse.x, mouse.y) ->
-        {:handled, %{selection | copy_press: true}}
+        {:handled, %{selection | press: :copy}}
 
       selection.menu != nil ->
         {:handled, %{selection | menu: nil}}
@@ -231,7 +230,7 @@ defmodule Alto.TUI.Selection do
                   max(length(text.lines) - inner.height, 0)
 
                 widget.wrap ->
-                  Alto.TUI.Scroll.bottom(text, inner.width, inner.height, :selection)
+                  Alto.TUI.Viewport.bottom(text, inner.width, inner.height)
 
                 true ->
                   max(length(String.split(String.trim_trailing(text), "\n")) - inner.height, 0)
@@ -241,7 +240,7 @@ defmodule Alto.TUI.Selection do
           %{
             index: index,
             offset: offset,
-            limit: (fn value -> fn -> value end end).(limit.(selection.anchor)),
+            limit: limit.(selection.anchor),
             dimensions: dimensions,
             covered: covered,
             history: nil,
@@ -311,8 +310,7 @@ defmodule Alto.TUI.Selection do
 
   defp scroll_by(selection, delta) do
     scroll = selection.scroll
-    limit = if is_function(scroll.limit), do: scroll.limit.(), else: scroll.limit
-    scroll = %{scroll | limit: limit}
+    limit = scroll.limit
 
     offset =
       if is_integer(limit), do: min(max(scroll.offset + delta, 0), limit), else: scroll.offset
@@ -401,44 +399,27 @@ defmodule Alto.TUI.Selection do
   def text(%{active?: false}), do: ""
 
   def text(selection) do
-    selected_rows(selection)
-    |> Enum.map_join("\n", fn {_y, runs} ->
-      Enum.map_join(runs, fn {_x, _width, text} -> text end) |> String.trim_trailing(" ")
+    {{first, _}, {last, _}} = bounds = bounds(selection)
+
+    Enum.map_join(first..last, "\n", fn y ->
+      selection
+      |> selected_row(y)
+      |> selected_segments(y, bounds, selection.snapshot.width)
+      |> Enum.map_join(fn {_x, _width, text} -> text end)
+      |> String.trim_trailing(" ")
     end)
   end
 
   defp bounds(%{anchor: {ax, ay}, head: {hx, hy}}), do: Enum.min_max([{ay, ax}, {hy, hx}])
 
-  defp selected_rows(%{scroll: %{history: history, offset: offset}, region: region} = selection)
-       when not is_nil(history) do
-    {{fy, fx}, {ly, lx}} = bounds(selection)
+  defp selected_row(%{scroll: %{history: history, offset: offset}, region: region}, y)
+       when not is_nil(history),
+       do: Map.fetch!(history, y + offset - region.y)
 
-    for y <- fy..ly do
-      row = Map.fetch!(history, y + offset - region.y)
+  defp selected_row(selection, y), do: elem(selection.snapshot.rows, y)
 
-      {y,
-       segments(
-         row,
-         if(y == fy, do: fx, else: 0),
-         if(y == ly, do: lx, else: selection.snapshot.width)
-       )}
-    end
-  end
-
-  defp selected_rows(selection) do
-    {{fy, fx}, {ly, lx}} = bounds(selection)
-
-    for y <- fy..ly do
-      row = elem(selection.snapshot.rows, y)
-
-      {y,
-       segments(
-         row,
-         if(y == fy, do: fx, else: 0),
-         if(y == ly, do: lx, else: selection.snapshot.width)
-       )}
-    end
-  end
+  defp selected_segments(row, y, {{fy, fx}, {ly, lx}}, width),
+    do: segments(row, if(y == fy, do: fx, else: 0), if(y == ly, do: lx, else: width))
 
   defp segments(row, low, high) do
     Enum.flat_map(indexed_runs(row), fn run ->
@@ -489,11 +470,7 @@ defmodule Alto.TUI.Selection do
         if y > fy and y < ly do
           row.highlight
         else
-          segments(
-            row,
-            if(y == fy, do: fx, else: 0),
-            if(y == ly, do: lx, else: selection.snapshot.width)
-          )
+          selected_segments(row, y, {{fy, fx}, {ly, lx}}, selection.snapshot.width)
           |> Enum.map(&highlight_widget(&1, y))
         end
       end)
@@ -520,7 +497,8 @@ defmodule Alto.TUI.Selection do
     # TestBackend retains cells skipped by wide-glyph diffs. Blank the frame
     # before reuse so moving a double-width glyph cannot leave stale copy text.
     :ok = ExRatatui.draw(terminal, [])
-    :ok = ExRatatui.draw(terminal, Alto.TUI.Viewport.widgets(widgets))
+    painted = Alto.TUI.Viewport.widgets(widgets)
+    :ok = ExRatatui.draw(terminal, painted)
     lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
     lines = List.to_tuple(lines)
 
@@ -540,41 +518,8 @@ defmodule Alto.TUI.Selection do
       end
 
     rows = List.to_tuple(rows)
-    painted = widgets |> Enum.map(&crop_history(&1, rows)) |> Alto.TUI.Viewport.widgets()
     %{rows: rows, width: width, widgets: painted, source_widgets: widgets}
   end
-
-  # A frozen Paragraph can still reflow thousands of off-screen lines in Rust
-  # on every paint. Replace large plain paragraphs with their already-rendered
-  # viewport, retaining the original block and style. Rich text keeps its spans.
-  defp crop_history({%Paragraph{text: text, scroll: {offset, _}} = widget, rect}, rows)
-       when is_binary(text) do
-    if byte_size(text) > max(rect.width * rect.height * 2, 4096) or
-         (offset > 0 and byte_size(text) > 4096) do
-      inner = SelectionRegions.content_rect(widget, rect)
-      bottom = min(inner.y + inner.height, tuple_size(rows))
-
-      if bottom > inner.y and inner.width > 0 do
-        text =
-          Enum.map_join(inner.y..(bottom - 1), "\n", fn y ->
-            row = elem(rows, y)
-            right = min(inner.x + inner.width, row.width)
-            ranges = if right > inner.x, do: [{inner.x, right}], else: []
-
-            segments(%{row | ranges: ranges}, inner.x, right - 1)
-            |> Enum.map_join(fn {_, _, text} -> text end)
-          end)
-
-        {%{widget | text: text, scroll: {0, 0}, wrap: false, alignment: :left}, rect}
-      else
-        {widget, rect}
-      end
-    else
-      {widget, rect}
-    end
-  end
-
-  defp crop_history(other, _rows), do: other
 
   # Reuse native buffers between gestures instead of allocating an entire second
   # terminal on each click. Every capture still redraws the current widgets.

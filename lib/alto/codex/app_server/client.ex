@@ -12,12 +12,7 @@ defmodule Alto.Codex.AppServer.Client do
   alias Alto.External.JSONRPC
   alias Alto.External.Process, as: ExternalProcess
 
-  @default_timeout 30_000
   @default_turn_timeout 120_000
-  @default_max_message_bytes 8_000_000
-  @default_max_pending_requests 128
-  @default_max_ready_waiters 128
-  @default_max_subscribers 128
 
   @type options :: keyword()
 
@@ -25,23 +20,8 @@ defmodule Alto.Codex.AppServer.Client do
   @spec ensure_started(options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts \\ []) when is_list(opts) do
     with {:ok, opts} <- normalize_options(opts) do
-      key = client_key(opts)
-      name = {:via, Registry, {Alto.External.Registry, key}}
-      child = {__MODULE__, Keyword.put(opts, :name, name)}
-
-      case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
-        {:ok, pid} ->
-          await_ready(pid, Keyword.fetch!(opts, :startup_timeout))
-
-        {:error, {:already_started, pid}} ->
-          await_ready(pid, Keyword.fetch!(opts, :startup_timeout))
-
-        {:error, reason} ->
-          {:error, {:codex_app_server_start_failed, reason}}
-      end
+      JSONRPC.ensure_started(__MODULE__, opts)
     end
-  catch
-    :exit, reason -> {:error, {:codex_app_server_supervisor_unavailable, reason}}
   end
 
   @doc "Receive App Server notifications and server requests in the calling process."
@@ -59,7 +39,7 @@ defmodule Alto.Codex.AppServer.Client do
     GenServer.call(
       client,
       {:request, method, params, JSONRPC.deadline(timeout)},
-      call_timeout(timeout)
+      JSONRPC.call_timeout(timeout)
     )
   catch
     :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
@@ -122,63 +102,29 @@ defmodule Alto.Codex.AppServer.Client do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-
-    state = %{
-      opts: opts,
-      port: nil,
-      process: nil,
-      buffer: "",
-      phase: :starting,
-      next_id: 1,
-      pending: %{},
-      ready_waiters: [],
-      subscribers: %{},
-      initialize_timer: nil
-    }
-
-    {:ok, state, {:continue, :open}}
+    {:ok, JSONRPC.state(opts, %{subscribers: %{}}), {:continue, :open}}
   end
 
   @impl true
   def handle_continue(:open, state) do
-    case open_port(state.opts) do
-      {:ok, process} ->
-        params = %{
-          "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
-          "capabilities" => %{"experimentalApi" => false}
-        }
+    params = %{
+      "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
+      "capabilities" => %{"experimentalApi" => false}
+    }
 
-        state = %{state | process: process, port: ExternalProcess.port(process)}
-
-        case send_request(state, "initialize", params, :initialize, false) do
-          {:ok, state} ->
-            timer =
-              Process.send_after(
-                self(),
-                :initialize_timeout,
-                Keyword.fetch!(state.opts, :startup_timeout)
-              )
-
-            {:noreply, %{state | initialize_timer: timer}}
-
-          {:error, reason} ->
-            {:stop, reason, fail_all(state, reason)}
-        end
-
-      {:error, reason} ->
-        {:stop, reason, fail_all(state, reason)}
+    case JSONRPC.open(
+           state,
+           &open_port/1,
+           &send_request(&1, "initialize", params, :initialize, false)
+         ) do
+      {:ok, state} -> {:noreply, state}
+      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
   @impl true
-  def handle_call(:await_ready, _from, %{phase: :ready} = state),
-    do: {:reply, {:ok, self()}, state}
-
-  def handle_call(:await_ready, _from, %{phase: {:failed, reason}} = state),
-    do: {:reply, {:error, reason}, state}
-
   def handle_call(:await_ready, from, state),
-    do: add_ready_waiter(from, state)
+    do: JSONRPC.await_ready(state, from, :codex_app_server_ready_waiter_limit)
 
   def handle_call({:subscribe, subscriber}, _from, state) do
     if Map.has_key?(state.subscribers, subscriber) do
@@ -220,7 +166,8 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_call({:respond, id, result}, _from, %{phase: :ready} = state) do
-    {:reply, send_payload(state, %{"jsonrpc" => "2.0", "id" => id, "result" => result}), state}
+    {:reply, JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "id" => id, "result" => result}),
+     state}
   end
 
   def handle_call({:reject, id, code, message}, _from, %{phase: :ready} = state) do
@@ -230,166 +177,47 @@ defmodule Alto.Codex.AppServer.Client do
       "error" => %{"code" => code, "message" => message}
     }
 
-    {:reply, send_payload(state, payload), state}
+    {:reply, JSONRPC.send_payload(state, payload), state}
   end
 
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:codex_app_server_not_ready, state.phase}}, state}
 
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state) do
-    buffer = state.buffer <> data
-
-    if byte_size(buffer) > Keyword.fetch!(state.opts, :max_message_bytes) do
-      reason = {:codex_app_server_message_limit, Keyword.fetch!(state.opts, :max_message_bytes)}
-      {:stop, reason, fail_all(state, reason)}
-    else
-      case consume_lines(%{state | buffer: buffer}) do
-        {:ok, next} -> {:noreply, next}
-        {:error, reason, next} -> {:stop, reason, fail_all(next, reason)}
-      end
-    end
-  end
-
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    reason = {:codex_app_server_exit, status}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info({:EXIT, port, reason}, %{port: port} = state) do
-    failure = {:codex_app_server_exit, reason}
-    {:stop, failure, fail_all(state, failure)}
-  end
-
-  def handle_info(:initialize_timeout, %{phase: :starting} = state) do
-    reason = {:codex_app_server_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}
-    {:stop, reason, fail_all(state, reason)}
-  end
-
-  def handle_info(:initialize_timeout, state), do: {:noreply, state}
-
   def handle_info({:request_timeout, id}, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
-        {:noreply, state}
-
-      {%{reply: reply, timer: timer, owner: owner, monitor: monitor}, pending} ->
-        cancel_timer(timer)
-        cancel_request(state, id)
-        demonitor(owner, monitor)
-        reply_error(reply, {:codex_app_server_request_timeout, id})
-        {:noreply, %{state | pending: pending}}
-    end
+    JSONRPC.expire(state, id, fn reply ->
+      cancel_request(state, id)
+      reply_error(reply, {:codex_app_server_request_timeout, id})
+    end)
   end
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
-    case Enum.find(state.pending, fn {_id, entry} ->
-           entry.monitor == monitor and entry.owner == owner
-         end) do
-      {id, %{timer: timer}} ->
-        cancel_request(state, id)
-        cancel_timer(timer)
-        {:noreply, %{state | pending: Map.delete(state.pending, id)}}
-
-      nil ->
-        ready_waiters = Enum.reject(state.ready_waiters, fn {_from, ref} -> ref == monitor end)
-
-        subscribers =
-          case Enum.find(state.subscribers, fn {_pid, ref} -> ref == monitor end) do
-            {subscriber, ^monitor} -> Map.delete(state.subscribers, subscriber)
-            nil -> state.subscribers
-          end
-
-        {:noreply, %{state | ready_waiters: ready_waiters, subscribers: subscribers}}
-    end
+    state = JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1))
+    subscribers = Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
+    {:noreply, %{state | subscribers: subscribers}}
   end
 
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_info(message, state),
+    do: JSONRPC.handle_transport(message, state, &handle_message/2, &fail_all/2)
 
   @impl true
-  def terminate(_reason, %{process: process}) when not is_nil(process) do
-    ExternalProcess.close(process)
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
+  def terminate(_reason, state), do: JSONRPC.close(state)
 
-  def terminate(_reason, _state), do: :ok
+  @options_schema [
+    command: [type: :string, default: "codex"],
+    args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
+    cwd: [type: :string],
+    env: [type: {:map, :any, :any}, default: %{}],
+    instance: [type: :any, default: :shared],
+    startup_timeout: [type: :pos_integer, default: 30_000],
+    request_timeout: [type: :pos_integer, default: @default_turn_timeout],
+    max_message_bytes: [type: :pos_integer, default: 8_000_000],
+    max_pending_requests: [type: :pos_integer, default: 128],
+    max_ready_waiters: [type: :pos_integer, default: 128],
+    max_subscribers: [type: :pos_integer, default: 128]
+  ]
 
-  defp normalize_options(opts) do
-    defaults = [
-      command: "codex",
-      args: ["app-server", "--stdio"],
-      cwd: File.cwd!(),
-      env: %{},
-      instance: :shared,
-      startup_timeout: @default_timeout,
-      request_timeout: @default_turn_timeout,
-      max_message_bytes: @default_max_message_bytes,
-      max_pending_requests: @default_max_pending_requests,
-      max_ready_waiters: @default_max_ready_waiters,
-      max_subscribers: @default_max_subscribers
-    ]
-
-    with {:ok, opts} <- Keyword.validate(opts, defaults),
-         command when is_binary(command) and command != "" <- Keyword.fetch!(opts, :command),
-         executable when is_binary(executable) <- ExternalProcess.resolve_executable(command),
-         args when is_list(args) <- Keyword.fetch!(opts, :args),
-         true <- Enum.all?(args, &is_binary/1),
-         cwd when is_binary(cwd) <- Keyword.fetch!(opts, :cwd),
-         true <- File.dir?(cwd),
-         env when is_map(env) <- Keyword.fetch!(opts, :env),
-         :ok <- positive_options(opts) do
-      {:ok, Keyword.put(opts, :command, executable)}
-    else
-      {:error, reason} -> {:error, {:invalid_codex_app_server_options, reason}}
-      nil -> {:error, {:codex_executable_not_found, Keyword.get(opts, :command)}}
-      _other -> {:error, {:invalid_codex_app_server_options, opts}}
-    end
-  end
-
-  defp positive_options(opts) do
-    keys = [
-      :startup_timeout,
-      :request_timeout,
-      :max_message_bytes,
-      :max_pending_requests,
-      :max_ready_waiters,
-      :max_subscribers
-    ]
-
-    if Enum.all?(keys, fn key ->
-         value = Keyword.fetch!(opts, key)
-         is_integer(value) and value > 0
-       end) do
-      :ok
-    else
-      {:error, :bounds_must_be_positive}
-    end
-  end
-
-  defp client_key(opts) do
-    identity =
-      Keyword.take(opts, [
-        :command,
-        :args,
-        :cwd,
-        :env,
-        :instance,
-        :startup_timeout,
-        :request_timeout,
-        :max_message_bytes,
-        :max_pending_requests,
-        :max_ready_waiters,
-        :max_subscribers
-      ])
-
-    "codex-app-server:" <>
-      Base.url_encode64(
-        :crypto.hash(:sha256, :erlang.term_to_binary(identity, [:deterministic])),
-        padding: false
-      )
-  end
+  defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   defp open_port(opts) do
     command = Keyword.fetch!(opts, :command)
@@ -422,27 +250,7 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   defp send_notification(state, method, params \\ %{}) do
-    send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
-  end
-
-  defp send_payload(state, payload),
-    do: JSONRPC.send(state.port, payload, Keyword.fetch!(state.opts, :max_message_bytes))
-
-  defp consume_lines(state), do: JSONRPC.consume_lines(state, &handle_line/2)
-
-  defp handle_line("", state), do: {:ok, state}
-
-  defp handle_line(line, state) do
-    case JSON.decode(line) do
-      {:ok, message} when is_map(message) ->
-        handle_message(message, state)
-
-      {:ok, _other} ->
-        {:error, :codex_app_server_message_not_object, state}
-
-      {:error, error} ->
-        {:error, {:codex_app_server_invalid_json, Exception.message(error)}, state}
-    end
+    JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
   end
 
   # Server requests carry both method and id. They must be handled before
@@ -468,30 +276,23 @@ defmodule Alto.Codex.AppServer.Client do
   defp handle_message(_message, state), do: {:ok, state}
 
   defp settle_response(:initialize, %{"result" => result}, state) when is_map(result) do
-    if state.initialize_timer, do: cancel_timer(state.initialize_timer)
-
     case send_notification(state, "initialized") do
       :ok ->
-        Enum.each(state.ready_waiters, fn {from, monitor} ->
-          demonitor(elem(from, 0), monitor)
-          GenServer.reply(from, {:ok, self()})
-        end)
-
-        {:ok, %{state | phase: :ready, ready_waiters: [], initialize_timer: nil}}
+        {:ok, JSONRPC.ready(state)}
 
       {:error, reason} ->
-        {:error, reason, fail_waiters(state, reason)}
+        {:error, reason, JSONRPC.fail_waiters(state, reason)}
     end
   end
 
   defp settle_response(:initialize, %{"result" => result}, state) do
     reason = {:invalid_codex_app_server_initialize_result, result}
-    {:error, {:codex_app_server_initialize_failed, reason}, fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
   end
 
   defp settle_response(:initialize, message, state) do
     reason = response_error(message)
-    {:error, {:codex_app_server_initialize_failed, reason}, fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
   end
 
   defp settle_response({:request, from, _method}, %{"result" => result}, state) do
@@ -510,24 +311,9 @@ defmodule Alto.Codex.AppServer.Client do
   defp broadcast(state, message),
     do: Enum.each(state.subscribers, fn {pid, _ref} -> send(pid, message) end)
 
-  defp add_ready_waiter(from, state) do
-    limit = Keyword.fetch!(state.opts, :max_ready_waiters)
-
-    if length(state.ready_waiters) >= limit do
-      {:reply, {:error, {:codex_app_server_ready_waiter_limit, limit}}, state}
-    else
-      owner = elem(from, 0)
-      monitor = Process.monitor(owner)
-      {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
-    end
-  end
-
-  defp demonitor(owner, monitor), do: JSONRPC.demonitor(owner, monitor)
-  defp cancel_timer(timer), do: JSONRPC.cancel_timer(timer)
-
   defp cancel_request(state, id) do
     _ =
-      send_payload(state, %{
+      JSONRPC.send_payload(state, %{
         "jsonrpc" => "2.0",
         "method" => "$/cancelRequest",
         "params" => %{"id" => id}
@@ -536,20 +322,8 @@ defmodule Alto.Codex.AppServer.Client do
     :ok
   end
 
-  defp await_ready(pid, timeout) do
-    GenServer.call(pid, :await_ready, call_timeout(timeout))
-  catch
-    :exit, reason -> {:error, {:codex_app_server_startup_failed, reason}}
-  end
-
-  defp fail_waiters(state, reason), do: JSONRPC.fail_waiters(state, reason)
-
   defp fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
 
   defp reply_error(:initialize, _reason), do: :ok
   defp reply_error({:request, from, _method}, reason), do: GenServer.reply(from, {:error, reason})
-
-  defp call_timeout(:infinity), do: :infinity
-  defp call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
-  defp call_timeout(_timeout), do: @default_turn_timeout
 end

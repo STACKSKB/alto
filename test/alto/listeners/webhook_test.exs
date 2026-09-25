@@ -5,7 +5,7 @@ defmodule Alto.Listeners.WebhookTest do
   per accepted delivery (the integration contract job-flow ingress).
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.FrontEnd.Registry
   alias Alto.Ingress.HMAC
@@ -15,19 +15,10 @@ defmodule Alto.Listeners.WebhookTest do
   @secret "event-webhook-secret"
 
   defmodule TaskTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :task_tool, execution_mode: :parallel, approval: :never
 
     @impl true
-    def name, do: :task_tool
-
-    @impl true
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     @impl true
     def run(arguments, _context, opts) do
@@ -106,7 +97,8 @@ defmodule Alto.Listeners.WebhookTest do
   defp endpoint(config_name) do
     %{
       path: "/hooks/events",
-      verify: {:hmac_sha256_base64, @secret},
+      verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+      identity: {IdentityHeader, header: "x-delivery-id"},
       on_event: {:start_run, config_name}
     }
   end
@@ -149,6 +141,52 @@ defmodule Alto.Listeners.WebhookTest do
     assert {:ok, "gh-1"} = IdentityHeader.extract(headers, header: "x-github-delivery")
   end
 
+  test "function verifier and identity callbacks dispatch a delivery", %{
+    listener: listener,
+    registry: registry
+  } do
+    verify = fn body, headers, opts -> HMAC.verify(body, headers, opts) end
+    identity = fn headers, opts -> IdentityHeader.extract(headers, opts) end
+
+    endpoint = %{
+      path: "/hooks/events",
+      verify: {verify, secret: @secret, header: "x-signature", encoding: :base64},
+      identity: {identity, header: "x-delivery-id"},
+      on_event: {:start_run, "job"}
+    }
+
+    port = start_listener(listener, registry, [endpoint])
+    assert post_event(port, delivery_id: "function-callbacks") =~ "200 OK"
+    assert_receive {:rule_ran, _}, 2_000
+  end
+
+  test "unexpected callback errors return a bounded server error", %{
+    listener: listener,
+    registry: registry
+  } do
+    verify_error = %{
+      path: "/hooks/verify",
+      verify: {fn _body, _headers, _opts -> {:error, :unexpected_verify} end, []},
+      identity: {fn _headers, _opts -> {:ok, "delivery"} end, []},
+      on_event: {:start_run, "job"}
+    }
+
+    identity_error = %{
+      verify_error
+      | path: "/hooks/identity",
+        verify: {fn _body, _headers, _opts -> :ok end, []},
+        identity: {fn _headers, _opts -> {:error, {:unexpected_identity, "detail"}} end, []}
+    }
+
+    port = start_listener(listener, registry, [verify_error, identity_error])
+
+    for path <- ["/hooks/verify", "/hooks/identity"] do
+      response = post(port, path, "event", [])
+      assert response =~ "500 Internal Server Error"
+      assert response =~ "webhook validation failed"
+    end
+  end
+
   test "identity extraction rejects duplicate delivery headers" do
     assert {:error, :duplicate_delivery_id} =
              IdentityHeader.extract(
@@ -157,7 +195,7 @@ defmodule Alto.Listeners.WebhookTest do
              )
   end
 
-  defp post(port, path, body, headers, recv_timeout \\ 2_000) do
+  defp post(port, path, body, headers, recv_timeout \\ 5_000) do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, {:active, false}])
 
     header_lines =
@@ -370,25 +408,64 @@ defmodule Alto.Listeners.WebhookTest do
           [%{path: "/x", verify: :none, on_event: {:start_run, "job"}}],
           [
             %{
-              path: "no-slash",
-              verify: {:hmac_sha256_base64, @secret},
+              path: "/x",
+              verify: {fn _body, _headers -> :ok end, []},
+              identity: {IdentityHeader, header: "x-delivery-id"},
               on_event: {:start_run, "job"}
             }
           ],
-          [%{path: "/x", verify: {:hmac_sha256_base64, @secret}, on_event: :reboot}],
-          [%{path: "/x", verify: {:hmac_sha256_base64, @secret}, on_event: {:enqueue, nil}}],
-          [%{path: "/x", verify: {:hmac_sha256_base64, @secret}, on_event: {:enqueue, 42}}],
           [
             %{
               path: "/x",
-              verify: {:hmac_sha256_base64, @secret},
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {fn _headers, _opts, _extra -> {:ok, "id"} end, []},
+              on_event: {:start_run, "job"}
+            }
+          ],
+          [
+            %{
+              path: "no-slash",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              on_event: {:start_run, "job"}
+            }
+          ],
+          [
+            %{
+              path: "/x",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {IdentityHeader, header: "x-delivery-id"},
+              on_event: :reboot
+            }
+          ],
+          [
+            %{
+              path: "/x",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {IdentityHeader, header: "x-delivery-id"},
+              on_event: {:enqueue, nil}
+            }
+          ],
+          [
+            %{
+              path: "/x",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {IdentityHeader, header: "x-delivery-id"},
+              on_event: {:enqueue, 42}
+            }
+          ],
+          [
+            %{
+              path: "/x",
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {IdentityHeader, header: "x-delivery-id"},
               on_event: {:enqueue, {String, []}}
             }
           ],
           [
             %{
               path: "/x",
-              verify: {:hmac_sha256_base64, @secret},
+              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+              identity: {IdentityHeader, header: "x-delivery-id"},
               on_event: {:enqueue, {ValidatingInbox, []}}
             }
           ]
@@ -429,8 +506,9 @@ defmodule Alto.Listeners.WebhookTest do
     defp enqueue_endpoint(queue) do
       %{
         path: "/hooks/events",
-        verify: {:hmac_sha256_base64, @secret},
-        on_event: {:enqueue, queue}
+        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+        identity: {IdentityHeader, header: "x-delivery-id"},
+        on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
       }
     end
 
@@ -440,7 +518,8 @@ defmodule Alto.Listeners.WebhookTest do
     } do
       endpoint = %{
         path: "/hooks/events",
-        verify: {:hmac_sha256_base64, @secret},
+        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+        identity: {IdentityHeader, header: "x-delivery-id"},
         on_event: {:enqueue, {RecordingInbox, test_pid: self()}}
       }
 
@@ -459,7 +538,8 @@ defmodule Alto.Listeners.WebhookTest do
     } do
       endpoint = %{
         path: "/hooks/events",
-        verify: {:hmac_sha256_base64, @secret},
+        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+        identity: {IdentityHeader, header: "x-delivery-id"},
         on_event: {:enqueue, {InvalidResultInbox, []}}
       }
 
@@ -555,8 +635,18 @@ defmodule Alto.Listeners.WebhookTest do
       queue = start_inbox!()
 
       endpoints = [
-        %{path: "/hooks/a", verify: {:hmac_sha256_base64, @secret}, on_event: {:enqueue, queue}},
-        %{path: "/hooks/b", verify: {:hmac_sha256_base64, @secret}, on_event: {:enqueue, queue}}
+        %{
+          path: "/hooks/a",
+          verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+          identity: {IdentityHeader, header: "x-delivery-id"},
+          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
+        },
+        %{
+          path: "/hooks/b",
+          verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
+          identity: {IdentityHeader, header: "x-delivery-id"},
+          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
+        }
       ]
 
       port = start_listener(listener, registry, endpoints)

@@ -14,7 +14,7 @@ defmodule Alto.Loops.Default do
   alias Alto.Loop.Spec
   alias Alto.Transition
 
-  defstruct [:task, :phase, :context, :subagents, step: 1, observations: []]
+  defstruct [:task, :phase, step: 1, observations: []]
 
   @type continuation :: :request_model | {:stop, term()}
   @type phase ::
@@ -24,48 +24,46 @@ defmodule Alto.Loops.Default do
   @type t :: %__MODULE__{
           task: term(),
           phase: phase(),
-          context: term(),
-          subagents: term(),
           step: pos_integer(),
           observations: [Event.t()]
         }
 
   @impl true
   def init(task, %Spec{} = spec) do
-    state = %__MODULE__{
-      task: task,
-      phase: :awaiting_model,
-      context: spec.context,
-      subagents: spec.subagents
-    }
-
-    Transition.continue(state, [model_request(state)])
+    state = %__MODULE__{task: task, phase: :awaiting_model}
+    Transition.continue(state, [model_request(state, spec)])
   end
 
   @impl true
-  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, _spec) do
+  def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
     next = %{state | task: text, phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next, [model_request(next)])
+    Transition.continue(next, [model_request(next, spec)])
   end
 
   def handle_event(
-        %Event{type: :model_completed, data: data},
+        %Event{type: :model_completed, data: %{message: output} = data},
         %__MODULE__{phase: :awaiting_model} = state,
         spec
       ) do
-    output = Map.get(data, :message, Map.get(data, :output))
+    mode = Keyword.get(spec.driver_options, :tool_execution, :serial)
 
-    case Map.get(data, :tool_calls, []) do
-      [] ->
+    case {mode, Map.get(data, :tool_calls, [])} do
+      {:disabled, []} ->
+        Transition.stop(state, output)
+
+      {:disabled, tool_calls} when is_list(tool_calls) ->
+        Transition.error(state, {:tools_not_supported, Enum.map(tool_calls, &Map.get(&1, :id))})
+
+      {_, []} ->
         settle(state, {:stop, output}, :completed)
 
-      tool_calls when is_list(tool_calls) ->
+      {mode, tool_calls} when is_list(tool_calls) ->
         # A provider may repeat a call id; every emitted invocation must
         # report before the step can settle.
         pending = Enum.frequencies_by(tool_calls, &Map.fetch!(&1, :id))
 
         effects =
-          case Keyword.get(spec.driver_options, :tool_execution, :serial) do
+          case mode do
             :serial -> Enum.map(tool_calls, &Effect.run_tool/1)
             {:parallel, limit} when limit in 1..32 -> [Effect.run_tools(tool_calls, limit)]
             other -> raise ArgumentError, "invalid tool_execution: #{inspect(other)}"
@@ -82,24 +80,19 @@ defmodule Alto.Loops.Default do
       )
       when type in [:tool_completed, :tool_failed] do
     call_id = Map.fetch!(event.data, :call_id)
-    next_state = %{state | observations: [event | state.observations]}
 
     case pending do
-      %{^call_id => 1} ->
-        if map_size(pending) == 1 do
-          settle(next_state, :request_model, :tools_completed)
-        else
-          Transition.continue(%{
-            next_state
-            | phase: {:awaiting_tools, Map.delete(pending, call_id)}
-          })
-        end
+      %{^call_id => count} when is_integer(count) and count > 0 ->
+        pending =
+          if count == 1,
+            do: Map.delete(pending, call_id),
+            else: Map.put(pending, call_id, count - 1)
 
-      %{^call_id => count} when is_integer(count) and count > 1 ->
-        Transition.continue(%{
-          next_state
-          | phase: {:awaiting_tools, Map.put(pending, call_id, count - 1)}
-        })
+        next = %{state | observations: [event | state.observations]}
+
+        if pending == %{},
+          do: settle(next, :request_model, :tools_completed),
+          else: Transition.continue(%{next | phase: {:awaiting_tools, pending}})
 
       _other ->
         Transition.error(state, {:unknown_tool_call, call_id})
@@ -109,10 +102,13 @@ defmodule Alto.Loops.Default do
   def handle_event(
         %Event{type: :step_settled},
         %__MODULE__{phase: {:settling, :request_model}} = state,
-        _spec
+        spec
       ) do
     next_state = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next_state, [model_request(next_state, Enum.reverse(state.observations))])
+
+    Transition.continue(next_state, [
+      model_request(next_state, spec, Enum.reverse(state.observations))
+    ])
   end
 
   def handle_event(
@@ -149,49 +145,14 @@ defmodule Alto.Loops.Default do
   end
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) do
-    with :ok <- validate_checkpoint_state(state) do
-      {:ok,
-       %{
-         task: state.task,
-         phase: state.phase,
-         step: state.step,
-         observations: state.observations
-       }}
-    end
+  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) when map_size(state) == 5 do
+    with :ok <- validate_checkpoint_state(state), do: {:ok, state}
   end
+
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
   @impl true
-  def load_checkpoint(checkpoint, %Spec{} = spec) do
-    with true <- checkpoint_keys?(checkpoint),
-         task <- Map.fetch!(checkpoint, :task),
-         phase <- Map.fetch!(checkpoint, :phase),
-         step <- Map.fetch!(checkpoint, :step),
-         observations <- Map.fetch!(checkpoint, :observations),
-         :ok <- validate_phase(phase),
-         :ok <- validate_step(step),
-         true <- is_list(observations) do
-      {:ok,
-       %__MODULE__{
-         task: task,
-         phase: phase,
-         step: step,
-         observations: observations,
-         context: spec.context,
-         subagents: spec.subagents
-       }}
-    else
-      _ -> {:error, :invalid_checkpoint}
-    end
-  end
-
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_checkpoint}
-
-  defp checkpoint_keys?(checkpoint) when is_map(checkpoint) do
-    Map.keys(checkpoint) |> Enum.sort() == [:observations, :phase, :step, :task]
-  end
-
-  defp checkpoint_keys?(_checkpoint), do: false
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
   defp validate_checkpoint_state(state) do
     with :ok <- validate_phase(state.phase),
@@ -228,11 +189,11 @@ defmodule Alto.Loops.Default do
     Transition.continue(%{state | phase: {:settling, continuation}}, [Effect.emit(event)])
   end
 
-  defp model_request(state, observations \\ []) do
+  defp model_request(state, spec, observations \\ []) do
     Effect.request_model(%{
       task: state.task,
       step: state.step,
-      context: state.context,
+      context: spec.context,
       observations: observations
     })
   end

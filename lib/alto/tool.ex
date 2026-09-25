@@ -9,11 +9,8 @@ defmodule Alto.Tool do
   @type spec :: module() | {module(), keyword()}
   @type result :: {:ok, term()} | {:error, term()} | {:unknown, term()}
 
-  @callback name() :: atom()
   @callback name(keyword()) :: atom()
-  @callback schema() :: map()
   @callback schema(keyword()) :: map()
-  @callback execution_mode() :: execution_mode()
   @callback execution_mode(keyword()) :: execution_mode()
 
   @doc """
@@ -26,7 +23,6 @@ defmodule Alto.Tool do
   therefore the trust boundary for any `:never` tool, so reserve `:never` for
   tools that are genuinely side-effect-free.
   """
-  @callback approval() :: approval_requirement()
   @callback approval(keyword()) :: approval_requirement()
 
   @doc """
@@ -37,52 +33,74 @@ defmodule Alto.Tool do
   resolve names and policy, but must not produce the external effect being
   authorized. Implement `prepare` and `run_prepared` as a matching arity pair.
   """
-  @callback prepare(arguments :: map(), Context.t()) ::
-              {:ok, prepared :: term(), approval_details()} | {:error, term()}
-
   @callback prepare(arguments :: map(), Context.t(), keyword()) ::
               {:ok, prepared :: term(), approval_details()} | {:error, term()}
 
   @doc "Execute exactly the opaque value returned by the matching `prepare` callback."
-  @callback run_prepared(prepared :: term(), Context.t()) ::
-              result()
-
   @callback run_prepared(prepared :: term(), Context.t(), keyword()) ::
               result()
 
   @doc "Return `{:unknown, reason}` when dispatch occurred but commit cannot be established. Transport loss and timeouts are not participant declarations of non-commit."
-  @callback run(arguments :: map(), Context.t()) :: result()
   @callback run(arguments :: map(), Context.t(), keyword()) :: result()
 
-  @optional_callbacks name: 0,
-                      name: 1,
-                      schema: 0,
-                      schema: 1,
-                      execution_mode: 0,
-                      execution_mode: 1,
-                      approval: 0,
-                      approval: 1,
-                      prepare: 2,
+  @optional_callbacks approval: 1,
                       prepare: 3,
-                      run_prepared: 2,
                       run_prepared: 3,
-                      run: 2,
                       run: 3
-  def callback(module, callback, opts) do
-    Code.ensure_loaded?(module)
 
-    cond do
-      function_exported?(module, callback, 1) -> apply(module, callback, [opts])
-      function_exported?(module, callback, 0) -> apply(module, callback, [])
-      true -> raise ArgumentError, "#{inspect(module)} does not implement #{callback}/0 or /1"
+  @doc """
+  Declare constant metadata while implementing schema and execution normally.
+
+      use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never
+
+  All three values are explicit. Tools whose metadata depends on options can
+  implement the behaviour callbacks directly instead.
+  """
+  defmacro __using__(opts) do
+    opts = Keyword.validate!(opts, [:name, :execution_mode, :approval])
+
+    quote do
+      @behaviour Alto.Tool
+      @impl true
+      def name(_opts \\ []), do: unquote(Keyword.fetch!(opts, :name))
+      @impl true
+      def execution_mode(_opts \\ []), do: unquote(Keyword.fetch!(opts, :execution_mode))
+      @impl true
+      def approval(_opts \\ []), do: unquote(Keyword.fetch!(opts, :approval))
     end
   end
 
+  @doc "Build a tool schema whose object parameters reject undeclared fields."
+  def object_schema(description, properties, required \\ nil) do
+    parameters = %{type: "object", properties: properties, additionalProperties: false}
+
+    parameters =
+      if is_nil(required), do: parameters, else: Map.put(parameters, :required, required)
+
+    %{description: description, parameters: parameters}
+  end
+
+  def callback(module, callback, opts), do: apply(module, callback, [opts])
+
   def requirement(module, opts) do
-    cond do
-      function_exported?(module, :approval, 1) -> module.approval(opts)
-      function_exported?(module, :approval, 0) -> module.approval()
-      true -> :required
+    if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
+  end
+
+  @doc "Validate the execution callbacks and select the preparation boundary."
+  def preparation(module) do
+    Code.ensure_loaded!(module)
+
+    case {function_exported?(module, :prepare, 3), function_exported?(module, :run_prepared, 3)} do
+      {true, true} ->
+        {:ok, :prepared}
+
+      {false, false} ->
+        if function_exported?(module, :run, 3),
+          do: {:ok, :none},
+          else: {:error, {:invalid_tool, module}}
+
+      _ ->
+        {:error, {:incomplete_tool_preparation_callbacks, module}}
     end
   end
 end

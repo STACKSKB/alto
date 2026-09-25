@@ -46,17 +46,16 @@ defmodule Alto.CLI do
           true -> execute(options, task)
         end
 
-      case result do
-        :ok -> :ok
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, format_reason(reason)}
-      end
+      format_result(result)
     else
       :help -> :ok
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:error, reason} -> format_result({:error, reason})
     end
   end
+
+  defp format_result(:ok), do: :ok
+  defp format_result({:error, reason}) when is_binary(reason), do: {:error, reason}
+  defp format_result({:error, reason}), do: {:error, format_reason(reason)}
 
   defp execute(options, task_words) do
     with {:ok, task} <- task_text(task_words),
@@ -64,24 +63,18 @@ defmodule Alto.CLI do
          {:ok, command_mode} <- command_mode(options),
          {:ok, run_options, renderer} <- run_options(options, config, command_mode) do
       try do
-        case run_task(options, task, run_options) do
-          {:ok, result} ->
-            Renderer.finish(result.output, Renderer.stop(renderer))
-            IO.write("\n")
-            report_session(result.session_id)
-            :ok
+        {status, output, session_id} =
+          case run_task(options, task, run_options) do
+            {:ok, result} -> {:ok, result.output, result.session_id}
+            {:error, reason, result} -> {{:error, reason}, nil, result.session_id}
+            {:error, reason} -> {{:error, reason}, nil, nil}
+          end
 
-          {:error, reason, result} ->
-            Renderer.stop(renderer)
-            IO.write("\n")
-            report_session(result.session_id)
-            {:error, reason}
-
-          {:error, reason} ->
-            Renderer.stop(renderer)
-            IO.write("\n")
-            {:error, reason}
-        end
+        rendered = Renderer.stop(renderer)
+        if status == :ok, do: Renderer.finish(output, rendered)
+        IO.write("\n")
+        report_session(session_id)
+        status
       after
         # A run that crashes before reaching the case above would otherwise
         # leak the renderer process.
@@ -170,11 +163,9 @@ defmodule Alto.CLI do
     with {:ok, config} <- load_config(options),
          {:ok, command_mode} <- command_mode(options),
          {:ok, base_options} <- serve_run_options(options, config, command_mode),
-         {:ok, named_runs} <- serve_named_runs(config),
          {:ok, listener_specs} <- serve_listener_specs(config, options),
          {:ok, queue} <- start_serve_queue(config),
-         {:ok, registry_opts} <-
-           serve_registry_opts(config, queue, base_options, named_runs),
+         registry_opts = serve_registry_opts(config, queue, base_options),
          {:ok, registry} <- Registry.start_link(registry_opts) do
       case start_serve_listeners(listener_specs, registry) do
         {:ok, descriptions} ->
@@ -192,41 +183,18 @@ defmodule Alto.CLI do
   # configuration's `sessions:` key: `true`, or `[session_dir: path]`).
   # Without it, served runs stay unpersisted; `session_dir:` alone selects
   # the directory resume reads from.
-  defp serve_registry_opts(config, queue, base_options, named_runs) do
+  defp serve_registry_opts(config, queue, base_options) do
     run_options = Config.run_options(config)
 
-    case normalize_serve_sessions(Keyword.get(run_options, :sessions)) do
-      {:ok, sessions} ->
-        {:ok,
-         [
-           config_resolver: serve_resolver(base_options, named_runs),
-           cwd: File.cwd!(),
-           queue: queue,
-           sessions: sessions,
-           session_dir: Keyword.get(run_options, :session_dir)
-         ]
-         |> Keyword.reject(fn {_k, v} -> is_nil(v) end)}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    [
+      config_resolver: serve_resolver(base_options, Keyword.get(run_options, :runs, %{})),
+      cwd: File.cwd!(),
+      queue: queue,
+      sessions: Keyword.get(run_options, :sessions) || false,
+      session_dir: Keyword.get(run_options, :session_dir)
+    ]
+    |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
   end
-
-  defp normalize_serve_sessions(nil), do: {:ok, false}
-  defp normalize_serve_sessions(true), do: {:ok, true}
-  defp normalize_serve_sessions(false), do: {:ok, false}
-
-  defp normalize_serve_sessions(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) and
-         Enum.all?(Keyword.keys(opts), &(&1 in [:session_dir])) do
-      {:ok, opts}
-    else
-      {:error, "invalid sessions: want true or [session_dir: path]"}
-    end
-  end
-
-  defp normalize_serve_sessions(_other),
-    do: {:error, "invalid sessions: want true or [session_dir: path]"}
 
   defp serve_resolver(base_options, named_runs) do
     fn
@@ -241,32 +209,6 @@ defmodule Alto.CLI do
     end
   end
 
-  # Named compiled run specs for multi-workflow hosts (webhook `on_event`
-  # names such as `"job"`). Each value is a keyword list of run
-  # options merged over the base configuration; no code over the wire.
-  defp serve_named_runs(config) do
-    case Config.run_options(config) |> Keyword.get(:runs, %{}) do
-      runs when runs == %{} ->
-        {:ok, %{}}
-
-      runs when is_map(runs) ->
-        Enum.reduce_while(runs, {:ok, %{}}, fn
-          {name, overrides}, {:ok, acc} when is_binary(name) and is_list(overrides) ->
-            if Keyword.keyword?(overrides) do
-              {:cont, {:ok, Map.put(acc, name, overrides)}}
-            else
-              {:halt, {:error, "invalid runs: values must be keyword lists of run options"}}
-            end
-
-          _entry, {:ok, _acc} ->
-            {:halt, {:error, "invalid runs: want %{name => keyword run options}"}}
-        end)
-
-      _other ->
-        {:error, "invalid runs: want %{name => keyword run options}"}
-    end
-  end
-
   # The durable queue behind the claim/ack surface (the integration contract): opt in
   # via the compiled configuration's `queue:` key (Alto.Queue start options).
   # Without it, the queue commands answer `unsupported`.
@@ -275,40 +217,27 @@ defmodule Alto.CLI do
       nil ->
         {:ok, nil}
 
-      opts when is_list(opts) ->
+      opts ->
         Alto.Queue.start_link(Keyword.put_new(opts, :name, Alto.Queue))
-
-      _other ->
-        {:error, "invalid queue: want a keyword list of Alto.Queue options"}
     end
   end
 
   defp serve_run_options(options, config, command_mode) do
-    configured = config |> Config.run_options() |> Keyword.drop([:tui])
-
-    with {:ok, provider, provider_timeout} <- provider(options, configured) do
-      run_options =
-        configured
-        |> Keyword.put(:provider, provider)
-        |> configure_provider_timeout(provider_timeout)
-        |> configure_tools(options, command_mode)
-        |> configure_serve_approval(options)
-        |> configure_max_steps(options)
-        |> configure_prompt(options)
-        |> configure_project_instructions(options)
-        |> Keyword.drop([
-          :listeners,
-          :queue,
-          :runs,
-          :sessions,
-          :session_dir,
-          :cwd,
-          :event_sink,
-          :session_id,
-          :tool_context_metadata
-        ])
-
-      {:ok, run_options}
+    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
+      {:ok,
+       run_options
+       |> configure_serve_approval(options)
+       |> Keyword.drop([
+         :listeners,
+         :queue,
+         :runs,
+         :sessions,
+         :session_dir,
+         :cwd,
+         :event_sink,
+         :session_id,
+         :tool_context_metadata
+       ])}
     end
   end
 
@@ -330,30 +259,12 @@ defmodule Alto.CLI do
       |> Config.run_options()
       |> Keyword.get(:listeners, [{UnixSocket, []}, {WebServer, []}])
 
-    with {:ok, specs} <- validate_listener_specs(specs),
-         specs = specs |> fill_listener_defaults() |> apply_listener_flags(options),
-         :ok <- validate_listener_ports(specs) do
+    specs = specs |> fill_listener_defaults() |> apply_listener_flags(options)
+
+    with :ok <- validate_listener_ports(specs) do
       {:ok, specs}
     end
   end
-
-  defp validate_listener_specs(specs) when is_list(specs) do
-    if Enum.all?(specs, &valid_listener_spec?/1) do
-      {:ok, specs}
-    else
-      {:error,
-       "invalid listeners: want [{Alto.Listeners.UnixSocket, opts}, {Alto.Listeners.WebServer, opts}]"}
-    end
-  end
-
-  defp validate_listener_specs(_specs) do
-    {:error, "invalid listeners: want a list of {module, options} pairs"}
-  end
-
-  defp valid_listener_spec?({module, opts}),
-    do: module in [UnixSocket, WebServer, Webhook] and Keyword.keyword?(opts)
-
-  defp valid_listener_spec?(_other), do: false
 
   defp validate_listener_ports(specs) do
     ports =
@@ -373,6 +284,7 @@ defmodule Alto.CLI do
       {UnixSocket, opts} -> {UnixSocket, Keyword.put_new(opts, :path, default_socket_path())}
       {WebServer, opts} -> {WebServer, Keyword.put_new(opts, :port, @default_serve_port)}
       {Webhook, opts} -> {Webhook, Keyword.put_new(opts, :port, @default_webhook_port)}
+      other -> other
     end)
   end
 
@@ -396,26 +308,16 @@ defmodule Alto.CLI do
   end
 
   defp default_socket_path do
-    state_home =
-      System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")
-
-    Path.join([state_home, "alto", "alto.sock"])
+    Path.join([Alto.Storage.state_home(), "alto", "alto.sock"])
   end
 
   defp start_serve_listeners(specs, registry) do
-    Enum.reduce_while(specs, {:ok, []}, fn {module, opts}, {:ok, descriptions} ->
+    Alto.Result.traverse(specs, fn {module, opts} ->
       case module.start_link(Keyword.put(opts, :registry, registry)) do
-        {:ok, listener} ->
-          {:cont, {:ok, [describe_listener(module, opts, listener) | descriptions]}}
-
-        {:error, reason} ->
-          {:halt, {:error, format_reason(reason)}}
+        {:ok, listener} -> {:ok, describe_listener(module, opts, listener)}
+        {:error, reason} -> {:error, format_reason(reason)}
       end
     end)
-    |> case do
-      {:ok, descriptions} -> {:ok, Enum.reverse(descriptions)}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp describe_listener(UnixSocket, opts, _listener),
@@ -435,16 +337,15 @@ defmodule Alto.CLI do
     "serving webhook endpoints at http://127.0.0.1:#{Webhook.bound_port(listener)} (#{paths})"
   end
 
+  defp describe_listener(module, _opts, _listener), do: "started listener #{inspect(module)}"
+
   defp setup(options, []) do
     if Onboarding.terminal?() do
-      provider_options = discovery_provider_options(options)
-
       case Onboarding.resolve(
              force: true,
              interactive: true,
              api_key: environment_api_key(options, :openrouter),
-             provider: OpenAICompatible,
-             provider_options: provider_options
+             provider: {OpenAICompatible, discovery_provider_options(options)}
            ) do
         {:ok, %{model: model}} ->
           IO.puts(:stderr, "OpenRouter setup complete. Default model: #{model}")
@@ -486,25 +387,32 @@ defmodule Alto.CLI do
   end
 
   defp run_options(options, config, command_mode) do
-    configured = config |> Config.run_options() |> Keyword.drop([:tui])
-
-    with {:ok, provider, provider_timeout} <- provider(options, configured) do
+    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
       renderer = Renderer.start(Onboarding.terminal?())
 
       run_options =
-        configured
-        |> Keyword.put(:provider, provider)
-        |> configure_provider_timeout(provider_timeout)
-        |> configure_tools(options, command_mode)
+        run_options
         |> configure_approval(options)
-        |> configure_max_steps(options)
-        |> configure_prompt(options)
-        |> configure_project_instructions(options)
         |> configure_session(options)
         |> Keyword.put(:cwd, File.cwd!())
         |> Alto.Events.attach(&send(renderer, {:event, &1}))
 
       {:ok, run_options, renderer}
+    end
+  end
+
+  defp common_run_options(options, config, command_mode) do
+    configured = config |> Config.run_options() |> Keyword.drop([:tui])
+
+    with {:ok, provider, provider_timeout} <- provider(options, configured) do
+      {:ok,
+       configured
+       |> Keyword.put(:provider, provider)
+       |> configure_provider_timeout(provider_timeout)
+       |> configure_tools(options, command_mode)
+       |> Keyword.merge(Keyword.take(options, [:max_steps]))
+       |> configure_prompt(options)
+       |> configure_project_instructions(options)}
     end
   end
 
@@ -573,26 +481,9 @@ defmodule Alto.CLI do
 
   defp configured_provider(options) do
     base_url = base_url(options)
-
-    if openrouter?(base_url) do
-      configure_openrouter(options, base_url)
-    else
-      configure_compatible_provider(options, base_url)
-    end
-  end
-
-  defp configure_openrouter(options, base_url) do
     timeout = Keyword.get(options, :timeout, 120_000)
-    discovery_options = discovery_provider_options(options, base_url)
 
-    with {:ok, selected} <-
-           Onboarding.resolve(
-             api_key: environment_api_key(options, :openrouter),
-             model: requested_model(options),
-             interactive: Onboarding.terminal?(),
-             provider: OpenAICompatible,
-             provider_options: discovery_options
-           ) do
+    with {:ok, selected} <- select_provider(options, base_url) do
       provider_options = [
         model: selected.model,
         base_url: base_url,
@@ -604,18 +495,18 @@ defmodule Alto.CLI do
     end
   end
 
-  defp configure_compatible_provider(options, base_url) do
-    with {:ok, model} <- required_model(options) do
-      timeout = Keyword.get(options, :timeout, 120_000)
-
-      provider_options = [
-        model: model,
-        base_url: base_url,
-        api_key: environment_api_key(options, :compatible),
-        timeout: timeout
-      ]
-
-      {:ok, {OpenAICompatible, provider_options}, timeout + 5_000}
+  defp select_provider(options, base_url) do
+    if openrouter?(base_url) do
+      Onboarding.resolve(
+        api_key: environment_api_key(options, :openrouter),
+        model: requested_model(options),
+        interactive: Onboarding.terminal?(),
+        provider: {OpenAICompatible, discovery_provider_options(options, base_url)}
+      )
+    else
+      with {:ok, model} <- required_model(options) do
+        {:ok, %{model: model, api_key: environment_api_key(options, :compatible)}}
+      end
     end
   end
 
@@ -662,32 +553,10 @@ defmodule Alto.CLI do
     end
   end
 
-  defp configure_max_steps(run_options, options) do
-    cond do
-      Keyword.has_key?(options, :max_steps) ->
-        Keyword.put(run_options, :max_steps, Keyword.fetch!(options, :max_steps))
-
-      Keyword.has_key?(run_options, :max_steps) ->
-        run_options
-
-      true ->
-        Keyword.put(run_options, :max_steps, 32)
-    end
-  end
-
   defp configure_prompt(run_options, options) do
-    if prompt_flags?(options) do
-      run_options
-      |> Keyword.drop([:prompt, :system_prompt])
-      |> Keyword.merge(prompt_options(options))
-    else
-      if Keyword.has_key?(run_options, :prompt) or
-           Keyword.has_key?(run_options, :system_prompt) do
-        run_options
-      else
-        Keyword.put(run_options, :prompt, Alto.Prompts.Coding)
-      end
-    end
+    if prompt_flags?(options),
+      do: Keyword.merge(run_options, prompt_options(options)),
+      else: Keyword.put_new(run_options, :prompt, Alto.Prompts.Coding)
   end
 
   defp prompt_flags?(options) do
@@ -759,24 +628,22 @@ defmodule Alto.CLI do
   end
 
   defp command_mode(options) do
-    unsandboxed? = Keyword.get(options, :allow_command, false)
-    sandboxed? = Keyword.get(options, :sandbox_command, false)
-    network? = Keyword.get(options, :allow_command_network, false)
-
-    cond do
-      unsandboxed? and sandboxed? ->
+    case {Keyword.get(options, :allow_command, false),
+          Keyword.get(options, :sandbox_command, false),
+          Keyword.get(options, :allow_command_network, false)} do
+      {true, true, _} ->
         {:error, "choose either --allow-command or --sandbox-command, not both"}
 
-      network? and not sandboxed? ->
+      {_, false, true} ->
         {:error, "--allow-command-network requires --sandbox-command"}
 
-      sandboxed? ->
+      {_, true, _} ->
         {:ok, :sandboxed}
 
-      unsandboxed? ->
+      {true, false, false} ->
         {:ok, :unsandboxed}
 
-      true ->
+      _ ->
         {:ok, :disabled}
     end
   end
@@ -796,26 +663,14 @@ defmodule Alto.CLI do
 
   defp prompt_options(options) do
     cond do
-      Keyword.get(options, :no_system_prompt, false) -> [system_prompt: nil]
-      prompt = Keyword.get(options, :system_prompt) -> [system_prompt: prompt]
+      Keyword.get(options, :no_system_prompt, false) -> [prompt: nil]
+      prompt = Keyword.get(options, :system_prompt) -> [prompt: prompt]
       true -> []
     end
   end
 
-  defp format_reason({:http_error, status, detail}),
-    do: "provider returned HTTP #{status}: #{inspect(detail)}"
-
   defp format_reason({:socket_bind_failed, path, :already_in_use}),
     do: "socket #{path} is already served by another Alto process"
-
-  defp format_reason({:socket_bind_failed, path, reason}),
-    do: "could not bind socket #{path}: #{inspect(reason)}"
-
-  defp format_reason({:listen_failed, reason}),
-    do: "could not listen for the WebSocket: #{inspect(reason)}"
-
-  defp format_reason({:config_load_failed, path, reason}),
-    do: "could not load config #{path}: #{inspect(reason)}"
 
   defp format_reason({:invalid_config_return, path}),
     do: "config #{path} must return %Alto.Config{}"
@@ -827,12 +682,6 @@ defmodule Alto.CLI do
 
   defp format_reason({:invalid_session_id, id}), do: "invalid session id #{inspect(id)}"
 
-  defp format_reason({:session_corrupt, id, line}),
-    do: "session #{id} is corrupt near record #{inspect(line)}"
-
-  defp format_reason({:session_read_failed, reason}),
-    do: "could not read sessions: #{inspect(reason)}"
-
   defp format_reason({:transcript_limit, max}),
     do: "transcript exceeded #{max} bytes (set compaction: true to compact and continue)"
 
@@ -842,5 +691,5 @@ defmodule Alto.CLI do
   defp format_reason(:compaction_requires_provider),
     do: "transcript limit reached, but compaction needs a provider"
 
-  defp format_reason(reason), do: inspect(reason, pretty: true, limit: 20)
+  defp format_reason(reason), do: Alto.Display.error(reason)
 end

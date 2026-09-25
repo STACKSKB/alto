@@ -5,6 +5,14 @@ around lifecycle events, configure trusted commands, transform model supplied
 tool input, select an optional renderer or front end, and choose provider
 adapters without changing the runner.
 
+## System prompts
+
+The `:prompt` run option accepts literal text, `nil` to omit the system message,
+a builder module, `{module, options}`, or a function receiving the prompt context.
+For example, use `prompt: "Answer concisely"` or `prompt: Alto.Prompts.Coding`.
+The CLI's `--system-prompt` and `--no-system-prompt` flags set this same option.
+A resumed conversation retains its stored system message.
+
 ## Request diagnostics by composition
 
 The executor emits `model_started` with the step number only. Request diagnostics
@@ -21,7 +29,9 @@ provider =
   end)
 ```
 
-Use this provider specification in `Alto.Config.new/1` or a provider profile.
+Use this `{module, options}` provider specification in `Alto.Config.new/1` or a
+provider profile. A bare module means `{module, []}`; provider options belong
+inside the tuple.
 Omit the wrapper to omit diagnostics; nest wrappers to compose observers.
 Observers run for each transport attempt (including retries and reduction),
 inside the provider's existing timeout and cancellation boundary. They receive
@@ -167,7 +177,7 @@ sandbox = {Alto.Command.Executors.Bubblewrap,
   network: :disabled, protected_paths: [".git"],
   env: %{"MY_TOOL_SETTING" => "value"}}
 
-Alto.Tools.FFF.tools(executable: "/usr/local/bin/fff-mcp", executor: sandbox)
+Alto.Tools.FFF.tools(command: "/usr/local/bin/fff-mcp", executor: sandbox)
 {Alto.Tools.Ripwire, executable: "/usr/local/bin/ripwire", executor: sandbox}
 ```
 
@@ -221,10 +231,9 @@ Reducers receive structured pinned, middle and recent messages, historical tool
 schemas, limits and artifact metadata, plus a bounded model-call function. They
 return `{:ok, %{content: text, data: map, events: list, records: list}}`. Execution
 forces `tool_choice: :none`, accounts model calls, and checks replacement size,
-shrinkage and headroom before accepting it. Legacy text `reduce/3` and
-`request/3` + `decode/3` reducers still work through `Reducers.Legacy`.
-`:summary` and `:handoff` remain compatibility aliases; new profiles can name the
-implementations explicitly.
+shrinkage and headroom before accepting it. Custom reducers use this same
+structured `compact/3` contract.
+Built-in reducers use the same module configuration as host reducers.
 
 ```elixir
 retry_policy: {Alto.Retry.Transient, base_delay: 100, max_delay: 2_000},
@@ -236,10 +245,9 @@ A retry callback returns `:stop` or `{:retry, delay_ms, reason}`. Execution stil
 refuses to replay an attempt after output delivery and enforces the attempt and
 time budgets. Omitted retry policy preserves the existing transient policy;
 `provider_retries: 0` disables retries. Omitted presentation emits the tool name.
-The optional `result/2` presenter callback supplies a preview for typed content;
-without it, `output` is empty and `value` retains the content. Presenter failures
-fall back to the tool name or an empty preview; presentation cannot change tool input
-or authorization.
+Completion events retain the native result in `value`; consumers render it with
+`Alto.ToolDisplay` or their own presentation function. Tool-title presenter failures
+fall back to the tool name; presentation cannot change tool input or authorization.
 
 `Alto.Events.combine/1` composes synchronous sinks in order, isolating sink
 failures. CLI, registry and TUI delivery attach their host sink before the

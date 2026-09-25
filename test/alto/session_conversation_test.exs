@@ -6,11 +6,8 @@ defmodule Alto.SessionConversationTest do
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-conversation-#{System.unique_integer([:positive])}")
-    workspace = Path.join(dir, "workspace")
-    File.mkdir_p!(workspace)
-    File.write!(Path.join(workspace, "kept.txt"), "unchanged")
     on_exit(fn -> File.rm_rf!(dir) end)
-    %{dir: dir, workspace: workspace}
+    %{dir: dir}
   end
 
   defp user(content), do: %{"role" => "user", "content" => content}
@@ -94,23 +91,27 @@ defmodule Alto.SessionConversationTest do
              %{revision: 1, tool_call_ids: ["call-1"], run_id: "run-crashed"}}} =
              Session.transcript(id, session_dir: dir)
 
-    # Terminal compatibility keeps the assistant call. Setup.close_interrupted/1
-    # will turn its missing reply into an explicit unknown result on resume.
+    # Retaining pending history keeps the assistant call. Resume turns its
+    # missing reply into an explicit unknown result.
     recovery = safe ++ [call("call-1")]
 
-    assert :ok =
-             Session.write_transcript(id, recovery, bytes(recovery),
+    assert {:ok, _snapshot} =
+             Session.persist_settled(id, recovery, bytes(recovery),
                session_dir: dir,
+               allow_pending: true,
                expected_revision: 1
              )
 
-    assert {:ok, %{messages: ^recovery, revision: 2}} =
+    assert {:ok, %{messages: ^recovery, revision: 2} = snapshot} =
              Session.transcript(id, session_dir: dir)
 
     assert {:ok, closed} = Transcript.close_interrupted(recovery)
-    assert :ok = Transcript.validate(closed)
     assert List.last(closed)["tool_call_id"] == "call-1"
     assert JSON.decode!(List.last(closed)["content"])["outcome"] == "unknown"
+
+    assert {:ok, run} = Alto.Runner.Execution.Setup.open("continue", resume: snapshot)
+    assert run.pending_provider_calls == %{}
+    assert Enum.reverse(run.messages_rev) == closed ++ [user("continue")]
 
     assert {:error, {:conversation_revision_unsettled, ^id, 2}} =
              Session.fork(id, revision: 2, session_dir: dir)
@@ -170,10 +171,7 @@ defmodule Alto.SessionConversationTest do
     assert {:ok, %{messages: ^outcome}} = Session.transcript(id, session_dir: dir)
   end
 
-  test "forks copy only a complete transcript and immutable provenance", %{
-    dir: dir,
-    workspace: workspace
-  } do
+  test "forks copy only a complete transcript and immutable provenance", %{dir: dir} do
     {:ok, source} = Session.create("task", %{}, session_dir: dir)
     first = [user("one")]
     second = first ++ [%{"role" => "assistant", "content" => "two"}]
@@ -238,7 +236,6 @@ defmodule Alto.SessionConversationTest do
     assert {:ok, branch_records} = Session.read("sess-branch", session_dir: dir)
     assert Enum.map(branch_records, & &1["type"]) == ["started", "forked"]
     refute Enum.any?(branch_records, &(&1["type"] == "approval_grant"))
-    assert File.read!(Path.join(workspace, "kept.txt")) == "unchanged"
   end
 
   test "revision and aggregate storage fences fail without replacing the head", %{dir: dir} do
@@ -280,26 +277,58 @@ defmodule Alto.SessionConversationTest do
              )
   end
 
-  test "legacy snapshots remain resumable and forkable", %{dir: dir} do
-    {:ok, id} = Session.create("legacy", %{}, session_dir: dir)
-    messages = [user("legacy")]
+  test "an uncommitted revision cannot bypass the fenced head and can be retried", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("native work")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    {:ok, _} = Session.mark_dispatched(id, ["op-1"], session_dir: dir, run_id: "run-1")
+    head_path = Path.join(dir, id <> ".transcript.json")
+    fenced_head = File.read!(head_path)
+    options = [session_dir: dir, expected_revision: 1, resolved_operations: ["op-1"]]
+    {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
 
-    File.write!(
-      Path.join(dir, id <> ".transcript.json"),
-      JSON.encode!(%{"v" => 1, "messages" => messages, "transcript_bytes" => bytes(messages)}) <>
-        "\n"
-    )
+    # Model a crash after the immutable entry was written but before the head commit.
+    File.write!(head_path, fenced_head)
 
-    assert {:ok, %{messages: ^messages, revision: 1}} =
+    assert {:error, {:session_unsettled_tool_dispatch, %{revision: 1}}} =
              Session.transcript(id, session_dir: dir)
 
-    assert {:ok, fork} =
-             Session.fork(id,
-               session_id: "sess-legacy-branch",
-               session_dir: dir
-             )
+    assert {:error, {:conversation_dispatch_conflict, _}} =
+             Session.mark_dispatched(id, ["op-2"], session_dir: dir, run_id: "other-run")
 
-    assert fork.transcript.messages == messages
-    assert fork.source == %{session_id: id, revision: 1}
+    assert {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
+    assert {:ok, resumed} = Session.transcript(id, session_dir: dir)
+    assert resumed.revision == 2
+    refute Map.has_key?(resumed, :unsettled)
+  end
+
+  test "invalid or obsolete heads cannot discard an unresolved fence", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("work")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    path = Path.join(dir, id <> ".transcript.json")
+    head = JSON.decode!(File.read!(path))
+
+    for invalid <- [
+          Map.put(head, "dispatch", %{"tool_call_ids" => []}),
+          %{"v" => 1, "revision" => 1}
+        ] do
+      File.write!(path, JSON.encode!(invalid))
+
+      assert {:error, {:session_corrupt, ^id, :transcript}} =
+               Session.transcript(id, session_dir: dir)
+    end
+  end
+
+  test "a missing immutable head fails resume instead of returning a stale transcript", %{
+    dir: dir
+  } do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("hello")]
+    {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    File.rm!(Path.join([dir, "conversations", id, "revision-1.json"]))
+
+    assert {:error, {:session_read_failed, {:conversation_revision_not_found, ^id, 1}}} =
+             Session.transcript(id, session_dir: dir)
   end
 end

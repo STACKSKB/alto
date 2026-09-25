@@ -143,7 +143,7 @@ defmodule Alto.CommandTest do
     System.put_env("PATH", first <> ":" <> inherited_path)
 
     assert {:ok, prepared} = Alto.Command.prepare(%{"program" => "alto-path-probe"}, context)
-    assert prepared.invocation.executable == Path.join(first, "alto-path-probe")
+    assert prepared.approval_details.command.executable == Path.join(first, "alto-path-probe")
 
     System.put_env("PATH", second <> ":" <> inherited_path)
 
@@ -176,7 +176,7 @@ defmodule Alto.CommandTest do
           {NoPolicyCallbacks, NoPolicyCallbacks},
           {{NoPolicyCallbacks, []}, NoPolicyCallbacks}
         ] do
-      assert {:error, {:invalid_command_component, :policy, ^module}} =
+      assert {:error, {:invalid_capability, Alto.Command.Policy, {^module, []}}} =
                Alto.Command.prepare(%{"program" => "printf"}, context, policy: spec)
     end
   end
@@ -188,7 +188,7 @@ defmodule Alto.CommandTest do
           {NoExecutorExecute, NoExecutorExecute},
           {{NoExecutorCallbacks, []}, NoExecutorCallbacks}
         ] do
-      assert {:error, {:invalid_command_component, :executor, ^module}} =
+      assert {:error, {:invalid_capability, Alto.Command.Executor, {^module, []}}} =
                Alto.Command.prepare(%{"program" => "printf"}, context, executor: spec)
     end
   end

@@ -1,6 +1,6 @@
 defmodule Alto.Runner.SerialSubagentTest do
   @moduledoc """
-  Owned serial sub-runs: the loop delegates through `:spawn_agent`, the host
+  Owned serial sub-runs: the loop delegates through a one-child batch, the host
   enforces depth budgets, inherits provider/tools/approval with no widening,
   forwards progress, validates results, and propagates cancellation.
   """
@@ -10,50 +10,14 @@ defmodule Alto.Runner.SerialSubagentTest do
   alias Alto.Effect
   alias Alto.Event
   alias Alto.Session
+  alias Alto.TestSupport.EchoTool
   alias Alto.Transition
 
-  defmodule EchoTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name, do: :echo
-
-    @impl true
-    def schema do
-      %{
-        description: "Echo a value.",
-        parameters: %{
-          type: "object",
-          properties: %{value: %{type: "string"}},
-          required: ["value"]
-        }
-      }
-    end
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :never
-
-    @impl true
-    def run(%{"value" => value}, _context), do: {:ok, %{echo: value}}
-  end
-
   defmodule GuardedEchoTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :guarded_echo, execution_mode: :parallel, approval: :required
 
     @impl true
-    def name, do: :guarded_echo
-
-    @impl true
-    def schema, do: EchoTool.schema()
-
-    @impl true
-    def execution_mode, do: :parallel
-
-    @impl true
-    def approval, do: :required
+    def schema(_opts), do: EchoTool.schema([])
 
     @impl true
     def run(%{"value" => value}, context, opts) do
@@ -138,16 +102,20 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     @impl true
     def init(%{spawn: spawn}, _spec) do
-      Transition.continue(%{}, [Effect.spawn_agent(spawn)])
+      Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
     end
 
     @impl true
-    def handle_event(%Event{type: :subagent_completed, data: data}, state, _spec) do
-      Transition.stop(state, {:completed, data})
+    def handle_event(
+          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
+          state,
+          _spec
+        ) do
+      Transition.stop(state, {:failed, data})
     end
 
-    def handle_event(%Event{type: :subagent_failed, data: data}, state, _spec) do
-      Transition.stop(state, {:failed, data})
+    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _spec) do
+      Transition.stop(state, {:completed, data})
     end
 
     def handle_event(_event, state, _spec), do: Transition.continue(state)
@@ -174,7 +142,7 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "delegation is disabled without a depth budget", %{dir: dir} do
-    assert {:ok, result} =
+    assert {:error, {:invalid_spawn_agents, :max_depth_exceeded}, result} =
              Alto.run(%{spawn: %{id: "sub-1", task: "child task"}},
                loop: parent_loop(0),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -182,20 +150,15 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:failed, %{id: "sub-1", error: :max_depth_exceeded}} = result.output
-    assert Enum.any?(result.events, &(&1.type == :subagent_failed))
+    assert result.output == nil
   end
 
   test "the child inherits provider, tools, and approval by default", %{dir: dir} do
-    test_pid = self()
-
-    child_provider = {EchoCallProvider, []}
-
     assert {:ok, result} =
              Alto.run(
-               %{spawn: %{id: "sub-1", task: "do the echo", provider: child_provider}},
+               %{spawn: %{id: "sub-1", task: "do the echo"}},
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {EchoCallProvider, []},
                tools: [EchoTool],
                approval: Alto.Approvals.DenyAll,
                session: :new,
@@ -226,12 +189,11 @@ defmodule Alto.Runner.SerialSubagentTest do
                %{
                  spawn: %{
                    id: "sub-1",
-                   task: "guarded",
-                   provider: {GuardedEchoCallProvider, test_pid: test_pid}
+                   task: "guarded"
                  }
                },
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {GuardedEchoCallProvider, test_pid: test_pid},
                tools: [{GuardedEchoTool, test_pid: test_pid}],
                approval: Alto.Approvals.DenyAll,
                session: :new,
@@ -243,20 +205,17 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "an explicit tool set overrides inheritance", %{dir: dir} do
-    test_pid = self()
-
     assert {:ok, result} =
              Alto.run(
                %{
                  spawn: %{
                    id: "sub-1",
                    task: "no tools",
-                   tools: [],
-                   provider: {EchoCallProvider, []}
+                   tools: []
                  }
                },
                loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "parent unused"},
+               provider: {EchoCallProvider, []},
                tools: [EchoTool],
                session: :new,
                session_dir: dir
@@ -289,7 +248,7 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "invalid delegation requests fail the run", %{dir: dir} do
-    assert {:error, {:invalid_spawn_agent, _}, _result} =
+    assert {:error, {:invalid_spawn_agents, _}, _result} =
              Alto.run(%{spawn: %{id: "sub-1"}},
                loop: parent_loop(1),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -311,8 +270,12 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:completed, %{id: "sub-1", status: :ok, output: {:failed, %{id: "grand"}}}} =
-             result.output
+    assert {:failed,
+            %{
+              id: "sub-1",
+              status: :error,
+              error: {:invalid_spawn_agents, :max_depth_exceeded}
+            }} = result.output
   end
 
   test "a crashing child becomes a failed event, not a parent crash", %{dir: dir} do

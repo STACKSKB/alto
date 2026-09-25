@@ -60,6 +60,16 @@ defmodule Alto.Runner.BudgetSnapshotTest do
       "remaining_ms" => 0
     }
 
+    for key <- Map.keys(base) do
+      assert {:error, :invalid_snapshot} = Budget.restore([], Map.delete(base, key))
+      assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, key, "0"))
+    end
+
+    for key <- ["effects_used", "model_requests_used", "max_effects", "max_model_requests"] do
+      assert {:error, :invalid_snapshot} =
+               Budget.restore([], Map.put(base, key, 18_446_744_073_709_551_616))
+    end
+
     assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "extra", 1))
     assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "effects_used", -1))
     assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "max_effects", 0))

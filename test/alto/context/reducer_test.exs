@@ -18,7 +18,7 @@ defmodule Alto.Context.ReducerTest do
       with {:ok, completion} <-
              Task.async(fn -> model.(%{messages: input.middle, tools: input.tools}) end)
              |> Task.await() do
-        {:ok, %{content: completion.message, data: %{strategy: :custom}, events: [], records: []}}
+        {:ok, %{content: completion.message, data: %{strategy: :custom}}}
       end
     end
   end
@@ -36,7 +36,7 @@ defmodule Alto.Context.ReducerTest do
                compaction: [strategy: {Structured, owner: self()}, keep_recent_messages: 1]
              )
 
-    state = Alto.Runner.Execution.Transcript.project(run)
+    state = run
 
     assert {:ok, state} =
              Alto.Runner.Execution.Transcript.append(state, %{

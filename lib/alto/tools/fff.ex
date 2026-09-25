@@ -7,76 +7,57 @@ defmodule Alto.Tools.FFF do
   in-memory index can remain resident across runs.
   """
 
-  @file_schema %{
-    description:
-      "Frecency- and git-aware fuzzy path search using the external FFF index. Keep queries short; supports path prefixes and FFF glob constraints.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        query: %{type: "string", description: "Fuzzy path query and optional FFF constraints."},
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
+  @page_fields %{
+    maxResults: %{type: "number", minimum: 1, maximum: 100},
+    cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
   }
+  @content_fields Map.merge(@page_fields, %{
+                    output_mode: %{type: "string"},
+                    context: %{type: "number", minimum: 0, maximum: 100}
+                  })
 
-  @grep_schema %{
-    description:
-      "Search file contents through the external FFF warm index. Put filename, directory, glob, and exclusion constraints inline before the query.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        query: %{type: "string", description: "Content query."},
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        output_mode: %{type: "string"},
-        context: %{type: "number", minimum: 0, maximum: 100},
-        cursor: %{type: "string", description: "Opaque cursor from a previous result page."}
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  }
+  @file_schema Alto.Tool.object_schema(
+                 "Frecency- and git-aware fuzzy path search using the external FFF index. Keep queries short; supports path prefixes and FFF glob constraints.",
+                 Map.merge(@page_fields, %{
+                   query: %{
+                     type: "string",
+                     description: "Fuzzy path query and optional FFF constraints."
+                   }
+                 }),
+                 ["query"]
+               )
 
-  @multi_schema %{
-    description:
-      "Search several content patterns in one call through the external FFF warm index.",
-    parameters: %{
-      type: "object",
-      properties: %{
-        patterns: %{type: "array", items: %{type: "string"}, minItems: 1, maxItems: 50},
-        constraints: %{
-          type: "string",
-          description: "FFF file constraints, such as '*.{ex,exs} !deps/'."
-        },
-        maxResults: %{type: "number", minimum: 1, maximum: 100},
-        output_mode: %{type: "string"},
-        context: %{type: "number", minimum: 0, maximum: 100},
-        cursor: %{type: "string"}
-      },
-      required: ["patterns"],
-      additionalProperties: false
-    }
-  }
+  @grep_schema Alto.Tool.object_schema(
+                 "Search file contents through the external FFF warm index. Put filename, directory, glob, and exclusion constraints inline before the query.",
+                 Map.put(@content_fields, :query, %{type: "string", description: "Content query."}),
+                 ["query"]
+               )
 
-  @doc "Return the three model-facing tool specs backed by one workspace-scoped FFF server."
+  @multi_schema Alto.Tool.object_schema(
+                  "Search several content patterns in one call through the external FFF warm index.",
+                  Map.merge(@content_fields, %{
+                    patterns: %{
+                      type: "array",
+                      items: %{type: "string"},
+                      minItems: 1,
+                      maxItems: 50
+                    },
+                    constraints: %{
+                      type: "string",
+                      description: "FFF file constraints, such as '*.{ex,exs} !deps/'."
+                    }
+                  }),
+                  ["patterns"]
+                )
+
+  @doc """
+  Return three tools backed by one workspace-scoped FFF server.
+  Options are MCP server options; `command` defaults to `fff-mcp` and `cwd`
+  is always resolved from the active workspace.
+  """
   @spec tools(keyword()) :: [Alto.Tool.spec()]
   def tools(opts \\ []) do
-    executable = Keyword.get(opts, :executable, "fff-mcp")
-    args = Keyword.get(opts, :args, [])
-
-    server = [
-      command: executable,
-      args: args,
-      cwd: :workspace,
-      executor: Keyword.get(opts, :executor, Alto.Command.Executors.Unsandboxed),
-      startup_timeout: Keyword.get(opts, :startup_timeout, 30_000),
-      request_timeout: Keyword.get(opts, :request_timeout, 30_000),
-      max_message_bytes: Keyword.get(opts, :max_message_bytes, 2_000_000),
-      max_pending_requests: Keyword.get(opts, :max_pending_requests, 128),
-      max_ready_waiters: Keyword.get(opts, :max_ready_waiters, 128)
-    ]
+    server = opts |> Keyword.put_new(:command, "fff-mcp") |> Keyword.put(:cwd, :workspace)
 
     [
       spec(:fff_find_files, "find_files", @file_schema, server),

@@ -26,10 +26,8 @@ adjustments can advance or postpone eligibility. `clock: zero_arity_function`
 is an optional trusted queue setting for deterministic tests; it must return
 Unix milliseconds and is also used for leases.
 
-Scheduled put/release records use log version 2; readers accept existing version
-1 records. Old Alto versions reject version 2 rather than silently ignoring a
-due time and executing work early. Do not downgrade a queue containing version
-2 records without an explicit migration. Immediate-only logs remain version 1.
+Queue logs use one current format for immediate, scheduled, and retained state.
+Unsupported historical formats are rejected.
 
 There are no background timers per record, automatic recurrences, new database,
 or application-level task concepts. Consumer polling and configured capacity
@@ -54,10 +52,9 @@ requested append cannot fit the log bound, the mutation fails explicitly;
 compaction never drops live work or shrinks the configured dedup window to fit.
 
 Replacement uses a file-and-directory-synced atomic rename while holding the
-queue's lifetime lock. A version 3 header preserves the next record ID and
+queue's lifetime lock. A retained-state header preserves the next record ID and
 completed identities, and checks the complete retained prefix's count and hash.
 An incomplete retained snapshot fails closed; only later torn appends receive
-normal tail repair. Existing version 1/2 logs remain readable. Old readers
-reject compacted logs, so do not downgrade queues after enabling compaction.
+normal tail repair.
 `compact/1` reports byte counts and retained live/completed counts. This is a
 queue-state maintenance operation, not an audit-log export.

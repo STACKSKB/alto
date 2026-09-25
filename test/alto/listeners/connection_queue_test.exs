@@ -36,21 +36,12 @@ defmodule Alto.Listeners.ConnectionQueueTest do
   end
 
   defp run(line, registry) do
-    Connection.run_command(line, registry, fn out -> send(self(), {:line, out}) end)
-
-    assert_receive {:line, out}
+    [out] = Connection.command_lines(line, registry)
     JSON.decode!(IO.iodata_to_binary(out))
   end
 
   defp run_with_limit(line, registry, max_line_bytes) do
-    Connection.run_command(
-      line,
-      registry,
-      fn out -> send(self(), {:line, out}) end,
-      max_line_bytes
-    )
-
-    assert_receive {:line, out}
+    [out] = Connection.command_lines(line, registry, max_line_bytes)
     JSON.decode!(IO.iodata_to_binary(out))
   end
 

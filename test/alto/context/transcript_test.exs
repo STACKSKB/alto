@@ -24,6 +24,23 @@ defmodule Alto.Context.TranscriptTest do
     end
   end
 
+  test "boundary cuts include duplicate call replies and retain unfinished groups" do
+    user = %{"role" => "user", "content" => "task"}
+    group = [call(["a", "a"]), reply("a"), reply("a")]
+    answer = %{"role" => "assistant", "content" => "done"}
+    messages = [user] ++ group ++ [answer]
+
+    assert {[], [^user], recent} = Transcript.split(messages, 2)
+    assert recent == group ++ [answer]
+    assert {pinned, [], [^answer]} = Transcript.split(messages, 1, 2)
+    assert pinned == [user] ++ group
+    assert {[], ^messages, []} = Transcript.split(messages, 0)
+
+    unfinished = [user, call(["a"])]
+    assert {[], [^user], [_call]} = Transcript.split(unfinished, 0)
+    assert {^unfinished, [], []} = Transcript.split(unfinished, 0, 2)
+  end
+
   test "interrupted effects close as unknown without inventing successful replies" do
     history = [call(["a", "b"]), reply("a")]
     assert {:error, {:unanswered_tool_calls, ["b"]}} = Transcript.validate(history)

@@ -1,27 +1,24 @@
 defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
   @moduledoc """
-  : operation and approval identity.
+  Operation and approval identity across concurrent runs and reconnects.
 
-  Identities: run (`session_id`, globally unique), provider call (`call_id`,
-  repeatable correlation only), runtime operation (`operation_id`,
-  `"<run_id>:op-<seq>"`, globally unique per invocation), approval handle
-  (`id`, 1:1 with `operation_id`). Front ends answer with the handle; the
-  `call_id` is never a handle.
+  Run identities are globally unique; provider call ids are repeatable
+  correlation tokens. Each invocation has one operation/approval handle
+  (`id`, `"<run_id>:op-<seq>"`). Front ends answer with this handle.
   """
 
   use ExUnit.Case, async: true
 
   alias Alto.Event
   alias Alto.FrontEnd.Registry
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   @receive_timeout 5_000
 
-  defmodule EchoTool do
-    @behaviour Alto.Tool
+  defmodule GuardedEchoTool do
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :required
     @impl true
-    def name, do: :echo
-    @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Echo.",
         parameters: %{
@@ -33,33 +30,15 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     end
 
     @impl true
-    def execution_mode, do: :parallel
-    @impl true
-    def approval, do: :never
-    @impl true
-    def run(%{"value" => value}, _ctx), do: {:ok, %{echo: value}}
-  end
-
-  defmodule GuardedEchoTool do
-    @behaviour Alto.Tool
-    @impl true
-    def name, do: :echo
-    @impl true
-    def schema, do: EchoTool.schema()
-    @impl true
-    def execution_mode, do: :parallel
-    @impl true
-    def approval, do: :required
-    @impl true
-    def run(%{"value" => value}, _ctx), do: {:ok, %{echo: value}}
+    def run(%{"value" => value}, _ctx, _opts), do: {:ok, %{echo: value}}
   end
 
   defmodule GuardedStampTool do
     @behaviour Alto.Tool
     @impl true
-    def name, do: :stamp
+    def name(_opts), do: :stamp
     @impl true
-    def schema do
+    def schema(_opts) do
       %{
         description: "Stamp.",
         parameters: %{
@@ -71,36 +50,16 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     end
 
     @impl true
-    def execution_mode, do: :exclusive
+    def execution_mode(_opts), do: :exclusive
     @impl true
-    def prepare(%{"value" => value}, _ctx) do
+    def prepare(%{"value" => value}, _ctx, _opts) do
       token = "tok-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
       {:ok, %{value: value, token: token}, %{stamped_with: value, token: token}}
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _ctx),
+    def run_prepared(%{value: value, token: token}, _ctx, _opts),
       do: {:ok, %{stamped: value, token: token}}
-  end
-
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-    @impl true
-    def describe(_opts), do: %{}
-    @impl true
-    def stream(request, _sink, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:provider_request, request})
-
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
-    end
   end
 
   defmodule DuplicateGuardedProvider do
@@ -136,14 +95,6 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     parent = self()
 
     resolver = fn
-      "tool-loop" ->
-        {:ok,
-         [
-           provider: {ToolThenAnswerProvider, test_pid: parent},
-           tools: [EchoTool],
-           approval: Alto.Approvals.DenyAll
-         ]}
-
       "guarded-loop" ->
         {:ok,
          [
@@ -234,10 +185,13 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert first_req.id != second_req.id
     assert first_req.run_id == first
     assert second_req.run_id == second
-    assert first_req.operation_id == first_req.id
     assert String.starts_with?(first_req.id, first <> ":op-")
 
     assert :ok = Registry.approval_response(registry, first_req.id, :approve)
+
+    assert {:error, :not_found} =
+             Registry.approval_response(registry, first_req.id, {:deny, :late})
+
     assert :ok = Registry.approval_response(registry, second_req.id, {:deny, :second})
 
     assert_receive {:alto_notification, {:result, ^first, :ok, _, _}}, @receive_timeout
@@ -276,23 +230,6 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert :ok = Registry.approval_response(registry, second.id, :approve)
 
     assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
-  end
-
-  test "duplicate approval_response: first wins, second is not_found", %{
-    registry: registry,
-    root: root
-  } do
-    start_registry(registry, root)
-    attach(registry)
-
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "t")
-    Registry.pull(registry, self(), 200)
-    request = wait_for_approval(run_id)
-
-    assert :ok = Registry.approval_response(registry, request.id, :approve)
-    assert {:error, :not_found} = Registry.approval_response(registry, request.id, {:deny, :late})
-
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, _, _}}, @receive_timeout
   end
 
   test "cancellation while approval is pending clears the handle", %{
@@ -370,24 +307,10 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert {:ok, [%{stamped: "first", token: first_tok}]} = first_out
     assert {:ok, [%{stamped: "second", token: second_tok}]} = second_out
 
-    assert first_tok == first_req.details[:token] or first_tok == first_req.details["token"] or
-             is_binary(first_tok)
+    assert first_tok == first_req.details.token
+    assert second_tok == second_req.details.token
 
     assert first_tok != second_tok
-  end
-
-  test "nested runs have distinct handles" do
-    # Nested runs get distinct run ids, so their operation ids cannot collide
-    # even when provider call ids do. Covered end-to-end by the subagent
-    # exposure suite; here we pin the handle construction directly.
-    run_a = "run-test-a"
-    run_b = "run-test-b"
-    op_a = run_a <> ":op-1"
-    op_b = run_b <> ":op-1"
-
-    assert op_a != op_b
-    assert String.starts_with?(op_a, run_a)
-    assert String.starts_with?(op_b, run_b)
   end
 
   defp wait_result(run_id) do

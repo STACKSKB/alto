@@ -51,7 +51,7 @@ defmodule Alto.Project do
          {:ok, %{type: :regular}} <- File.stat(path) do
       File.open(path, [:read, :binary], fn io ->
         case IO.binread(io, max_bytes + 4) do
-          :eof -> {:ok, bounded(path, "", max_bytes)}
+          :eof -> decode_bounded(path, "", max_bytes)
           {:error, reason} -> {:error, reason}
           content -> decode_bounded(path, content, max_bytes)
         end
@@ -67,35 +67,26 @@ defmodule Alto.Project do
     end
   end
 
-  defp decode_bounded(path, content, max_bytes) when byte_size(content) > max_bytes do
-    # At most three trailing bytes can be an incomplete UTF-8 code point.
-    # Never hide malformed bytes earlier in the retained prefix.
-    prefix = binary_part(content, 0, max_bytes)
-
-    case :unicode.characters_to_binary(prefix, :utf8, :utf8) do
-      kept when is_binary(kept) -> {:ok, %{bounded(path, kept, max_bytes) | truncated: true}}
-      {:incomplete, kept, _tail} -> {:ok, %{bounded(path, kept, max_bytes) | truncated: true}}
-      {:error, _kept, _tail} -> {:error, :instructions_not_utf8}
-    end
-  end
-
   defp decode_bounded(path, content, max_bytes) do
-    case validate_utf8(content) do
-      :ok -> {:ok, bounded(path, content, max_bytes)}
-      error -> error
+    truncated = byte_size(content) > max_bytes
+    prefix = binary_part(content, 0, min(byte_size(content), max_bytes))
+
+    # A split code point is allowed only at the truncation boundary; malformed
+    # bytes within the retained prefix must still fail.
+    case :unicode.characters_to_binary(prefix) do
+      kept when is_binary(kept) -> instructions(path, kept, truncated)
+      {:incomplete, kept, _tail} when truncated -> instructions(path, kept, true)
+      _invalid -> {:error, :instructions_not_utf8}
     end
   end
 
-  defp validate_utf8(content) do
-    if String.valid?(content), do: :ok, else: {:error, :instructions_not_utf8}
-  end
-
-  defp bounded(path, content, _max_bytes) do
-    %{
-      path: path,
-      file: Path.basename(path),
-      instructions: content,
-      truncated: false
-    }
+  defp instructions(path, content, truncated) do
+    {:ok,
+     %{
+       path: path,
+       file: Path.basename(path),
+       instructions: content,
+       truncated: truncated
+     }}
   end
 end

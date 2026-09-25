@@ -22,8 +22,6 @@ defmodule Alto.Runner do
   @callback terminate(term(), term()) :: outcome()
   @callback subscribe(term(), pid()) :: {:ok, reference()} | {:error, term()}
 
-  @callbacks [run: 2, start: 2, await: 2, cancel: 2, terminate: 2, subscribe: 2]
-
   @doc "The default execution host."
   def default, do: Alto.Runner.Serial
 
@@ -53,9 +51,8 @@ defmodule Alto.Runner do
   defp resolve(opts) do
     module = Keyword.get(opts, :runner, Alto.Runner.Serial)
 
-    if is_atom(module) and Code.ensure_loaded?(module) and
-         Enum.all?(@callbacks, fn {name, arity} -> function_exported?(module, name, arity) end),
-       do: {:ok, module},
-       else: {:error, {:invalid_runner, module}}
+    if Alto.Capabilities.implements?(module, __MODULE__),
+      do: {:ok, module},
+      else: {:error, {:invalid_runner, module}}
   end
 end

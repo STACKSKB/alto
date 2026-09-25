@@ -15,22 +15,8 @@ defmodule Alto.Providers.OpenAICompatible do
 
   @default_base_url "https://openrouter.ai/api/v1"
   @config_schema HTTPOptions.stream_schema()
-  @config_errors [
-    model: :model_required,
-    endpoint: {:value, :invalid_endpoint},
-    timeout: {:value, :invalid_timeout},
-    max_event_bytes: {:value, :invalid_max_event_bytes},
-    max_response_bytes: {:value, :invalid_max_response_bytes},
-    supports_images: {:value, :invalid_supports_images}
-  ]
   @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
                    [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
-  @models_errors [
-    endpoint: {:value, :invalid_models_endpoint},
-    timeout: {:value, :invalid_timeout},
-    max_models_response_bytes: {:value, :invalid_max_models_response_bytes}
-  ]
-  @default_max_models_response_bytes 8_000_000
   @models_state_key :alto_openai_compatible_models
 
   @impl true
@@ -49,9 +35,8 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, response} <- models_request(config),
-         {:ok, models} <- models_result(response) do
-      {:ok, models}
+         {:ok, status, state} <- models_request(config) do
+      models_result(status, state)
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
@@ -59,10 +44,7 @@ defmodule Alto.Providers.OpenAICompatible do
 
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
-    with {:ok, config} <- config(opts),
-         {:ok, completion} <- request(config, request, sink) do
-      {:ok, completion}
-    end
+    with {:ok, config} <- config(opts), do: request(config, request, sink)
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
   end
@@ -89,62 +71,40 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_messages(messages, supports_images),
-    do: provider_messages(messages, supports_images, [])
-
-  defp provider_messages([], _supports_images, normalized),
-    do: {:ok, Enum.reverse(normalized)}
-
-  defp provider_messages([%{"role" => "tool"} | _] = messages, supports_images, normalized) do
-    {tool_group, rest} = Enum.split_while(messages, &(&1["role"] == "tool"))
-
-    with {:ok, tool_messages, attachments} <-
-           openai_tool_group(tool_group, supports_images) do
-      group =
-        case attachments do
-          [] -> tool_messages
-          attachments -> tool_messages ++ [openai_attachment_message(attachments)]
-        end
-
-      provider_messages(rest, supports_images, Enum.reverse(group, normalized))
-    end
-  end
-
-  defp provider_messages([message | rest], supports_images, normalized) do
-    with {:ok, message} <- provider_message(message, supports_images) do
-      provider_messages(rest, supports_images, [message | normalized])
-    end
-  end
-
-  defp openai_tool_group(messages, supports_images) do
+  defp provider_messages(messages, supports_images) do
     messages
-    |> Enum.reduce_while({:ok, [], []}, fn message, {:ok, normalized, attachments} ->
-      case openai_tool_message(message, supports_images) do
-        {:ok, tool_message, images} ->
-          {:cont, {:ok, [tool_message | normalized], attachments ++ images}}
-
-        {:error, _} = error ->
-          {:halt, error}
-      end
-    end)
+    |> Enum.chunk_by(&match?(%{"role" => "tool"}, &1))
+    |> Alto.Result.traverse(&provider_group(&1, supports_images))
     |> case do
-      {:ok, normalized, attachments} ->
-        {:ok, Enum.reverse(normalized), attachments}
-
-      {:error, _} = error ->
-        error
+      {:ok, groups} -> {:ok, List.flatten(groups)}
+      error -> error
     end
   end
+
+  defp provider_group([%{"role" => "tool"} | _] = messages, supports_images) do
+    with {:ok, results} <-
+           Alto.Result.traverse(messages, &openai_tool_message(&1, supports_images)) do
+      {tools, images} = Enum.unzip(results)
+
+      case List.flatten(images) do
+        [] -> {:ok, tools}
+        attachments -> {:ok, tools ++ [openai_attachment_message(attachments)]}
+      end
+    end
+  end
+
+  defp provider_group(messages, supports_images),
+    do: Alto.Result.traverse(messages, &provider_message(&1, supports_images))
 
   defp openai_tool_message(message, supports_images) do
     message = Map.delete(message, "alto_anthropic_content")
 
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
-        {:ok, message, []}
+        {:ok, {message, []}}
 
       {:ok, content} ->
-        images = Enum.filter(content.blocks, &match?(%Content.Image{}, &1))
+        images = Enum.filter(content.blocks, &match?(%{"type" => "image"}, &1))
 
         cond do
           images != [] and not supports_images ->
@@ -154,14 +114,14 @@ defmodule Alto.Providers.OpenAICompatible do
             text =
               content.blocks
               |> Enum.flat_map(fn
-                %Content.Text{text: text} -> [text]
-                %Content.Image{} -> []
+                %{"type" => "text", "text" => text} -> [text]
+                %{"type" => "image"} -> []
               end)
               |> Enum.join("\n")
               |> append_attachment_marker(message["tool_call_id"], images)
 
             attachments = Enum.map(images, &{message["tool_call_id"], &1})
-            {:ok, Map.put(message, "content", text), attachments}
+            {:ok, {Map.put(message, "content", text), attachments}}
         end
 
       {:error, reason} ->
@@ -178,13 +138,10 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp openai_attachment_message(attachments) do
     content =
-      Enum.flat_map(attachments, fn {call_id, %Content.Image{media_type: media_type, data: data}} ->
+      Enum.flat_map(attachments, fn {call_id, image} ->
         [
-          %{"type" => "text", "text" => "Image result from tool call #{call_id}:"},
-          %{
-            "type" => "image_url",
-            "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-          }
+          Content.text("Image result from tool call #{call_id}:"),
+          openai_image(image)
         ]
       end)
 
@@ -199,7 +156,7 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok, message}
 
       {:ok, content} ->
-        with {:ok, blocks} <- openai_blocks(content.blocks, supports_images) do
+        with {:ok, blocks} <- Content.map_images(content, supports_images, &openai_image/1) do
           {:ok, Map.put(message, "content", blocks)}
         end
 
@@ -211,27 +168,11 @@ defmodule Alto.Providers.OpenAICompatible do
   defp provider_message(message, _supports_images),
     do: {:error, {:invalid_provider_message, message}}
 
-  defp openai_blocks(blocks, supports_images) do
-    blocks
-    |> Enum.reduce_while({:ok, []}, fn
-      %Content.Text{text: text}, {:ok, normalized} ->
-        {:cont, {:ok, [%{"type" => "text", "text" => text} | normalized]}}
-
-      %Content.Image{}, _acc when not supports_images ->
-        {:halt, {:error, :model_does_not_support_images}}
-
-      %Content.Image{media_type: media_type, data: data}, {:ok, normalized} ->
-        block = %{
-          "type" => "image_url",
-          "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-        }
-
-        {:cont, {:ok, [block | normalized]}}
-    end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = error -> error
-    end
+  defp openai_image(%{"media_type" => media_type, "data" => data}) do
+    %{
+      "type" => "image_url",
+      "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
+    }
   end
 
   defp models_request(config) do
@@ -245,27 +186,18 @@ defmodule Alto.Providers.OpenAICompatible do
       if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
     end
 
-    options =
-      [
-        url: config.endpoint,
-        params: config.query,
-        headers: config.headers,
-        into: into,
-        raw: true,
-        retry: false,
-        receive_timeout: config.timeout,
-        request_timeout: config.timeout
-      ] ++ config.req_options
+    case Req.get(
+           HTTPOptions.request_options(config, config.headers, params: config.query, into: into)
+         ) do
+      {:ok, response} ->
+        {:ok, response.status, Req.Response.get_private(response, @models_state_key, state)}
 
-    case Req.get(options) do
-      {:ok, response} -> {:ok, response}
-      {:error, error} -> {:error, {:transport_error, error}}
+      {:error, error} ->
+        {:error, {:transport_error, error}}
     end
   end
 
-  defp models_result(%Req.Response{status: status} = response) when status in 200..299 do
-    state = models_state(response)
-
+  defp models_result(status, state) when status in 200..299 do
     with nil <- state.error,
          body <- state.chunks |> Enum.reverse() |> IO.iodata_to_binary(),
          {:ok, decoded} <- JSON.decode(body),
@@ -280,27 +212,10 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp models_result(%Req.Response{status: status} = response) do
-    state = models_state(response)
+  defp models_result(status, state) do
     body = state.chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
-    detail =
-      case JSON.decode(body) do
-        {:ok, %{"error" => error}} -> error
-        {:ok, decoded} -> decoded
-        {:error, _error} -> body
-      end
-
-    {:error, {:http_error, status, detail}}
-  end
-
-  defp models_state(response) do
-    Req.Response.get_private(response, @models_state_key, %{
-      chunks: [],
-      bytes: 0,
-      error: nil,
-      limit: @default_max_models_response_bytes
-    })
+    {:error, {:http_error, status, StreamEnvelope.decode_error_body(body)}}
   end
 
   defp consume_models_chunk(state, status, data) do
@@ -364,16 +279,10 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp config(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
-
-    endpoint =
-      Keyword.get(opts, :endpoint, String.trim_trailing(base_url, "/") <> "/chat/completions")
-
     with {:ok, config} <-
            HTTPOptions.validate(
-             Keyword.put(opts, :endpoint, endpoint),
-             @config_schema,
-             @config_errors
+             HTTPOptions.endpoint_options(opts, @default_base_url, "/chat/completions"),
+             @config_schema
            ) do
       {:ok,
        Map.merge(config, %{
@@ -388,16 +297,10 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp models_config(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
-
-    endpoint =
-      Keyword.get(opts, :models_endpoint, String.trim_trailing(base_url, "/") <> "/models")
-
     with {:ok, config} <-
            HTTPOptions.validate(
-             Keyword.put(opts, :endpoint, endpoint),
-             @models_schema,
-             @models_errors
+             HTTPOptions.endpoint_options(opts, @default_base_url, "/models", :models_endpoint),
+             @models_schema
            ) do
       {:ok,
        %{

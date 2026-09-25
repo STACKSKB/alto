@@ -10,7 +10,10 @@ Alto.Config.new(
      endpoints: [
        %{
          path: "/hooks/events",
-         verify: {:hmac_sha256_base64, secret},
+         verify:
+           {Alto.Ingress.HMAC,
+            secret: secret, header: "x-signature", encoding: :base64},
+         identity: {Alto.Ingress.IdentityHeader, header: "x-delivery-id"},
          on_event:
            {:enqueue,
             {AltoObanExample.Inbox,

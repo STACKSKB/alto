@@ -7,7 +7,6 @@ defmodule Alto do
   """
 
   alias Alto.Loop.Spec
-  alias Alto.Loops.Chat
   alias Alto.Loops.Default
   alias Alto.Loops.Rule
   alias Alto.Runner
@@ -24,9 +23,8 @@ defmodule Alto do
   @doc "Build the tool-free, one-request conversational loop."
   @spec chat_loop(keyword()) :: Spec.t()
   def chat_loop(opts \\ []) do
-    opts
-    |> Keyword.put_new(:context, Alto.Context.window())
-    |> then(&Spec.new(Chat, &1))
+    spec = Spec.new(Default, Keyword.put_new(opts, :context, Alto.Context.window()))
+    %{spec | driver_options: Keyword.put(spec.driver_options, :tool_execution, :disabled)}
   end
 
   @doc "Build a loop specification around a user-supplied loop module."
@@ -63,21 +61,8 @@ defmodule Alto do
   """
   @spec resume(String.t(), term(), keyword()) :: Runner.outcome() | {:error, term()}
   def resume(session_id, task, opts \\ []) do
-    dir_opts = Keyword.take(opts, [:session_dir])
-
-    case Alto.Session.transcript(session_id, dir_opts) do
-      {:ok, snapshot} ->
-        opts
-        |> Keyword.put(:session, session_id)
-        |> Keyword.put(
-          :resume,
-          Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-        )
-        |> then(&Runner.run(task, &1))
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    with {:ok, resume_opts} <- Alto.Session.resume_options(session_id, opts),
+         do: Runner.run(task, Keyword.merge(opts, resume_opts))
   end
 
   @doc """

@@ -6,7 +6,7 @@ defmodule Alto.Credentials do
   atomically replaced with mode `0600` and bounded before decoding.
   """
 
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   @version 1
   @max_bytes 64_000
@@ -27,9 +27,9 @@ defmodule Alto.Credentials do
   def load(path \\ default_path()) when is_binary(path) do
     expanded = Path.expand(path)
 
-    case bounded_read(expanded) do
+    case Alto.BoundedFile.read(expanded, @max_bytes) do
       {:ok, content} -> decode(expanded, content)
-      {:error, :too_large} -> {:error, {:credentials_too_large, @max_bytes}}
+      {:error, {:too_large, _size, _max}} -> {:error, {:credentials_too_large, @max_bytes}}
       {:error, :enoent} -> {:ok, %__MODULE__{path: expanded, providers: %{}}}
       {:error, reason} -> {:error, {:credentials_read_failed, expanded, reason}}
     end
@@ -54,16 +54,12 @@ defmodule Alto.Credentials do
 
       Alto.Storage.with_lock(path <> ".lock", fn ->
         with {:ok, latest} <- load(path),
-             :ok <-
-               persist(%__MODULE__{
-                 path: path,
-                 providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
-               }) do
-          {:ok,
-           %__MODULE__{
-             path: path,
-             providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
-           }}
+             updated = %{
+               latest
+               | providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
+             },
+             :ok <- persist(updated) do
+          {:ok, updated}
         end
       end)
     end
@@ -105,7 +101,7 @@ defmodule Alto.Credentials do
       {:error, {:credentials_too_large, @max_bytes}}
     else
       with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(credentials.path), owned: true),
-           :ok <- AtomicWrite.write(credentials.path, content <> "\n", 0o600) do
+           :ok <- AtomicFile.write(credentials.path, content <> "\n", mode: 0o600) do
         :ok
       else
         {:error, reason} -> {:error, {:credentials_write_failed, credentials.path, reason}}
@@ -126,30 +122,11 @@ defmodule Alto.Credentials do
   defp valid_providers?(providers) when is_map(providers) do
     Enum.all?(providers, fn {provider, values} ->
       is_binary(provider) and provider != "" and is_map(values) and
-        Enum.all?(values, fn {key, value} -> is_binary(key) and is_binary(value) end)
+        validate_values(values) == :ok
     end)
   end
 
   defp valid_providers?(_providers), do: false
-
-  defp bounded_read(path) do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, @max_bytes + 1) do
-            {:error, _reason} -> {:error, :read_failed}
-            :eof -> {:ok, <<>>}
-            content when byte_size(content) > @max_bytes -> {:error, :too_large}
-            content -> {:ok, content}
-          end
-
-        File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 end
 
 defimpl Inspect, for: Alto.Credentials do

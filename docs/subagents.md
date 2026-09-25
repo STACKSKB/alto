@@ -1,8 +1,7 @@
 # Alto subagents
 
-Subagents are requested by a trusted loop through an effect. A single child
-uses `Alto.Effect.spawn_agent/1`; a bounded batch uses
-`Alto.Effect.spawn_agents/1`:
+Subagents are requested by a trusted loop through
+`Alto.Effect.spawn_agents/1`. A single child is a one-element batch:
 
 ```elixir
 defmodule FanoutLoop do
@@ -38,15 +37,18 @@ Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
   provider: MyProvider)
 ```
 
-`spawn_agents/1` accepts `%{agents: [...]}`. Each entry has the same spawn
-fields as `spawn_agent/1`: required `:id` and `:task`, with optional provider,
-loop, tools, model tools, maximum steps, and system prompt. IDs must be unique.
+`spawn_agents/1` accepts `%{agents: [...]}`. Each child is an atom-keyed map;
+string, mixed, and unknown keys are rejected. Each entry requires `:id` and
+`:task`, with optional `:profile_key`, loop, tools, model tools, maximum steps,
+and system prompt. IDs must be unique. A named provider is resolved by the
+parent loop's `resolve_child_provider(profile_key, parent_spec)` callback on both
+initial dispatch and recovery; raw provider configuration is rejected.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
 `reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.
-A child that could not start has only `id`, `status: :error`, and `error`. The single-child events are `:subagent_completed` or
-`:subagent_failed`; a batch emits one `:subagents_completed` event containing
-`%{results: results}`.
+A child that could not start has only `id`, `status: :error`, and `error`.
+A completed batch emits one `:subagents_completed` event containing
+`%{results: results}`, including one-element batches.
 
 `Alto.Subagents.bounded/1` is Alto's policy constructor. `max_children` limits
 one batch (default 16, range 1–64), while `max_concurrency` limits active children
@@ -88,9 +90,10 @@ must reopen and supply that same account through `budget_account:`. Restore
 uses the current durable counts, including charges made after the snapshot;
 it never clones the snapshot's remaining allowance. Missing/replaced accounts,
 an observed counter rollback or ledger failure reject restoration/reservation.
-The legacy in-memory counter path remains the default. Separate child
-checkpoints are still disabled: durable counts alone do not recover child
-dispatch, active execution time, or parent joins.
+In-memory counters remain the default. Durable counts alone do not recover child
+dispatch, active execution time, or parent joins. Independent child approval
+checkpoints also require a continuation store, a checkpoint version, and a
+checkpoint-capable loop; see [child continuations](child-continuations.md).
 
 This account persists count limits only. The existing monotonic run deadline
 and root checkpoint's remaining active time keep their current semantics;
@@ -151,27 +154,30 @@ a user message and validates it under the transcript limit.
 
 ## Durable child dispatch and retained joins
 
-A trusted host can enable an `Alto.OperationLog` journal on its subagent policy:
+A trusted host can retain child batches in an `Alto.OperationLog` through the
+run's `continuation_store`:
 
 ```elixir
 {:ok, ledger} = Alto.OperationLog.start_link(
-  id: "children", name: MyChildJournal, dir: "/private/alto-state/operations")
+  id: "children", name: MyContinuations, dir: "/private/alto-state/operations")
 policy = Alto.Subagents.bounded(
-  max_depth: 1, max_children: 4, max_concurrency: 2, journal: MyChildJournal)
+  max_depth: 1, max_children: 4, max_concurrency: 2)
+
+Alto.run(task, loop: loop, continuation_store: MyContinuations)
 ```
 
 The policy covers single-child and batch effects. Descendants inherit the
-journal along with their shared budgets and owned lifetime. A run-scoped
+continuation store along with their shared budgets and owned lifetime. A run-scoped
 operation key identifies each batch. Its immutable metadata contains the
 parent run/session and execution-tree identity; child IDs retain input order.
-The parent emits `subagents_started` with a portable `journal` binding. Normal
+The parent emits `subagents_started` with a portable continuation binding. Normal
 single-child and batch completion data also includes that binding.
 
 Alto persists a unique dispatch ticket before starting each child. The child
 itself records its bounded result after session persistence and workspace
 capture, before returning to its parent. This retains the exact native child
 summary (including output, verdict, usage, session/workspace links and
-persistence status), even when the parent cannot collect its reply. The journal
+persistence status), even when the parent cannot collect its reply. The aggregate
 does not store the child's full transcript or arbitrary loop state. Failure to
 retain a result keeps the dispatch uncertain and prevents a successful join.
 Queued cancellation records known non-dispatch separately; it cannot overwrite
@@ -182,17 +188,17 @@ cannot evict them before a parent acknowledges consumption and explicitly
 retires the batch. A host can use the generic API directly:
 
 ```elixir
-alias Alto.Subagents.Journal
-{:ok, batch} = Journal.restore(MyChildJournal, saved_binding)
-{:ok, joined} = Journal.join(batch)
+alias Alto.Subagents.Continuation
+{:ok, batch} = Continuation.restore(MyContinuationStore, saved_binding)
+{:ok, joined} = Continuation.join(batch)
 # joined.results is an ordered list of {child_id, exact_result} pairs.
 # First durably save the consumer's continuation with this binding/results.
-{:ok, acknowledged} = Journal.acknowledge(batch, joined.revision,
+{:ok, acknowledged} = Continuation.acknowledge(batch, joined.revision,
   %{"parent_checkpoint" => durable_checkpoint_id})
-:ok = Journal.retire(batch, acknowledged.revision)
+:ok = Continuation.retire(batch, acknowledged.revision)
 ```
 
-`acknowledge/3` fences the viewed revision and accepts a nonempty JSON receipt;
+`acknowledge/3` fences the viewed revision and accepts a nonempty portable-term receipt;
 the host is responsible for that receipt referring to its durable continuation.
 The runner does not automatically acknowledge a join merely because its loop
 received an event or a best-effort session write succeeded. Acknowledgement
@@ -203,7 +209,7 @@ updates, never child execution. Reusing an evicted key creates a new generation,
 so old parent bindings and dispatch tickets cannot attach to the replacement.
 
 For custom hosts, `open/4` creates/reconnects a batch from ordered unique IDs
-and immutable JSON metadata. `dispatch/2` grants a planned child once;
+and immutable portable metadata. `dispatch/2` grants a planned child once;
 `complete/2` retains a portable result under that ticket, and `skip/3` records a
 planned child's known non-dispatch. Exact repeated result publication is
 idempotent; conflicting results are rejected. A lost dispatch reply does not

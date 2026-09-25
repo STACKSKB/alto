@@ -1,6 +1,30 @@
 defmodule Alto.Capabilities do
   @moduledoc "Inspect configured extension points without resolving credentials or starting a provider."
 
+  @doc "Whether a module implements every required callback of a behaviour."
+  def implements?(module, contract) when is_atom(module) do
+    Code.ensure_loaded?(module) and
+      Enum.all?(
+        contract.behaviour_info(:callbacks) -- contract.behaviour_info(:optional_callbacks),
+        fn
+          {name, arity} -> function_exported?(module, name, arity)
+        end
+      )
+  end
+
+  def implements?(_, _), do: false
+
+  @doc "Normalize a module or configured module and validate its callback contract."
+  def resolve(module, contract) when is_atom(module), do: resolve({module, []}, contract)
+
+  def resolve({module, options} = spec, contract) do
+    if Keyword.keyword?(options) and implements?(module, contract),
+      do: {:ok, spec},
+      else: {:error, {:invalid_capability, contract, spec}}
+  end
+
+  def resolve(spec, contract), do: {:error, {:invalid_capability, contract, spec}}
+
   @defaults [
     max_steps: 32,
     max_effects: 10_000,
@@ -70,7 +94,7 @@ defmodule Alto.Capabilities do
       module: module_name(module),
       approval: Alto.Tool.requirement(module, opts),
       execution_mode: Alto.Tool.callback(module, :execution_mode, opts),
-      prepared: function_exported?(module, :prepare, 2) or function_exported?(module, :prepare, 3)
+      prepared: function_exported?(module, :prepare, 3)
     }
   end
 

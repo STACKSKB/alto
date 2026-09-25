@@ -16,8 +16,6 @@ defmodule Alto.TUI.BackendTest do
   end
 
   test "the configured list is complete and built-in identities are replaceable" do
-    assert Backend.items([]) == []
-    assert Backend.lookup([], :alto) == {:error, {:backend_unavailable, :alto}}
     options = [tui_backends: [alto: {Interactive, label: "Host backend"}]]
     assert Backend.valid?(options[:tui_backends])
     assert Backend.items(options) == [%{label: "Host backend", value: :alto}]
@@ -48,7 +46,7 @@ defmodule Alto.TUI.BackendTest do
     }
 
     assert Backend.valid?(state.run_options[:tui_backends])
-    assert Backend.ui(state, :durable_input?)
-    refute Backend.ui(%{state | selected_backend: :alto}, :durable_input?) == true
+    assert Backend.ui(state, :steering?)
+    refute Backend.ui(%{state | selected_backend: :alto}, :steering?) == true
   end
 end

@@ -2,7 +2,7 @@ defmodule Alto.Persistence.Codec do
   @moduledoc """
   Bounded portable-term encoding for durable application data.
 
-  The codec accepts ordinary data terms only. Processes, ports, references,
+  By default, the codec accepts ordinary data terms only. Processes, ports, references,
   functions, and other runtime capabilities are rejected before encoding and
   after decoding. Decoding also requires that the ETF contain exactly one
   term; trailing bytes are never silently accepted.
@@ -11,28 +11,34 @@ defmodule Alto.Persistence.Codec do
   @default_max_bytes 1_000_000
   @max_depth 64
 
-  @spec encode(term(), keyword()) :: {:ok, binary()} | {:error, atom()}
-  def encode(term, opts \\ []) do
+  @doc "Check portability and ETF byte bounds without allocating an encoded value."
+  @spec valid?(term(), keyword()) :: boolean()
+  def valid?(term, opts \\ []) do
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
-
-    with true <- valid_limit?(max_bytes),
-         true <- :erlang.external_size(term) <= max_bytes,
-         true <- portable?(term, 0),
-         binary <- :erlang.term_to_binary(term),
-         true <- byte_size(binary) <= max_bytes do
-      {:ok, Base.encode64(binary)}
-    else
-      false -> {:error, :not_portable_or_too_large}
-    end
+    valid_limit?(max_bytes) and :erlang.external_size(term) <= max_bytes and portable?(term, 0)
   rescue
-    _ -> {:error, :not_portable_or_too_large}
+    _ -> false
   end
 
+  @spec encode(term(), keyword()) :: {:ok, binary()} | {:error, atom()}
+  def encode(term, opts \\ []) do
+    if valid?(term, opts),
+      do: {:ok, Base.encode64(:erlang.term_to_binary(term))},
+      else: {:error, :not_portable_or_too_large}
+  end
+
+  @doc """
+  Decode bounded ETF, rejecting runtime capabilities by default.
+
+  A trusted `:validate` predicate may replace the portable-data policy for
+  diagnostic stores. Framing, byte bounds and safe atom decoding always apply.
+  """
   @spec decode(binary(), keyword()) :: {:ok, term()} | {:error, atom()}
   def decode(encoded, opts \\ [])
 
   def decode(encoded, opts) when is_binary(encoded) do
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+    validate = Keyword.get(opts, :validate, &portable?(&1, 0))
 
     with true <- valid_limit?(max_bytes),
          {:ok, binary} <- decode_base64(encoded, max_bytes),
@@ -41,7 +47,7 @@ defmodule Alto.Persistence.Codec do
          true <- byte_size(binary) <= max_bytes,
          {term, used} <- :erlang.binary_to_term(binary, [:safe, :used]),
          true <- used == byte_size(binary),
-         true <- portable?(term, 0),
+         true <- validate.(term),
          true <- :erlang.external_size(term) <= max_bytes do
       {:ok, term}
     else

@@ -73,16 +73,27 @@ defmodule Alto.TUI.ApprovalView do
     title = if tool == "write_file", do: "Write file", else: "Edit file"
 
     title <>
-      sections([
-        {"File", details["path"] || args["path"]},
-        {"Size before", bytes(details["bytes_before"])},
-        {"Size after", bytes(details["bytes_after"])},
-        {"Replacements", details["replacements"]},
-        {"Find", args["old_text"]},
-        {"Replace with", args["new_text"]},
-        {"Preview", details["preview"] || args["content"]}
-      ])
+      sections(
+        [
+          {"File", details["path"] || args["path"]},
+          {"Size before", bytes(details["bytes_before"])},
+          {"Size after", bytes(details["bytes_after"])},
+          {"Replacements", details["replacements"]}
+        ] ++ edit_sections(args["edits"]) ++ [{"Preview", details["preview"] || args["content"]}]
+      )
   end
+
+  defp edit_sections([edit]), do: [{"Find", edit["old_text"]}, {"Replace with", edit["new_text"]}]
+
+  defp edit_sections(edits) when is_list(edits) do
+    edits
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {edit, index} ->
+      [{"Find #{index}", edit["old_text"]}, {"Replace with #{index}", edit["new_text"]}]
+    end)
+  end
+
+  defp edit_sections(_), do: []
 
   defp execution(nil), do: nil
 

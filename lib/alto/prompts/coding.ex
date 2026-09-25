@@ -13,13 +13,13 @@ defmodule Alto.Prompts.Coding do
 
   @impl true
   def build(%{cwd: cwd, tools: tools} = context, _opts) do
-    capabilities = capabilities(tools)
+    names = MapSet.new(tools, &tool_name/1)
 
     [
       base(cwd),
       project_fragment(Map.get(context, :project_instructions)),
-      workspace_fragment(capabilities.workspace),
-      command_fragment(capabilities.command),
+      workspace_fragment(workspace_capability(names)),
+      command_fragment(MapSet.member?(names, :run_command)),
       @finish
     ]
     |> List.flatten()
@@ -32,20 +32,11 @@ defmodule Alto.Prompts.Coding do
     "You are a coding agent running in the Alto harness.\nThe workspace root is #{cwd}."
   end
 
-  defp capabilities(tools) do
-    names = MapSet.new(tools, &tool_name/1)
-
-    %{
-      workspace: workspace_capability(names),
-      command: MapSet.member?(names, :run_command)
-    }
-  end
-
   defp tool_name({module, opts}) when is_atom(module) and is_list(opts) do
-    if function_exported?(module, :name, 1), do: module.name(opts), else: module.name()
+    module.name(opts)
   end
 
-  defp tool_name(module) when is_atom(module), do: module.name()
+  defp tool_name(module) when is_atom(module), do: module.name([])
 
   defp workspace_capability(names) do
     cond do

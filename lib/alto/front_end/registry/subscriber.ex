@@ -17,12 +17,8 @@ defmodule Alto.FrontEnd.Registry.Subscriber do
     closed?: false
   ]
 
-  def interested?(%__MODULE__{runs: :all, domains: domains}, _run_id, domain) do
-    domain == :approval or domain == :result or MapSet.member?(domains, domain)
-  end
-
   def interested?(%__MODULE__{runs: runs, domains: domains}, run_id, domain) do
-    MapSet.member?(runs, run_id) and
+    (runs == :all or MapSet.member?(runs, run_id)) and
       (domain == :approval or domain == :result or MapSet.member?(domains, domain))
   end
 

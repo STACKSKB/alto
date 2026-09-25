@@ -27,11 +27,9 @@ defmodule Alto.Tools.ProtectPaths do
   end
 
   defp protected_roots(paths, cwd) do
-    Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
-      case SafePath.resolve(path, cwd) do
-        {:ok, resolved} -> {:cont, {:ok, [resolved, Path.expand(path, cwd) | acc]}}
-        error -> {:halt, error}
-      end
+    Alto.Result.reduce(paths, [], fn path, acc ->
+      with {:ok, resolved} <- SafePath.resolve(path, cwd),
+           do: {:ok, [resolved, Path.expand(path, cwd) | acc]}
     end)
   end
 

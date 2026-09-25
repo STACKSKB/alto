@@ -2,12 +2,9 @@ defmodule Alto.Runner.SupportOwnerTest do
   use ExUnit.Case, async: true
 
   defmodule BlockingTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :owner_blocking_tool, execution_mode: :exclusive, approval: :never
 
-    def name, do: :owner_blocking_tool
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :never
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     def run(_arguments, _context, opts) do
       send(Keyword.fetch!(opts, :owner), {:tool_participant, self()})

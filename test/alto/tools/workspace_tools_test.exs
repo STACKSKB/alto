@@ -42,6 +42,11 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:ok, %{content: "bcd", truncated: true}} =
              ReadFile.run(%{"path" => "sample.txt", "offset" => 1, "limit" => 3}, context)
 
+    for offset <- [6, 9] do
+      assert {:ok, %{content: "", truncated: false}} =
+               ReadFile.run(%{"path" => "sample.txt", "offset" => offset}, context)
+    end
+
     assert File.read!(Path.join(root, "sample.txt")) == "abcdef"
 
     assert {:error, {:path_outside_workspace, "../outside.txt"}} =
@@ -69,14 +74,14 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:file_too_large, 3}} =
              EditFile.run(
-               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
+               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "b"}]},
                context,
                max_file_bytes: 3
              )
 
     assert {:error, {:replacement_too_large, 1}} =
              EditFile.run(
-               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "long"},
+               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "long"}]},
                context,
                max_replacement_bytes: 1
              )
@@ -96,6 +101,15 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:invalid_edit_options, _}} =
              EditFile.run(%{}, context, max_input_bytes: 0)
+  end
+
+  test "edit schema and runtime require the canonical edits list", %{context: context} do
+    parameters = EditFile.schema().parameters
+    assert parameters.required == ["path", "edits"]
+    assert Map.keys(parameters.properties) |> Enum.sort() == [:edits, :path]
+
+    assert {:error, :edits_must_be_nonempty_list} =
+             EditFile.run(%{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"}, context)
   end
 
   test "host-configured search limits skip large files and bound line output", %{
@@ -275,10 +289,26 @@ defmodule Alto.Tools.WorkspaceToolsTest do
            ]
 
     assert result.scanned_files == 7
+
+    options = [backend: {SearchBackend, label: "index"}, max_query_bytes: 6]
+    assert {:ok, _tools, [definition]} = Alto.Tool.Registry.build([{SearchFiles, options}])
+    assert definition["function"]["parameters"][:properties][:query][:maxLength] == 6
+
+    assert {:error, {:query_too_large, 6}} =
+             SearchFiles.run(%{"query" => "too long"}, context, options)
+
+    assert {:ok, run} =
+             Alto.run(%{"query" => "needle"},
+               loop: Alto.rule_loop(steps: ["search_files"]),
+               tools: [{SearchFiles, options}],
+               cwd: context.cwd
+             )
+
+    assert [%{matches: [%{path: "index"}]}] = run.output
   end
 
   test "search rejects invalid backends before invocation", %{context: context} do
-    assert {:error, {:invalid_search_backend, {String, []}}} =
+    assert {:error, {:invalid_capability, Alto.Search.Backend, {String, []}}} =
              SearchFiles.run(%{"query" => "needle"}, context, backend: String)
   end
 
@@ -292,7 +322,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:ambiguous_match, 2}} =
              EditFile.run(
-               %{"path" => "sample.txt", "old_text" => "one", "new_text" => "three"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "one", "new_text" => "three"}]
+               },
                context
              )
 
@@ -302,9 +335,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              EditFile.run(
                %{
                  "path" => "sample.txt",
-                 "old_text" => "one",
-                 "new_text" => "three",
-                 "replace_all" => true
+                 "edits" => [
+                   %{"old_text" => "one", "new_text" => "three", "replace_all" => true}
+                 ]
                },
                context
              )
@@ -323,7 +356,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:ok, prepared, details} =
              EditFile.prepare(
-               %{"path" => "sample.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 
@@ -332,6 +368,47 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:error, {:stale_file, "sample.txt"}} = EditFile.run_prepared(prepared, context)
     assert File.read!(path) == "changed by another writer\n"
+  end
+
+  test "prepared file changes reject mode changes and retargeted symlinks", %{
+    root: root,
+    context: context
+  } do
+    first = Path.join(root, "first.txt")
+    second = Path.join(root, "second.txt")
+    link = Path.join(root, "link.txt")
+    File.write!(first, "before")
+    File.write!(second, "before")
+    File.chmod!(first, 0o640)
+    File.ln_s!("first.txt", link)
+
+    changes = [
+      {WriteFile, %{"path" => "link.txt", "content" => "after"}},
+      {EditFile,
+       %{
+         "path" => "link.txt",
+         "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+       }}
+    ]
+
+    for {tool, arguments} <- changes do
+      assert {:ok, prepared, _details} = tool.prepare(arguments, context)
+      File.chmod!(first, 0o600)
+      assert {:error, {:stale_file, _path}} = tool.run_prepared(prepared, context)
+      File.chmod!(first, 0o640)
+
+      File.rm!(link)
+      File.ln_s!("second.txt", link)
+
+      assert {:error, {:prepared_path_changed, "link.txt"}} =
+               tool.run_prepared(prepared, context)
+
+      assert File.read!(first) == "before"
+      assert File.read!(second) == "before"
+
+      File.rm!(link)
+      File.ln_s!("first.txt", link)
+    end
   end
 
   test "applies disjoint edits against one original snapshot", %{
@@ -357,23 +434,38 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "b c b\n"
   end
 
-  test "rejects mixed and overlapping multi-edit requests without writing", %{
+  test "bounds the final edit result after both growth and deletion", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "aXYZ")
+
+    arguments = %{
+      "path" => "sample.txt",
+      "edits" => [
+        %{"old_text" => "XYZ", "new_text" => ""},
+        %{"old_text" => "a", "new_text" => "123456"}
+      ]
+    }
+
+    assert {:error, {:file_too_large, 5}} =
+             EditFile.prepare(arguments, context, max_file_bytes: 5)
+
+    assert File.read!(path) == "aXYZ"
+
+    assert {:ok, %{bytes_after: 6, replacements: 2}} =
+             EditFile.run(arguments, context, max_file_bytes: 6)
+
+    assert File.read!(path) == "123456"
+  end
+
+  test "rejects overlapping multi-edit requests without writing", %{
     root: root,
     context: context
   } do
     path = Path.join(root, "sample.txt")
     File.write!(path, "abcdef\n")
-
-    assert {:error, :mixed_edit_arguments} =
-             EditFile.run(
-               %{
-                 "path" => "sample.txt",
-                 "edits" => [%{"old_text" => "ab", "new_text" => "x"}],
-                 "old_text" => "cd",
-                 "new_text" => "y"
-               },
-               context
-             )
 
     assert {:error, :overlapping_edits} =
              EditFile.run(
@@ -476,8 +568,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              EditFile.prepare(
                %{
                  "path" => "sample.txt",
-                 "old_text" => "marker",
-                 "new_text" => :binary.copy("n", 256_001)
+                 "edits" => [
+                   %{"old_text" => "marker", "new_text" => :binary.copy("n", 256_001)}
+                 ]
                },
                context
              )
@@ -497,7 +590,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert {:ok, prepared, _details} =
              EditFile.prepare(
-               %{"path" => "sample.txt", "old_text" => "before", "new_text" => "after"},
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "before", "new_text" => "after"}]
+               },
                context
              )
 
@@ -517,6 +613,55 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:error, {:stale_file, path}} = WriteFile.run_prepared(prepared, context)
     assert path == Path.join(root, "new.txt")
     assert File.read!(path) == "created by another writer\n"
+  end
+
+  test "writes fingerprint large originals without retaining a diff", %{
+    root: root,
+    context: context
+  } do
+    path = Path.join(root, "large.txt")
+    original = "0123456789abcdef"
+    File.write!(path, original)
+
+    assert {:ok, prepared, details} =
+             WriteFile.prepare(%{"path" => "large.txt", "content" => "small"}, context,
+               max_bytes: 8
+             )
+
+    assert details.bytes_before == byte_size(original)
+    assert details.patch == nil
+    refute Map.has_key?(prepared.original, :content)
+
+    File.write!(path, "0123456789abcdeg")
+    assert {:error, {:stale_file, ^path}} = WriteFile.run_prepared(prepared, context)
+    File.write!(path, original)
+    assert {:ok, %{bytes_written: 5, patch: nil}} = WriteFile.run_prepared(prepared, context)
+    assert File.read!(path) == "small"
+  end
+
+  test "write and edit approval diffs can be disabled", %{root: root, context: context} do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "before")
+
+    assert {:ok, write, %{patch: nil}} =
+             WriteFile.prepare(%{"path" => "sample.txt", "content" => "after"}, context,
+               diff_bytes: 0
+             )
+
+    assert {:ok, %{patch: nil}} = WriteFile.run_prepared(write, context)
+
+    assert {:ok, edit, %{patch: nil}} =
+             EditFile.prepare(
+               %{
+                 "path" => "sample.txt",
+                 "edits" => [%{"old_text" => "after", "new_text" => "done"}]
+               },
+               context,
+               patch_bytes: 0
+             )
+
+    assert {:ok, %{patch: nil}} = EditFile.run_prepared(edit, context)
+    assert File.read!(path) == "done"
   end
 
   test "write_file writes atomically and leaves no temp litter", %{

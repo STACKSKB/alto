@@ -1,34 +1,14 @@
 defmodule Alto.FrontEnd.Registry do
   @moduledoc """
-  The resident-side hub between the execution host and front-end transports.
+  Resident hub for run lifetimes, bounded event replay, subscribers, and approvals.
+  Transports encode its typed notifications through `Alto.Protocol`. Durable
+  sequence numbers are provisional until the session store assigns final ones.
 
-  The registry owns run lifetimes started through it, assigns provisional
-  per-run durable sequence numbers (the protocol contract: the session store will assign
-  final ones later), retains a bounded durable replay buffer per run, and
-  correlates front-end approval decisions. It is transport-agnostic: it ships
-  typed notifications to subscriber processes, which encode them through
-  `Alto.Protocol` for their own wire.
-
-  Delivery is pull-based: subscribers receive notifications only in response
-  to `pull/3`, so a stalled client stops pulling and consumes at most its
-  configured buffer. When a subscriber's buffer is full, incoming
-  notifications are dropped and an `overflow` notification is queued for the
-  next pull — durable gaps are never silent. The core itself is never blocked
-  by a slow client.
-
-  Approval notifications ignore domain filters: any client attached to a run
-  is eligible to answer its approvals, and the first decision wins. Handles
-  are globally unique operations (`"<run_id>:op-<seq>"`, ): no scoping or
-  random-suffix patch, every request/response/event/cleanup path uses the
-  handle, and `call_id` is correlation only. Pending approvals replay on
-  `attach` for reconnect; duplicate handles fail `already_pending` and late
-  replies fail `not_found`.
-
-  Finished runs keep their replay buffers up to a bounded recent window
-  (`:max_finished_runs`, default 100); `run_ids/1` lists only live runs.
-  Once the window is exceeded the oldest finished run is evicted and a later
-  `attach` to it answers `unknown_run` — webhook-per-event traffic would
-  otherwise grow the registry monotonically.
+  Subscribers pull from bounded buffers; overflow is reported rather than
+  silently losing a durable gap. Attached clients can answer approvals regardless
+  of event-domain filters. The first decision wins, and pending requests replay
+  on attach. The bounded finished-run window retains recent replay buffers;
+  `run_ids/1` lists only live runs.
   """
 
   use GenServer
@@ -49,14 +29,13 @@ defmodule Alto.FrontEnd.Registry do
     :start_order,
     events_rev: [],
     head_seq: 0,
-    status: :running,
-    result: nil,
+    result: :running,
     pending: %{}
   ]
 
   alias Alto.FrontEnd.Registry.Subscriber
 
-  @capacity_options [
+  @options [
     max_buffer_messages: [type: :non_neg_integer, default: 10_000],
     max_buffer_bytes: [type: :non_neg_integer, default: 8_000_000],
     max_retained_events: [type: :non_neg_integer, default: 1_000],
@@ -64,63 +43,37 @@ defmodule Alto.FrontEnd.Registry do
     max_subscribers: [type: :non_neg_integer, default: 128],
     max_finished_runs: [type: :non_neg_integer, default: 100],
     max_claim_bytes: [type: :non_neg_integer, default: 1_046_528],
-    command_timeout: [type: :pos_integer, default: 30_000]
+    command_timeout: [type: :pos_integer, default: 30_000],
+    commands: [type: {:map, {:custom, __MODULE__, :command_name, []}, {:fun, 1}}, default: %{}],
+    disconnect_after_overflow: [type: {:in, [:never, :immediately]}, default: :never]
   ]
-  @capacity_schema NimbleOptions.new!(@capacity_options)
+  @options_schema NimbleOptions.new!(@options)
   @max_task_bytes 1_000_000
 
   ## Client API
 
   @doc """
-  Start the registry. Options:
+  Start the registry. `:config_resolver` maps a configuration name to
+  `{:ok, run_opts}` or `{:error, reason}`. `:queue` enables claim/ack;
+  `:queue` and `:ledger` together enable read-only operation inspection.
+  `:commands` maps trusted names to supervised callbacks; a timeout leaves an
+  unknown outcome for the caller to reconcile.
 
-    * `:config_resolver` — required fun taking a configuration name and
-      returning `{:ok, run_opts}` or `{:error, term()}`;
-    * `:cwd` — workspace root for started runs (default: `File.cwd!/0`);
-    * `:queue` — optional durable queue server (`Alto.Queue`) backing the
-      claim/ack surface;
-    * `:ledger` — optional operation ledger server (`Alto.OperationLog`)
-      backing the read-only operator inspection surface (`ops_list`);
-      the queue/ledger pair is read together, never written by inspection;
-    * `:max_buffer_messages` — per-subscriber notification bound;
-    * `:max_retained_events` — durable replay bound per run;
-    * `:max_finished_runs` — finished-run replay window (default 100);
-    * `:max_claim_bytes` — encoded-bytes budget for `queue_claim` replies
-      without an explicit per-call budget (default 1 MiB minus envelope
-      reserve); transports pass their own `max_line_bytes`-derived budget
-      per call so claims never outgrow the connection;
-    * :commands — optional map of non-empty binary names to trusted arity-one
-      callbacks. A callback receives a map and returns a map, {:ok, map()},
-      or {:error, reason}; it runs in a supervised task;
-    * `:command_timeout` — callback deadline in milliseconds (default 30,000).
-      A timeout reports an unknown outcome; callers must reconcile before retrying;
-    * `:disconnect_after_overflow` — `:never` (default) or `:immediately`;
-    * `:sessions` — served-run session persistence (, explicit opt-in,
-      default `false` keeps served runs unpersisted): `true` persists each
-      fresh run in the default session store, `[session_dir: path]` uses a
-      custom directory. Resume (`start_run` with `resume:`) reads from the
-      same directory regardless of this flag. Evicting a finished run from
-      the replay window never deletes its session files;
-    * `:session_dir` — session directory override (default: the standard
-      session store); also honoured when `sessions:` carries no directory;
-    * `:name` — registered name (default `Alto.FrontEnd.Registry`).
+  `:sessions` opts fresh served runs into persistence (`true` or
+  `[session_dir: path]`). Resume can read `:session_dir` regardless of that
+  setting. `:cwd` defaults to the process directory and `:name` to this module.
+  The buffer, replay, claim-size, command-timeout, and overflow
+  controls and their defaults are declared in `@options`.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @doc """
-  Start a run from a trusted, resolver-resolvable configuration name. An
-  optional owner pid may be supplied in opts; it receives the runner's
-  cancellation guarantee, while the registry process is the default owner.
-
-  Options: `:resume` — continue a persisted session id instead of starting
-  fresh. The session must exist with a resumable (completed-run) transcript
-  snapshot; crashed runs report `:no_resumable_transcript` rather than
-  rerunning anything. Provider, tools, approval, and bounds come from the
-  resolved configuration exactly like a fresh run. Trusted in-process callers may
-  supply `:cwd` to choose a workspace for this run; wire clients cannot override it. Hosts may also pass a validated `:reasoning_effort`
-  for the configured provider; wire start commands cannot supply provider overrides.
+  Start a run from a trusted configuration name. `:resume` requires a completed
+  transcript snapshot; a crashed run cannot be replayed as new work. Trusted
+  callers may set `:owner`, `:cwd`, or validated `:reasoning_effort`; wire
+  clients cannot override the provider, tools, approval, or workspace.
   """
   @spec start_run(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -141,7 +94,7 @@ defmodule Alto.FrontEnd.Registry do
 
   def command(server, name, payload) when is_binary(name) and is_map(payload) do
     with {:ok, callback, timeout} <- GenServer.call(server, {:command_callback, name}) do
-      case Alto.Runner.Execution.Support.supervised_call(
+      case Alto.Runner.Execution.Call.run(
              fn -> invoke_command(callback, payload) end,
              timeout,
              nil
@@ -312,19 +265,16 @@ defmodule Alto.FrontEnd.Registry do
   def init(opts) do
     {sessions_enabled, session_dir} = normalize_sessions(opts)
 
-    with {:ok, capacity} <- capacity_options(opts),
-         :ok <- validate_commands(Keyword.get(opts, :commands, %{})) do
+    with {:ok, options} <-
+           NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@options)), @options_schema) do
       state =
-        Map.merge(capacity, %{
+        Map.merge(Map.new(options), %{
           resolver: Keyword.fetch!(opts, :config_resolver),
           cwd: Keyword.get(opts, :cwd, File.cwd!()),
           queue: Keyword.get(opts, :queue),
           ledger: Keyword.get(opts, :ledger),
-          commands: Keyword.get(opts, :commands, %{}),
           sessions_enabled: sessions_enabled,
           session_dir: session_dir,
-          disconnect_after_overflow:
-            validate_disconnect(Keyword.get(opts, :disconnect_after_overflow, :never)),
           subscribers: %{},
           runs: %{},
           finished_order: []
@@ -354,46 +304,12 @@ defmodule Alto.FrontEnd.Registry do
   defp validate_owner(owner) when is_pid(owner), do: :ok
   defp validate_owner(owner), do: {:error, {:invalid_owner, owner}}
 
-  defp validate_commands(commands) when is_map(commands) do
-    if Enum.all?(commands, fn {name, callback} ->
-         is_binary(name) and name != "" and is_function(callback, 1)
-       end) do
-      :ok
-    else
-      {:error, {:invalid_option, :commands, commands}}
-    end
-  end
-
-  defp validate_commands(commands), do: {:error, {:invalid_option, :commands, commands}}
-
-  defp validate_disconnect(:never), do: :never
-
-  defp validate_disconnect(:immediately), do: :immediately
-
-  defp validate_disconnect(other),
-    do: raise(ArgumentError, "invalid disconnect_after_overflow: #{inspect(other)}")
-
-  defp capacity_options(opts) do
-    case NimbleOptions.validate(
-           Keyword.take(opts, Keyword.keys(@capacity_options)),
-           @capacity_schema
-         ) do
-      {:ok, options} ->
-        {:ok, Map.new(options)}
-
-      {:error, %NimbleOptions.ValidationError{key: :max_finished_runs, value: value}} ->
-        {:error, {:invalid_max_finished_runs, value}}
-
-      {:error, %NimbleOptions.ValidationError{key: :max_claim_bytes, value: value}} ->
-        {:error, {:invalid_max_claim_bytes, value}}
-
-      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
-        {:error, {:invalid_option, key, value}}
-    end
-  end
+  @doc false
+  def command_name(name) when is_binary(name) and name != "", do: {:ok, name}
+  def command_name(_name), do: {:error, "expected a nonempty command name"}
 
   defp active_capacity(state) do
-    count = Enum.count(state.runs, fn {_id, run} -> run.status == :running end)
+    count = Enum.count(state.runs, fn {_id, run} -> run.result == :running end)
     if count < state.max_active_runs, do: :ok, else: {:error, :run_capacity}
   end
 
@@ -411,7 +327,7 @@ defmodule Alto.FrontEnd.Registry do
 
       run_opts =
         config_opts
-        |> Keyword.merge(Keyword.take(opts, [:continuation_key, :budget_account, :cwd]))
+        |> Keyword.merge(Keyword.take(opts, [:budget_account, :cwd]))
         |> Alto.Reasoning.configure_run(Keyword.get(opts, :reasoning_effort))
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
@@ -449,7 +365,7 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_call({:run_result, run_id}, _from, state) do
     case Map.fetch(state.runs, run_id) do
-      {:ok, %{status: :running}} -> {:reply, :running, state}
+      {:ok, %{result: :running}} -> {:reply, :running, state}
       {:ok, %{result: result}} -> {:reply, {:ok, result}, state}
       :error -> {:reply, {:error, :unknown_run}, state}
     end
@@ -514,7 +430,7 @@ defmodule Alto.FrontEnd.Registry do
   def handle_call(:run_ids, _from, state) do
     live =
       state.runs
-      |> Enum.filter(fn {_id, run} -> run.status == :running end)
+      |> Enum.filter(fn {_id, run} -> run.result == :running end)
       |> Enum.map(&elem(&1, 0))
 
     {:reply, live, state}
@@ -574,7 +490,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   # Approval handles are globally unique operation ids: no scoping
-  # or random-suffix patch. The handle in `request.id`/`operation_id` is the
+  # or random-suffix patch. The handle in `request.id` is the
   # key; `call_id` is correlation only. A duplicate handle is a caller bug
   # and is rejected instead of silently replacing the waiter.
   def handle_call({:request_approval, session_id, request, waiter}, _from, state)
@@ -593,10 +509,8 @@ defmodule Alto.FrontEnd.Registry do
             request: request
           }
 
-          state =
-            update_run(state, session_id, fn run ->
-              %{run | pending: Map.put(run.pending, request.id, entry)}
-            end)
+          run = %{run | pending: Map.put(run.pending, request.id, entry)}
+          state = put_in(state.runs[session_id], run)
 
           state = publish(state, run.id, {:approval_request, run.id, request}, :approval)
           {:reply, :ok, state}
@@ -636,16 +550,7 @@ defmodule Alto.FrontEnd.Registry do
   # unrelated run it owns — down with it. Queue failures stay observable
   # per call.
   defp queue_op(%{queue: nil}, _fun), do: {:error, :no_queue}
-
-  defp queue_op(_state, fun) do
-    try do
-      fun.()
-    rescue
-      error -> {:error, {:queue_unavailable, Exception.message(error)}}
-    catch
-      :exit, reason -> {:error, {:queue_unavailable, reason}}
-    end
-  end
+  defp queue_op(_state, fun), do: guarded_store_call(fun, :queue_unavailable)
 
   # Read-only inspection needs both stores; a dead store answers
   # per-call without taking the registry down. No new authority: this
@@ -653,13 +558,16 @@ defmodule Alto.FrontEnd.Registry do
   defp ops_list_op(%{queue: nil}, _opts), do: {:error, :no_ops}
   defp ops_list_op(%{ledger: nil}, _opts), do: {:error, :no_ops}
 
-  defp ops_list_op(%{queue: queue, ledger: ledger}, opts) do
+  defp ops_list_op(%{queue: queue, ledger: ledger}, opts),
+    do: guarded_store_call(fn -> Alto.Ops.list(queue, ledger, opts) end, :ops_unavailable)
+
+  defp guarded_store_call(fun, unavailable) do
     try do
-      Alto.Ops.list(queue, ledger, opts)
+      fun.()
     rescue
-      error -> {:error, {:ops_unavailable, Exception.message(error)}}
+      error -> {:error, {unavailable, Exception.message(error)}}
     catch
-      :exit, reason -> {:error, {:ops_unavailable, reason}}
+      :exit, reason -> {:error, {unavailable, reason}}
     end
   end
 
@@ -675,36 +583,22 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   @impl true
-  def handle_info({:alto_run_event, run_id, %Event{} = event}, state) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} -> {:noreply, ingest_event(state, run, event)}
-      :error -> {:noreply, state}
-    end
-  end
-
   def handle_info({:alto_runner_result, ref, outcome}, state) do
     case find_run(state, completion_ref: ref) do
-      %{status: :running} = run -> {:noreply, finish_run(state, run, outcome)}
+      %{result: :running} = run -> {:noreply, finish_run(state, run, outcome)}
       _ -> {:noreply, state}
     end
   end
 
   @impl true
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
-    {:noreply, state |> maybe_drop_subscriber(monitor) |> maybe_clear_pending(monitor)}
+    {:noreply, state |> maybe_drop_subscriber(monitor) |> clear_pending(monitor: monitor)}
   end
 
   defp maybe_drop_subscriber(state, monitor) do
-    case find_subscriber(state, monitor: monitor) do
+    case Enum.find(state.subscribers, fn {_pid, subscriber} -> subscriber.monitor == monitor end) do
       {pid, _subscriber} -> drop_subscriber(state, pid)
       nil -> state
-    end
-  end
-
-  defp maybe_clear_pending(state, monitor) do
-    case find_pending(state, monitor: monitor) do
-      nil -> state
-      _found -> clear_pending(state, monitor: monitor)
     end
   end
 
@@ -715,17 +609,17 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp run_summary(run) do
-    {status, result} =
-      case run.status do
-        :running -> {"running", nil}
-        {:done, {:error, :approval_suspended}, _, _} -> {"suspended", run.result}
-        {:done, :ok, _, _} -> {"completed", run.result}
-        {:done, {:cancelled, _}, _, _} -> {"cancelled", run.result}
-        _ -> {"failed", run.result}
+    status =
+      case run.result do
+        :running -> "running"
+        {:error, :approval_suspended, _} -> "suspended"
+        {:ok, _} -> "completed"
+        {:error, {:cancelled, _}, _} -> "cancelled"
+        _ -> "failed"
       end
 
     usage =
-      case result do
+      case run.result do
         {:ok, value} -> value.usage
         {:error, _, value} when not is_nil(value) -> value.usage
         _ -> %{}
@@ -779,7 +673,6 @@ defmodule Alto.FrontEnd.Registry do
     publish(state, run.id, {:event, run.id, nil, event}, :live)
   end
 
-  defp retain(events, max) when length(events) <= max, do: events
   defp retain(events, max), do: Enum.take(events, max)
 
   ## Fanout
@@ -811,15 +704,8 @@ defmodule Alto.FrontEnd.Registry do
   # A wildcard attach subscribes to all present and future runs: replay every
   # running run's pending approvals so a reconnecting client can still answer.
   defp deliver_attach(state, subscriber, nil, _from_seq) do
-    Enum.reduce(state.runs, state, fn {run_id, run}, state ->
-      if run.status == :running do
-        Enum.reduce(run.pending, state, fn {_approval_id, entry}, state ->
-          current = Map.fetch!(state.subscribers, subscriber.pid)
-          enqueue(state, current.pid, current, {:approval_request, run_id, entry.request})
-        end)
-      else
-        state
-      end
+    Enum.reduce(state.runs, state, fn {_run_id, run}, state ->
+      replay_approvals(state, subscriber.pid, run)
     end)
   end
 
@@ -840,29 +726,25 @@ defmodule Alto.FrontEnd.Registry do
     # published but before it was decided must still be able to answer it.
     # Pending approvals are live-only, so they are replayed after the
     # durable `attached` envelope on every attach to a running run.
-    state =
-      if run.status == :running do
-        Enum.reduce(run.pending, state, fn {_approval_id, entry}, state ->
-          subscriber = Map.fetch!(state.subscribers, subscriber.pid)
-          enqueue(state, subscriber.pid, subscriber, {:approval_request, run_id, entry.request})
-        end)
-      else
-        state
-      end
+    state = replay_approvals(state, subscriber.pid, run)
 
-    case run.status do
-      {:done, outcome, output, model_requests} ->
-        enqueue(state, subscriber.pid, Map.fetch!(state.subscribers, subscriber.pid), {
-          :result,
-          run_id,
-          outcome,
-          output,
-          model_requests
-        })
-
-      :running ->
-        state
+    if run.result == :running do
+      state
+    else
+      enqueue(
+        state,
+        subscriber.pid,
+        Map.fetch!(state.subscribers, subscriber.pid),
+        result_notification(run)
+      )
     end
+  end
+
+  defp replay_approvals(state, pid, run) do
+    Enum.reduce(run.pending, state, fn {_id, entry}, state ->
+      subscriber = Map.fetch!(state.subscribers, pid)
+      enqueue(state, pid, subscriber, {:approval_request, run.id, entry.request})
+    end)
   end
 
   ## Run completion
@@ -881,8 +763,29 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp finish_run(state, run, run_result) do
+    # Cleanup: a finished run owns no pending approvals. Waiters that
+    # outlive the run (crash mid-approval) are released here; cooperative
+    # cancellation already cleared them via the waiter DOWN path.
+    Enum.each(run.pending, fn {_approval_id, entry} ->
+      Process.demonitor(entry.monitor, [:flush])
+    end)
+
+    run = %{
+      run
+      | result: run_result,
+        pending: %{}
+    }
+
+    state = %{state | runs: Map.put(state.runs, run.id, run)}
+
+    state = track_finished(state, run.id)
+
+    publish(state, run.id, result_notification(run), :result)
+  end
+
+  defp result_notification(run) do
     {outcome, output, model_requests} =
-      case run_result do
+      case run.result do
         {:ok, result} ->
           {:ok, result.output, result.model_requests}
 
@@ -896,48 +799,22 @@ defmodule Alto.FrontEnd.Registry do
           {{:error, :invalid_runner_result}, nil, 0}
       end
 
-    # Cleanup: a finished run owns no pending approvals. Waiters that
-    # outlive the run (crash mid-approval) are released here; cooperative
-    # cancellation already cleared them via the waiter DOWN path.
-    Enum.each(run.pending, fn {_approval_id, entry} ->
-      Process.demonitor(entry.monitor, [:flush])
-    end)
-
-    run = %{
-      run
-      | status: {:done, outcome, output, model_requests},
-        result: run_result,
-        pending: %{}
-    }
-
-    state = %{state | runs: Map.put(state.runs, run.id, run)}
-
-    state = track_finished(state, run.id)
-
-    publish(state, run.id, {:result, run.id, outcome, output, model_requests}, :result)
+    {:result, run.id, outcome, output, model_requests}
   end
 
   defp track_finished(state, run_id) do
-    order = (Map.get(state, :finished_order, []) ++ [run_id]) |> Enum.uniq()
-    limit = Map.get(state, :max_finished_runs, @capacity_options[:max_finished_runs][:default])
+    order = state.finished_order ++ [run_id]
+    limit = state.max_finished_runs
     overflow = max(length(order) - limit, 0)
 
     {evict, order} = Enum.split(order, overflow)
-
-    runs =
-      Enum.reduce(evict, state.runs, fn id, runs ->
-        case Map.fetch(runs, id) do
-          {:ok, %{status: {:done, _, _, _}}} -> Map.delete(runs, id)
-          _other -> runs
-        end
-      end)
 
     subscribers =
       Map.new(state.subscribers, fn {pid, sub} ->
         {pid, %{sub | last_durable_seq: Map.drop(sub.last_durable_seq, evict)}}
       end)
 
-    %{state | runs: runs, finished_order: order, subscribers: subscribers}
+    %{state | runs: Map.drop(state.runs, evict), finished_order: order, subscribers: subscribers}
   end
 
   defp model_requests_of(nil), do: 0
@@ -946,46 +823,44 @@ defmodule Alto.FrontEnd.Registry do
   ## Approvals
 
   defp resolve_approval(state, request_id, decision) do
-    case find_pending(state, request_id: request_id) do
-      nil ->
+    case take_pending(state, request_id: request_id) do
+      {nil, state} ->
         {{:error, :not_found}, state}
 
-      {run_id, request_id, entry} ->
+      {entry, state} ->
         send(entry.waiter, {:alto_approval_decision, request_id, decision})
-        Process.demonitor(entry.monitor, [:flush])
-
-        state =
-          update_run(state, run_id, fn run ->
-            %{run | pending: Map.delete(run.pending, request_id)}
-          end)
-
         {:ok, state}
     end
   end
 
-  defp clear_pending(state, request_id: request_id) do
-    case find_pending(state, request_id: request_id) do
-      nil ->
-        state
+  defp clear_pending(state, selector), do: elem(take_pending(state, selector), 1)
 
-      {run_id, ^request_id, entry} ->
+  defp take_pending(state, selector) do
+    pending =
+      Enum.find_value(state.runs, fn {run_id, run} ->
+        case selector do
+          [request_id: id] ->
+            case Map.fetch(run.pending, id) do
+              {:ok, entry} -> {run_id, id, entry}
+              :error -> nil
+            end
+
+          [monitor: ref] ->
+            Enum.find_value(run.pending, fn
+              {id, %{monitor: ^ref} = entry} -> {run_id, id, entry}
+              _other -> nil
+            end)
+        end
+      end)
+
+    case pending do
+      nil ->
+        {nil, state}
+
+      {run_id, request_id, entry} ->
         Process.demonitor(entry.monitor, [:flush])
-
-        update_run(state, run_id, fn run ->
-          %{run | pending: Map.delete(run.pending, request_id)}
-        end)
-    end
-  end
-
-  defp clear_pending(state, monitor: monitor) do
-    case find_pending(state, monitor: monitor) do
-      nil ->
-        state
-
-      {run_id, request_id, _entry} ->
-        update_run(state, run_id, fn run ->
-          %{run | pending: Map.delete(run.pending, request_id)}
-        end)
+        state = update_in(state.runs[run_id].pending, &Map.delete(&1, request_id))
+        {entry, state}
     end
   end
 
@@ -993,35 +868,6 @@ defmodule Alto.FrontEnd.Registry do
 
   defp find_run(state, completion_ref: ref) do
     Enum.find_value(state.runs, fn {_id, run} -> if run.completion_ref == ref, do: run end)
-  end
-
-  defp find_subscriber(state, monitor: monitor) do
-    Enum.find(state.subscribers, fn {_pid, subscriber} -> subscriber.monitor == monitor end)
-  end
-
-  defp find_pending(state, request_id: request_id) do
-    Enum.find_value(state.runs, fn {run_id, run} ->
-      case Map.fetch(run.pending, request_id) do
-        {:ok, entry} -> {run_id, request_id, entry}
-        :error -> nil
-      end
-    end)
-  end
-
-  defp find_pending(state, monitor: monitor) do
-    Enum.find_value(state.runs, fn {run_id, run} ->
-      Enum.find_value(run.pending, fn
-        {request_id, %{monitor: ^monitor} = entry} -> {run_id, request_id, entry}
-        _other -> nil
-      end)
-    end)
-  end
-
-  defp update_run(state, run_id, fun) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} -> %{state | runs: Map.put(state.runs, run_id, fun.(run))}
-      :error -> state
-    end
   end
 
   # : fresh served runs persist only when enabled (registry-owned session
@@ -1086,20 +932,8 @@ defmodule Alto.FrontEnd.Registry do
     end
   end
 
-  defp resume_opts(session_id, state) when is_binary(session_id) do
-    case Alto.Session.transcript(session_id, session_dir: state.session_dir) do
-      {:ok, snapshot} ->
-        {:ok,
-         [
-           session: session_id,
-           resume:
-             Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-         ]}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+  defp resume_opts(session_id, state) when is_binary(session_id),
+    do: Alto.Session.resume_options(session_id, session_dir: state.session_dir)
 
   defp resume_opts(other, _state), do: {:error, {:invalid_resume_option, other}}
 

@@ -2,10 +2,10 @@ defmodule Alto.Runner.ContextPressureTest do
   use ExUnit.Case, async: true
 
   defmodule Reducer do
-    @behaviour Alto.Context.Compaction
-    def reduce(_, _, opts) do
+    @behaviour Alto.Context.Reducer
+    def compact(_, _, opts) do
       send(opts[:owner], :reduced)
-      {:ok, "Earlier work summarized."}
+      {:ok, %{content: "Earlier work summarized.", data: %{}}}
     end
   end
 

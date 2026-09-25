@@ -26,7 +26,7 @@ defmodule Alto.Runner.ContractTest do
     assert {:ok, ^result} = Alto.terminate(handle)
     assert {:ok, ref} = Alto.subscribe(handle)
     assert_receive {:alto_runner_result, ^ref, {:ok, ^result}}
-    assert :completed = Alto.Consumer.worst_outcome(result)
+    assert result.verdict == :completed
   end
 
   test "registry completion does not assume a Task handle or a worker process" do
@@ -43,6 +43,29 @@ defmodule Alto.Runner.ContractTest do
              Alto.FrontEnd.Registry.run_result(name, id)
 
     assert Alto.FrontEnd.Registry.run_ids(name) == []
+  end
+
+  test "child batches handle failed starts and opaque handles without consuming unrelated results" do
+    specs = Enum.map(["rejected", "one", "two"], &%{id: &1})
+    unrelated = make_ref()
+    send(self(), {:alto_runner_result, unrelated, :other_batch})
+
+    start = fn
+      %{id: "rejected"} -> {:error, :cannot_start}
+      %{id: id} -> ExternalRunner.start(id, [])
+    end
+
+    assert {:ok,
+            [
+              {"rejected", {:error, :cannot_start}},
+              {"one", {:ok, %Result{output: "one"}}},
+              {"two", {:ok, %Result{output: "two"}}}
+            ]} =
+             Alto.Runner.SubagentBatch.run(specs, 2, start, fn -> :continue end,
+               runner: ExternalRunner
+             )
+
+    assert_receive {:alto_runner_result, ^unrelated, :other_batch}
   end
 
   test "invalid runner modules fail before starting work" do

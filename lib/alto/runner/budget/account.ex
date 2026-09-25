@@ -31,17 +31,17 @@ defmodule Alto.Runner.Budget.Account do
         })
 
       deadline = Keyword.get(opts, :deadline, :infinity)
+      packet = Map.merge(initial, %{"effects_used" => 0, "model_requests_used" => 0})
 
       safe(fn ->
-        with :ok <- Retained.deadline_ok(deadline),
-             {:ok, entry} <- Retained.ensure_intent(ledger, key, @kind, nil, initial, deadline),
+        with {:ok, entry} <-
+               Retained.ensure_checkpoint(ledger, key, @kind, initial, @attempt, packet, deadline),
              :ok <- valid_initial(entry),
              account = %__MODULE__{
                ledger: ledger,
                key: key,
                generation: entry.recovery["generation"]
              },
-             :ok <- initialize(account, entry, deadline),
              {:ok, _} <-
                tighten(account, caps["max_effects"], caps["max_model_requests"], deadline) do
           {:ok, account}
@@ -56,7 +56,7 @@ defmodule Alto.Runner.Budget.Account do
 
   @doc "Look up one retained account without initializing or mutating it."
   def lookup(ledger, key, opts \\ []) do
-    with {:ok, deadline} <- deadline_option(opts) do
+    with {:ok, deadline} <- Retained.deadline(opts) do
       safe(fn ->
         with {:ok, entry} <- Retained.read(ledger, key, deadline),
              :ok <- valid_initial(entry),
@@ -69,38 +69,22 @@ defmodule Alto.Runner.Budget.Account do
           }
 
           {:ok, account, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-        else
-          false -> {:error, :budget_account_mismatch}
-          {:error, _} = error -> error
         end
       end)
     end
   end
 
   @doc "Read one consistent revision, both counters, and the closure state."
-  def read(%__MODULE__{} = account), do: read(account, :infinity)
-
-  def read(%__MODULE__{} = account, deadline) do
-    safe(fn ->
-      with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
-           :ok <- valid_initial(entry),
-           true <- entry.recovery["generation"] == account.generation,
-           :ok <- valid_packet(entry.checkpoint, entry.recovery),
-           {:ok, state} <- lifecycle(entry) do
-        {:ok, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-      else
-        false -> {:error, :budget_account_mismatch}
-        {:error, _} = error -> error
-      end
-    end)
+  def read(%__MODULE__{} = account, deadline \\ :infinity) do
+    with {:ok, found, snapshot} <- lookup(account.ledger, account.key, deadline: deadline) do
+      if found.generation == account.generation,
+        do: {:ok, snapshot},
+        else: {:error, :budget_account_mismatch}
+    end
   end
 
   @doc "Lower shared caps. Already consumed counts remain consumed."
-  def tighten(%__MODULE__{} = account, effects, models) do
-    tighten(account, effects, models, :infinity)
-  end
-
-  def tighten(%__MODULE__{} = account, effects, models, deadline) do
+  def tighten(%__MODULE__{} = account, effects, models, deadline \\ :infinity) do
     if valid_cap?(effects) and valid_cap?(models) do
       update(
         account,
@@ -158,10 +142,8 @@ defmodule Alto.Runner.Budget.Account do
     if is_integer(expected_revision) and expected_revision >= 1 do
       safe(fn ->
         with {:ok, snapshot} <- read(account),
-             true <- snapshot.revision == expected_revision,
-             :ok <- begin_close(account, snapshot),
-             :ok <- finish_close(account) do
-          :ok
+             true <- snapshot.revision == expected_revision do
+          close_snapshot(account, snapshot)
         else
           false -> {:error, :stale_revision}
           {:error, _} = error -> error
@@ -172,58 +154,17 @@ defmodule Alto.Runner.Budget.Account do
     end
   end
 
-  defp begin_close(account, %{state: :active, revision: revision}) do
-    with {:ok, _} <-
-           Retained.resume(
-             account.ledger,
-             account.key,
-             revision,
-             %{"action" => "close_budget", "generation" => account.generation},
-             :infinity
-           ),
-         do: :ok
-  end
+  defp close_snapshot(_, %{state: :closed}), do: :ok
 
-  defp begin_close(_, %{state: state}) when state in [:closing, :closed], do: :ok
-
-  defp finish_close(account) do
-    with {:ok, snapshot} <- read(account) do
-      if snapshot.state == :closed do
-        :ok
-      else
-        evidence = Map.take(snapshot.packet, @limits ++ @counters)
-
-        case Retained.record_attempt(account.ledger, account.key, @close, :infinity) do
-          :ok ->
-            case Retained.record_outcome(
-                   account.ledger,
-                   account.key,
-                   @close,
-                   :completed,
-                   evidence,
-                   :infinity
-                 ) do
-              :ok -> :ok
-              {:error, :already_decided} -> closed_after_race(account)
-              error -> error
-            end
-
-          {:error, :already_decided} ->
-            closed_after_race(account)
-
-          error ->
-            error
-        end
-      end
-    end
-  end
-
-  defp closed_after_race(account) do
-    case read(account) do
-      {:ok, %{state: :closed}} -> :ok
-      {:ok, _} -> {:error, :budget_account_not_closed}
-      error -> error
-    end
+  defp close_snapshot(account, %{state: :active} = snapshot) do
+    Retained.retire(
+      account.ledger,
+      account.key,
+      snapshot.revision,
+      %{"action" => "close_budget", "generation" => account.generation},
+      @close,
+      Map.take(snapshot.packet, @limits ++ @counters)
+    )
   end
 
   defp update(account, fun, deadline) do
@@ -251,41 +192,6 @@ defmodule Alto.Runner.Budget.Account do
       {:ok, _} -> {:error, :budget_account_closed}
       error -> error
     end
-  end
-
-  # Initialization records only counter state, never external dispatch. Its
-  # deterministic attempt can safely finish an interrupted initialization.
-  defp initialize(account, %{status: {:checkpointed, _, @attempt}}, deadline),
-    do: ensure_readable(account, deadline)
-
-  defp initialize(account, %{status: {:intended}}, deadline) do
-    case Retained.record_attempt(account.ledger, account.key, @attempt, deadline) do
-      :ok ->
-        with {:ok, entry} <- Retained.read(account.ledger, account.key, deadline),
-             do: initialize(account, entry, deadline)
-
-      {:error, :checkpoint_active} ->
-        ensure_readable(account, deadline)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp initialize(account, %{status: {:dispatched, @attempt}} = entry, deadline) do
-    packet = Map.merge(entry.recovery, %{"effects_used" => 0, "model_requests_used" => 0})
-
-    case Retained.record_checkpoint(account.ledger, account.key, @attempt, packet, deadline) do
-      :ok -> :ok
-      {:error, :checkpoint_active} -> ensure_readable(account, deadline)
-      {:error, _} = error -> error
-    end
-  end
-
-  defp initialize(_, _, _), do: {:error, :budget_account_not_active}
-
-  defp ensure_readable(account, deadline) do
-    with {:ok, _} <- read(account, deadline), do: :ok
   end
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
@@ -317,28 +223,15 @@ defmodule Alto.Runner.Budget.Account do
 
   defp lifecycle(%{status: {:checkpointed, _, @attempt}}), do: {:ok, :active}
 
-  defp lifecycle(
-         %{
-           checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
-           recovery: %{"generation" => generation},
-           checkpoint: packet
-         } = entry
-       ) do
-    case entry.status do
-      {:intended} ->
-        {:ok, :closing}
-
-      {:dispatched, @close} ->
-        {:ok, :closing}
-
-      {:decided, :completed, evidence} ->
-        if evidence == Map.take(packet, @limits ++ @counters),
-          do: {:ok, :closed},
-          else: {:error, :invalid_budget_account}
-
-      _ ->
-        {:error, :invalid_budget_account}
-    end
+  defp lifecycle(%{
+         checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
+         recovery: %{"generation" => generation},
+         checkpoint: packet,
+         status: {:decided, :completed, evidence}
+       }) do
+    if evidence == Map.take(packet, @limits ++ @counters),
+      do: {:ok, :closed},
+      else: {:error, :invalid_budget_account}
   end
 
   defp lifecycle(_), do: {:error, :invalid_budget_account}
@@ -359,19 +252,6 @@ defmodule Alto.Runner.Budget.Account do
           |> Keyword.take([:max_effects, :max_model_requests])
           |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)},
        else: {:error, :invalid_budget_account_limits}
-  end
-
-  defp deadline_option(opts) do
-    if Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:deadline]] do
-      deadline = Keyword.get(opts, :deadline, :infinity)
-
-      case Retained.deadline_ok(deadline) do
-        :ok -> {:ok, deadline}
-        {:error, _} = error -> error
-      end
-    else
-      {:error, :invalid_budget_account_options}
-    end
   end
 
   defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max

@@ -26,11 +26,11 @@ EOF
 
     defmodule ConsumerSmoke.Echo do
       @behaviour Alto.Tool
-      def name, do: :echo
-      def schema, do: %{parameters: %{type: "object", properties: %{}}}
-      def execution_mode, do: :parallel
-      def approval, do: :never
-      def run(arguments, _context), do: {:ok, arguments}
+      def name(_opts), do: :echo
+      def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
+      def execution_mode(_opts), do: :parallel
+      def approval(_opts), do: :never
+      def run(arguments, _context, _opts), do: {:ok, arguments}
     end
 
     {:ok, result} =

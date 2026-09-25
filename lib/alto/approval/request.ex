@@ -10,16 +10,12 @@ defmodule Alto.Approval.Request do
       (a provider may reuse ids) or be `nil` (native `invoke_tool` without an
       id). It is preserved for transcript and loop correlation but is never
       an approval handle.
-    * `operation_id` — runtime operation identity, globally unique per tool
-      invocation (`"<run_id>:op-<seq>"`). One operation prepares exactly one
-      opaque value.
-    * `id` — the approval handle. It coincides 1:1 with `operation_id`: the
-      decision recorded for `id` authorizes exactly the prepared value of
-      that operation, and no other.
+    * `id` — globally unique runtime operation identity and approval handle
+      (`"<run_id>:op-<seq>"`). Its decision authorizes exactly one prepared value.
 
-  Approval handles are globally unambiguous across concurrent runs, nested
-  runs, and repeated provider call ids. Front ends answer `approval_response`
-  with the handle (`id`/`operation_id`), never the bare `call_id`.
+  Handles remain unambiguous across concurrent runs, nested runs, and repeated
+  provider call ids. Front ends answer `approval_response` with `id`, never
+  the bare `call_id`.
   """
 
   @enforce_keys [:id, :tool, :arguments, :execution_mode]
@@ -30,7 +26,6 @@ defmodule Alto.Approval.Request do
     :execution_mode,
     :run_id,
     :call_id,
-    :operation_id,
     details: %{}
   ]
 
@@ -41,7 +36,6 @@ defmodule Alto.Approval.Request do
           execution_mode: Alto.Tool.execution_mode(),
           run_id: String.t() | nil,
           call_id: String.t() | nil,
-          operation_id: String.t() | nil,
           details: map()
         }
 end

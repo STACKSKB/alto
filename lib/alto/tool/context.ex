@@ -8,6 +8,6 @@ defmodule Alto.Tool.Context do
           session_id: String.t(),
           cwd: String.t(),
           metadata: map() | nil,
-          agent_identity: %{root_run_id: binary(), path: [binary()]} | nil
+          agent_identity: Alto.AgentIdentity.t() | nil
         }
 end

@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadFile do
   @moduledoc "Bounded, workspace-confined file reads."
 
-  @behaviour Alto.Tool
+  use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never
 
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -10,87 +10,42 @@ defmodule Alto.Tools.ReadFile do
   # expanded. Leave enough headroom for the runner's default native result
   # bound instead of advertising a content limit that can be rejected after
   # the read has already completed.
-  @max_bytes 47_000
-  @options_schema [max_bytes: [type: :pos_integer, default: @max_bytes]]
+  @options_schema [max_bytes: [type: :pos_integer, default: 47_000]]
 
   @impl true
-  def name, do: :read_file
-
-  @impl true
-  def schema, do: schema([])
-
-  @impl true
-  def schema(opts) when is_list(opts) do
+  def schema(opts \\ []) when is_list(opts) do
     limits = validate_options!(opts)
 
-    %{
-      description: "Read a bounded byte range from a file inside the workspace.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          path: %{
-            type: "string",
-            description: "Workspace-relative or in-workspace absolute path."
-          },
-          offset: %{type: "integer", minimum: 0, description: "Byte offset; defaults to 0."},
-          limit: %{
-            type: "integer",
-            minimum: 1,
-            maximum: limits.max_bytes,
-            description: "Maximum bytes to read."
-          }
+    Alto.Tool.object_schema(
+      "Read a bounded byte range from a file inside the workspace.",
+      %{
+        path: %{
+          type: "string",
+          description: "Workspace-relative or in-workspace absolute path."
         },
-        required: ["path"],
-        additionalProperties: false
-      }
-    }
+        offset: %{type: "integer", minimum: 0, description: "Byte offset; defaults to 0."},
+        limit: %{
+          type: "integer",
+          minimum: 1,
+          maximum: limits.max_bytes,
+          description: "Maximum bytes to read."
+        }
+      },
+      ["path"]
+    )
   end
 
   @impl true
-  def execution_mode, do: :parallel
-
-  @impl true
-  def approval, do: :never
-
-  @impl true
-  def run(arguments, %Context{} = context) do
-    run(arguments, context, [])
-  end
-
-  @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %Context{} = context, opts \\ []) do
     path = Map.get(arguments, "path")
     offset = Map.get(arguments, "offset", 0)
 
     with {:ok, limits} <- validate_options(opts),
          limit <- Map.get(arguments, "limit", limits.max_bytes),
          :ok <- valid_range(offset, limit, limits.max_bytes),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd) do
-      case :file.open(String.to_charlist(resolved), [:read, :binary]) do
-        {:ok, file} ->
-          try do
-            with {:ok, content} <- read(file, offset, limit) do
-              {:ok, encode_content(path, offset, content, limit)}
-            end
-          after
-            :file.close(file)
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp read(file, offset, limit) do
-    with {:ok, _position} <- :file.position(file, offset) do
-      case :file.read(file, limit + 1) do
-        {:ok, content} -> {:ok, content}
-        :eof -> {:ok, ""}
-        {:error, reason} -> {:error, reason}
-      end
+         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+         {:ok, content} <- Alto.BoundedFile.range(resolved, offset, limit + 1) do
+      {:ok, encode_content(path, offset, content, limit)}
     end
   end
 

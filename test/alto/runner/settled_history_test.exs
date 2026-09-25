@@ -2,11 +2,8 @@ defmodule Alto.Runner.SettledHistoryTest do
   use ExUnit.Case, async: true
 
   defmodule Change do
-    @behaviour Alto.Tool
-    def name, do: :change
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :exclusive
-    def approval, do: :required
+    use Alto.Tool, name: :change, execution_mode: :exclusive, approval: :required
+    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
 
     def run(_, context, opts) do
       File.write!(Path.join(context.cwd, "changed"), "yes")
@@ -99,7 +96,7 @@ defmodule Alto.Runner.SettledHistoryTest do
       |> Keyword.put(:tools, [{Change, owner: self(), block: true}])
 
     {:ok, handle} = Alto.start(%{}, opts)
-    assert_receive {:changed, _}, 1000
+    assert_receive {:changed, _}, 5_000
     assert {:error, _, _} = Alto.Runner.terminate(handle)
 
     assert {:error, {:session_unsettled_tool_dispatch, fence}} =

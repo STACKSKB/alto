@@ -12,17 +12,35 @@ defmodule Alto.Providers.HTTPOptions do
     ]
   end
 
-  def validate(opts, schema, errors) do
-    case NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
-      {:ok, values} ->
-        {:ok, Map.new(values)}
+  def endpoint_options(opts, base_url, path, key \\ :endpoint) do
+    endpoint =
+      Keyword.get_lazy(opts, key, fn ->
+        String.trim_trailing(Keyword.get(opts, :base_url, base_url), "/") <> path
+      end)
 
-      {:error, error} ->
-        case Keyword.fetch!(errors, error.key) do
-          {:value, tag} -> {:error, {tag, error.value}}
-          reason -> {:error, reason}
-        end
+    Keyword.put(opts, :endpoint, endpoint)
+  end
+
+  def validate(opts, schema) do
+    with {:ok, values} <- NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
+      {:ok, Map.new(values)}
     end
+  end
+
+  def request_options(config, headers, extra) do
+    # Provider extensions cannot override the streaming and timeout guards.
+    Keyword.merge(
+      config.req_options,
+      extra ++
+        [
+          url: config.endpoint,
+          headers: headers,
+          raw: true,
+          retry: false,
+          receive_timeout: config.timeout,
+          request_timeout: config.timeout
+        ]
+    )
   end
 
   def nonempty_string(value) when is_binary(value) and value != "", do: {:ok, value}

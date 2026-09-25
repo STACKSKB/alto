@@ -2,16 +2,12 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   use ExUnit.Case, async: true
 
   alias Alto.Runner.Budget
-  alias Alto.Runner.Execution.Tool.Capabilities
   alias Alto.Runner.ToolBatch
 
   defmodule ControlledTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :controlled_batch_tool, execution_mode: :parallel, approval: :never
 
-    def name, do: :controlled_batch_tool
-    def schema, do: %{parameters: %{type: "object", properties: %{}}}
-    def execution_mode, do: :parallel
-    def approval, do: :never
+    def schema(_), do: %{parameters: %{type: "object", properties: %{}}}
 
     def run(%{id: id}, _context, opts) do
       owner = Keyword.fetch!(opts, :owner)
@@ -74,13 +70,17 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   end
 
   defp capabilities(budget, cancel_ref) do
-    %Capabilities{
+    %{
       tools: %{},
       approval: {Alto.Approvals.DenyAll, []},
-      context: nil,
+      tool_context: nil,
       budget: budget,
       cancel_ref: cancel_ref,
-      tool_timeout: 5_000
+      tool_timeout: 5_000,
+      approval_timeout: 300_000,
+      max_approval_details_bytes: 64_000,
+      max_tool_result_bytes: 64_000,
+      event_sink: nil
     }
   end
 

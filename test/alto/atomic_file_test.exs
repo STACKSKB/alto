@@ -1,7 +1,7 @@
-defmodule Alto.Tools.AtomicWriteTest do
+defmodule Alto.AtomicFileTest do
   use ExUnit.Case, async: false
 
-  alias Alto.Tools.AtomicWrite
+  alias Alto.AtomicFile
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-atomic-#{System.unique_integer([:positive])}")
@@ -18,7 +18,7 @@ defmodule Alto.Tools.AtomicWriteTest do
 
   test "writes, renames, and leaves no temporary sibling", %{dir: dir} do
     path = Path.join(dir, "state.txt")
-    assert :ok = AtomicWrite.write(path, "new")
+    assert :ok = AtomicFile.write(path, "new")
     assert File.read!(path) == "new"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
   end
@@ -34,10 +34,26 @@ defmodule Alto.Tools.AtomicWriteTest do
     path = Path.join(dir, "state.txt")
 
     assert {:error, {:post_rename_sync_failed, {:directory_sync_failed, 42, _}}} =
-             AtomicWrite.write(path, "published")
+             AtomicFile.write(path, "published")
 
     assert File.read!(path) == "published"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
+
+    context = %Alto.Tool.Context{session_id: "test", cwd: dir}
+
+    for {tool, arguments, expected} <- [
+          {Alto.Tools.WriteFile, %{"path" => "state.txt", "content" => "written"}, "written"},
+          {Alto.Tools.EditFile,
+           %{
+             "path" => "state.txt",
+             "edits" => [%{"old_text" => "written", "new_text" => "edited"}]
+           }, "edited"}
+        ] do
+      assert {:ok, prepared, _details} = tool.prepare(arguments, context)
+      assert {:unknown, {:directory_sync_failed, 42, _}} = tool.run_prepared(prepared, context)
+      assert File.read!(path) == expected
+      assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
+    end
   end
 
   defp restore_path(nil), do: System.delete_env("PATH")

@@ -1,11 +1,11 @@
 defmodule Alto.TUI.Markdown do
-  @moduledoc "Streaming-safe report layout with cached blocks and responsive tables."
-  alias ExRatatui.{CellSession, Style, Text}
-  alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Layout.Rect
-  alias ExRatatui.Widgets.Markdown, as: NativeMarkdown
+  @moduledoc "Streaming-safe native Markdown with responsive evidence tables."
 
-  @accent {:rgb, 105, 180, 255}
+  alias ExRatatui.{CellSession, Style, Text}
+  alias ExRatatui.Layout.Rect
+  alias ExRatatui.Text.{Line, Span}
+  alias ExRatatui.Widgets.{CodeBlock, Markdown}
+
   @muted {:rgb, 150, 160, 175}
 
   def render(source, width) do
@@ -15,7 +15,7 @@ defmodule Alto.TUI.Markdown do
 
     cache =
       case List.keyfind(widths, width, 0) do
-        {_, cache} -> cache
+        {^width, cache} -> cache
         nil -> %{}
       end
 
@@ -29,10 +29,10 @@ defmodule Alto.TUI.Markdown do
         {rows, Map.put(used, id, rows)}
       end)
 
-    # Keep only the current version of each block at a few pane widths. A
-    # streaming table must not retain hundreds of previous full-table layouts.
+    # Streaming replaces the final block repeatedly. Retain only current blocks
+    # at the three most recent pane widths.
     Process.put(key, Enum.take([{width, used} | List.keydelete(widths, width, 0)], 3))
-    Text.new(Enum.intersperse(groups, [Line.new([])]) |> List.flatten())
+    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten())
   end
 
   def plain(source, width) do
@@ -45,9 +45,9 @@ defmodule Alto.TUI.Markdown do
 
   defp blocks([line | rest], acc) do
     cond do
-      fence = fence(line) ->
-        {code, rest} = take_code(rest, fence, [])
-        blocks(rest, [{:code, elem(fence, 1), Enum.join(code, "\n")} | acc])
+      opening = fence(line) ->
+        {code, rest} = take_code(rest, opening, [])
+        blocks(rest, [{:code, elem(opening, 1), Enum.join(code, "\n")} | acc])
 
       indented?(line) ->
         {code, rest} = Enum.split_while([line | rest], &(indented?(&1) or String.trim(&1) == ""))
@@ -60,43 +60,27 @@ defmodule Alto.TUI.Markdown do
 
         blocks(rest, [{:code, "", code} | acc])
 
-      setext?(rest) ->
-        blocks(tl(rest), [{:heading, String.trim(line)} | acc])
-
-      heading = Regex.run(~r/^ {0,3}(\#{1,6})[ \t]+(.+?)\s*$/, line) ->
-        [_, _, text] = heading
-        text = Regex.replace(~r/[ \t]+\#+[ \t]*$/, text, "")
-        blocks(rest, [{:heading, text} | acc])
-
-      rule?(line) ->
-        blocks(rest, [:rule | acc])
-
       table?(line, rest) ->
-        [_separator | rest] = rest
-
-        {rows, rest} =
-          Enum.split_while(rest, &(String.trim(&1) != "" and String.contains?(&1, "|")))
-
-        blocks(rest, [{:table, cells(line), Enum.map(rows, &cells/1)} | acc])
+        [separator | rest] = rest
+        {rows, rest} = Enum.split_while(rest, &table_row?/1)
+        source = Enum.join([line, separator | rows], "\n")
+        blocks(rest, [{:table, source, cells(line), Enum.map(rows, &cells/1)} | acc])
 
       true ->
-        {paragraph, rest} = take_paragraph(rest, [line])
-        blocks(rest, [{:prose, Enum.join(paragraph, "\n")} | acc])
+        {markdown, rest} = take_markdown(rest, [line])
+        blocks(rest, [{:markdown, Enum.join(markdown, "\n")} | acc])
     end
   end
 
-  defp indented?(line), do: String.starts_with?(line, ["    ", "\t"])
-  defp setext?([line | _]), do: Regex.match?(~r/^ {0,3}(?:=+|-+)[ \t]*$/, line)
-  defp setext?(_), do: false
+  defp take_markdown([], acc), do: {Enum.reverse(acc), []}
 
-  defp take_paragraph([], acc), do: {Enum.reverse(acc), []}
-
-  defp take_paragraph([line | rest] = remaining, acc) do
-    if String.trim(line) == "" or fence(line) != nil or rule?(line) or
-         Regex.match?(~r/^ {0,3}\#{1,6}\s/, line) or table?(line, rest),
-       do: {Enum.reverse(acc), remaining},
-       else: take_paragraph(rest, [line | acc])
+  defp take_markdown([line | rest] = remaining, acc) do
+    if String.trim(line) == "" or not is_nil(fence(line)) or table?(line, rest),
+      do: {Enum.reverse(acc), remaining},
+      else: take_markdown(rest, [line | acc])
   end
+
+  defp indented?(line), do: String.starts_with?(line, ["    ", "\t"])
 
   defp fence(line) do
     case Regex.run(~r/^ {0,3}(`{3,}|~{3,})(.*)$/, line) do
@@ -105,7 +89,7 @@ defmodule Alto.TUI.Markdown do
     end
   end
 
-  defp take_code([], _, acc), do: {Enum.reverse(acc), []}
+  defp take_code([], _opening, acc), do: {Enum.reverse(acc), []}
 
   defp take_code([line | rest], {marker, _} = opening, acc) do
     closing = String.trim(line)
@@ -116,9 +100,6 @@ defmodule Alto.TUI.Markdown do
        else: take_code(rest, opening, [line | acc])
   end
 
-  defp rule?(line),
-    do: Regex.match?(~r/^ {0,3}(?:\*\s*){3,}$|^ {0,3}(?:-\s*){3,}$|^ {0,3}(?:_\s*){3,}$/, line)
-
   defp table?(header, [separator | _]) do
     columns = cells(separator)
 
@@ -127,20 +108,20 @@ defmodule Alto.TUI.Markdown do
   end
 
   defp table?(_, _), do: false
+  defp table_row?(line), do: String.trim(line) != "" and String.contains?(line, "|")
 
-  # Pipes inside inline code and escaped pipes are data, not column separators.
+  # Escaped pipes and pipes inside inline code belong to the cell.
   defp cells(line) do
     tokens = Regex.scan(~r/\\.|`+|[^\\`|]+|\||./us, String.trim(line)) |> List.flatten()
 
-    {parts, current, _} =
+    {parts, current, _ticks} =
       Enum.reduce(tokens, {[], [], nil}, fn token, {parts, current, ticks} ->
         cond do
           token == "|" and ticks == nil ->
-            {[Enum.reverse(current) |> Enum.join() | parts], [], ticks}
+            {[current |> Enum.reverse() |> Enum.join() | parts], [], ticks}
 
           String.starts_with?(token, "`") ->
-            next = if ticks == token, do: nil, else: ticks || token
-            {parts, [token | current], next}
+            {parts, [token | current], if(ticks == token, do: nil, else: ticks || token)}
 
           token == "\\|" ->
             {parts, ["|" | current], ticks}
@@ -150,7 +131,7 @@ defmodule Alto.TUI.Markdown do
         end
       end)
 
-    result = Enum.reverse([Enum.reverse(current) |> Enum.join() | parts])
+    result = Enum.reverse([current |> Enum.reverse() |> Enum.join() | parts])
     result = if String.starts_with?(String.trim(line), "|"), do: tl(result), else: result
 
     result =
@@ -161,118 +142,58 @@ defmodule Alto.TUI.Markdown do
     Enum.map(result, &String.trim/1)
   end
 
-  defp render_block(:rule, width),
-    do: [Line.new([Span.new(String.duplicate("─", width), style: %Style{fg: @muted})])]
-
-  defp render_block({:prose, text}, width), do: native(String.replace(text, "\n", "  \n"), width)
-
-  defp render_block({:heading, text}, width) do
-    native(text, width)
-    |> Enum.map(fn line ->
-      %{
-        line
-        | spans:
-            Enum.map(line.spans, fn span ->
-              %{
-                span
-                | style: %{
-                    span.style
-                    | fg: @accent,
-                      modifiers: Enum.uniq([:bold | span.style.modifiers])
-                  }
-              }
-            end)
-      }
-    end)
-  end
+  defp render_block({:markdown, source}, width), do: materialize({:markdown, source}, width)
 
   defp render_block({:code, language, code}, width) do
     label = if language == "", do: "code", else: language
-    heading = Line.new([Span.new("  " <> label, style: %Style{fg: @muted})])
 
-    rows =
-      ExRatatui.CodeBlock.highlight(code, language, :base16_ocean_dark)
-      |> Enum.flat_map(&wrap_code(&1, width))
-
-    [heading | rows]
+    [
+      Line.new([Span.new("  " <> label, style: %Style{fg: @muted})])
+      | materialize({:code, language, code}, width)
+    ]
   end
 
-  defp render_block({:table, headers, records}, width) do
-    count = length(headers)
-    # Keep partially streamed rows visible; never silently discard extra cells.
-    count = Enum.reduce(records, count, &max(length(&1), &2))
-    headers = headers ++ Enum.map((length(headers) + 1)..count//1, &"Column #{&1}")
+  defp render_block({:table, source, headers, records}, width) do
+    original_columns = length(headers)
+    columns = Enum.reduce(records, length(headers), &max(length(&1), &2))
+    headers = headers ++ Enum.map((length(headers) + 1)..columns//1, &"Column #{&1}")
 
-    widths =
-      for index <- 0..(count - 1),
-          do:
-            Enum.reduce([headers | records], 1, fn row, n ->
-              max(n, byte_size(Enum.at(row, index, "")))
+    required =
+      1 +
+        Enum.reduce(0..(columns - 1), 0, fn index, total ->
+          widest =
+            Enum.reduce([headers | records], 1, fn row, size ->
+              max(size, display_width(Enum.at(row, index, "")))
             end)
 
-    if Enum.sum(widths) + (count - 1) * 3 <= width do
-      table_grid(headers, records, widths)
+          total + widest + 3
+        end)
+
+    # The native GFM parser treats pipes in code spans as separators. It also
+    # discards cells beyond the header width, so use the semantic fallback for
+    # either case rather than losing evidence.
+    native_safe? =
+      Enum.all?([headers | records], fn row ->
+        length(row) <= original_columns and Enum.all?(row, &(not String.contains?(&1, "|")))
+      end)
+
+    if required <= width and native_safe? do
+      materialize({:markdown, source}, width)
     else
-      if(records == [], do: [[]], else: records)
+      rows = if records == [], do: [[]], else: records
+
+      rows
       |> Enum.map(fn row ->
         headers
         |> Enum.with_index()
-        |> Enum.flat_map(fn {header, index} ->
-          value = Enum.at(row, index, "")
-          native("**#{header}:** #{value}", width)
+        |> Enum.map_join("\n\n", fn {header, index} ->
+          "**#{header}:** #{Enum.at(row, index, "")}"
         end)
       end)
+      |> Enum.map(&materialize({:markdown, &1}, width))
       |> Enum.intersperse([Line.new([])])
       |> List.flatten()
     end
-  end
-
-  defp table_grid(headers, records, widths) do
-    header = grid_row(headers, widths, true)
-
-    rule =
-      Line.new(
-        Enum.intersperse(
-          Enum.map(widths, &Span.new(String.duplicate("─", &1), style: %Style{fg: @muted})),
-          Span.new("─┼─", style: %Style{fg: @muted})
-        )
-      )
-
-    [header, rule | Enum.map(records, &grid_row(&1, widths, false))]
-  end
-
-  defp grid_row(values, widths, header?) do
-    spans =
-      widths
-      |> Enum.with_index()
-      |> Enum.map(fn {width, index} ->
-        value = Enum.at(values, index, "")
-        lines = native(value, max(width, 1))
-        spans = Enum.flat_map(lines, & &1.spans)
-
-        spans =
-          if header?,
-            do:
-              Enum.map(
-                spans,
-                &%{&1 | style: %{&1.style | modifiers: Enum.uniq([:bold | &1.style.modifiers])}}
-              ),
-            else: spans
-
-        spans ++
-          [
-            Span.new(
-              String.duplicate(
-                " ",
-                max(width - display_width(Enum.map_join(spans, & &1.content)), 0)
-              )
-            )
-          ]
-      end)
-      |> Enum.intersperse([Span.new(" │ ", style: %Style{fg: @muted})])
-      |> List.flatten()
-
-    Line.new(spans)
   end
 
   defp display_width(text) do
@@ -281,63 +202,17 @@ defmodule Alto.TUI.Markdown do
     Enum.reduce(glyphs, 0, &(Map.get(widths, &1, 1) + &2))
   end
 
-  defp wrap_code(line, width) do
-    glyphs =
-      Enum.flat_map(line.spans, fn span ->
-        span.content
-        |> String.replace("\n", "")
-        |> String.replace("\t", "    ")
-        |> String.graphemes()
-        |> Enum.map(&{&1, span.style})
-      end)
+  defp materialize({_kind, ""}, _width), do: [Line.new([])]
+  defp materialize({:code, _language, ""}, _width), do: [Line.new([])]
 
-    widths = Alto.TUI.Selection.glyph_widths(Enum.map(glyphs, &elem(&1, 0)))
-
-    {rows, spans, _} =
-      Enum.reduce(glyphs, {[], [], 0}, fn {glyph, style}, {rows, spans, col} ->
-        size = Map.get(widths, glyph, 1)
-
-        if col + size > width and spans != [],
-          do: {[Line.new(Enum.reverse(spans)) | rows], [Span.new(glyph, style: style)], size},
-          else: {rows, [Span.new(glyph, style: style) | spans], col + size}
-      end)
-
-    Enum.reverse([Line.new(Enum.reverse(spans)) | rows])
-  end
-
-  # Parse/format only an individual block. Export compact styled runs once;
-  # pointer motion and ordinary paints use the cached rows, never this path.
-  defp native("", _), do: [Line.new([])]
-
-  defp native(text, width) do
-    key = {__MODULE__, :inline}
-    cache = Process.get(key, %{})
-    id = {text, width}
-
-    case Map.fetch(cache, id) do
-      {:ok, rows} ->
-        rows
-
-      :error ->
-        rows = native_uncached(text, width)
-        cache = if map_size(cache) >= 1024, do: %{}, else: cache
-        if byte_size(text) <= 4096, do: Process.put(key, Map.put(cache, id, rows))
-        rows
-    end
-  end
-
-  defp native_uncached(text, width) do
-    marker =
-      Enum.find_value(0xE000..0xF8FF, fn n ->
-        char = <<n::utf8>>
-        if not String.contains?(text, char), do: char
-      end)
-
-    height = min(64, length(String.split(text, "\n")) + div(2 * byte_size(text), width) + 4)
+  defp materialize(content, width) do
+    marker = marker(content)
+    source = content_source(content) <> "\n\n" <> marker
+    height = min(64, length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4)
     session = CellSession.new(width, height)
 
     try do
-      native_pages(session, text <> "\n\n" <> marker, marker, width, height, 0, [])
+      native_pages(session, content, source, marker, width, height, 0, [])
       |> Enum.reverse()
       |> List.flatten()
       |> Enum.reverse()
@@ -348,20 +223,15 @@ defmodule Alto.TUI.Markdown do
     end
   end
 
-  defp native_pages(session, text, marker, width, height, offset, acc) do
+  defp native_pages(session, content, source, marker, width, height, offset, acc) do
     :ok = CellSession.draw(session, [])
-
-    :ok =
-      CellSession.draw(session, [
-        {%NativeMarkdown{content: text, scroll: {offset, 0}, style: %Style{fg: :white}},
-         %Rect{width: width, height: height}}
-      ])
-
+    widget = native_widget(content, source, offset)
+    :ok = CellSession.draw(session, [{widget, %Rect{width: width, height: height}}])
     cells = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
 
     case Enum.find_index(cells, fn row -> Enum.any?(row, &(&1.symbol == marker)) end) do
       nil when offset < 65_000 ->
-        native_pages(session, text, marker, width, height, offset + height, [
+        native_pages(session, content, source, marker, width, height, offset + height, [
           styled_rows(cells) | acc
         ])
 
@@ -371,6 +241,31 @@ defmodule Alto.TUI.Markdown do
       row ->
         [styled_rows(Enum.take(cells, row)) | acc]
     end
+  end
+
+  defp native_widget({:markdown, _}, source, offset),
+    do: %Markdown{content: source, scroll: {offset, 0}, style: %Style{fg: :white}}
+
+  defp native_widget({:code, language, _}, source, offset),
+    do: %CodeBlock{
+      content: source,
+      language: if(language == "", do: nil, else: language),
+      scroll: {offset, 0},
+      wrap: true
+    }
+
+  # Transcript lines are meaningful during streaming; Markdown soft breaks
+  # would otherwise collapse long line-oriented output into one visual row.
+  defp content_source({:markdown, source}), do: String.replace(source, "\n", "  \n")
+  defp content_source({:code, _language, source}), do: String.replace(source, "\t", "    ")
+
+  defp marker(content) do
+    source = content_source(content)
+
+    Enum.find_value(0xE000..0xF8FF, fn point ->
+      char = <<point::utf8>>
+      if not String.contains?(source, char), do: char
+    end)
   end
 
   defp styled_rows(rows) do
@@ -401,18 +296,21 @@ defmodule Alto.TUI.Markdown do
           end
         end)
 
-      spans = Enum.reverse(spans)
-      # Native row padding is not content and would interfere with table widths.
-      spans = trim_padding(Enum.reverse(spans)) |> Enum.reverse()
-      Line.new(spans)
+      Line.new(trim_padding(Enum.reverse(spans)))
     end)
   end
 
-  defp trim_padding([]), do: []
+  defp trim_padding(spans) do
+    spans
+    |> Enum.reverse()
+    |> Enum.drop_while(&(String.trim(&1.content) == ""))
+    |> case do
+      [] ->
+        []
 
-  defp trim_padding([span | rest]) do
-    text = String.trim_trailing(span.content)
-    if text == "", do: trim_padding(rest), else: [%{span | content: text} | rest]
+      [span | rest] ->
+        Enum.reverse([%{span | content: String.trim_trailing(span.content)} | rest])
+    end
   end
 
   defp blank?(line), do: Enum.all?(line.spans, &(String.trim(&1.content) == ""))

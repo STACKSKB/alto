@@ -4,8 +4,6 @@ defmodule Alto.Context.Reducers.Summary do
 
   @impl true
   def compact(input, model, _opts) do
-    input.notify.(Alto.Event.live(:context_compacting, %{dropped_messages: length(input.middle)}))
-
     prompt =
       "Summarize this agent work transcript so the run can continue without it. " <>
         "Preserve: the active task and any plan, key decisions taken, files read or modified, " <>
@@ -40,18 +38,9 @@ defmodule Alto.Context.Reducers.Summary do
       data: %{
         strategy: :summary,
         summarized_bytes: byte_size(input.text),
-        summary_bytes: byte_size(summary)
-      },
-      events: [],
-      records: [
-        Alto.Session.compaction_record(%{
-          run_id: input.run_id,
-          dropped_messages: length(input.middle),
-          dropped_bytes: input.middle_bytes,
-          summary_bytes: byte_size(summary),
-          summary: summary
-        })
-      ]
+        summary_bytes: byte_size(summary),
+        summary: summary
+      }
     }
   end
 end

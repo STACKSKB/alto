@@ -2,13 +2,12 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{State, WorkspaceForm}
+  alias Alto.TUI.{Menu, State, TextForm, WorkspaceForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
-  alias ExRatatui.Text
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup}
+  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup, TextInput}
 
   @accent {:rgb, 105, 180, 255}
   @muted {:rgb, 116, 126, 140}
@@ -25,9 +24,8 @@ defmodule Alto.TUI.View do
     |> add(transcript_widget(state), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
-    |> add_details(state, layout.details, :pane)
     |> add(status_widget(state, width), layout.status)
-    |> add_context_drawer(state, layout)
+    |> add_details(state, details_layout(state, width, height))
     |> add_overlay(state.overlay, layout.root)
   end
 
@@ -60,61 +58,37 @@ defmodule Alto.TUI.View do
   def selection_content(%State{overlay: %{kind: :workspace_form} = form}, width, height),
     do: WorkspaceForm.selection_content(form, width, height)
 
-  def selection_content(%State{overlay: %{kind: :provider_form} = form}, width, height) do
+  def selection_content(%State{overlay: %{kind: kind} = form}, width, height)
+      when kind in [:provider_form, :model_form] do
     rect = content_rect(overlay_rect(form, width, height))
+    prefix = form.prefix_width
 
     form.fields
     |> Enum.with_index()
     |> Enum.flat_map(fn {field, row} ->
-      if ExRatatui.text_input_get_value(field.input) == "" or row + 2 >= rect.height,
+      field_row = TextForm.field_row(row)
+
+      if ExRatatui.text_input_get_value(field.input) == "" or field_row >= rect.height,
         do: [],
         else: [
-          %Rect{x: rect.x + 16, y: rect.y + 2 + row, width: max(rect.width - 16, 0), height: 1}
+          %Rect{
+            x: rect.x + prefix,
+            y: rect.y + field_row,
+            width: max(rect.width - prefix, 0),
+            height: 1
+          }
         ]
     end)
-  end
-
-  def selection_content(%State{overlay: %{kind: :model_form} = form}, width, height) do
-    rect = content_rect(overlay_rect(form, width, height))
-    prefix = String.length("› Model ID  ")
-
-    if ExRatatui.text_input_get_value(form.input) == "" or rect.height <= 2,
-      do: [],
-      else: [
-        %Rect{x: rect.x + prefix, y: rect.y + 2, width: max(rect.width - prefix, 0), height: 1}
-      ]
   end
 
   def selection_content(%State{overlay: overlay}, _, _) when not is_nil(overlay), do: []
 
   def selection_content(state, width, height) do
     layout = layout(state, width, height)
-    drawer = context_overlay_rect(state, width, height)
-    details = drawer || layout.details
+    details = details_layout(state, width, height)
+    details_content = if details, do: [details.content], else: []
 
-    details_content =
-      if details do
-        rect = content_rect(details)
-        # Approval actions sit below the data, outside the selectable area.
-        [
-          %{
-            rect
-            | height:
-                max(
-                  rect.height -
-                    if(state.pending_approvals == [],
-                      do: 0,
-                      else: length(approval_controls(details))
-                    ),
-                  0
-                )
-          }
-        ]
-      else
-        []
-      end
-
-    if drawer do
+    if details && details.presentation == :drawer do
       details_content
     else
       transcript =
@@ -151,19 +125,19 @@ defmodule Alto.TUI.View do
 
   def hit_target(%State{} = state, width, height, x, y) do
     layout = layout(state, width, height)
-    context_overlay = context_overlay_rect(state, width, height)
+    details = details_layout(state, width, height)
 
     cond do
-      PaneLayout.contains?(context_overlay, x, y) ->
-        details_target(state, context_overlay, x, y)
+      details && details.presentation == :drawer && PaneLayout.contains?(details.rect, x, y) ->
+        details_target(details, x, y)
 
-      context_overlay ->
+      details && details.presentation == :drawer ->
         :details_drawer_outside
 
-      layout.left_seam && abs(x - layout.left_seam) <= 0 ->
+      layout.left_seam && x == layout.left_seam ->
         :left_seam
 
-      layout.right_seam && abs(x - layout.right_seam) <= 0 ->
+      layout.right_seam && x == layout.right_seam ->
         :right_seam
 
       PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->
@@ -194,7 +168,7 @@ defmodule Alto.TUI.View do
         :composer
 
       PaneLayout.contains?(layout.details, x, y) ->
-        details_target(state, layout.details, x, y)
+        details_target(details, x, y)
 
       PaneLayout.contains?(layout.transcript, x, y) ->
         :transcript
@@ -224,6 +198,23 @@ defmodule Alto.TUI.View do
       else
         %Rect{x: width - drawer_width, y: 0, width: drawer_width, height: main_height}
       end
+    end
+  end
+
+  defp details_layout(state, width, height) do
+    drawer = context_overlay_rect(state, width, height)
+    rect = drawer || layout(state, width, height).details
+
+    if rect do
+      controls = if state.pending_approvals == [], do: [], else: approval_controls(rect)
+      content = content_rect(rect)
+
+      %{
+        rect: rect,
+        content: %{content | height: max(content.height - length(controls), 0)},
+        controls: controls,
+        presentation: if(drawer, do: :drawer, else: :pane)
+      }
     end
   end
 
@@ -393,23 +384,21 @@ defmodule Alto.TUI.View do
   @doc "Largest useful context offset, including the approval button rows."
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
-    drawer = context_overlay_rect(state, width, height)
-    rect = drawer || layout(state, width, height).details
+    details = details_layout(state, width, height)
 
-    if rect do
-      {_, text} = details_content(state, if(drawer, do: :drawer, else: :pane))
-      controls = if state.pending_approvals == [], do: 0, else: length(approval_controls(rect))
-      Alto.TUI.Scroll.bottom(text, rect.width - 2, rect.height - 2 - controls, :details)
+    if details do
+      {_, text} = details_content(state, details.presentation)
+      Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
     else
       0
     end
   end
 
-  defp details_widget(state, presentation) do
-    {title, text} = details_content(state, presentation)
+  defp details_widget(state, details) do
+    {title, text} = details_content(state, details.presentation)
 
     title =
-      if presentation == :drawer,
+      if details.presentation == :drawer,
         do: title <> "│ click header / Esc close ",
         else: title
 
@@ -422,35 +411,31 @@ defmodule Alto.TUI.View do
     }
   end
 
-  defp add_details(widgets, _state, nil, _presentation), do: widgets
+  defp add_details(widgets, _state, nil), do: widgets
 
-  defp add_details(widgets, %{pending_approvals: []} = state, rect, presentation),
-    do: add(widgets, details_widget(state, presentation), rect)
+  defp add_details(widgets, state, layout) do
+    details = details_widget(state, layout)
+    clear = if layout.presentation == :drawer, do: [{%Clear{}, layout.rect}], else: []
 
-  defp add_details(widgets, state, rect, presentation) do
-    details = details_widget(state, presentation)
-    controls = approval_controls(rect)
+    body =
+      if layout.controls == [] do
+        [{details, layout.rect}]
+      else
+        [
+          {%{details | text: "", scroll: {0, 0}}, layout.rect},
+          {%{details | block: nil}, layout.content}
+        ]
+      end
 
-    content = %Rect{
-      x: rect.x + 1,
-      y: rect.y + 1,
-      width: max(rect.width - 2, 0),
-      height: max(rect.height - 2 - length(controls), 0)
-    }
+    buttons =
+      Enum.map(layout.controls, fn control ->
+        {%Paragraph{
+           text: control.label,
+           style: style(fg: :black, bg: @accent, modifiers: [:bold])
+         }, control.rect}
+      end)
 
-    widgets =
-      widgets
-      |> add(%{details | text: "", scroll: {0, 0}}, rect)
-      |> add(%{details | block: nil}, content)
-
-    Enum.reduce(controls, widgets, fn control, acc ->
-      button = %Paragraph{
-        text: control.label,
-        style: style(fg: :black, bg: @accent, modifiers: [:bold])
-      }
-
-      add(acc, button, control.rect)
-    end)
+    widgets ++ clear ++ body ++ buttons
   end
 
   # Rendering and hit testing share these rectangles; only a visible button
@@ -474,13 +459,6 @@ defmodule Alto.TUI.View do
 
   defp approval_controls(_rect), do: []
 
-  defp add_context_drawer(widgets, state, layout) do
-    case context_overlay_rect(state, layout.root.width, layout.root.height) do
-      nil -> widgets
-      rect -> widgets |> add(%Clear{}, rect) |> add_details(state, rect, :drawer)
-    end
-  end
-
   defp status_widget(state, width) do
     usage = State.current_usage(state)
     project = State.selected_project(state)
@@ -503,16 +481,11 @@ defmodule Alto.TUI.View do
 
     message = if state.notice, do: " │ " <> short(state.notice, 32), else: ""
     left = left <> message
+    left_width = width - String.length(right)
 
     text =
-      if width > String.length(right) + 12 do
-        left_width = width - String.length(right)
-
-        if left_width >= String.length(left) do
-          String.pad_trailing(short(left, left_width), left_width) <> right
-        else
-          compact_status_line(activity, message, right, width)
-        end
+      if left_width > 12 and left_width >= String.length(left) do
+        String.pad_trailing(left, left_width) <> right
       else
         compact_status_line(activity, message, right, width)
       end
@@ -535,57 +508,16 @@ defmodule Alto.TUI.View do
   defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
     do: widgets ++ WorkspaceForm.widgets(form, root)
 
-  defp add_overlay(widgets, %{kind: :provider_form} = overlay, root) do
-    popup = %Popup{
-      content: %Paragraph{
-        text: provider_form_text(overlay, root.width),
-        wrap: false,
-        style: style(fg: :white, bg: @panel_alt)
-      },
-      block: %Block{
-        title: " #{overlay.title} │ Tab/↑↓ fields · Enter next/save · ^S save · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
-      percent_width: 72,
-      percent_height: 66
-    }
-
-    widgets ++ [{popup, root}]
-  end
-
-  defp add_overlay(widgets, %{kind: :model_form} = overlay, root) do
-    value = ExRatatui.text_input_get_value(overlay.input)
-    cursor = ExRatatui.text_input_cursor(overlay.input)
-    error = if overlay.error, do: "  ! " <> overlay.error, else: ""
-
-    popup = %Popup{
-      content: %Paragraph{
-        text: model_form_text(value, cursor, error, root.width),
-        wrap: false,
-        style: style(fg: :white, bg: @panel_alt)
-      },
-      block: %Block{
-        title: " #{overlay.title} │ Enter use · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
-      percent_width: 62,
-      percent_height: 42
-    }
-
-    widgets ++ [{popup, root}]
-  end
+  defp add_overlay(widgets, %{kind: kind} = form, root)
+       when kind in [:provider_form, :model_form],
+       do: widgets ++ text_form_widgets(form, root)
 
   defp add_overlay(widgets, overlay, root) do
-    selected = safe_selected(overlay.index, overlay.items)
+    items = Menu.items(overlay)
+    selected = safe_selected(overlay.index, items)
 
     list = %List{
-      items: Enum.map(overlay.items, & &1.label),
+      items: Enum.map(items, & &1.label),
       selected: selected,
       highlight_symbol: "› ",
       highlight_style: style(fg: :black, bg: @accent, modifiers: [:bold]),
@@ -599,7 +531,7 @@ defmodule Alto.TUI.View do
             overlay_message_prefix(overlay) <>
               overlay.message <>
               "\n\n" <>
-              (overlay.items
+              (items
                |> Enum.with_index()
                |> Enum.map_join("\n", fn {item, index} ->
                  if index == selected, do: "› " <> item.label, else: "  " <> item.label
@@ -613,13 +545,7 @@ defmodule Alto.TUI.View do
 
     popup = %Popup{
       content: content,
-      block: %Block{
-        title: " #{overlay.title} │ ↑↓ · Enter · Esc ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: style(fg: @accent),
-        style: style(bg: @panel_alt)
-      },
+      block: overlay_block(" #{Menu.title(overlay)} │ ↑↓ · Enter · Esc "),
       percent_width: 62,
       percent_height: 62
     }
@@ -627,172 +553,85 @@ defmodule Alto.TUI.View do
     widgets ++ [{popup, root}]
   end
 
-  defp provider_form_text(overlay, root_width) do
-    values = Map.new(overlay.fields, &{&1.key, ExRatatui.text_input_get_value(&1.input)})
-    active = overlay.field_index
-    key = Map.get(values, :api_key, "")
+  defp text_form_widgets(form, root) do
+    rect = overlay_rect(form, root.width, root.height)
+    inner = content_rect(rect)
+    bg = style(fg: :white, bg: @panel_alt)
 
-    key_display =
-      cond do
-        key != "" -> String.duplicate("•", min(length(String.codepoints(key)), 32))
-        overlay.key_saved? -> "(saved — leave blank to keep)"
-        true -> "(optional for local providers)"
-      end
+    error_row = 2 + length(form.fields)
+    {button_row, _cancel_row} = TextForm.button_rows(form)
 
-    lines = [
-      plain_line("  Credentials are saved privately outside the workspace."),
-      plain_line(""),
-      form_line(overlay, active, 0, :id, "ID", Map.get(values, :id, ""),
-        locked?: locked?(overlay, :id),
-        max_width: provider_value_width(root_width, locked?(overlay, :id))
-      ),
-      form_line(overlay, active, 1, :label, "Name", Map.get(values, :label, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 2, :base_url, "Base URL", Map.get(values, :base_url, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 3, :api_key, "API key", key_display,
-        placeholder?: key == "",
-        raw_value: key,
-        max_width: provider_value_width(root_width, false)
-      ),
-      form_line(overlay, active, 4, :model, "Default model", Map.get(values, :model, ""),
-        max_width: provider_value_width(root_width, false)
-      ),
-      plain_line(if(overlay.error, do: "  ! " <> overlay.error, else: "")),
-      plain_line("  [ Save provider ]"),
-      plain_line("  [ Cancel ]")
+    rows = [
+      {if(form.error, do: "  ! " <> form.error, else: ""), error_row},
+      {"  " <> Enum.at(form.buttons, 0), button_row},
+      {"  " <> Enum.at(form.buttons, 1), button_row + 1}
     ]
 
-    Text.new(lines)
+    background = [
+      {%Clear{}, rect},
+      {%Paragraph{
+         text: "  " <> form.intro,
+         style: bg,
+         block: overlay_block(" #{form.title} │ #{form.hint} ")
+       }, rect}
+    ]
+
+    background ++
+      Enum.flat_map(Enum.with_index(form.fields), &text_form_field(form, inner, bg, &1)) ++
+      Enum.map(rows, fn {text, row} -> {form_paragraph(text, bg), form_row(inner, row)} end)
   end
 
-  defp model_form_text(value, cursor, error, root_width) do
-    max_width = max(div(root_width * 62, 100) - 2 - String.length("› Model ID  "), 1)
+  defp text_form_field(form, inner, bg, {field, index}) do
+    active? = form.field_index == index
+    locked? = Map.get(field, :locked?, false)
+    secret? = Map.get(field, :secret?, false)
+    prefix_width = form.prefix_width
 
-    Text.new([
-      plain_line("  Use the provider's exact model identifier."),
-      plain_line(""),
-      Line.new([Span.new("› Model ID  ") | editable_value_spans(value, cursor, max_width)]),
-      plain_line(error),
-      plain_line(""),
-      plain_line("  [ Use model ]"),
-      plain_line("  [ Cancel ]")
-    ])
-  end
+    prefix =
+      if(active?, do: "› ", else: "  ") <> String.pad_trailing(field.label, prefix_width - 2)
 
-  defp plain_line(value), do: Line.new([Span.new(value)])
+    row = form_row(inner, TextForm.field_row(index))
+    value = ExRatatui.text_input_get_value(field.input)
 
-  defp form_line(overlay, active, index, key, label, value, opts) do
-    locked? = Keyword.get(opts, :locked?, false)
-    placeholder? = Keyword.get(opts, :placeholder?, false)
-    raw_value = Keyword.get(opts, :raw_value, value)
-    max_width = Keyword.get(opts, :max_width, 40)
-    marker = if active == index, do: "›", else: " "
-    suffix = if locked?, do: "  (fixed)", else: ""
-    prefix = marker <> " " <> String.pad_trailing(label, 14)
+    if active? and not locked? do
+      visible_prefix = min(prefix_width, row.width)
+      input_rect = %{row | x: row.x + visible_prefix, width: max(row.width - visible_prefix, 0)}
+      state = if secret?, do: TextForm.masked_state(field), else: field.input
 
-    value_spans =
-      if active == index and not locked? do
-        field = Enum.find(overlay.fields, &(&1.key == key))
-        cursor = if field, do: ExRatatui.text_input_cursor(field.input), else: 0
-
-        if placeholder? do
-          editable_value_spans("", cursor, max_width) ++
-            [Span.new(value, style: style(fg: @muted))]
-        else
-          if key == :api_key do
-            masked_value_spans(raw_value, cursor, max_width)
-          else
-            editable_value_spans(value, cursor, max_width)
-          end
-        end
-      else
-        [Span.new(value)]
-      end
-
-    Line.new([Span.new(prefix) | value_spans ++ [Span.new(suffix)]])
-  end
-
-  defp provider_value_width(root_width, locked?) do
-    popup_content_width = max(div(root_width * 72, 100) - 2, 1)
-    suffix_width = if locked?, do: String.length("  (fixed)"), else: 0
-    max(popup_content_width - String.length("› ") - 14 - suffix_width, 1)
-  end
-
-  # Keep the insertion point visible when a URL or model identifier is longer
-  # than the popup. The displayed value is still the real value (or its mask);
-  # only the far end away from the cursor is elided.
-  defp editable_value_spans(value, cursor, max_width) do
-    editable_codepoint_spans(String.codepoints(value), cursor, max_width)
-  end
-
-  defp masked_value_spans(value, cursor, max_width) do
-    value
-    |> String.codepoints()
-    |> Enum.map(fn _grapheme -> "•" end)
-    |> editable_codepoint_spans(cursor, max_width)
-  end
-
-  defp editable_codepoint_spans(graphemes, cursor, max_width) do
-    cursor = min(max(cursor, 0), length(graphemes))
-    max_width = max(max_width, 1)
-
-    if length(graphemes) + 1 <= max_width do
-      caret_spans(graphemes, cursor)
+      [
+        {form_paragraph(prefix, bg), %{row | width: min(prefix_width, row.width)}},
+        {%TextInput{
+           state: state,
+           placeholder: Map.get(field, :placeholder),
+           placeholder_style: style(fg: @muted, bg: @panel_alt),
+           style: bg,
+           cursor_style: style(fg: :black, bg: @accent)
+         }, input_rect}
+      ]
     else
-      bounded_caret_spans(graphemes, cursor, max_width)
+      display =
+        cond do
+          secret? and value != "" -> String.duplicate("•", length(String.codepoints(value)))
+          secret? -> Map.get(field, :placeholder, "")
+          true -> value
+        end
+
+      suffix = if locked?, do: "  (fixed)", else: ""
+      [{form_paragraph(prefix <> display <> suffix, bg), row}]
     end
   end
 
-  defp bounded_caret_spans(_graphemes, _cursor, 1), do: caret_spans([], 0)
+  defp form_row(inner, offset),
+    do: %{inner | y: inner.y + offset, height: min(max(inner.height - offset, 0), 1)}
 
-  defp bounded_caret_spans(graphemes, cursor, max_width) do
-    edge_width = max_width - 2
-
-    cond do
-      cursor <= edge_width ->
-        visible = Enum.take(graphemes, edge_width)
-        caret_spans(visible, cursor) ++ [Span.new("…")]
-
-      cursor >= length(graphemes) - edge_width ->
-        start = max(length(graphemes) - edge_width, 0)
-        visible = Enum.slice(graphemes, start, edge_width)
-        [Span.new("…") | caret_spans(visible, cursor - start)]
-
-      max_width < 4 ->
-        caret_spans([], 0)
-
-      true ->
-        content_width = max_width - 3
-        start = max(cursor - div(content_width, 2), 1)
-        start = min(start, length(graphemes) - content_width - 1)
-        visible = Enum.slice(graphemes, start, content_width)
-        [Span.new("…") | caret_spans(visible, cursor - start)] ++ [Span.new("…")]
-    end
-  end
-
-  defp caret_spans(graphemes, column) do
-    {before, trailing} = Enum.split(graphemes, column)
-
-    [
-      Span.new(Enum.join(before)),
-      Span.new("▏", style: style(fg: :black, bg: @accent)),
-      Span.new(Enum.join(trailing))
-    ]
-  end
-
-  defp locked?(overlay, key) do
-    case Enum.find(overlay.fields, &(&1.key == key)) do
-      %{locked?: locked?} -> locked?
-      _other -> false
-    end
-  end
+  defp form_paragraph(text, style), do: %Paragraph{text: text, wrap: false, style: style}
 
   @doc "Settings labels and exact click widths."
   def settings_segments(state) do
     profile = State.selected_profile(state)
+    {width, height} = state.dimensions
+
+    settings_width = layout(state, width, height).settings.width
 
     provider =
       case Alto.TUI.Backend.ui(state, :provider_label) do
@@ -802,56 +641,45 @@ defmodule Alto.TUI.View do
 
     segments =
       cond do
-        ultra_compact_settings?(state) ->
+        settings_width < 48 ->
           [
-            %{target: {:setting, :backend}, text: " B:#{String.first(backend_label(state))} "},
-            %{target: {:setting, :approval}, text: " A:#{mini_approval_label(state)} "},
-            %{target: {:setting, :entry_mode}, text: " E:#{mini_entry_label(state)} "},
-            %{target: {:setting, :details}, text: " D:#{mini_context_label(state)} "},
-            %{target: {:setting, :provider}, text: " P:… "},
-            %{target: {:setting, :model}, text: " M:… "}
+            {:backend, " B:#{String.first(backend_label(state))} "},
+            {:approval, " A:#{mini_approval_label(state)} "},
+            {:entry_mode, " E:#{mini_entry_label(state)} "},
+            {:details, " D:#{mini_context_label(state)} "},
+            {:provider, " P:… "},
+            {:model, " M:… "}
           ]
 
-        compact_settings?(state) ->
-          label_width = compact_setting_label_width(state)
+        settings_width < 112 ->
+          label_width = settings_width |> Kernel.-(39) |> div(2) |> max(1) |> min(13)
 
           [
-            %{target: {:setting, :backend}, text: " B:#{backend_label(state)} "},
-            %{target: {:setting, :approval}, text: " A:#{approval_label(state.approval_level)} "},
-            %{target: {:setting, :entry_mode}, text: " E:#{entry_mode_label(state)} "},
-            %{target: {:setting, :details}, text: " D:#{context_label(state)} "},
-            %{target: {:setting, :provider}, text: " P:#{short(provider, label_width)} "},
-            %{
-              target: {:setting, :model},
-              text: " M:#{short(state.selected_model || "choose…", label_width)} "
-            }
+            {:backend, " B:#{backend_label(state)} "},
+            {:approval, " A:#{approval_label(state.approval_level)} "},
+            {:entry_mode, " E:#{entry_mode_label(state)} "},
+            {:details, " D:#{context_label(state)} "},
+            {:provider, " P:#{short(provider, label_width)} "},
+            {:model, " M:#{short(state.selected_model || "choose…", label_width)} "}
           ]
 
         true ->
           [
-            %{target: {:setting, :backend}, text: " backend #{backend_label(state)} "},
-            %{
-              target: {:setting, :approval},
-              text: " approval #{approval_label(state.approval_level)} "
-            },
-            %{target: {:setting, :details}, text: " context #{context_label(state)} "},
-            %{target: {:setting, :provider}, text: " provider #{short(provider, 16)} "},
-            %{
-              target: {:setting, :model},
-              text: " model #{short(state.selected_model || "choose…", 20)} "
-            },
-            %{target: {:setting, :entry_mode}, text: " entry #{entry_mode_label(state)} "}
+            {:backend, " backend #{backend_label(state)} "},
+            {:approval, " approval #{approval_label(state.approval_level)} "},
+            {:details, " context #{context_label(state)} "},
+            {:provider, " provider #{short(provider, 16)} "},
+            {:model, " model #{short(state.selected_model || "choose…", 20)} "},
+            {:entry_mode, " entry #{entry_mode_label(state)} "}
           ]
       end
 
-    if State.effort_choices(state) == [] do
-      segments
-    else
-      [
-        %{target: {:setting, :effort}, text: " R:#{State.selected_effort(state) || "auto"} "}
-        | segments
-      ]
-    end
+    segments =
+      if State.effort_choices(state) == [],
+        do: segments,
+        else: [{:effort, " R:#{State.selected_effort(state) || "auto"} "} | segments]
+
+    Enum.map(segments, fn {key, text} -> %{target: {:setting, key}, text: text} end)
   end
 
   defp settings_target(state, rect, x) do
@@ -871,16 +699,14 @@ defmodule Alto.TUI.View do
     end
   end
 
-  defp details_target(%{details_drawer_open?: true}, rect, _x, y) when y == rect.y,
+  defp details_target(%{presentation: :drawer, rect: rect}, _x, y) when y == rect.y,
     do: :details_close
 
-  defp details_target(%{pending_approvals: [_ | _]}, rect, x, y) do
-    Enum.find_value(approval_controls(rect), :details, fn control ->
+  defp details_target(details, x, y) do
+    Enum.find_value(details.controls, :details, fn control ->
       if PaneLayout.contains?(control.rect, x, y), do: {:approval, control.decision}
     end)
   end
-
-  defp details_target(_state, _rect, _x, _y), do: :details
 
   defp details_content(%{pending_approvals: [%{request: request} | _]}, _presentation) do
     {" approval required ", Alto.TUI.ApprovalView.text(request)}
@@ -951,16 +777,24 @@ defmodule Alto.TUI.View do
     }
   end
 
+  defp overlay_block(title) do
+    %Block{
+      title: title,
+      borders: [:all],
+      border_type: :rounded,
+      border_style: style(fg: @accent),
+      style: style(bg: @panel_alt)
+    }
+  end
+
   defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
 
   defp overlay_rect(%{kind: :workspace_form}, width, height),
     do: WorkspaceForm.rect(width, height)
 
-  defp overlay_rect(%{kind: :provider_form}, width, height),
-    do: popup_rect(width, height, 72, 66)
-
-  defp overlay_rect(%{kind: :model_form}, width, height),
-    do: popup_rect(width, height, 62, 42)
+  defp overlay_rect(%{kind: kind} = form, width, height)
+       when kind in [:provider_form, :model_form],
+       do: popup_rect(width, height, form.width_percent, form.height_percent)
 
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
 
@@ -990,15 +824,8 @@ defmodule Alto.TUI.View do
   end
 
   defp native_context_consumption(state, usage) do
-    with model when is_binary(model) <- state.selected_model,
-         models when is_list(models) <- Map.get(state.models, state.selected_provider_id),
-         model_info when not is_nil(model_info) <- Enum.find(models, &(model_id(&1) == model)),
-         context when is_integer(context) and context > 0 <- model_context(model_info) do
-      percent = min(usage.last_input_tokens / context * 100.0, 999.9)
-      "#{Float.round(percent, 1)}%"
-    else
-      _other -> "—"
-    end
+    model = State.model_metadata(state) || %{}
+    context_percent(usage, model[:context_length] || model["context_length"])
   end
 
   defp context_percent(usage, context) when is_integer(context) and context > 0 do
@@ -1012,40 +839,6 @@ defmodule Alto.TUI.View do
     case Alto.TUI.Backend.ui(state, :quota_label) do
       :pass -> ""
       label -> label
-    end
-  end
-
-  defp compact_settings?(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} -> settings_width < 112
-      _other -> true
-    end
-  end
-
-  defp ultra_compact_settings?(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} -> settings_width < 48
-      _other -> true
-    end
-  end
-
-  defp compact_setting_label_width(state) do
-    {width, height} = state.dimensions
-
-    case layout(state, width, height).settings do
-      %Rect{width: settings_width} ->
-        settings_width
-        |> Kernel.-(39)
-        |> div(2)
-        |> max(1)
-        |> min(13)
-
-      _other ->
-        1
     end
   end
 
@@ -1081,12 +874,6 @@ defmodule Alto.TUI.View do
 
   defp overlay_message_prefix(%{kind: :codex_error}), do: "Codex App Server reported:\n"
   defp overlay_message_prefix(_overlay), do: ""
-
-  defp model_id(%{id: id}), do: id
-  defp model_id(%{"id" => id}), do: id
-
-  defp model_context(model),
-    do: Map.get(model, :context_length) || Map.get(model, "context_length")
 
   defp approval_label(:ask), do: "ASK"
   defp approval_label(:read_only), do: "READ"

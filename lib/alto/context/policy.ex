@@ -14,7 +14,7 @@ defmodule Alto.Context.Policy do
   def validate(_), do: {:error, :invalid_context_policy}
 
   defp validate_module(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :check, 3),
+    if Alto.Capabilities.implements?(module, __MODULE__),
       do: :ok,
       else: {:error, :invalid_context_policy}
   end
