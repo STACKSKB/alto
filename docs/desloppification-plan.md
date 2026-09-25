@@ -3,14 +3,15 @@
 Alto is at `0.0.1`. Internal formats may break without migration, but preserve
 every current capability, including Ripwire, FFF, webhooks, and other features
 enabled only by external configuration. Prefer a tiny composable core with
-explicit ownership of state and effects. Do not preserve an incidental behavior
-merely because a test asserts it.
+explicit ownership of state and effects. Keep native database integrations
+optional; the core session store must work without SQLite or Oban. Do not
+preserve an incidental behavior merely because a test asserts it.
 
 ## Measure the result
 
 The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,062, down 7,593 lines (18.7%). Reaching 30% requires
-at most 28,458 lines, another 4,604 fewer than today. The 50% stretch target is
+2026-09-25 the count is 33,063, down 7,592 lines (18.7%). Reaching 30% requires
+at most 28,458 lines, another 4,605 fewer than today. The 50% stretch target is
 20,327 lines. Recount after each coherent change; moving code does not count.
 Test files are measured separately.
 

@@ -112,7 +112,8 @@ defmodule Alto.Session do
 
   @doc false
   def with_lock(id, opts, fun) when is_function(fun, 0) do
-    Alto.Storage.with_lock(Path.join(dir(opts), id <> ".lock"), fun)
+    with :ok <- validate_id(id),
+         do: Alto.Storage.with_lock(Path.join(dir(opts), id <> ".lock"), fun)
   end
 
   @doc "Persist a safe settled boundary and return its new immutable revision."
