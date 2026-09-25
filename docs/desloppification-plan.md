@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-25 inventory is 33,114 lines, a reduction of 7,541 (18.5%). A 30%
-reduction would require at most 28,458 lines, or another 4,656 lines below the
+The 2026-09-25 inventory is 33,094 lines, a reduction of 7,561 (18.6%). A 30%
+reduction would require at most 28,458 lines, or another 4,636 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. A 50% stretch would require at most 20,327 lines.
 Recount after each coherent change; a moved line is not a reduction.
@@ -189,6 +189,15 @@ results still hide raw content in the terminal. CLI prompt selection is one
 decision instead of three one-use helpers. Both full suites pass.
 The attempted checkpoint/continuation and TUI-render projection audits found
 distinct durable phases and already-shared geometry, so they made no edits.
+The outcome class type now lives with its only consumer, the operation ledger;
+the empty `Effect.Outcome` module was removed. A TUI assertion that checked
+UTF-8 validity immediately after asserting the exact Unicode result was
+removed. A broader audit found no other safe deletions among small tests:
+their assertions cover Alto's effects, bounds, masking, and recovery behavior.
+The provider subtree already shares HTTP setup, SSE framing, and request
+envelopes; Anthropic and OpenAI streams retain distinct wire state. TUI task
+entries support concurrent streaming and navigation, so their storage cannot
+be collapsed within `State` and `Transcript` alone.
 
 ## Next passes
 
