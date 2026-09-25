@@ -718,15 +718,7 @@ defmodule Alto.TUI.View do
       |> State.visible_entries()
       |> Enum.filter(&(&1.kind in [:tool, :system, :error]))
       |> Enum.take(-12)
-      |> Enum.map(fn entry ->
-        case Map.get(entry, :detail) do
-          detail when detail not in [nil, "", %{}, []] ->
-            format_entry(Map.delete(entry, :detail)) <> "\n" <> Alto.Display.result(detail)
-
-          _other ->
-            format_entry(entry)
-        end
-      end)
+      |> Enum.map(&context_entry/1)
       |> Enum.join("\n\n")
 
     project = State.selected_project(state)
@@ -734,23 +726,19 @@ defmodule Alto.TUI.View do
     {" context ", root <> "\n\n" <> recent}
   end
 
-  defp format_entry(%{kind: :reasoning, text: text}), do: "thinking › " <> text
+  defp context_entry(entry) do
+    line =
+      case entry do
+        %{kind: :tool, text: text} -> "tool · " <> Alto.Display.result(text)
+        %{kind: :error, text: text} -> "error ! " <> Alto.Display.error(text)
+        %{text: text} -> "· " <> Alto.Display.text(text)
+      end
 
-  defp format_entry(%{kind: :user, text: text}), do: "you › " <> text
-
-  defp format_entry(%{kind: :assistant, text: text}),
-    do: "alto › " <> Alto.TUI.Markdown.plain(text, 80)
-
-  defp format_entry(%{kind: :codex_assistant, text: text}),
-    do: "codex › " <> Alto.TUI.Markdown.plain(text, 80)
-
-  defp format_entry(%{kind: :tool, text: text, detail: detail}) when detail not in [nil, ""],
-    do: "tool · " <> Alto.Display.text(text) <> "\n" <> Alto.ToolDisplay.detail(detail)
-
-  defp format_entry(%{kind: :tool, text: text}), do: "tool · " <> Alto.Display.result(text)
-  defp format_entry(%{kind: :error, text: text}), do: "error ! " <> Alto.Display.error(text)
-  defp format_entry(%{kind: :system, text: text}), do: "· " <> Alto.Display.text(text)
-  defp format_entry(%{text: text}), do: Alto.Display.text(text)
+    case Map.get(entry, :detail) do
+      detail when detail not in [nil, "", %{}, []] -> line <> "\n" <> Alto.Display.result(detail)
+      _ -> line
+    end
+  end
 
   defp segment_span(segment),
     do: Span.new(segment.text, style: style(fg: :white, bg: @panel_alt, modifiers: [:bold]))

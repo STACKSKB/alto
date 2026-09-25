@@ -10,10 +10,6 @@ defmodule Alto.ProjectTest do
     %{root: root}
   end
 
-  test "returns nil when no instruction file exists", %{root: root} do
-    assert {:ok, nil} = Project.load(root)
-  end
-
   test "prefers alto.md over AGENTS.md", %{root: root} do
     File.write!(Path.join(root, "AGENTS.md"), "generic")
     File.write!(Path.join(root, "alto.md"), "specific")

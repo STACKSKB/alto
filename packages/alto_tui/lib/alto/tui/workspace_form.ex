@@ -5,7 +5,7 @@ defmodule Alto.TUI.WorkspaceForm do
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, Clear, Paragraph, TextInput, List}
 
-  def new(base, host \\ "this computer", folders \\ [], opts \\ []) do
+  def new(base, folders \\ []) do
     %{
       kind: :workspace_form,
       input: ExRatatui.text_input_new(),
@@ -14,10 +14,6 @@ defmodule Alto.TUI.WorkspaceForm do
       suggestions: [],
       suggestion_index: nil,
       completion: nil,
-      tab_pending?: false,
-      complete: Keyword.get(opts, :complete, &Alto.Harness.Folders.suggest(&1, base)),
-      revision: make_ref(),
-      host: host,
       error: nil
     }
     |> refresh()
@@ -48,7 +44,6 @@ defmodule Alto.TUI.WorkspaceForm do
     cond do
       form.suggestion_index -> {:edit, complete_path(form, selected(form))}
       path(form) == "" -> {:edit, form}
-      form.completion == :pending -> {:edit, %{form | tab_pending?: true}}
       true -> {:edit, complete_path(form, form.completion)}
     end
   end
@@ -86,27 +81,12 @@ defmodule Alto.TUI.WorkspaceForm do
   defp selected(form), do: Enum.at(form.suggestions, form.suggestion_index)
 
   defp refresh(form) do
-    result = if form.complete, do: form.complete.(path(form)), else: :pending
-
-    form = %{
-      form
-      | revision: make_ref(),
-        tab_pending?: false,
-        suggestion_index: nil,
-        error: nil
-    }
-
-    suggest(form, result)
-  end
-
-  def suggest(form, result) do
     # Saved workspaces are shortcuts for an empty field, never path completions.
     saved = if path(form) == "", do: form.folders, else: []
 
     {found, completion} =
-      case result do
+      case Alto.Harness.Folders.suggest(path(form), form.base) do
         {:ok, %{folders: folders, completion: completion}} -> {folders, completion}
-        {:ok, list} when is_list(list) -> {list, Alto.Harness.Folders.common_prefix(list)}
         _ -> {[], nil}
       end
 
@@ -114,17 +94,13 @@ defmodule Alto.TUI.WorkspaceForm do
       Enum.uniq(Enum.map(saved, &(String.trim_trailing(&1, "/") <> "/")) ++ found)
       |> Enum.take(50)
 
-    selected = selected(form)
-
-    next = %{
+    %{
       form
       | suggestions: suggestions,
-        suggestion_index: Enum.find_index(suggestions, &(&1 == selected)),
-        completion: if(result == :pending, do: :pending, else: completion),
-        tab_pending?: false
+        suggestion_index: nil,
+        completion: completion,
+        error: nil
     }
-
-    if form.tab_pending?, do: complete_path(next, completion), else: next
   end
 
   def rect(width, height) do
@@ -146,7 +122,7 @@ defmodule Alto.TUI.WorkspaceForm do
 
     bg = %Style{fg: :white, bg: :dark_gray}
     button_row = max(inner.height - 3, 4)
-    text = "Folder on #{form.host}\nRelative paths start from: #{form.base}"
+    text = "Folder on this computer\nRelative paths start from: #{form.base}"
 
     enter_hint =
       cond do

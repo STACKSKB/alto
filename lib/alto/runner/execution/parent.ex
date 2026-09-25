@@ -1,7 +1,7 @@
 defmodule Alto.Runner.Execution.Parent do
   @moduledoc "Durable parent batch boundaries shared by execution hosts."
   alias Alto.Runner.{Budget, Checkpoint}
-  alias Alto.Runner.Execution.{Call, Children, History}
+  alias Alto.Runner.Execution.{Call, Children, History, Operation}
   alias Alto.Subagents.Continuation
 
   def options(opts) do
@@ -49,7 +49,7 @@ defmodule Alto.Runner.Execution.Parent do
          true <- is_struct(run.budget.account, Budget.Account),
          {:ok, specs, concurrency} <- Children.validate_batch(data, run),
          {:ok, specs} <- Children.prepare_resources(specs, run),
-         {key, run} <- Children.reserve_continuation(run),
+         {key, run} <- Operation.next(run),
          {:ok, run} <- History.persist(run, allow_pending: true),
          pending = %{kind: :children, ids: Enum.map(specs, & &1.id)},
          {:ok, packet} <-

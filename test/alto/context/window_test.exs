@@ -4,7 +4,7 @@ defmodule Alto.Context.WindowTest do
   alias Alto.Context.Window
 
   test "caps the requested window at the model limit and reserves output" do
-    policy = Alto.Context.window(max_tokens: 200_000, reserve_output: 16_000)
+    policy = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
 
     assert Window.resolve(policy, 128_000) == %{
              context_window: 128_000,
@@ -14,7 +14,7 @@ defmodule Alto.Context.WindowTest do
   end
 
   test "uses a lower user cap when the model supports more" do
-    policy = Alto.Context.window(max_tokens: 200_000, reserve_output: 16_000)
+    policy = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
 
     assert Window.resolve(policy, 1_000_000).context_window == 200_000
   end

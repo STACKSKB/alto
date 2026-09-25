@@ -1,7 +1,7 @@
 defmodule Alto.Queue do
   @moduledoc """
   A durable, bounded claim/ack queue. Each queue id owns a GenServer and a
-  JSONL log at `queues/<id>.jsonl`. Exact-term payloads survive restarts;
+  JSONL log at `queues/<id>.jsonl`. Portable term payloads survive restarts;
   acknowledgements and cancellations append tombstones.
 
   `put/4` uses business keys: a pending key updates its payload and revision,
@@ -24,10 +24,10 @@ defmodule Alto.Queue do
 
   use GenServer
 
-  alias Alto.Session, as: SessionStore
+  alias Alto.Persistence.Codec
   alias Alto.DurableLog
 
-  @version 6
+  @version 7
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @options [
     max_records: [type: :non_neg_integer, default: 10_000],
@@ -63,7 +63,7 @@ defmodule Alto.Queue do
       :at_ms,
       :generation_id,
       :operation_key,
-      mode: :business,
+      admission: :business,
       status: :pending,
       claim_id: nil,
       claimed_by: nil,
@@ -137,7 +137,8 @@ defmodule Alto.Queue do
   is immediate eligibility.
   """
   @spec put(GenServer.server(), binary(), term(), keyword()) ::
-          {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
+          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
+          | {:error, term()}
   def put(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
     GenServer.call(server, {:put, key, payload, opts})
   end
@@ -155,7 +156,8 @@ defmodule Alto.Queue do
   never modify the original schedule.
   """
   @spec admit(GenServer.server(), binary(), term(), keyword()) ::
-          {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
+          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
+          | {:error, term()}
   def admit(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
     GenServer.call(server, {:admit, key, payload, opts})
   end
@@ -168,22 +170,18 @@ defmodule Alto.Queue do
   ledger-approved grant; ledger reconciliation remains a separate required
   authorization step.
   """
-  @spec restore(GenServer.server(), binary(), binary(), map()) ::
-          {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
-  def restore(server \\ __MODULE__, operation_key, generation_id, payload) do
-    restore(server, operation_key, generation_id, payload, [])
-  end
-
   @spec restore(GenServer.server(), binary(), binary(), map(), keyword()) ::
-          {:ok, %{id: String.t(), revision: pos_integer(), status: :pending}} | {:error, term()}
-  def restore(server, operation_key, generation_id, payload, opts) when is_list(opts) do
+          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
+          | {:error, term()}
+  def restore(server \\ __MODULE__, operation_key, generation_id, payload, opts \\ [])
+      when is_list(opts) do
     GenServer.call(server, {:restore, operation_key, generation_id, payload, opts})
   end
 
   @doc "Claim up to `count` oldest pending records under a fresh lease."
   @spec claim(GenServer.server(), pos_integer(), term()) :: {:ok, [map()]}
   def claim(server \\ __MODULE__, count \\ 1, by \\ nil) when is_integer(count) and count >= 1 do
-    GenServer.call(server, {:claim, min(count, @max_claim_count), by})
+    GenServer.call(server, {:claim, min(count, @max_claim_count), by, :infinity, %{}})
   end
 
   @doc """
@@ -202,7 +200,7 @@ defmodule Alto.Queue do
     with :ok <- validate_selector(selector) do
       GenServer.call(
         server,
-        {:claim_matching, selector, min(count, @max_claim_count), by, max_bytes}
+        {:claim, min(count, @max_claim_count), by, max_bytes, selector}
       )
     end
   end
@@ -222,25 +220,19 @@ defmodule Alto.Queue do
           {:ok, [map()]} | {:error, term()}
   def claim_bounded(server \\ __MODULE__, count \\ 1, by \\ nil, max_bytes)
       when is_integer(count) and count >= 1 and is_integer(max_bytes) and max_bytes >= 0 do
-    GenServer.call(server, {:claim_bounded, min(count, @max_claim_count), by, max_bytes})
+    GenServer.call(server, {:claim, min(count, @max_claim_count), by, max_bytes, %{}})
   end
 
   @doc "Blank a claimed record (it was handled). The record is removed."
   @spec ack(GenServer.server(), String.t()) :: :ok | {:error, :not_found | :lease_expired}
   def ack(server \\ __MODULE__, claim_id) do
-    GenServer.call(server, {:ack, claim_id})
+    GenServer.call(server, {:settle, claim_id, :ack, []})
   end
 
   @doc "Return a claim to pending (the client failed before finishing). Pass `delay_ms:` to delay it."
   @spec release(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
   def release(server \\ __MODULE__, claim_id, opts \\ []) when is_list(opts) do
-    GenServer.call(server, {:release, claim_id, opts})
-  end
-
-  @doc "Return a claim to pending after an optional delay, fenced by claim id."
-  def reschedule(server \\ __MODULE__, claim_id, delay_ms)
-      when is_integer(delay_ms) and delay_ms >= 0 do
-    release(server, claim_id, delay_ms: delay_ms)
+    GenServer.call(server, {:settle, claim_id, :release, opts})
   end
 
   @doc "Blank every record for `key` (record cancellation)."
@@ -290,7 +282,13 @@ defmodule Alto.Queue do
   def init(%__MODULE__{} = state), do: {:ok, state}
 
   defp load(state) do
-    with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)
+    with :ok <- Alto.Storage.ensure_private_dir(state.dir, owned: true) do
+      if File.exists?(state.path) do
+        with :ok <- File.chmod(state.path, 0o600), do: replay(state)
+      else
+        with {:ok, _} <- compact_log(state, 0), do: {:ok, state}
+      end
+    end
   end
 
   defp replay(state) do
@@ -302,85 +300,64 @@ defmodule Alto.Queue do
     end
   end
 
-  defp replay_lines(state, lines) do
-    with :ok <- verify_retained_prefix(lines),
-         {:ok, state} <- Alto.JSONLines.fold(state, lines, &apply_logged/3),
-         do: {:ok, trim_completed(state)}
-  end
-
-  defp apply_logged(state, line, number) do
-    case JSON.decode(line) do
-      {:ok, %{"v" => @version, "type" => "retained_state"} = entry}
-      when number == 1 ->
-        restore_retained_state(state, entry)
-
-      {:ok, %{"v" => version, "type" => type} = entry}
-      when version == @version and is_binary(type) ->
-        log_apply(state, type, entry)
-
-      _other ->
-        {:error, {:queue_corrupt, state.id, number}}
+  defp replay_lines(state, [snapshot | lines]) do
+    with {:ok, state} <- restore_snapshot(state, snapshot) do
+      Alto.Result.reduce(Enum.with_index(lines, 2), state, fn {line, number}, state ->
+        with {:ok, encoded} <- JSON.decode(line),
+             {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_log_bytes) do
+          apply_command(command, state)
+        else
+          _ -> {:error, {:queue_corrupt, state.id, number}}
+        end
+      end)
     end
   end
 
-  # Replay applies logged transitions only; live ops only log transitions
-  # they performed, so replaying reproduces the same state.
-  defp log_apply(state, "record", entry) do
-    with {:ok, record, sequence} <- decode_record(entry) do
-      {:ok, %{put_record(state, record) | next_id: max(state.next_id, sequence + 1)}}
-    end
-  end
+  defp replay_lines(_state, []), do: {:error, :invalid_queue_snapshot}
 
-  defp log_apply(state, "lease", entry) do
-    case {SessionStore.decode_term(entry["lease"]), fetch_record(state.records, entry["id"])} do
-      {{:ok, {status, claim_id, by, until, due}}, {:ok, record}} ->
-        next = %Record{
-          record
-          | status: status,
-            claim_id: claim_id,
-            claimed_by: by,
-            lease_until_ms: until,
-            not_before_ms: due
-        }
-
-        if valid_lease?(next) and validate_due(due) == :ok,
-          do: {:ok, put_record(state, next)},
-          else: {:error, :bad_entry}
-
-      _ ->
-        {:error, :bad_entry}
-    end
-  end
-
-  defp log_apply(state, "blank", entry) do
-    case fetch_record(state.records, entry["id"]) do
-      {:ok, record} ->
-        {:ok, state |> drop_record(entry["id"]) |> track_completed(record.key)}
-
-      :error ->
-        {:ok, state}
-    end
-  end
-
-  defp log_apply(_state, _type, _entry), do: {:error, :bad_entry}
-
-  defp decode_record(%{"record" => encoded}) do
-    with {:ok, %Record{} = record} <- SessionStore.decode_term(encoded),
-         true <- Enum.sort(Map.keys(record)) == Enum.sort(Map.keys(Record.__struct__())),
+  # The same native commands update live and replayed state. Encoding belongs
+  # only at the storage boundary.
+  defp apply_command({:put, %Record{} = record}, state) do
+    with true <- Enum.sort(Map.keys(record)) == Enum.sort(Map.keys(Record.__struct__())),
          true <- is_binary(record.key) and is_integer(record.revision) and record.revision >= 1,
-         true <- record.mode in [:business, :delivery, :recovery] and is_integer(record.at_ms),
+         true <-
+           record.admission in [:business, :delivery, :recovery] and is_integer(record.at_ms),
          true <- valid_lease?(record),
-         {:ok, sequence} <- record_sequence(record.id),
+         true <- is_integer(record.id) and record.id >= 1,
          :ok <- validate_generation(record.generation_id),
          :ok <- validate_due(record.not_before_ms) do
-      {:ok, record, sequence}
+      {:ok, %{put_record(state, record) | next_id: max(state.next_id, record.id + 1)}}
     else
-      {:error, _} = error -> error
       _ -> {:error, :bad_entry}
     end
   end
 
-  defp decode_record(_), do: {:error, :bad_entry}
+  defp apply_command({:lease, id, status, claim_id, by, until, due}, state) do
+    with {:ok, record} <- fetch_record(state.records, id),
+         :ok <- validate_due(due) do
+      next = %Record{
+        record
+        | status: status,
+          claim_id: claim_id,
+          claimed_by: by,
+          lease_until_ms: until,
+          not_before_ms: due
+      }
+
+      if valid_lease?(next), do: {:ok, put_record(state, next)}, else: {:error, :bad_entry}
+    else
+      _ -> {:error, :bad_entry}
+    end
+  end
+
+  defp apply_command({:drop, id}, state) do
+    case fetch_record(state.records, id) do
+      {:ok, record} -> {:ok, state |> drop_record(id) |> track_completed(record.key)}
+      :error -> {:ok, state}
+    end
+  end
+
+  defp apply_command(_, _), do: {:error, :bad_entry}
 
   defp valid_lease?(%Record{
          status: :pending,
@@ -429,25 +406,8 @@ defmodule Alto.Queue do
     end
   end
 
-  @impl true
-  def handle_call({:claim, count, by}, _from, state) do
-    do_claim(state, count, by, :infinity, %{})
-  end
-
-  @impl true
-  def handle_call({:claim_bounded, count, by, max_bytes}, _from, state) do
-    do_claim(state, count, by, max_bytes, %{})
-  end
-
-  def handle_call({:claim_matching, selector, count, by, max_bytes}, _from, state) do
-    do_claim(state, count, by, max_bytes, selector)
-  end
-
-  def handle_call({:ack, claim_id}, from, state),
-    do: handle_call({:settle, claim_id, :ack, []}, from, state)
-
-  def handle_call({:release, claim_id, opts}, from, state),
-    do: handle_call({:settle, claim_id, :release, opts}, from, state)
+  def handle_call({:claim, count, by, max_bytes, selector}, _from, state),
+    do: do_claim(state, count, by, max_bytes, selector)
 
   def handle_call({:settle, claim_id, operation, opts}, _from, state) do
     with {:ok, record} <- find_by_claim(state, claim_id),
@@ -455,11 +415,10 @@ defmodule Alto.Queue do
          {:ok, due} <- schedule_at(state, opts) do
       log =
         case operation do
-          :ack -> %{"type" => "blank", "reason" => "acked"}
-          :release -> lease_log(%Record{unclaim(record) | not_before_ms: due})
+          :ack -> {:drop, record.id}
+          :release -> lease_command(%Record{unclaim(record) | not_before_ms: due})
         end
 
-      log = Map.merge(log, %{"v" => @version, "id" => record.id})
       commit(state, state, [log], :ok, true)
     else
       :error -> {:reply, {:error, :not_found}, state}
@@ -498,7 +457,7 @@ defmodule Alto.Queue do
     records =
       ordered_records(state)
       |> Enum.slice(cursor, limit)
-      |> Enum.map(&view/1)
+      |> Enum.map(&Map.from_struct/1)
 
     next_cursor =
       if cursor + length(records) < :gb_trees.size(state.records),
@@ -512,7 +471,7 @@ defmodule Alto.Queue do
     reply =
       case find_by_key(state, key) do
         nil -> {:error, :not_found}
-        record -> {:ok, view(record)}
+        record -> {:ok, Map.from_struct(record)}
       end
 
     {:reply, reply, state}
@@ -523,12 +482,7 @@ defmodule Alto.Queue do
   end
 
   defp cancel_records(state, victims) do
-    logs =
-      Enum.map(victims, fn record ->
-        %{"v" => @version, "type" => "blank", "id" => record.id, "reason" => "cancelled"}
-      end)
-
-    commit(state, state, logs, :ok, true)
+    commit(state, state, Enum.map(victims, &{:drop, &1.id}), :ok, true)
   end
 
   # Completed-delivery window: newest-first, unique, bounded. Expiry is
@@ -538,11 +492,6 @@ defmodule Alto.Queue do
       [key | List.delete(state.completed, key)]
       |> Enum.take(max(state.max_completed, 0))
 
-    %{state | completed: completed, completed_set: MapSet.new(completed)}
-  end
-
-  defp trim_completed(state) do
-    completed = Enum.take(state.completed, max(state.max_completed, 0))
     %{state | completed: completed, completed_set: MapSet.new(completed)}
   end
 
@@ -583,9 +532,9 @@ defmodule Alto.Queue do
         {:reply, {:ok, []}, state}
 
       {:ok, claimed} ->
-        logs = Enum.map(claimed, &lease_log/1)
+        logs = Enum.map(claimed, &lease_command/1)
 
-        commit(state, state, logs, {:ok, Enum.map(claimed, &view/1)}, true)
+        commit(state, state, logs, {:ok, Enum.map(claimed, &Map.from_struct/1)}, true)
     end
   end
 
@@ -648,7 +597,7 @@ defmodule Alto.Queue do
   defp wire_size(record) do
     size =
       record
-      |> view()
+      |> Map.from_struct()
       |> Alto.Protocol.encode_term()
       |> JSON.encode!()
       |> byte_size()
@@ -748,50 +697,43 @@ defmodule Alto.Queue do
 
       true ->
         with :ok <- validate_room(state) do
+          generation = fields[:generation_id] || generate_generation_id()
+
+          operation =
+            fields[:operation_key] ||
+              if(mode == :delivery, do: key, else: "business-generation:" <> generation)
+
           {:ok,
            %Record{
-             id: "rec-#{state.next_id}",
+             id: state.next_id,
              key: key,
              payload: payload,
              revision: 1,
              at_ms: now(state),
-             mode: mode,
-             generation_id: fields[:generation_id] || generate_generation_id(),
-             operation_key: fields[:operation_key],
+             admission: mode,
+             generation_id: generation,
+             operation_key: operation,
              not_before_ms: fields[:not_before_ms]
            }}
         end
     end
   end
 
-  defp put_log(record),
-    do: %{"v" => @version, "type" => "record", "record" => SessionStore.encode_term(record)}
-
-  defp lease_log(record) do
-    lease =
-      {record.status, record.claim_id, record.claimed_by, record.lease_until_ms,
-       record.not_before_ms}
-
-    %{
-      "v" => @version,
-      "type" => "lease",
-      "id" => record.id,
-      "lease" => SessionStore.encode_term(lease)
-    }
-  end
+  defp lease_command(record),
+    do:
+      {:lease, record.id, record.status, record.claim_id, record.claimed_by,
+       record.lease_until_ms, record.not_before_ms}
 
   defp commit_record(original, current, record) do
     reply = {:ok, Map.take(record, [:id, :revision, :status])}
-    commit(original, current, [put_log(record)], reply)
+    commit(original, current, [{:put, record}], reply)
   end
 
   # Live commands and restart replay apply the same records. Publish state only
   # after the complete mutation has been durably appended.
   defp commit(original, current, records, reply, wrap_error \\ false) do
     with {:ok, next} <-
-           Alto.Result.reduce(records, current, fn record, acc ->
-             log_apply(acc, record["type"], record)
-           end),
+           Alto.Result.reduce(records, current, &apply_command/2),
          :ok <- append(current, records) do
       {:reply, reply, next}
     else
@@ -813,18 +755,6 @@ defmodule Alto.Queue do
 
   defp find_by_key(state, key),
     do: Enum.find(ordered_records(state), &(&1.key == key))
-
-  defp view(%Record{} = record) do
-    {mode, fields} = Map.pop(Map.from_struct(record), :mode)
-
-    fields
-    |> Map.put(:admission, mode)
-    |> Map.put(:operation_key, operation_key(record))
-  end
-
-  defp operation_key(%Record{operation_key: key}) when is_binary(key), do: key
-  defp operation_key(%Record{mode: :delivery, key: key}), do: key
-  defp operation_key(%Record{generation_id: id}), do: "business-generation:" <> id
 
   defp generate_generation_id do
     "gen-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
@@ -854,58 +784,34 @@ defmodule Alto.Queue do
 
   defp recovery_revision(opts), do: {:error, {:invalid_recovery_revision, opts}}
 
-  defp put_record(state, %Record{} = record) do
-    {:ok, sequence} = record_sequence(record.id)
-    %{state | records: :gb_trees.enter(sequence, record, state.records)}
-  end
+  defp put_record(state, %Record{} = record),
+    do: %{state | records: :gb_trees.enter(record.id, record, state.records)}
 
   defp ordered_records(state), do: :gb_trees.values(state.records)
 
-  defp drop_record(state, id) do
-    case record_sequence(id) do
-      {:ok, sequence} -> %{state | records: :gb_trees.delete_any(sequence, state.records)}
-      :error -> state
-    end
-  end
+  defp drop_record(state, id),
+    do: %{state | records: :gb_trees.delete_any(id, state.records)}
 
   defp fetch_record(records, id) do
-    with {:ok, sequence} <- record_sequence(id),
-         {:value, record} <- :gb_trees.lookup(sequence, records) do
-      {:ok, record}
-    else
-      _ -> :error
+    case :gb_trees.lookup(id, records) do
+      {:value, record} -> {:ok, record}
+      :none -> :error
     end
   end
-
-  defp record_sequence("rec-" <> digits) do
-    if Regex.match?(~r/\A[1-9][0-9]*\z/, digits),
-      do: {:ok, String.to_integer(digits)},
-      else: :error
-  end
-
-  defp record_sequence(_id), do: :error
 
   # One append per mutation, file-synced before acknowledgement. A failed
   # write leaves state untouched: memory and disk stay in agreement.
-  defp append(state, log_or_logs) do
-    logs = if is_list(log_or_logs), do: log_or_logs, else: [log_or_logs]
-
-    lines =
-      logs
-      |> Enum.map(&JSON.encode!/1)
-      |> Enum.intersperse("\n")
-      |> Kernel.++(["\n"])
-
-    bytes = IO.iodata_length(lines)
-
-    with :ok <- ensure_log_room(state, bytes),
-         :ok <- DurableLog.append(state.path, lines) do
-      :ok
-    else
-      {:error, _reason} = error -> error
-    end
+  defp append(state, commands) do
+    with {:ok, lines} <- Alto.Result.traverse(commands, &encode_command/1),
+         :ok <- ensure_log_room(state, IO.iodata_length(lines)),
+         do: DurableLog.append(state.path, lines)
   rescue
     error -> {:error, {:queue_unencodable, Exception.message(error)}}
+  end
+
+  defp encode_command(command) do
+    with {:ok, encoded} <- Codec.encode(command, max_bytes: :erlang.external_size(command)),
+         do: {:ok, [JSON.encode!(encoded), "\n"]}
   end
 
   defp ensure_log_room(state, append_bytes) do
@@ -932,27 +838,23 @@ defmodule Alto.Queue do
   # appended afterwards through the existing sync path; a replacement failure
   # cannot commit an operation that its caller was told had failed.
   defp compact_log(state, reserved_bytes) do
-    retained = Enum.map(ordered_records(state), &put_log/1)
-    record_lines = Enum.map(retained, &JSON.encode!/1)
+    snapshot = {state.next_id, state.completed, ordered_records(state)}
 
-    header = %{
-      "v" => @version,
-      "type" => "retained_state",
-      "queue" => state.id,
-      "next_id" => state.next_id,
-      "completed" => state.completed,
-      "entries" => length(record_lines),
-      "sha256" => retained_digest(record_lines)
-    }
-
-    lines = [JSON.encode!(header), "\n", Alto.JSONLines.join(record_lines)]
-    bytes = IO.iodata_length(lines)
-
-    with true <-
+    with {:ok, encoded} <- Codec.encode(snapshot, max_bytes: :erlang.external_size(snapshot)),
+         lines <- [
+           JSON.encode!(%{"v" => @version, "queue" => state.id, "state" => encoded}),
+           "\n"
+         ],
+         bytes <- IO.iodata_length(lines),
+         true <-
            bytes + reserved_bytes <= state.max_log_bytes or
              {:error, {:queue_log_too_large, bytes + reserved_bytes, state.max_log_bytes}},
-         {:ok, %{size: before}} <- File.stat(state.path),
-         :ok <- DurableLog.replace(state.path, lines) do
+         {:ok, %{size: before}} <-
+           (case File.stat(state.path) do
+              {:error, :enoent} -> {:ok, %{size: 0}}
+              stat -> stat
+            end),
+         :ok <- DurableLog.replace(state.path, lines, mode: 0o600) do
       {:ok,
        %{
          before_bytes: before,
@@ -967,58 +869,34 @@ defmodule Alto.Queue do
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}
   end
 
-  # Canonical records were synced before replacement, so a missing record is
-  # corruption, not an interrupted append. Only a tail after the complete
-  # retained prefix can use ordinary torn-append recovery.
-  defp verify_retained_prefix([]), do: :ok
-
-  defp verify_retained_prefix([header | rest]) do
-    case JSON.decode(header) do
-      {:ok,
-       %{
-         "v" => @version,
-         "type" => "retained_state",
-         "entries" => count,
-         "sha256" => digest
-       }}
-      when is_integer(count) and count >= 0 and is_binary(digest) ->
-        records = Enum.take(rest, count)
-
-        if length(records) == count and retained_digest(records) == digest,
-          do: :ok,
-          else: {:error, :invalid_retained_queue_prefix}
-
-      {:ok, %{"type" => "retained_state"}} ->
-        {:error, :invalid_retained_queue_prefix}
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp retained_digest(lines),
-    do: :crypto.hash(:sha256, Alto.JSONLines.join(lines)) |> Base.encode16(case: :lower)
-
-  defp restore_retained_state(
-         state,
-         %{
-           "v" => @version,
-           "type" => "retained_state",
-           "queue" => queue,
-           "next_id" => next_id,
-           "completed" => completed
-         } = entry
-       )
-       when map_size(entry) == 7 and is_integer(next_id) and next_id >= 1 and is_list(completed) do
-    if queue == state.id and Enum.all?(completed, &(validate_key(&1, state) == :ok)) and
-         length(completed) == MapSet.size(MapSet.new(completed)) do
-      {:ok, trim_completed(%{state | next_id: next_id, completed: completed})}
+  # A snapshot is one complete record, so an interrupted snapshot can never be
+  # mistaken for a valid prefix followed by a torn append.
+  defp restore_snapshot(state, line) do
+    with {:ok, %{"v" => @version, "queue" => queue, "state" => encoded}} <- JSON.decode(line),
+         true <- queue == state.id,
+         {:ok, {next_id, completed, records}} <-
+           Codec.decode(encoded, max_bytes: state.max_log_bytes),
+         true <- is_integer(next_id) and next_id >= 1 and is_list(completed) and is_list(records),
+         true <- Enum.all?(completed, &(validate_key(&1, state) == :ok)),
+         true <- length(completed) == MapSet.size(MapSet.new(completed)),
+         completed <- Enum.take(completed, state.max_completed),
+         {:ok, restored} <-
+           Alto.Result.reduce(
+             records,
+             %{
+               state
+               | next_id: next_id,
+                 completed: completed,
+                 completed_set: MapSet.new(completed)
+             },
+             &apply_command({:put, &1}, &2)
+           ),
+         true <- :gb_trees.size(restored.records) == length(records) do
+      {:ok, restored}
     else
-      {:error, :bad_entry}
+      _ -> {:error, :invalid_queue_snapshot}
     end
   end
-
-  defp restore_retained_state(_, _), do: {:error, :bad_entry}
 
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
 

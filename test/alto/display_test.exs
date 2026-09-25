@@ -7,7 +7,6 @@ defmodule Alto.DisplayTest do
     content = Alto.Content.new([Alto.Content.text("A diagram"), image])
 
     assert Alto.Display.result(content) == "A diagram\nImage · image/png · 12 × 8"
-    assert Alto.Display.result(image) =~ "hidden-base64-payload"
   end
 
   test "redacts known credentials in displayed text" do

@@ -149,7 +149,7 @@ defmodule Alto.Loops.RuleTest do
       assert [%{id: record_id, revision: 1, status: :pending}] =
                result.output
 
-      assert is_binary(record_id)
+      assert is_integer(record_id)
 
       assert %{pending: 1} = Alto.Queue.count(queue)
 

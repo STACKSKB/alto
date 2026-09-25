@@ -284,29 +284,23 @@ defmodule Alto.Workspaces.Git do
     if length(lines) > max_files do
       {:error, :checkout_too_large}
     else
-      Enum.reduce_while(lines, {:ok, 0}, fn line, {:ok, total} ->
-        case String.split(line, "\t", parts: 2) do
-          [mode_type_size, _path] ->
-            case String.split(mode_type_size, " ", trim: true) do
-              ["120000", "blob", _hash, _size] ->
-                {:halt, {:error, :symlink_unsupported}}
+      Alto.Result.reduce(lines, 0, fn line, total ->
+        case String.split(line, [" ", "\t"], trim: true, parts: 5) do
+          ["120000", "blob", _hash, _size, _path] ->
+            {:error, :symlink_unsupported}
 
-              [mode, "blob", _hash, size] when mode in ["100644", "100755"] ->
-                case Integer.parse(size) do
-                  {bytes, ""} when total + bytes <= max -> {:cont, {:ok, total + bytes}}
-                  {_, ""} -> {:halt, {:error, :checkout_too_large}}
-                  _ -> {:halt, {:error, :invalid_tree}}
-                end
-
-              [_mode, "commit", _hash, _size] ->
-                {:halt, {:error, :submodule_unsupported}}
-
-              _ ->
-                {:halt, {:error, :invalid_tree}}
+          [mode, "blob", _hash, size, _path] when mode in ["100644", "100755"] ->
+            case Integer.parse(size) do
+              {bytes, ""} when total + bytes <= max -> {:ok, total + bytes}
+              {_, ""} -> {:error, :checkout_too_large}
+              _ -> {:error, :invalid_tree}
             end
 
+          [_mode, "commit", _hash, _size, _path] ->
+            {:error, :submodule_unsupported}
+
           _ ->
-            {:halt, {:error, :invalid_tree}}
+            {:error, :invalid_tree}
         end
       end)
     end

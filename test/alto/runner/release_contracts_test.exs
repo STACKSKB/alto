@@ -115,7 +115,7 @@ defmodule Alto.Runner.ReleaseContractsTest do
   test "context policy rejects excess input before provider dispatch" do
     assert {:error, {:context_limit, _}, _} =
              Alto.run(String.duplicate("x", 500),
-               loop: Alto.chat_loop(context: Alto.Context.window(max_tokens: 50)),
+               loop: Alto.chat_loop(context: Alto.Context.Window.new(max_tokens: 50)),
                provider: {Provider, owner: self()}
              )
 
@@ -127,7 +127,7 @@ defmodule Alto.Runner.ReleaseContractsTest do
              Alto.run("go",
                loop:
                  Alto.chat_loop(
-                   context: Alto.Context.window(max_tokens: 500, reserve_output: 100)
+                   context: Alto.Context.Window.new(max_tokens: 500, reserve_output: 100)
                  ),
                provider: {Provider, owner: self()}
              )

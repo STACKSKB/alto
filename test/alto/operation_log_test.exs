@@ -484,8 +484,7 @@ defmodule Alto.OperationLogTest do
       refute bytes =~ "sk-live-123"
       refute bytes =~ "hunter2"
 
-      %{"command" => encoded} =
-        bytes |> String.split("\n", trim: true) |> List.last() |> JSON.decode!()
+      encoded = bytes |> String.split("\n", trim: true) |> List.last() |> JSON.decode!()
 
       assert {:ok, {:outcome, "op-1", "clm-a", :completed, ^evidence}} =
                Alto.Persistence.Codec.decode(encoded)
@@ -573,7 +572,7 @@ defmodule Alto.OperationLogTest do
       assert {:dispatched, "clm-a"} = OperationLog.status(name2, "op-1")
 
       path = Path.join([dir, "l", id <> ".jsonl"])
-      File.write!(path, File.read!(path) <> "{\"v\": 1, \"t\": \"intent\", \"op\": \"op-torn\"")
+      File.write!(path, File.read!(path) <> ~s("torn))
       GenServer.stop(Process.whereis(name2))
 
       %{name: name3} = start_ledger!(id: id, dir: Path.join(dir, "l"))
@@ -589,9 +588,9 @@ defmodule Alto.OperationLogTest do
       {:ok, incomplete} = Alto.Persistence.Codec.encode({:intent, "op"})
 
       for {line, reason} <- [
-            {JSON.encode!(%{"v" => 2, "command" => "invalid"}), {:ledger_corrupt, id, 1}},
-            {JSON.encode!(%{"v" => 2, "command" => unknown}), {:ledger_corrupt, id, 1}},
-            {JSON.encode!(%{"v" => 2, "command" => incomplete}), {:ledger_corrupt, id, 1}},
+            {JSON.encode!("invalid"), {:ledger_corrupt, id, 1}},
+            {JSON.encode!(unknown), {:ledger_corrupt, id, 1}},
+            {JSON.encode!(incomplete), {:ledger_corrupt, id, 1}},
             {"not json", {:ledger_corrupt, id, 1}}
           ] do
         File.write!(path, line <> "\n")

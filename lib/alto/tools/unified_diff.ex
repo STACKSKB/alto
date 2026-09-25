@@ -26,40 +26,19 @@ defmodule Alto.Tools.UnifiedDiff do
     %{content: content, truncated: truncated?}
   end
 
-  defp split_lines(""), do: []
-
-  defp split_lines(content) do
-    content
-    |> :binary.split("\n", [:global])
-    |> add_newlines([])
-  end
-
-  defp add_newlines([last], acc) do
-    case last do
-      "" -> Enum.reverse(acc)
-      _ -> Enum.reverse([last | acc])
-    end
-  end
-
-  defp add_newlines([line | rest], acc), do: add_newlines(rest, [line <> "\n" | acc])
+  defp split_lines(content), do: Regex.scan(~r/[^\n]*\n|[^\n]+$/, content) |> List.flatten()
 
   defp records(before, updated) do
-    before
-    |> List.myers_difference(updated)
-    |> Enum.reduce({[], 1, 1}, fn {kind, lines}, acc ->
-      {tag, old_step, new_step} =
-        case kind do
-          :eq -> {:context, 1, 1}
-          :del -> {:delete, 1, 0}
-          :ins -> {:insert, 0, 1}
-        end
-
-      Enum.reduce(lines, acc, fn line, {records, old_line, new_line} ->
-        {[{tag, line, old_line, new_line} | records], old_line + old_step, new_line + new_step}
+    {records, _} =
+      before
+      |> List.myers_difference(updated)
+      |> Enum.flat_map(fn {tag, lines} -> Enum.map(lines, &{tag, &1}) end)
+      |> Enum.map_reduce({1, 1}, fn {tag, line}, {old, new} ->
+        {{tag, line, old, new},
+         {old + if(tag == :ins, do: 0, else: 1), new + if(tag == :del, do: 0, else: 1)}}
       end)
-    end)
-    |> elem(0)
-    |> Enum.reverse()
+
+    records
   end
 
   defp hunk_ranges(records) do
@@ -68,7 +47,7 @@ defmodule Alto.Tools.UnifiedDiff do
     records
     |> Enum.with_index()
     |> Enum.flat_map(fn
-      {{:context, _line, _old, _new}, _index} ->
+      {{:eq, _line, _old, _new}, _index} ->
         []
 
       {_record, index} ->
@@ -89,38 +68,17 @@ defmodule Alto.Tools.UnifiedDiff do
   end
 
   defp hunk_header(records) do
-    old_records = Enum.reject(records, &(elem(&1, 0) == :insert))
-    new_records = Enum.reject(records, &(elem(&1, 0) == :delete))
-    first = hd(records)
-
-    old_start =
-      case old_records do
-        [] -> elem(first, 2) - 1
-        [record | _] -> elem(record, 2)
-      end
-
-    new_start =
-      case new_records do
-        [] -> elem(first, 3) - 1
-        [record | _] -> elem(record, 3)
-      end
-
-    [
-      "@@ -",
-      Integer.to_string(old_start),
-      ",",
-      Integer.to_string(length(old_records)),
-      " +",
-      Integer.to_string(new_start),
-      ",",
-      Integer.to_string(length(new_records)),
-      " @@\n"
-    ]
+    {_, _, old, new} = hd(records)
+    old_count = Enum.count(records, &(elem(&1, 0) != :ins))
+    new_count = Enum.count(records, &(elem(&1, 0) != :del))
+    old = if old_count == 0, do: old - 1, else: old
+    new = if new_count == 0, do: new - 1, else: new
+    "@@ -#{old},#{old_count} +#{new},#{new_count} @@\n"
   end
 
-  defp format_record({:context, line, _old, _new}), do: format_line(" ", line)
-  defp format_record({:delete, line, _old, _new}), do: format_line("-", line)
-  defp format_record({:insert, line, _old, _new}), do: format_line("+", line)
+  defp format_record({:eq, line, _old, _new}), do: format_line(" ", line)
+  defp format_record({:del, line, _old, _new}), do: format_line("-", line)
+  defp format_record({:ins, line, _old, _new}), do: format_line("+", line)
 
   defp format_line(prefix, line) do
     if String.ends_with?(line, "\n"),

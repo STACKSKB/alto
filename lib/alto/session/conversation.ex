@@ -25,7 +25,6 @@ defmodule Alto.Session.Conversation do
           required(:messages) => [map()],
           required(:transcript_bytes) => non_neg_integer(),
           required(:revision) => revision(),
-          required(:entry_id) => String.t(),
           required(:entry_session_id) => Session.session_id(),
           required(:parent) => parent() | nil,
           required(:summary) => String.t() | nil,
@@ -121,11 +120,9 @@ defmodule Alto.Session.Conversation do
   end
 
   defp with_snapshot(id, opts, fun) do
-    with :ok <- Session.validate_id(id) do
-      Session.with_lock(id, opts, fn ->
-        with {:ok, head} <- read_head(id, opts), do: fun.(head)
-      end)
-    end
+    Session.with_lock(id, opts, fn ->
+      with {:ok, head} <- read_head(id, opts), do: fun.(head)
+    end)
   end
 
   defp persist_locked(draft, constraints, opts) do
@@ -205,7 +202,6 @@ defmodule Alto.Session.Conversation do
       context_observation: entry["context_observation"],
       transcript_bytes: entry["transcript_bytes"],
       revision: entry["revision"],
-      entry_id: entry_id(entry["session_id"], entry["revision"]),
       entry_session_id: entry["session_id"],
       parent: decode_parent!(entry["parent"]),
       summary: entry["summary"],
@@ -501,13 +497,10 @@ defmodule Alto.Session.Conversation do
   defp optional_summary(summary) when is_binary(summary) do
     if summary != "" and String.valid?(summary) and byte_size(summary) <= @max_summary_bytes,
       do: {:ok, summary},
-      else: {:error, {:invalid_branch_summary, summary_size(summary)}}
+      else: {:error, {:invalid_branch_summary, byte_size(summary)}}
   end
 
   defp optional_summary(summary), do: {:error, {:invalid_branch_summary, summary}}
-
-  defp summary_size(summary) when is_binary(summary), do: byte_size(summary)
-  defp summary_size(summary), do: summary
 
   defp validate_tool_call_ids(ids) when is_list(ids) and length(ids) in 1..@max_tool_calls do
     unique = Enum.uniq(ids)
@@ -547,8 +540,6 @@ defmodule Alto.Session.Conversation do
   rescue
     error -> {:error, {:session_unencodable, Exception.message(error)}}
   end
-
-  defp entry_id(id, revision), do: id <> ":" <> Integer.to_string(revision)
 
   defp transcript_path(opts, id), do: Path.join(Session.dir(opts), id <> ".transcript.json")
 

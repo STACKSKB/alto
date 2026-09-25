@@ -14,7 +14,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
       session_dir: dir,
       provider: {Provider, model: "test-model"},
       tools: [PayloadTool],
-      loop: Alto.default_loop(context: Alto.Context.window(usage_estimation: true)),
+      loop: Alto.default_loop(context: Alto.Context.Window.new(usage_estimation: true)),
       compaction: [strategy: {Reducer, []}, keep_recent_messages: 1, max_compactions: 2]
     ]
 
@@ -143,7 +143,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
              %{snapshot | messages: messages, transcript_bytes: Transcript.bytes(messages)}}
 
           :disabled ->
-            loop = Alto.default_loop(context: Alto.Context.window(usage_estimation: false))
+            loop = Alto.default_loop(context: Alto.Context.Window.new(usage_estimation: false))
             {Keyword.put(local, :loop, loop), snapshot}
         end
 

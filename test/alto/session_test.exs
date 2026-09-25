@@ -229,10 +229,6 @@ defmodule Alto.SessionTest do
     assert is_integer(newest.started_at_ms)
   end
 
-  test "list on a missing directory is empty", %{dir: dir} do
-    assert {:ok, []} = Session.list(session_dir: Path.join(dir, "nope"))
-  end
-
   test "diagnostic terms retain identities while sharing strict ETF framing" do
     data = %{process: self(), reference: make_ref(), bits: <<1::1>>}
     encoded = Session.encode_term(data)

@@ -644,13 +644,6 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp stringify_top_keys(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
-      pair -> pair
-    end)
-  end
-
   defp model_request(request, run) do
     options = Map.get(request, :options, %{})
     exposure = Map.get(request, :model_tools, MapSet.to_list(run.model_tools))
@@ -678,7 +671,7 @@ defmodule Alto.Runner.Execution do
            context_observation: Map.get(run, :context_observation),
            resume_context_observation: Map.get(run, :resume_context_observation),
            tools: tools,
-           options: stringify_top_keys(options),
+           options: Map.new(options, fn {key, value} -> {to_string(key), value} end),
            loop: request
          }}
     end

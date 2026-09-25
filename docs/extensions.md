@@ -82,7 +82,7 @@ estimator =
     model_overhead: %{"claude-sonnet-4-5" => 12}
   )
 
-context = Alto.Context.window(
+context = Alto.Context.Window.new(
   max_tokens: 200_000,
   reserve_output: 16_000,
   estimator: estimator

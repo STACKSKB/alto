@@ -80,8 +80,6 @@ defmodule Alto.Tool do
     %{description: description, parameters: parameters}
   end
 
-  def callback(module, callback, opts), do: apply(module, callback, [opts])
-
   def requirement(module, opts) do
     if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
   end

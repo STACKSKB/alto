@@ -85,7 +85,7 @@ defmodule Alto.Runner.ContextPressureTest do
     opts =
       opts
       |> Keyword.put(:provider, {Provider, owner: self(), window: 2_000})
-      |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.window(compact_at: 0.5)))
+      |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.5)))
 
     assert {:ok, _} = Alto.run("current task", opts)
     assert_receive :reduced
@@ -97,7 +97,7 @@ defmodule Alto.Runner.ContextPressureTest do
     opts =
       opts
       |> Keyword.put(:provider, {Provider, owner: self(), window: 2_000})
-      |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.window(compact_at: 0.5)))
+      |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.5)))
       |> Keyword.put(:compaction, false)
 
     assert {:ok, _} = Alto.run("current task", opts)

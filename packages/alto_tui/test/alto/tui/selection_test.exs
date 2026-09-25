@@ -204,7 +204,7 @@ defmodule Alto.TUI.SelectionTest do
     refute_receive :built, 0
   end
 
-  test "freezes mutable inputs without exporting every screen cell" do
+  test "freezes mutable inputs while selecting their rendered cells" do
     input = ExRatatui.text_input_new()
     ExRatatui.text_input_set_value(input, "original")
 

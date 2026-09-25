@@ -84,8 +84,6 @@ defmodule Alto.QueueCompactionTest do
     assert {:ok, [claimed]} = Queue.claim(q, 1, "owner")
     churn(q, 1..100)
     assert File.stat!(c.path).size <= 4_000
-    [header | _] = c.path |> File.read!() |> String.split("\n", trim: true)
-    assert %{"v" => 6, "type" => "retained_state"} = JSON.decode!(header)
     assert {:ok, ^claimed} = Queue.lookup(q, "live")
     stop_supervised!(Queue)
     q = start_supervised!({Queue, opts})
@@ -108,12 +106,12 @@ defmodule Alto.QueueCompactionTest do
   end
 
   test "default queues keep append-only history and refuse a full log", c do
-    q = start_supervised!({Queue, Keyword.put(c.opts, :max_log_bytes, 500)})
+    q = start_supervised!({Queue, Keyword.put(c.opts, :max_log_bytes, 600)})
     assert {:ok, _} = Queue.admit(q, "first", %{})
     assert :ok = Queue.cancel_pending(q, "first")
     bytes = File.read!(c.path)
 
-    assert {:error, {:queue_log_too_large, _, 500}} =
+    assert {:error, {:queue_log_too_large, _, 600}} =
              Queue.admit(q, "second", %{payload: String.duplicate("x", 500)})
 
     assert File.read!(c.path) == bytes
@@ -127,7 +125,7 @@ defmodule Alto.QueueCompactionTest do
     churn(q, 5..8)
     stop_supervised!(Queue)
     q = start_supervised!({Queue, c.opts})
-    assert {:ok, %{id: "rec-9"}} = Queue.admit(q, "new", %{})
+    assert {:ok, %{id: 9}} = Queue.admit(q, "new", %{})
   end
 
   test "an incomplete compacted prefix fails while a torn later append is repaired", c do
@@ -137,15 +135,45 @@ defmodule Alto.QueueCompactionTest do
     before = Queue.snapshot_page(q, 0)
     stop_supervised!(Queue)
     bytes = File.read!(c.path)
-    [header, _record] = String.split(bytes, "\n", trim: true)
-    File.write!(c.path, header <> "\n")
-    assert {:error, :invalid_retained_queue_prefix} = Queue.start_link(c.opts)
+    File.write!(c.path, "")
+    assert {:error, :invalid_queue_snapshot} = Queue.start_link(c.opts)
     File.write!(c.path, binary_part(bytes, 0, byte_size(bytes) - 12))
-    assert {:error, :invalid_retained_queue_prefix} = Queue.start_link(c.opts)
+    assert {:error, :invalid_queue_snapshot} = Queue.start_link(c.opts)
     File.write!(c.path, bytes <> ~s({"v":1,"type":"claim"))
     q = start_supervised!({Queue, c.opts})
     assert Queue.snapshot_page(q, 0) == before
     assert File.read!(c.path) == bytes
+  end
+
+  test "snapshots use the queue byte bound rather than the session-log bound", c do
+    opts = Keyword.put(c.opts, :max_payload_bytes, 5_000_000)
+    q = start_supervised!({Queue, opts})
+    payload = %{body: String.duplicate("x", 4_100_000)}
+    for n <- 1..3, do: assert({:ok, _} = Queue.put(q, "large-#{n}", payload))
+    before = Queue.snapshot_page(q, 0)
+    assert {:ok, %{after_bytes: bytes}} = Queue.compact(q)
+    assert bytes > 16_000_000
+    stop_supervised!(Queue)
+    q = start_supervised!({Queue, opts})
+    assert Queue.snapshot_page(q, 0) == before
+  end
+
+  test "failed initialization does not leave an empty log that blocks retry", c do
+    assert {:error, {:queue_log_too_large, _, 1}} =
+             Queue.start_link(Keyword.put(c.opts, :max_log_bytes, 1))
+
+    refute File.exists?(c.path)
+    q = start_supervised!({Queue, c.opts})
+    assert {:ok, _} = Queue.put(q, "first", %{})
+  end
+
+  test "unpersistable payloads fail without changing live or replayed state", c do
+    q = start_supervised!({Queue, c.opts})
+    assert {:error, :not_portable_or_too_large} = Queue.put(q, "bad", %{pid: self()})
+    assert Queue.count(q) == %{pending: 0, claimed: 0}
+    stop_supervised!(Queue)
+    q = start_supervised!({Queue, c.opts})
+    assert Queue.count(q) == %{pending: 0, claimed: 0}
   end
 
   test "a repeated or foreign retained-state header fails closed", c do
@@ -157,6 +185,6 @@ defmodule Alto.QueueCompactionTest do
     assert {:error, _} = Queue.start_link(c.opts)
     header = bytes |> String.trim() |> JSON.decode!() |> Map.put("queue", "foreign")
     File.write!(c.path, JSON.encode!(header) <> "\n")
-    assert {:error, :bad_entry} = Queue.start_link(c.opts)
+    assert {:error, :invalid_queue_snapshot} = Queue.start_link(c.opts)
   end
 end

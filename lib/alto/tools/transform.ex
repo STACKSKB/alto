@@ -61,7 +61,7 @@ defmodule Alto.Tools.Transform do
 
   defp callback(opts, callback) do
     {module, inner_opts} = inner_tool(opts)
-    Alto.Tool.callback(module, callback, inner_opts)
+    apply(module, callback, [inner_opts])
   end
 
   defp transform(arguments, context, opts) do

@@ -6,7 +6,7 @@ defmodule Alto.Loops.DefaultTest do
   alias Alto.Runtime
 
   test "starts by requesting a model response" do
-    context = Alto.Context.window(max_tokens: 200_000, reserve_output: 16_000)
+    context = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
     spec = Alto.default_loop(context: context)
 
     transition = Runtime.init(spec, "fix the parser")

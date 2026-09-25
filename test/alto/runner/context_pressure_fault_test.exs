@@ -66,7 +66,7 @@ defmodule Alto.Runner.ContextPressureFaultTest do
       loop:
         Alto.default_loop(
           context:
-            Alto.Context.window(
+            Alto.Context.Window.new(
               compact_at: 0.4,
               estimator: fn %{messages: messages} ->
                 Enum.reduce(messages, 0, fn message, bytes ->

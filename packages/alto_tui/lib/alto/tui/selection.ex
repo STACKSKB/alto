@@ -356,7 +356,6 @@ defmodule Alto.TUI.Selection do
         rows
       else
         row = elem(snapshot.rows, y)
-        # Do not retain a full frame binary for each off-screen line.
         Map.put(rows, key, %{row | raw: :binary.copy(row.raw)})
       end
     end)
@@ -422,40 +421,23 @@ defmodule Alto.TUI.Selection do
     do: segments(row, if(y == fy, do: fx, else: 0), if(y == ly, do: lx, else: width))
 
   defp segments(row, low, high) do
-    Enum.flat_map(indexed_runs(row), fn run ->
-      if run.right <= low or run.x > high do
-        []
-      else
-        {x, _, first, _} = point_at(run, max(low, run.x))
-        {_, right, _, last} = point_at(run, min(high, run.right - 1))
-        [{x, right - x, binary_part(run.text, first, last - first)}]
+    cells = visible_cells(row.raw)
+
+    Enum.flat_map(row.ranges, fn {left, right} ->
+      selected =
+        Enum.filter(cells, fn {x, end_x, _symbol} ->
+          end_x > max(low, left) and x <= min(high, right - 1)
+        end)
+
+      case selected do
+        [] ->
+          []
+
+        [{x, _, _} | _] ->
+          {_, end_x, _} = List.last(selected)
+          [{x, end_x - x, Enum.map_join(selected, fn {_, _, symbol} -> symbol end)}]
       end
     end)
-  end
-
-  # ASCII columns map directly to byte offsets. Store only Unicode exceptions,
-  # avoiding a tuple for every blank/ASCII cell in a large terminal snapshot.
-  defp point_at(run, col) do
-    case preceding(run.points, col, 0, tuple_size(run.points) - 1, nil) do
-      nil ->
-        {col, col + 1, col, col + 1}
-
-      {_x, right, _first, last} = point ->
-        if col < right,
-          do: point,
-          else: {col, col + 1, last + col - right, last + col - right + 1}
-    end
-  end
-
-  defp preceding(_points, _col, low, high, found) when low > high, do: found
-
-  defp preceding(points, col, low, high, found) do
-    middle = div(low + high, 2)
-    {x, _, _, _} = point = elem(points, middle)
-
-    if x <= col,
-      do: preceding(points, col, middle + 1, high, point),
-      else: preceding(points, col, low, middle - 1, found)
   end
 
   defp highlight(%{active?: false} = selection), do: selection
@@ -494,13 +476,11 @@ defmodule Alto.TUI.Selection do
     # Exporting 48,000 cell maps just to start a drag causes a visible pause.
     widgets = Enum.map(widgets, fn {widget, rect} -> {freeze(widget), rect} end)
     terminal = capture_terminal(max(width, 1), max(height, 1))
-    # TestBackend retains cells skipped by wide-glyph diffs. Blank the frame
-    # before reuse so moving a double-width glyph cannot leave stale copy text.
+    # Clear stale filler cells left when a wide glyph moves between captures.
     :ok = ExRatatui.draw(terminal, [])
     painted = Alto.TUI.Viewport.widgets(widgets)
     :ok = ExRatatui.draw(terminal, painted)
-    lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
-    lines = List.to_tuple(lines)
+    lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n") |> List.to_tuple()
 
     rows =
       for y <- 0..(max(height, 1) - 1) do
@@ -510,7 +490,6 @@ defmodule Alto.TUI.Selection do
 
         %{
           raw: raw,
-          width: width,
           ranges: ranges,
           highlight:
             Enum.map(ranges, fn {x, right} -> highlight_widget({x, right - x, ""}, y) end)
@@ -521,8 +500,23 @@ defmodule Alto.TUI.Selection do
     %{rows: rows, width: width, widgets: painted, source_widgets: widgets}
   end
 
-  # Reuse native buffers between gestures instead of allocating an entire second
-  # terminal on each click. Every capture still redraws the current widgets.
+  defp visible_cells(raw) do
+    glyphs = String.graphemes(raw)
+    widths = symbol_widths(Enum.filter(glyphs, &(byte_size(&1) > 1)))
+
+    {visible, _column, _skip} =
+      Enum.reduce(glyphs, {[], 0, 0}, fn glyph, {acc, column, skip} ->
+        if skip > 0 do
+          {acc, column, skip - 1}
+        else
+          width = Map.get(widths, glyph, 1)
+          {[{column, column + width, glyph} | acc], column + width, width - 1}
+        end
+      end)
+
+    Enum.reverse(visible)
+  end
+
   defp capture_terminal(width, height) do
     key = {__MODULE__, :capture_terminal}
 
@@ -539,71 +533,16 @@ defmodule Alto.TUI.Selection do
 
   @doc false
   def buffer_row_text(raw, width) do
-    [%{text: text}] = indexed_runs(%{raw: raw, width: width, ranges: [{0, width}]})
-    text
-  end
+    cells = visible_cells(raw)
 
-  # Only the two boundary rows need a glyph index during motion. Interior rows
-  # use cached rectangles; their text is indexed only if the user copies it.
-  defp indexed_runs(row) do
-    tokens = Enum.reject(tokens(row.raw), &(&1 == {:ascii, ""}))
-    symbols = for {:glyph, glyph} <- tokens, do: glyph
-    widths = symbol_widths(symbols)
-    {parts, points, col, _offset} = index_row(tokens, widths, [], [], 0, 0)
-
-    text =
-      IO.iodata_to_binary([Enum.reverse(parts), String.duplicate(" ", max(row.width - col, 0))])
-
-    points = points |> Enum.reverse() |> List.to_tuple()
-
-    Enum.map(row.ranges, fn {left, right} ->
-      %{x: left, right: right, text: text, points: points}
-    end)
-  end
-
-  # Native buffers contain one filler cell after a double-width glyph. Remove
-  # that filler while indexing columns; combining marks remain in their glyph.
-  defp index_row([], _widths, parts, points, col, offset), do: {parts, points, col, offset}
-
-  defp index_row([{:ascii, text} | rest], widths, parts, points, col, offset) do
-    size = byte_size(text)
-    index_row(rest, widths, [text | parts], points, col + size, offset + size)
-  end
-
-  defp index_row([{:glyph, glyph} | rest], widths, parts, points, col, offset) do
-    width = Map.fetch!(widths, glyph)
-    size = byte_size(glyph)
-    points = [{col, col + width, offset, offset + size} | points]
-
-    rest =
-      case {width, rest} do
-        {w, [{:ascii, text} | tail]} when w > 1 ->
-          skip = min(w - 1, byte_size(text))
-          [{:ascii, binary_part(text, skip, byte_size(text) - skip)} | tail]
-
-        _ ->
-          rest
+    column =
+      case List.last(cells) do
+        nil -> 0
+        {_, right, _} -> right
       end
 
-    index_row(rest, widths, [glyph | parts], points, col + width, offset + size)
-  end
-
-  # Keep entire ASCII runs as binaries. Only Unicode needs grapheme segmentation;
-  # include the preceding ASCII character so e + combining accent stays intact.
-  defp tokens(""), do: []
-
-  defp tokens(text) do
-    case Regex.run(~r/[^\x00-\x7F]/, text, return: :index) do
-      nil ->
-        [{:ascii, text}]
-
-      [{offset, _}] ->
-        prefix = max(offset - 1, 0)
-        <<ascii::binary-size(prefix), rest::binary>> = text
-        {glyph, rest} = String.next_grapheme(rest)
-        token = if byte_size(glyph) == 1, do: {:ascii, glyph}, else: {:glyph, glyph}
-        [{:ascii, ascii}, token | tokens(rest)]
-    end
+    Enum.map_join(cells, fn {_, _, glyph} -> glyph end) <>
+      String.duplicate(" ", max(width - column, 0))
   end
 
   defp ranges(rects, y, width) do

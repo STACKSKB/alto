@@ -1,87 +1,69 @@
-# Desloppification plan
+# Desloppification
 
-Alto is at `0.0.1`. Internal formats may break without migration, but preserve
-every current capability, including Ripwire, FFF, webhooks, and other features
-enabled only by external configuration. Prefer a tiny composable core with
-explicit ownership of state and effects. Keep native database integrations
-optional; the core session store must work without SQLite or Oban. Do not
-preserve an incidental behavior merely because a test asserts it.
+Alto is at `0.0.1`. Internal APIs and formats may change without migrations.
+Preserve useful capabilities, including configured extensions, but do not retain
+an abstraction merely because a test exercises it. Prefer existing Elixir/OTP
+and installed-library APIs over custom implementations. Measure complete flows;
+moving code or compressing formatting is not a reduction.
 
-## Measure the result
+## Measurement
 
-The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,064, down 7,591 lines (18.7%). Reaching 30% requires
-at most 28,458 lines, another 4,606 fewer than today. The 50% stretch target is
-20,327 lines. Recount after each coherent change; moving code does not count.
-Test files are measured separately.
+The original baseline is 40,655 physical production `.ex` lines in `lib/` and
+`packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
+documentation, generated output, and dependencies are counted separately.
 
-The largest files are `Alto.TUI.App` (1,718), `Alto.Runner.Execution` (1,323),
-`Alto.Queue` (1,031), `Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
-`Alto.OperationLog` (848), and `Alto.TUI.Backends.Codex` (842). Size marks a place
-to inspect, not a reason to delete safeguards.
+The latest pass starts at 33,064 lines and removes 317, leaving 32,747
+(19.5% below the original baseline), with 4,289 still to remove.
 
-## Boundaries established by the audit
+Reproduce the production count with:
 
-- A production clone scan found no identical ten-line flow across files. Core
-  and TUI dependency graphs have no dead module cluster: zero-inbound modules
-  are application, Mix, configured extension, or backend entry points. Further
-  gains must change a complete representation or flow, not delete unused files
-  or wrap repeated syntax.
-- Queue and operation ledger already share durable file operations and each
-  applies the same transition during live writes and replay. Queue business-key
-  upsert, source admission, recovery, lease, and tombstone rules are distinct.
-  A full-queue rewrite would turn a small lease mutation into an O(queue-size)
-  synced write. SQLite is unlikely to remove much code by itself because
-  transition and bound checks would remain.
-- Session events and conversation revisions support different reads and crash
-  guarantees. They now share a session lock; the latest transcript and dispatch
-  fence commit atomically in one head, with older revisions archived on the next
-  write. A missing head fails closed rather than silently revealing an older
-  transcript. Root, parent,
-  and child checkpoints already share the portable state codec while retaining
-  different authority and resumption rules.
-- Runner outcomes differ by dispatch order, cancellation origin, approval
-  fencing, provider correlation, and retained child completion. Two complete
-  effect-flow audits found no safe local extraction of 100 lines. A replacement
-  should simplify the whole flow, not add an outcome adapter around it.
-- TUI task entries need per-task state for concurrent streaming and navigation.
-  Selection geometry also drives mouse hit tests. Backend-specific Codex and
-  native adapters share display projection where their contracts agree; the
-  remaining protocol and task-lifecycle branches have different semantics.
-- Replacing selection's text frame with `CellSession.take_cells/1` might remove
-  45–70 lines of Unicode indexing, but a local 200×60 capture probe took about
-  7 ms for cells versus 1 ms for the current text export. The interactive
-  mouse-down path needs measured end-to-end improvement before that rewrite.
-- CLI run/serve setup, JSON-RPC framing, provider HTTP/SSE envelopes, and
-  workspace path checks have already been consolidated at their shared
-  boundaries. Their remaining branches often enforce different authority,
-  wire, recovery, or output contracts.
+```sh
+git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
+  xargs -0 -I{} sh -c 'test ! -f "$1" || wc -l "$1"' sh {} |
+  awk '{sum += $1} END {print sum}'
+```
 
-## Next work
+## Findings from the fresh review
 
-1. **Replace a complete state representation.** Trace queue, ledger, session,
-   and continuation records from command through replay and recovery. Prototype
-   one smaller representation with bounded mutation work and one live/replay
-   transition. Corrupt or partial current records must still be observable and
-   safe; old pre-release formats need no compatibility path.
-2. **Simplify runner effects end to end.** Map the owner and reader of each run
-   field and each outcome shape. Try one internal outcome contract spanning
-   interpretation, tool completion, event dispatch, and scheduling. Compare the
-   complete runner group before keeping it. Preserve append-before-dispatch,
-   provider call counts, batch order, cancellation origin, and approval fences.
-3. **Simplify TUI state and view together.** Search for state derived twice or
-   retained by two owners across app, state, view, and backends. Keep catalog
-   recovery, backend selection, approval, clipboard, and selection behavior.
-   Reject abstractions that merely move branches or slow interactive input.
-4. **Prune tests by behavioral value.** Remove constructor echoes, language or
-   library demonstrations, and superseded scenarios covered by a stronger
-   integration test. Keep cases that distinguish Alto behavior at malformed
-   input, authority, cancellation, concurrency, or corruption boundaries.
-   Resource-sensitive integration suites now run serially after intermittent
-   full-suite failures; their behavioral assertions remain.
+- The workspace picker had a remote/async completion protocol used only by
+  tests. It now uses the existing synchronous local folder service directly.
+- The context pane filtered out entry kinds that its formatter still handled.
+  Those unreachable cases and the duplicated detail branch are removed.
+- The diff renderer translated Myers tags into a second internal vocabulary,
+  rebuilt line endings recursively, and allocated filtered lists just to count
+  hunk lines. It now uses library tags, regex line splitting, and map/reduce.
+- Folder completion now uses OTP's longest-common-prefix operation, with the
+  existing UTF-8 boundary helper. The test-only completion wrapper is removed.
+- Tool metadata callbacks no longer pass through a wrapper around `apply/3`.
+- Conversation snapshots no longer expose an unused derived entry ID. The
+  atomic transcript/dispatch fence and revision conflict checks remain.
+- Queue replay and live mutations now share native commands. A complete atomic
+  snapshot replaces the multi-record snapshot/checksum protocol. Queue IDs are
+  integers, and all persisted values must be portable. Old formats are rejected.
+- Operation logs no longer write unused version/timestamp command envelopes.
+- Context construction and continuation IDs use their canonical APIs directly.
+- Git tree parsing uses one split and the existing fallible reduction helper.
+- The SSE dependency change predates the latest session commits and replaced
+  two parser implementations. This pass adds no dependencies.
 
-For each pass, name the capability and its desired behavior, make one coherent
-edit, run focused tests, formatter, and the affected full suites, then compare
-production and test lines. Revert prototypes that add indirection without
-reducing the complete flow. The line target does not justify erasing current
-capabilities or useful safety checks.
+## Larger work still open
+
+Local cleanups alone have not reached the target. Reassess whole representations
+across queue/ledger replay, retained parent/child continuations, and TUI task
+state. Prior clone scans and unsuccessful extractions do not establish that
+these flows cannot be simplified. Keep durable append-before-dispatch behavior,
+explicit unknown outcomes, and bounded retention when replacing them.
+
+Selection keeps raw text capture because exporting cell maps made mouse-down
+substantially slower. Boundary rows now use `String.graphemes/1` instead of a
+custom tokenizer and binary-search index; renderer-derived glyph widths still
+account for wide-cell continuations.
+
+Remove tests that merely echo constructors or exercise unused scaffolding.
+Retain tests that distinguish behavior across malformed input, concurrent writes,
+interrupted execution, and actual user interactions. Run focused checks and the
+affected full suites after each coherent change.
+
+Validation: the complete core suite passes 1,010 tests and the TUI suite
+passes 137. Selection viewport output matched the prior implementation across
+nine Unicode cases; mouse-down remained about 1 ms at 200×60.

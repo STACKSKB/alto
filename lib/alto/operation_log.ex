@@ -5,7 +5,7 @@ defmodule Alto.OperationLog do
   One native command representation serves live execution and replay. Accepted
   commands are appended before their state is published, so failed writes
   cannot expose invented progress. Open work is never evicted. Commands use
-  bounded portable-term encoding inside a versioned JSONL envelope; evidence
+  bounded portable-term encoding as JSONL strings; evidence
   and checkpoints retain their exact keys and values across restarts. As with
   other portable stores, atoms must already be loaded when decoding.
   """
@@ -15,7 +15,6 @@ defmodule Alto.OperationLog do
   alias Alto.Persistence.Codec
   alias Alto.DurableLog
 
-  @version 2
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @max_key_bytes 256
   @limits [
@@ -514,28 +513,23 @@ defmodule Alto.OperationLog do
   end
 
   defp apply_logged(state, line, number) do
-    with :ok <- validate_record_bytes(line, state) do
-      case JSON.decode(line) do
-        {:ok, %{"v" => @version, "command" => encoded}} ->
-          with {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
-               true <- command?(command) do
-            case transition(state, command) do
-              {:ok, state, _reply} ->
-                {:ok, state}
+    with :ok <- validate_record_bytes(line, state),
+         {:ok, encoded} when is_binary(encoded) <- JSON.decode(line),
+         {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
+         true <- command?(command) do
+      case transition(state, command) do
+        {:ok, state, _reply} ->
+          {:ok, state}
 
-              {:error, :ledger_full} ->
-                {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
+        {:error, :ledger_full} ->
+          {:error, {:ledger_capacity_exceeded, map_size(state.ops) + 1, state.max_ops}}
 
-              error ->
-                error
-            end
-          else
-            _ -> {:error, {:ledger_corrupt, state.id, number}}
-          end
-
-        _other ->
-          {:error, {:ledger_corrupt, state.id, number}}
+        error ->
+          error
       end
+    else
+      {:error, {:record_too_large, _, _}} = error -> error
+      _ -> {:error, {:ledger_corrupt, state.id, number}}
     end
   end
 
@@ -798,12 +792,7 @@ defmodule Alto.OperationLog do
 
   defp append(state, command) do
     with {:ok, payload} <- Codec.encode(command, max_bytes: :erlang.external_size(command)),
-         encoded <-
-           JSON.encode!(%{
-             "v" => @version,
-             "command" => payload,
-             "at_ms" => System.system_time(:millisecond)
-           }),
+         encoded <- JSON.encode!(payload),
          :ok <- validate_record_bytes(encoded, state),
          :ok <- ensure_log_room(state, byte_size(encoded) + 1) do
       case DurableLog.append(state.path, [encoded, "\n"]) do

@@ -4,14 +4,14 @@ defmodule Alto.Tool.Registry do
   def build(modules) when is_list(modules) do
     Enum.reduce_while(modules, {:ok, %{}, []}, fn tool_spec, {:ok, tools, definitions} ->
       with {:ok, module, tool_opts} <- normalize_tool(tool_spec),
-           name when is_atom(name) <- Alto.Tool.callback(module, :name, tool_opts),
-           schema when is_map(schema) <- Alto.Tool.callback(module, :schema, tool_opts),
+           name when is_atom(name) <- module.name(tool_opts),
+           schema when is_map(schema) <- module.schema(tool_opts),
            {:ok, preparation} <- Alto.Tool.preparation(module),
            string_name = Atom.to_string(name),
            true <-
              not Map.has_key?(tools, string_name) or {:error, {:duplicate_tool, string_name}},
            mode when mode in [:parallel, :exclusive] <-
-             Alto.Tool.callback(module, :execution_mode, tool_opts),
+             module.execution_mode(tool_opts),
            approval when approval in [:never, :required] <-
              Alto.Tool.requirement(module, tool_opts) do
         definition = %{

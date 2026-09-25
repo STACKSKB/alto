@@ -53,17 +53,6 @@ defmodule Alto.TUI.WorkspaceFormTest do
     assert WorkspaceForm.path(completed) == root <> "/Alpha/"
   end
 
-  test "remote refresh does not silently select a replacement for a vanished choice" do
-    form = WorkspaceForm.new("/remote", "remote", [], complete: nil)
-    form = WorkspaceForm.paste(form, "/remote/")
-    form = WorkspaceForm.suggest(form, {:ok, ["/remote/Alpha/", "/remote/Beta/"]})
-    assert suggestion_list(form).selected == nil
-    {:edit, form} = WorkspaceForm.key(form, %Key{code: "down"})
-    form = WorkspaceForm.suggest(form, {:ok, ["/remote/Beta/"]})
-    assert suggestion_list(form).selected == nil
-    assert {:submit, "/remote/"} = WorkspaceForm.key(form, %Key{code: "enter"})
-  end
-
   defp suggestion_list(form) do
     {list, _} =
       Enum.find(WorkspaceForm.widgets(form, %{width: 100, height: 30}), fn
@@ -108,7 +97,7 @@ defmodule Alto.TUI.WorkspaceFormTest do
   end
 
   test "Shift inserts the terminal's actual characters while command modifiers remain shortcuts" do
-    form = WorkspaceForm.new("/remote", "remote", [], complete: nil)
+    form = WorkspaceForm.new("/remote")
 
     for code <- ["A", "_", "~", "!", "É"] do
       {:edit, _} = WorkspaceForm.key(form, %Key{code: code, modifiers: ["shift"]})
@@ -183,28 +172,16 @@ defmodule Alto.TUI.WorkspaceFormTest do
     {:edit, nested} = WorkspaceForm.key(completed, %Key{code: "tab"})
     assert {:submit, path} = WorkspaceForm.key(nested, %Key{code: "enter"})
     assert path == root <> "/another folder/nested/"
-    assert {:ok, [hidden]} = Alto.Harness.Folders.complete(".", root)
+    assert {:ok, %{folders: [hidden]}} = Alto.Harness.Folders.suggest(".", root)
     assert hidden == root <> "/.hidden/"
-    assert {:error, _} = Alto.Harness.Folders.complete("bad\npath", root)
-  end
-
-  test "remote forms use supplied service suggestions without reading local folders" do
-    form = WorkspaceForm.new("/remote", "the service host", ["/remote/saved"], complete: nil)
-    assert form.suggestions == ["/remote/saved/"]
-    form = WorkspaceForm.paste(form, "pro")
-    assert form.suggestions == []
-    form = WorkspaceForm.suggest(form, {:ok, ["/remote/probe/", "/remote/project/"]})
-    {:edit, form} = WorkspaceForm.key(form, %Key{code: "up"})
-    form = WorkspaceForm.suggest(form, {:ok, ["/remote/project/", "/remote/probe/"]})
-    {:edit, completed} = WorkspaceForm.key(form, %Key{code: "tab"})
-    assert WorkspaceForm.path(completed) == "/remote/project/"
+    assert {:error, _} = Alto.Harness.Folders.suggest("bad\npath", root)
   end
 
   test "Tab completes the typed prefix, never a saved working directory" do
     root = temporary_folders(["home/current/project", "home/another"])
 
     form =
-      WorkspaceForm.new(root <> "/home/current/project", "host", [root <> "/home/current/project"])
+      WorkspaceForm.new(root <> "/home/current/project", [root <> "/home/current/project"])
 
     {:edit, empty} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(empty) == ""
@@ -248,35 +225,6 @@ defmodule Alto.TUI.WorkspaceFormTest do
     form = WorkspaceForm.new(root) |> WorkspaceForm.paste("a")
     {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(form) == root <> "/a"
-  end
-
-  test "Tab waits for remote completion and then lists the completed folder's children" do
-    form = WorkspaceForm.new("/home/current", "remote", ["/home/current"], complete: nil)
-    form = WorkspaceForm.paste(form, "/hom")
-    revision = form.revision
-    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
-    assert form.revision == revision
-    assert WorkspaceForm.path(form) == "/hom"
-    form = WorkspaceForm.suggest(form, {:ok, %{folders: ["/home/"], completion: "/home/"}})
-    assert WorkspaceForm.path(form) == "/home/"
-    assert form.revision != revision
-    assert form.completion == :pending
-    refute form.tab_pending?
-
-    form =
-      WorkspaceForm.suggest(
-        form,
-        {:ok, %{folders: ["/home/current/", "/home/other/"], completion: "/home/"}}
-      )
-
-    assert form.suggestions == ["/home/current/", "/home/other/"]
-
-    form = WorkspaceForm.paste(form, "oth")
-    {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
-    form = WorkspaceForm.paste(form, "er/new")
-    form = WorkspaceForm.suggest(form, {:ok, []})
-    assert WorkspaceForm.path(form) == "/home/other/new"
-    refute form.tab_pending?
   end
 
   defp temporary_folders(folders) do

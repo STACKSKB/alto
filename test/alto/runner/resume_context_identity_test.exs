@@ -26,7 +26,7 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
       session_dir: dir,
       provider: {DescribedProvider, []},
       tools: [Fixture.PayloadTool],
-      loop: Alto.default_loop(context: Alto.Context.window(usage_estimation: true)),
+      loop: Alto.default_loop(context: Alto.Context.Window.new(usage_estimation: true)),
       compaction: [strategy: {Fixture.Reducer, []}, keep_recent_messages: 1, max_compactions: 2]
     ]
 

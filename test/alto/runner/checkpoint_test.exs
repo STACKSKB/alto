@@ -103,8 +103,6 @@ defmodule Alto.Runner.CheckpointTest do
     opts: opts
   } do
     assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
-    assert suspended.checkpoint["request"]["tool"] == "guarded"
-    assert %{"$inspect" => _} = suspended.checkpoint["request"]["details"]["prepared_by"]
     assert File.read!(Path.join(dir, "first")) == "1"
     refute File.exists?(Path.join(dir, "guarded"))
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()

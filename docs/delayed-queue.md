@@ -7,7 +7,7 @@ or another host using the claim/ack contract.
 ```elixir
 Alto.Queue.admit(queue, "source:delivery-id", payload, delay_ms: 60_000)
 Alto.Queue.put(queue, "job-key", payload, not_before_ms: unix_time_ms)
-Alto.Queue.reschedule(queue, claim_id, 30_000)
+Alto.Queue.release(queue, claim_id, delay_ms: 30_000)
 ```
 
 Claims, including byte-bounded claims used by Consumer, skip pending records
@@ -40,7 +40,7 @@ Queues keep append-only history by default. Hosts that need bounded retained
 state rather than historical audit entries can set `auto_compact: true` or call
 `Alto.Queue.compact/1` explicitly. Automatic compaction runs before a new append
 would exceed `max_log_bytes`. It retains every pending and claimed record in
-FIFO order, exact payloads, revisions, generation/operation identities, delayed
+FIFO order, portable term payloads, revisions, generation/operation identities, delayed
 due times and active claim IDs/owners/lease deadlines. It does not reclaim
 leases, acknowledge unread work or cancel records as a cleanup policy.
 
@@ -52,9 +52,11 @@ requested append cannot fit the log bound, the mutation fails explicitly;
 compaction never drops live work or shrinks the configured dedup window to fit.
 
 Replacement uses a file-and-directory-synced atomic rename while holding the
-queue's lifetime lock. A retained-state header preserves the next record ID and
-completed identities, and checks the complete retained prefix's count and hash.
-An incomplete retained snapshot fails closed; only later torn appends receive
-normal tail repair.
+queue's lifetime lock. Each log starts with one complete snapshot containing its
+next numeric record ID, live records, and completed delivery identities. Subsequent
+lines encode native queue mutations. An incomplete snapshot fails closed; only
+later torn appends receive normal tail repair. This is the current prerelease
+format; older queue logs are not migrated. Payloads and claim owners must be
+portable data; process IDs, references, ports, and functions are rejected.
 `compact/1` reports byte counts and retained live/completed counts. This is a
 queue-state maintenance operation, not an audit-log export.

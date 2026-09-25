@@ -15,7 +15,7 @@ defmodule Alto do
   @spec default_loop(keyword()) :: Spec.t()
   def default_loop(opts \\ []) do
     opts
-    |> Keyword.put_new(:context, Alto.Context.window())
+    |> Keyword.put_new(:context, Alto.Context.Window.new())
     |> Keyword.put_new(:subagents, Alto.Subagents.bounded())
     |> then(&Spec.new(Default, &1))
   end
@@ -23,7 +23,7 @@ defmodule Alto do
   @doc "Build the tool-free, one-request conversational loop."
   @spec chat_loop(keyword()) :: Spec.t()
   def chat_loop(opts \\ []) do
-    spec = Spec.new(Default, Keyword.put_new(opts, :context, Alto.Context.window()))
+    spec = Spec.new(Default, Keyword.put_new(opts, :context, Alto.Context.Window.new()))
     %{spec | driver_options: Keyword.put(spec.driver_options, :tool_execution, :disabled)}
   end
 

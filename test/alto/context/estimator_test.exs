@@ -29,7 +29,7 @@ defmodule Alto.Context.EstimatorTest do
 
   test "works directly as a Window estimator and keeps provider usage separate" do
     policy =
-      Alto.Context.window(
+      Alto.Context.Window.new(
         max_tokens: 100,
         reserve_output: 10,
         estimator: Estimator.new(tokenizer: fn _text -> 20 end, provider_overhead: 4)

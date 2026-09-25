@@ -83,7 +83,7 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     {:ok, command} =
       Alto.Persistence.Codec.encode({:checkpoint_update, "bank", 3, %{"used" => 2}})
 
-    line = JSON.encode!(%{"v" => 2, "command" => command})
+    line = JSON.encode!(command)
 
     File.write!(path, line <> "\n" <> line <> "\n", [:append])
 

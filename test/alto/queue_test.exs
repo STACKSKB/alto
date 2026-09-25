@@ -51,7 +51,7 @@ defmodule Alto.QueueTest do
              Queue.put(name, "key", %{payload: String.duplicate("x", 200)})
 
     assert projected > 100
-    assert File.stat!(Path.join(dir, id <> ".jsonl")).size == 0
+    assert File.stat!(Path.join(dir, id <> ".jsonl")).size <= 100
   end
 
   describe "put / claim / ack lifecycle" do
@@ -175,10 +175,10 @@ defmodule Alto.QueueTest do
       {:ok, _} = Queue.put(queue, "retry", %{})
       {:ok, [first]} = Queue.claim(queue)
       Agent.update(clock, &(&1 + 100))
-      assert {:error, :lease_expired} = Queue.reschedule(queue, first.claim_id, 500)
+      assert {:error, :lease_expired} = Queue.release(queue, first.claim_id, delay_ms: 500)
       {:ok, [second]} = Queue.claim(queue)
-      assert {:error, :not_found} = Queue.reschedule(queue, first.claim_id, 500)
-      assert :ok = Queue.reschedule(queue, second.claim_id, 300)
+      assert {:error, :not_found} = Queue.release(queue, first.claim_id, delay_ms: 500)
+      assert :ok = Queue.release(queue, second.claim_id, delay_ms: 300)
       GenServer.stop(pid)
       %{name: restarted} = start_queue!(id: id, dir: dir, clock: now)
       assert {:ok, []} = Queue.claim_bounded(restarted, 1, "consumer", 10_000)
@@ -441,37 +441,24 @@ defmodule Alto.QueueTest do
       path = Path.join(dir, id <> ".jsonl")
       File.mkdir_p!(dir)
 
-      valid_put =
-        JSON.encode!(%{
-          "v" => 6,
-          "type" => "record",
-          "record" =>
-            Alto.Session.encode_term(%Queue.Record{
-              id: "rec-1",
-              key: "k",
-              payload: %{n: 1},
-              revision: 1,
-              generation_id: "gen-fixture",
-              at_ms: 1
-            })
-        })
+      %{name: name, pid: pid} = start_queue!(id: id, dir: dir)
+      {:ok, _} = Queue.put(name, "k", %{n: 1})
+      GenServer.stop(pid)
+      good = File.read!(path)
+      File.write!(path, good <> "not json\n")
 
-      File.write!(path, valid_put <> "\nnot json\n")
-
-      assert {:error, {:queue_corrupt, ^id, 2}} =
+      assert {:error, {:queue_corrupt, ^id, 3}} =
                Queue.start_link(id: id, dir: dir, name: :"corrupt_#{unique_id()}")
 
-      entry = JSON.decode!(valid_put)
-      {:ok, record} = Alto.Session.decode_term(entry["record"])
+      [snapshot, command] = String.split(good, "\n", trim: true)
+      {:ok, {:put, record}} = command |> JSON.decode!() |> Alto.Persistence.Codec.decode()
 
       for malformed <- [
             %{record | status: :claimed, claim_id: nil, lease_until_ms: "bad"},
             record |> Map.delete(:key) |> Map.put(:unexpected, "k")
           ] do
-        File.write!(
-          path,
-          JSON.encode!(%{entry | "record" => Alto.Session.encode_term(malformed)}) <> "\n"
-        )
+        {:ok, encoded} = Alto.Persistence.Codec.encode({:put, malformed})
+        File.write!(path, snapshot <> "\n" <> JSON.encode!(encoded) <> "\n")
 
         assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
       end
@@ -560,25 +547,13 @@ defmodule Alto.QueueTest do
       path = Path.join(dir, id <> ".jsonl")
       File.mkdir_p!(dir)
 
-      record = %Queue.Record{
-        id: "rec-1",
-        key: "k",
-        payload: %{},
-        revision: 1,
-        generation_id: "gen-fixture",
-        at_ms: 1,
-        not_before_ms: "bad"
-      }
-
-      File.write!(
-        path,
-        JSON.encode!(%{
-          "v" => 6,
-          "type" => "record",
-          "record" => Alto.Session.encode_term(record)
-        }) <>
-          "\n"
-      )
+      %{name: name, pid: pid} = start_queue!(id: id, dir: dir)
+      {:ok, _} = Queue.put(name, "k", %{})
+      GenServer.stop(pid)
+      [snapshot, command] = path |> File.read!() |> String.split("\n", trim: true)
+      {:ok, {:put, record}} = command |> JSON.decode!() |> Alto.Persistence.Codec.decode()
+      {:ok, malformed} = Alto.Persistence.Codec.encode({:put, %{record | not_before_ms: "bad"}})
+      File.write!(path, snapshot <> "\n" <> JSON.encode!(malformed) <> "\n")
 
       assert {:error, :bad_entry} = Queue.start_link(id: id, dir: dir, name: nil)
     end

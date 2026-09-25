@@ -138,20 +138,10 @@ defmodule Alto.QueueAdmissionTest do
       path = Path.join(dir, id <> ".jsonl")
       File.mkdir_p!(dir)
 
-      good =
-        JSON.encode!(%{
-          "v" => 6,
-          "type" => "record",
-          "record" =>
-            Alto.Session.encode_term(%Queue.Record{
-              id: "rec-1",
-              key: "k",
-              payload: %{n: 1},
-              revision: 1,
-              generation_id: "gen-fixture",
-              at_ms: 1
-            })
-        })
+      %{name: name, pid: pid} = start_queue!(id: id, dir: dir)
+      {:ok, _} = Queue.put(name, "k", %{n: 1})
+      GenServer.stop(pid)
+      good = File.read!(path)
 
       # Torn tail: bytes with no trailing newline that do not decode.
       File.write!(path, good <> "\n" <> "{\"v\": 1, \"type\": \"put\", \"id\": \"rec-2\"")
@@ -168,7 +158,7 @@ defmodule Alto.QueueAdmissionTest do
       # Corruption anywhere else still fails loudly.
       File.write!(path, "not json\n" <> good <> "\n")
 
-      assert {:error, {:queue_corrupt, ^id, 1}} =
+      assert {:error, :invalid_queue_snapshot} =
                Queue.start_link(
                  id: id,
                  dir: dir,

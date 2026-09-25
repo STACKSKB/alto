@@ -1498,7 +1498,7 @@ defmodule Alto.TUI.App do
 
     %{
       state
-      | overlay: WorkspaceForm.new(base, "this computer", Enum.map(state.projects, & &1["root"])),
+      | overlay: WorkspaceForm.new(base, Enum.map(state.projects, & &1["root"])),
         leader?: false
     }
   end

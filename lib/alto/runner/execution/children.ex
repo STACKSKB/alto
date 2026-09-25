@@ -175,8 +175,6 @@ defmodule Alto.Runner.Execution.Children do
     open_reserved_continuation(specs, run, parent, key)
   end
 
-  def reserve_continuation(run), do: Operation.next(run)
-
   def open_reserved_continuation(specs, run, parent, key) do
     metadata = %{
       "parent_run_id" => run.tool_context.session_id,

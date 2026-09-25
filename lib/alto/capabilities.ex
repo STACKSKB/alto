@@ -90,10 +90,10 @@ defmodule Alto.Capabilities do
     Code.ensure_loaded!(module)
 
     %{
-      name: to_string(Alto.Tool.callback(module, :name, opts)),
+      name: to_string(module.name(opts)),
       module: module_name(module),
       approval: Alto.Tool.requirement(module, opts),
-      execution_mode: Alto.Tool.callback(module, :execution_mode, opts),
+      execution_mode: module.execution_mode(opts),
       prepared: function_exported?(module, :prepare, 3)
     }
   end
