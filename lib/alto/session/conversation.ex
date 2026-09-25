@@ -167,7 +167,7 @@ defmodule Alto.Session.Conversation do
              constraints.max_conversation_bytes,
              byte_size(encoded)
            ),
-         :ok <- put_entry(id, next_revision, entry, encoded, opts),
+         :ok <- put_entry(id, next_revision, encoded, opts),
          snapshot <- snapshot(entry, byte_size(encoded)),
          :ok <- write_head(id, snapshot.revision, nil, opts) do
       {:ok, snapshot}
@@ -210,25 +210,22 @@ defmodule Alto.Session.Conversation do
     }
   end
 
-  defp put_entry(id, revision, entry, encoded, opts) do
+  defp put_entry(id, revision, encoded, opts) do
     path = entry_path(opts, id, revision)
 
     with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true) do
       case Alto.BoundedFile.read(path, @max_entry_bytes) do
         {:ok, ""} ->
-          DurableLog.replace(path, encoded)
+          DurableLog.replace(path, encoded, mode: 0o600)
 
-        {:ok, existing} ->
-          case JSON.decode(existing) do
-            {:ok, ^entry} ->
-              :ok
+        {:ok, ^encoded} ->
+          :ok
 
-            _ ->
-              {:error, {:conversation_revision_conflict, %{session_id: id, revision: revision}}}
-          end
+        {:ok, _existing} ->
+          {:error, {:conversation_revision_conflict, %{session_id: id, revision: revision}}}
 
         {:error, :enoent} ->
-          with :ok <- Storage.ensure_private_file(path), do: DurableLog.replace(path, encoded)
+          DurableLog.replace(path, encoded, mode: 0o600)
 
         {:error, reason} ->
           {:error, {:conversation_write_failed, reason}}

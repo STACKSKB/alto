@@ -114,7 +114,7 @@ defmodule Alto.SessionConversationTest do
     assert Enum.reverse(run.messages_rev) == closed ++ [user("continue")]
 
     assert {:error, {:conversation_revision_unsettled, ^id, 2}} =
-             Session.fork(id, revision: 2, session_dir: dir)
+             Session.fork(id, 2, session_dir: dir)
   end
 
   test "a completed tool group supersedes its dispatch fence", %{dir: dir} do
@@ -198,8 +198,7 @@ defmodule Alto.SessionConversationTest do
              )
 
     assert {:ok, fork} =
-             Session.fork(source,
-               revision: 1,
+             Session.fork(source, 1,
                expected_revision: 2,
                session_id: "sess-branch",
                summary: "Explore another approach.",
@@ -270,7 +269,7 @@ defmodule Alto.SessionConversationTest do
              Session.conversation(id, 2, session_dir: dir)
 
     assert {:error, {:session_conflict, %{expected_revision: 0, current_revision: 1}}} =
-             Session.fork(id,
+             Session.fork(id, :latest,
                expected_revision: 0,
                session_id: "sess-stale-branch",
                session_dir: dir

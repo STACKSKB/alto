@@ -212,8 +212,12 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                source: "github"
              )
 
-    assert [%{key: "github:http-1", payload: %{"report" => report}}] =
-             Alto.Queue.records(queue)
+    assert {:ok,
+            %{
+              records: [%{key: "github:http-1", payload: %{"report" => report}}],
+              next_cursor: nil
+            }} =
+             Alto.Queue.snapshot_page(queue, 0)
 
     assert report["source"] == "github"
     assert report["delivery_id"] == "http-1"

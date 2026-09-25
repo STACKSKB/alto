@@ -38,12 +38,13 @@ defmodule Alto.QueueCompactionTest do
     assert {:ok, [_]} = Queue.claim(q, 1, %{owner: {:worker, 2}})
     churn(q, 1..3)
     assert {:ok, _} = Queue.restore(q, "operation", "generation", %{v: 3})
-    before = Queue.snapshot(q)
-    assert Enum.all?(before, &(&1.at_ms == 1_000))
+    before = Queue.snapshot_page(q, 0)
+    assert {:ok, %{records: records, next_cursor: nil}} = before
+    assert Enum.all?(records, &(&1.at_ms == 1_000))
     stop_supervised!(Queue)
 
     q = start_supervised!({Queue, c.opts})
-    assert Queue.snapshot(q) == before
+    assert Queue.snapshot_page(q, 0) == before
     assert {:error, :duplicate} = Queue.admit(q, "del-3", %{})
   end
 
@@ -56,15 +57,15 @@ defmodule Alto.QueueCompactionTest do
     assert {:ok, _} = Queue.put(q, "later", %{v: 2}, not_before_ms: 1_600)
     assert {:ok, _} = Queue.admit(q, "delivery", %{v: 3})
     assert {:ok, _} = Queue.restore(q, "operation", "generation", %{v: 4}, recovery_revision: 7)
-    before = Queue.snapshot(q)
+    before = Queue.snapshot_page(q, 0)
     assert {:ok, stats} = Queue.compact(q)
     assert stats.after_bytes < stats.before_bytes
     assert stats.live_records == 4
     assert stats.completed_keys == 3
-    assert Queue.snapshot(q) == before
+    assert Queue.snapshot_page(q, 0) == before
     stop_supervised!(Queue)
     q = start_supervised!({Queue, c.opts})
-    assert Queue.snapshot(q) == before
+    assert Queue.snapshot_page(q, 0) == before
     assert {:error, :duplicate} = Queue.admit(q, "del-20", %{})
     assert {:error, :duplicate} = Queue.admit(q, "delivery", %{})
     assert :ok = Queue.ack(q, claimed.claim_id)
@@ -98,12 +99,12 @@ defmodule Alto.QueueCompactionTest do
     q = start_supervised!({Queue, c.opts})
     assert {:ok, _} = Queue.put(q, "pending", %{payload: String.duplicate("x", 800)})
     bytes = File.read!(c.path)
-    before = Queue.snapshot(q)
+    before = Queue.snapshot_page(q, 0)
     :sys.replace_state(q, &%{&1 | max_log_bytes: 100, auto_compact: true})
     assert {:error, {:queue_log_too_large, _, 100}} = Queue.compact(q)
     assert {:error, {:queue_log_too_large, _, 100}} = Queue.put(q, "new", %{})
     assert File.read!(c.path) == bytes
-    assert Queue.snapshot(q) == before
+    assert Queue.snapshot_page(q, 0) == before
   end
 
   test "default queues keep append-only history and refuse a full log", c do
@@ -133,7 +134,7 @@ defmodule Alto.QueueCompactionTest do
     q = start_supervised!({Queue, c.opts})
     assert {:ok, _} = Queue.admit(q, "preserve", %{body: "unread"})
     assert {:ok, _} = Queue.compact(q)
-    before = Queue.snapshot(q)
+    before = Queue.snapshot_page(q, 0)
     stop_supervised!(Queue)
     bytes = File.read!(c.path)
     [header, _record] = String.split(bytes, "\n", trim: true)
@@ -143,7 +144,7 @@ defmodule Alto.QueueCompactionTest do
     assert {:error, :invalid_retained_queue_prefix} = Queue.start_link(c.opts)
     File.write!(c.path, bytes <> ~s({"v":1,"type":"claim"))
     q = start_supervised!({Queue, c.opts})
-    assert Queue.snapshot(q) == before
+    assert Queue.snapshot_page(q, 0) == before
     assert File.read!(c.path) == bytes
   end
 

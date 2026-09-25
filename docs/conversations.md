@@ -55,8 +55,7 @@ logs, credentials, or workspace state.
 
 ```elixir
 {:ok, branch} =
-  Alto.Session.fork(source_session,
-    revision: 3,
+  Alto.Session.fork(source_session, 3,
     expected_revision: 7,
     summary: "Try the smaller migration first",
     session_dir: session_dir

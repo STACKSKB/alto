@@ -216,18 +216,6 @@ defmodule Alto.Session do
     end
   end
 
-  @doc "Fork a retained complete revision into a new isolated session."
-  @spec fork(session_id(), keyword()) :: {:ok, map()} | {:error, term()}
-  def fork(id, opts \\ [])
-
-  def fork(id, opts) when is_list(opts) do
-    {revision, opts} = Keyword.pop(opts, :revision, :latest)
-    fork(id, revision, opts)
-  end
-
-  def fork(id, revision) when revision == :latest or is_integer(revision),
-    do: fork(id, revision, [])
-
   @doc "Fork a specific retained complete revision into a new isolated session."
   @spec fork(session_id(), :latest | pos_integer(), keyword()) ::
           {:ok, map()} | {:error, term()}

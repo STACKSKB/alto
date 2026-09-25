@@ -9,14 +9,14 @@ merely because a test asserts it.
 ## Measure the result
 
 The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,094, down 7,561 lines (18.6%). Reaching 30% requires
-at most 28,458 lines, another 4,636 fewer than today. The 50% stretch target is
+2026-09-25 the count is 33,055, down 7,600 lines (18.7%). Reaching 30% requires
+at most 28,458 lines, another 4,597 fewer than today. The 50% stretch target is
 20,327 lines. Recount after each coherent change; moving code does not count.
 Test files are measured separately.
 
 The largest files are `Alto.TUI.App` (1,718), `Alto.Runner.Execution` (1,323),
-`Alto.Queue` (1,054), `Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
-`Alto.TUI.Backends.Codex` (855), and `Alto.OperationLog` (847). Size marks a place
+`Alto.Queue` (1,031), `Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
+`Alto.OperationLog` (853), and `Alto.TUI.Backends.Codex` (842). Size marks a place
 to inspect, not a reason to delete safeguards.
 
 ## Boundaries established by the audit
