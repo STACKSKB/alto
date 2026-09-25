@@ -8,8 +8,8 @@ data flow, not a smaller product.
 ## Measure the result
 
 The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-24 inventory is 33,141 lines, a reduction of 7,514 (18.5%). A 30%
-reduction would require at most 28,458 lines, or another 4,683 lines below the
+The 2026-09-25 inventory is 33,114 lines, a reduction of 7,541 (18.5%). A 30%
+reduction would require at most 28,458 lines, or another 4,656 lines below the
 current inventory. Test files are tracked separately and never count toward
 that production target. A 50% stretch would require at most 20,327 lines.
 Recount after each coherent change; a moved line is not a reduction.
@@ -184,6 +184,11 @@ reverted. Using the session event log as the pointer would require publish
 markers, shared locks, private record projection, and a log-bound redesign;
 it would add code and make resume scan the log. Keep an independent monotonic
 head marker unless a replacement can fail closed on missing current state.
+Live and restored tool results now share one completed-row formatter; read-file
+results still hide raw content in the terminal. CLI prompt selection is one
+decision instead of three one-use helpers. Both full suites pass.
+The attempted checkpoint/continuation and TUI-render projection audits found
+distinct durable phases and already-shared geometry, so they made no edits.
 
 ## Next passes
 

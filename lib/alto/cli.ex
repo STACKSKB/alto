@@ -554,13 +554,11 @@ defmodule Alto.CLI do
   end
 
   defp configure_prompt(run_options, options) do
-    if prompt_flags?(options),
-      do: Keyword.merge(run_options, prompt_options(options)),
-      else: Keyword.put_new(run_options, :prompt, Alto.Prompts.Coding)
-  end
-
-  defp prompt_flags?(options) do
-    Keyword.has_key?(options, :system_prompt) or Keyword.has_key?(options, :no_system_prompt)
+    cond do
+      Keyword.get(options, :no_system_prompt, false) -> Keyword.put(run_options, :prompt, nil)
+      prompt = Keyword.get(options, :system_prompt) -> Keyword.put(run_options, :prompt, prompt)
+      true -> Keyword.put_new(run_options, :prompt, Alto.Prompts.Coding)
+    end
   end
 
   defp required_model(options) do
@@ -659,14 +657,6 @@ defmodule Alto.CLI do
       {RunCommand,
        executor: {Alto.Command.Executors.Bubblewrap, network: network, protected_paths: [".git"]}}
     ]
-  end
-
-  defp prompt_options(options) do
-    cond do
-      Keyword.get(options, :no_system_prompt, false) -> [prompt: nil]
-      prompt = Keyword.get(options, :system_prompt) -> [prompt: prompt]
-      true -> []
-    end
   end
 
   defp format_reason({:socket_bind_failed, path, :already_in_use}),

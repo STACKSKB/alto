@@ -8,19 +8,17 @@ defmodule Alto.ToolDisplay do
   def summary(name, arguments) do
     args = decode(arguments)
     name = to_string(name || "tool")
-
-    target =
-      get(args, "path") || get(args, "file_path") || get(args, "pattern") || get(args, "query")
+    target = first(args, ~w(path file_path pattern query))
 
     parts =
-      cond do
-        name in ["git_inspect", "git_mutate"] ->
+      case name do
+        git when git in ["git_inspect", "git_mutate"] ->
           ["git", get(args, "action"), get(args, "ref"), target, get(args, "branch")]
 
-        name == "run_command" ->
-          [get(args, "program") || get(args, "command") || name | List.wrap(get(args, "args"))]
+        "run_command" ->
+          [first(args, ~w(program command)) || name | List.wrap(get(args, "args"))]
 
-        true ->
+        _ ->
           [name, target, range(args)]
       end
 
@@ -44,9 +42,12 @@ defmodule Alto.ToolDisplay do
         %{kind: :error, text: title <> " failed", detail: Alto.Display.error(get(data, "error"))}
 
       _ ->
-        %{kind: :tool, text: title <> " ✓", detail: result_detail(name, output)}
+        completed(name, title, output)
     end
   end
+
+  defp completed(name, title, value),
+    do: %{kind: :tool, text: title <> " ✓", detail: result_detail(name, value)}
 
   # Read results remain intact in the model/session; the terminal shows metadata.
   defp result_detail(name, value) when name in ["read_file", :read_file] do
@@ -67,7 +68,7 @@ defmodule Alto.ToolDisplay do
   def detail(value) do
     value = decode(value)
     patch = get(value, "patch")
-    output = get(value, "output") || get(value, "content")
+    output = first(value, ~w(output content))
 
     cond do
       is_map(patch) ->
@@ -83,61 +84,43 @@ defmodule Alto.ToolDisplay do
   end
 
   def transcript(messages) do
-    {entries, _calls} =
-      Enum.map_reduce(messages, %{}, fn message, calls ->
-        case message["role"] do
-          "assistant" ->
-            calls =
-              Enum.reduce(message["tool_calls"] || [], calls, fn call, acc ->
-                function = call["function"] || %{}
-
-                Map.put(
-                  acc,
-                  call["id"],
-                  {function["name"], summary(function["name"], function["arguments"])}
-                )
-              end)
-
-            entries =
-              Alto.Reasoning.entries(message) ++
-                if(is_binary(message["content"]) and message["content"] != "",
-                  do: [%{kind: :assistant, text: message["content"]}],
-                  else: []
-                )
-
-            {entries, calls}
-
-          "user" ->
-            {[%{kind: :user, text: Alto.Display.text(message["content"])}], calls}
-
-          "tool" ->
-            {name, title} =
-              Map.get(
-                calls,
-                message["tool_call_id"],
-                {message["name"], message["name"] || "tool"}
-              )
-
-            {[
-               %{
-                 kind: :tool,
-                 text: title <> " ✓",
-                 detail: result_detail(name, message["content"])
-               }
-             ], calls}
-
-          _ ->
-            {[], calls}
-        end
-      end)
-
+    {entries, _calls} = Enum.map_reduce(messages, %{}, &transcript_entry/2)
     List.flatten(entries)
   end
 
+  defp transcript_entry(%{"role" => "assistant"} = message, calls) do
+    calls =
+      Enum.reduce(message["tool_calls"] || [], calls, fn call, acc ->
+        function = call["function"] || %{}
+        name = function["name"]
+        Map.put(acc, call["id"], {name, summary(name, function["arguments"])})
+      end)
+
+    content = message["content"]
+
+    assistant =
+      if is_binary(content) and content != "", do: [%{kind: :assistant, text: content}], else: []
+
+    {Alto.Reasoning.entries(message) ++ assistant, calls}
+  end
+
+  defp transcript_entry(%{"role" => "user"} = message, calls),
+    do: {[%{kind: :user, text: Alto.Display.text(message["content"])}], calls}
+
+  defp transcript_entry(%{"role" => "tool"} = message, calls) do
+    name = message["name"]
+    {name, title} = Map.get(calls, message["tool_call_id"], {name, name || "tool"})
+    {[completed(name, title, message["content"])], calls}
+  end
+
+  defp transcript_entry(_, calls), do: {[], calls}
+
   defp range(args) do
-    first = get(args, "offset") || get(args, "line_start")
+    first = first(args, ~w(offset line_start))
     if first, do: "(from #{first})"
   end
+
+  defp first(data, keys), do: Enum.find_value(keys, &get(data, &1))
 
   defp decode(value) when is_binary(value) do
     case JSON.decode(value) do

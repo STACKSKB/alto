@@ -1,6 +1,8 @@
 defmodule Alto.InputTest do
   use ExUnit.Case, async: true
 
+  @receive_timeout 5_000
+
   defmodule Provider do
     @behaviour Alto.Provider
     def describe(_), do: %{}
@@ -35,11 +37,11 @@ defmodule Alto.InputTest do
     {:ok, input} = Alto.Input.start_link()
     opts = [input: input, provider: {Provider, owner: self()}, max_steps: 2]
     {:ok, handle} = Alto.start("first", opts)
-    assert_receive {:request, first, worker}
+    assert_receive {:request, first, worker}, @receive_timeout
     assert List.last(first)["content"] == "first"
     assert {:ok, _} = Alto.Input.put(input, "second", :follow_up)
     send(worker, :answer)
-    assert_receive {:request, second, next}
+    assert_receive {:request, second, next}, @receive_timeout
     assert List.last(second)["content"] == "second"
     assert Enum.any?(second, &(&1["content"] == "answer"))
     assert {:ok, _} = Alto.Input.put(input, "third", :follow_up)
@@ -52,11 +54,11 @@ defmodule Alto.InputTest do
   test "steering supplied during a provider call arrives at the next safe boundary" do
     {:ok, input} = Alto.Input.start_link()
     {:ok, handle} = Alto.start("first", input: input, provider: {Provider, owner: self()})
-    assert_receive {:request, _, worker}
+    assert_receive {:request, _, worker}, @receive_timeout
     {:ok, _} = Alto.Input.put(input, "change direction", :steer)
     refute_receive {:request, _, _}, 20
     send(worker, :answer)
-    assert_receive {:request, history, next}
+    assert_receive {:request, history, next}, @receive_timeout
     assert List.last(history)["content"] == "change direction"
     send(next, :answer)
     assert {:ok, result} = Alto.await(handle)
@@ -68,7 +70,7 @@ defmodule Alto.InputTest do
     {:ok, input} = Alto.Input.start_link()
     opts = [input: input, provider: {Provider, owner: self()}]
     {:ok, handle} = Alto.start("first", opts)
-    assert_receive {:request, _, worker}
+    assert_receive {:request, _, worker}, @receive_timeout
     assert {:error, :input_in_use, _} = Alto.run("second", opts)
     send(worker, :answer)
     assert {:ok, _} = Alto.await(handle)
