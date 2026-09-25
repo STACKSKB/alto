@@ -21,6 +21,11 @@ to inspect, not a reason to delete safeguards.
 
 ## Boundaries established by the audit
 
+- A production clone scan found no identical ten-line flow across files. Core
+  and TUI dependency graphs have no dead module cluster: zero-inbound modules
+  are application, Mix, configured extension, or backend entry points. Further
+  gains must change a complete representation or flow, not delete unused files
+  or wrap repeated syntax.
 - Queue and operation ledger already share durable file operations and each
   applies the same transition during live writes and replay. Queue business-key
   upsert, source admission, recovery, lease, and tombstone rules are distinct.
