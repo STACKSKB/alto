@@ -194,18 +194,18 @@ defmodule Alto.QueueTest do
       %{name: name} = start_queue!(id: id, dir: dir)
 
       {:ok, first} = Queue.put(name, "job-1", %{v: 1})
-      [first_view] = Queue.records(name)
+      {:ok, first_view} = Queue.lookup(name, "job-1")
       assert first_view.generation_id =~ "gen-"
 
       {:ok, updated} = Queue.put(name, "job-1", %{v: 2})
-      [updated_view] = Queue.records(name)
+      {:ok, updated_view} = Queue.lookup(name, "job-1")
       assert updated.id == first.id
       assert updated_view.generation_id == first_view.generation_id
 
       {:ok, [claimed]} = Queue.claim(name)
       :ok = Queue.ack(name, claimed.claim_id)
       {:ok, _} = Queue.put(name, "job-1", %{v: 3})
-      [next_view] = Queue.records(name)
+      {:ok, next_view} = Queue.lookup(name, "job-1")
       refute next_view.generation_id == first_view.generation_id
     end
 
@@ -272,6 +272,11 @@ defmodule Alto.QueueTest do
 
       Process.sleep(10)
 
+      assert {:ok, %{records: [%{status: :claimed, claim_id: claim_id}], next_cursor: nil}} =
+               Queue.snapshot_page(name, 0)
+
+      assert claim_id == claimed.claim_id
+
       # An ack past its lease is refused: the claim is dead, not the record.
       assert {:error, :lease_expired} = Queue.ack(name, claimed.claim_id)
 
@@ -293,7 +298,10 @@ defmodule Alto.QueueTest do
 
       assert id == original.id
       assert {:error, :not_found} = Queue.ack(name, claimed.claim_id)
-      assert [%{payload: %{n: 2}, revision: 2, status: :pending}] = Queue.records(name)
+
+      assert {:ok,
+              %{records: [%{payload: %{n: 2}, revision: 2, status: :pending}], next_cursor: nil}} =
+               Queue.snapshot_page(name, 0)
     end
 
     test "put reclaims an expired lease after restart", %{dir: dir, id: id} do
@@ -380,7 +388,8 @@ defmodule Alto.QueueTest do
       GenServer.stop(pid3)
 
       %{name: name4} = start_queue!(id: id, dir: dir)
-      assert Enum.map(Queue.records(name4), & &1.key) == ["kept", "after-repair"]
+      assert {:ok, %{records: records, next_cursor: nil}} = Queue.snapshot_page(name4, 0)
+      assert Enum.map(records, & &1.key) == ["kept", "after-repair"]
     end
 
     test "records survive a restart, blanks included", %{dir: dir, id: id} do
@@ -398,8 +407,8 @@ defmodule Alto.QueueTest do
 
       kept_id = kept.id
 
-      assert [%{id: ^kept_id, key: "keep", payload: %{n: 1}, revision: 1}] =
-               Queue.records(name2) |> Enum.filter(&(&1.key == "keep"))
+      assert {:ok, %{id: ^kept_id, key: "keep", payload: %{n: 1}, revision: 1}} =
+               Queue.lookup(name2, "keep")
     end
 
     test "a claimed record survives restart under its lease, then expires", %{dir: dir, id: id} do

@@ -158,7 +158,7 @@ defmodule Alto.QueueAdmissionTest do
 
       %{name: name} = start_queue!(id: id, dir: dir)
       assert %{pending: 1} = Queue.count(name)
-      assert [%{key: "k"}] = Queue.records(name)
+      assert {:ok, %{records: [%{key: "k"}], next_cursor: nil}} = Queue.snapshot_page(name, 0)
 
       # The file was truncated back to the last good byte.
       assert {:ok, contents} = File.read(path)

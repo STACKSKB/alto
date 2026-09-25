@@ -707,7 +707,9 @@ defmodule Alto.FrontEnd.RegistryTest do
       assert %{id: ^id, key: "job-1", status: :claimed, claimed_by: "station-1"} = claimed
 
       assert :ok = Registry.queue_release(registry, claimed.claim_id)
-      assert [%{id: ^id, status: :pending}] = Alto.Queue.records(queue)
+
+      assert {:ok, %{records: [%{id: ^id, status: :pending}], next_cursor: nil}} =
+               Alto.Queue.snapshot_page(queue, 0)
 
       {:ok, [reclaimed]} = Registry.queue_claim(registry, 1, "station-1")
       assert :ok = Registry.queue_ack(registry, reclaimed.claim_id)

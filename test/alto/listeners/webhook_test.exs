@@ -559,13 +559,16 @@ defmodule Alto.Listeners.WebhookTest do
 
       assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
 
-      assert [
-               %{
-                 key: "/hooks/events:inbox-del-1",
-                 payload: %{"delivery_id" => "inbox-del-1", "body" => ^body}
-               }
-             ] =
-               Alto.Queue.records(queue)
+      assert {:ok,
+              %{
+                records: [
+                  %{
+                    key: "/hooks/events:inbox-del-1",
+                    payload: %{"delivery_id" => "inbox-del-1", "body" => ^body}
+                  }
+                ],
+                next_cursor: nil
+              }} = Alto.Queue.snapshot_page(queue, 0)
 
       # The sender's retry is a durable no-op, still 200.
       assert post_event(port, body: body, delivery_id: "inbox-del-1") =~ "200 OK"
@@ -604,7 +607,9 @@ defmodule Alto.Listeners.WebhookTest do
 
       assert post_event(port, delivery_id: "inbox-overflow") =~ "503"
       assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
-      assert [%{key: "filler"}] = Alto.Queue.records(queue)
+
+      assert {:ok, %{records: [%{key: "filler"}], next_cursor: nil}} =
+               Alto.Queue.snapshot_page(queue, 0)
     end
 
     test "an oversized inbox payload is rejected, never truncated", %{
@@ -657,7 +662,8 @@ defmodule Alto.Listeners.WebhookTest do
 
       assert %{pending: 2} = Alto.Queue.count(queue)
 
-      keys = queue |> Alto.Queue.records() |> Enum.map(& &1.key) |> Enum.sort()
+      assert {:ok, %{records: records, next_cursor: nil}} = Alto.Queue.snapshot_page(queue, 0)
+      keys = records |> Enum.map(& &1.key) |> Enum.sort()
       assert keys == ["/hooks/a:shared-del", "/hooks/b:shared-del"]
     end
 
@@ -721,7 +727,8 @@ defmodule Alto.Listeners.WebhookTest do
       assert post(port, "/hooks/events", first, signed_headers(first, "conflict")) =~ "200 OK"
       assert post(port, "/hooks/events", second, signed_headers(second, "conflict")) =~ "200 OK"
 
-      assert [%{payload: %{"body" => ^first}}] = Alto.Queue.records(queue)
+      assert {:ok, %{records: [%{payload: %{"body" => ^first}}], next_cursor: nil}} =
+               Alto.Queue.snapshot_page(queue, 0)
     end
 
     test "an overlong delivery id is rejected before storage", %{

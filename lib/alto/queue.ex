@@ -262,23 +262,6 @@ defmodule Alto.Queue do
     GenServer.call(server, :count)
   end
 
-  @doc "Bounded listing of live records, oldest first."
-  @spec records(GenServer.server(), pos_integer()) :: [map()]
-  def records(server \\ __MODULE__, max \\ @max_list_records) do
-    GenServer.call(server, {:records, min(max, @max_list_records)})
-  end
-
-  @doc """
-  Bounded snapshot of live records without lazy lease reclaim, oldest
-  first (operator inspection). Unlike `records/2`, expired leases stay
-  visible as claimed so stale owners read accurately; the snapshot never
-  mutates queue state.
-  """
-  @spec snapshot(GenServer.server(), pos_integer()) :: [map()]
-  def snapshot(server \\ __MODULE__, max \\ @max_list_records) do
-    GenServer.call(server, {:snapshot, min(max, @max_list_records)})
-  end
-
   @doc "Read one bounded live-record page without reclaiming leases."
   @spec snapshot_page(GenServer.server(), non_neg_integer(), pos_integer()) ::
           {:ok, %{records: [map()], next_cursor: non_neg_integer() | nil}} | {:error, term()}
@@ -509,12 +492,6 @@ defmodule Alto.Queue do
 
     {:reply, %{pending: Map.get(counts, :pending, 0), claimed: Map.get(counts, :claimed, 0)},
      state}
-  end
-
-  def handle_call({operation, max}, _from, state) when operation in [:records, :snapshot] do
-    state = if operation == :records, do: reclaim_expired(state), else: state
-    views = state |> ordered_records() |> Enum.take(max) |> Enum.map(&view/1)
-    {:reply, views, state}
   end
 
   def handle_call({:snapshot_page, cursor, limit}, _from, state) do
