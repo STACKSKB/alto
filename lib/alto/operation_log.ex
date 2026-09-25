@@ -172,9 +172,6 @@ defmodule Alto.OperationLog do
     call(server, {:reject_intended, op_key, expected_revision, evidence})
   end
 
-  @spec keys(GenServer.server(), timeout()) :: [op_key()]
-  def keys(server \\ __MODULE__, timeout \\ 5_000), do: call(server, :keys, timeout)
-
   @doc "Bounded canonical operation views, oldest first."
   @spec entries(GenServer.server(), :all | :open | :parked, timeout()) :: [map()]
   def entries(server \\ __MODULE__, filter \\ :all, timeout \\ 5_000)
@@ -276,8 +273,6 @@ defmodule Alto.OperationLog do
 
   defp read({:attempts, op}, state),
     do: {:reply, length(Map.get(state.ops, op, %{attempts: []}).attempts), state}
-
-  defp read(:keys, state), do: {:reply, state.order, state}
 
   defp read({:entries, filter}, state) do
     entries =

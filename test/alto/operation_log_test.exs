@@ -28,7 +28,7 @@ defmodule Alto.OperationLogTest do
     assert {:error, :ledger_full} =
              OperationLog.retain(ledger, "cell", "internal", %{}, "init", %{})
 
-    assert OperationLog.keys(ledger) == []
+    assert OperationLog.entries(ledger) == []
   end
 
   defp start_ledger!(opts) do
