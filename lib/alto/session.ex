@@ -8,8 +8,8 @@ defmodule Alto.Session do
   small JSON envelopes; arbitrary Elixir terms (event data, outcomes, outputs)
   travel as base64 `term_to_binary` payloads so the durable log is exact —
   exactness is recovered from here, never from the lossy front-end wire. The
-  `<id>.transcript.json` head selects an immutable conversation revision; the
-  transcript stays outside the event log so listing and reading sessions stays cheap.
+  `<id>.transcript.json` atomically holds the latest conversation revision;
+  older revisions are archived separately so listing sessions stays cheap.
 
   Session identity is random (`sess-…`) and validated on every entry point,
   so a hostile or mistyped id cannot escape the sessions directory. Credential
@@ -98,7 +98,7 @@ defmodule Alto.Session do
          {:ok, line} <- encode_line(record) do
       path = log_path(dir(opts), id)
 
-      Alto.Storage.with_lock(lock_path(path), fn ->
+      with_lock(id, opts, fn ->
         with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
              :ok <- Alto.Storage.ensure_private_file(path),
              :ok <- Alto.DurableLog.append(path, line) do
@@ -108,6 +108,11 @@ defmodule Alto.Session do
         end
       end)
     end
+  end
+
+  @doc false
+  def with_lock(id, opts, fun) when is_function(fun, 0) do
+    Alto.Storage.with_lock(Path.join(dir(opts), id <> ".lock"), fun)
   end
 
   @doc "Persist a safe settled boundary and return its new immutable revision."
@@ -489,7 +494,6 @@ defmodule Alto.Session do
 
   defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
   defp transcript_path(dir, id), do: Path.join(dir, id <> ".transcript.json")
-  defp lock_path(path), do: path <> ".lock"
 
   defp encode_line(record) do
     {:ok, JSON.encode!(record) <> "\n"}

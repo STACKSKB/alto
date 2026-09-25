@@ -9,8 +9,8 @@ merely because a test asserts it.
 ## Measure the result
 
 The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,050, down 7,605 lines (18.7%). Reaching 30% requires
-at most 28,458 lines, another 4,592 fewer than today. The 50% stretch target is
+2026-09-25 the count is 33,062, down 7,593 lines (18.7%). Reaching 30% requires
+at most 28,458 lines, another 4,604 fewer than today. The 50% stretch target is
 20,327 lines. Recount after each coherent change; moving code does not count.
 Test files are measured separately.
 
@@ -32,9 +32,11 @@ to inspect, not a reason to delete safeguards.
   A full-queue rewrite would turn a small lease mutation into an O(queue-size)
   synced write. SQLite is unlikely to remove much code by itself because
   transition and bound checks would remain.
-- Session events, immutable conversation revisions, and the fenced head marker
-  support different reads and crash guarantees. A missing newest revision must
-  fail closed rather than silently reveal an older transcript. Root, parent,
+- Session events and conversation revisions support different reads and crash
+  guarantees. They now share a session lock; the latest transcript and dispatch
+  fence commit atomically in one head, with older revisions archived on the next
+  write. A missing head fails closed rather than silently revealing an older
+  transcript. Root, parent,
   and child checkpoints already share the portable state codec while retaining
   different authority and resumption rules.
 - Runner outcomes differ by dispatch order, cancellation origin, approval
