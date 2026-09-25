@@ -9,8 +9,8 @@ merely because a test asserts it.
 ## Measure the result
 
 The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,094, down 7,561 lines (18.6%). Reaching 30% requires
-at most 28,458 lines, another 4,636 fewer than today. The 50% stretch target is
+2026-09-25 the count is 33,093, down 7,562 lines (18.6%). Reaching 30% requires
+at most 28,458 lines, another 4,635 fewer than today. The 50% stretch target is
 20,327 lines. Recount after each coherent change; moving code does not count.
 Test files are measured separately.
 

@@ -349,8 +349,7 @@ defmodule Alto.Subagents.Continuation do
          :ok <- valid_parent(packet),
          {:ok, %{phase: :children} = snapshot} <- read(cell),
          :ok <- active(snapshot),
-         {:ok, results} <- ordered_results(snapshot.ids, snapshot.packet["children"]),
-         snapshot <- Map.put(snapshot, :results, results),
+         {:ok, _results} <- ordered_results(snapshot.ids, snapshot.packet["children"]),
          true <- not is_nil(snapshot.parent) and snapshot.revision == expected_revision,
          replacement <- %{
            "phase" => "ready",
