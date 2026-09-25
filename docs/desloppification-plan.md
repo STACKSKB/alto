@@ -10,8 +10,8 @@ preserve an incidental behavior merely because a test asserts it.
 ## Measure the result
 
 The baseline is 40,655 physical lines in production `.ex` files. On
-2026-09-25 the count is 33,063, down 7,592 lines (18.7%). Reaching 30% requires
-at most 28,458 lines, another 4,605 fewer than today. The 50% stretch target is
+2026-09-25 the count is 33,064, down 7,591 lines (18.7%). Reaching 30% requires
+at most 28,458 lines, another 4,606 fewer than today. The 50% stretch target is
 20,327 lines. Recount after each coherent change; moving code does not count.
 Test files are measured separately.
 
@@ -48,6 +48,10 @@ to inspect, not a reason to delete safeguards.
   Selection geometry also drives mouse hit tests. Backend-specific Codex and
   native adapters share display projection where their contracts agree; the
   remaining protocol and task-lifecycle branches have different semantics.
+- Replacing selection's text frame with `CellSession.take_cells/1` might remove
+  45–70 lines of Unicode indexing, but a local 200×60 capture probe took about
+  7 ms for cells versus 1 ms for the current text export. The interactive
+  mouse-down path needs measured end-to-end improvement before that rewrite.
 - CLI run/serve setup, JSON-RPC framing, provider HTTP/SSE envelopes, and
   workspace path checks have already been consolidated at their shared
   boundaries. Their remaining branches often enforce different authority,
