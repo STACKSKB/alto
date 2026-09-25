@@ -1,246 +1,75 @@
 # Desloppification plan
 
-Alto is still at `0.0.1`. Internal storage formats may change without migration,
-but every current capability remains in scope, including features enabled only
-through external configuration. The goal is less production code with clearer
-data flow, not a smaller product.
+Alto is at `0.0.1`. Internal formats may break without migration, but preserve
+every current capability, including Ripwire, FFF, webhooks, and other features
+enabled only by external configuration. Prefer a tiny composable core with
+explicit ownership of state and effects. Do not preserve an incidental behavior
+merely because a test asserts it.
 
 ## Measure the result
 
-The starting inventory was 40,655 physical lines in production `.ex` files.
-The 2026-09-25 inventory is 33,094 lines, a reduction of 7,561 (18.6%). A 30%
-reduction would require at most 28,458 lines, or another 4,636 lines below the
-current inventory. Test files are tracked separately and never count toward
-that production target. A 50% stretch would require at most 20,327 lines.
-Recount after each coherent change; a moved line is not a reduction.
+The baseline is 40,655 physical lines in production `.ex` files. On
+2026-09-25 the count is 33,094, down 7,561 lines (18.6%). Reaching 30% requires
+at most 28,458 lines, another 4,636 fewer than today. The 50% stretch target is
+20,327 lines. Recount after each coherent change; moving code does not count.
+Test files are measured separately.
 
-The largest remaining files are `Alto.TUI.App` (1,718),
-`Alto.Runner.Execution` (1,323), `Alto.Queue` (1,054),
-`Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
-`Alto.TUI.Backends.Codex` (855), and `Alto.OperationLog` (847). Their size identifies
-where to investigate, not what to delete. Focused audits found that many
-apparently similar branches differ in authority, cancellation, event ordering,
-or recovery guarantees; extracting a helper just to reduce line count can make
-those rules harder to see.
+The largest files are `Alto.TUI.App` (1,718), `Alto.Runner.Execution` (1,323),
+`Alto.Queue` (1,054), `Alto.FrontEnd.Registry` (961), `Alto.TUI.View` (890),
+`Alto.TUI.Backends.Codex` (855), and `Alto.OperationLog` (847). Size marks a place
+to inspect, not a reason to delete safeguards.
 
-The current audit found no removable run-context fields. In particular,
-`agent_identity` appears in both the live tool context and the checkpoint state
-because checkpoint packets must retain that portable identity without
-serializing the tool context's live metadata. The workspace tool tests cover
-different host, runner, and approval boundaries even when their inputs look
-similar. Git inspection and isolated-workspace Git execution have different
-command authority and environment isolation. Keep these boundaries explicit;
-the next reduction should come from a complete data-flow redesign, not from
-removing one side of such a pair.
+## Boundaries established by the audit
 
-The session event log and immutable conversation revisions also serve different
-reads; the transcript sidecar is the current revision head, not an obsolete
-second copy. The Git workspace's source-tree check, checkout-size check, and
-staged-workspace check enforce different safety rules. Provider adapter tests
-that look similar inspect different wire contracts. These seams need a new
-shared contract to shrink; line-by-line helper extraction would only relocate
-policy.
+- Queue and operation ledger already share durable file operations and each
+  applies the same transition during live writes and replay. Queue business-key
+  upsert, source admission, recovery, lease, and tombstone rules are distinct.
+  A full-queue rewrite would turn a small lease mutation into an O(queue-size)
+  synced write. SQLite is unlikely to remove much code by itself because
+  transition and bound checks would remain.
+- Session events, immutable conversation revisions, and the fenced head marker
+  support different reads and crash guarantees. A missing newest revision must
+  fail closed rather than silently reveal an older transcript. Root, parent,
+  and child checkpoints already share the portable state codec while retaining
+  different authority and resumption rules.
+- Runner outcomes differ by dispatch order, cancellation origin, approval
+  fencing, provider correlation, and retained child completion. Two complete
+  effect-flow audits found no safe local extraction of 100 lines. A replacement
+  should simplify the whole flow, not add an outcome adapter around it.
+- TUI task entries need per-task state for concurrent streaming and navigation.
+  Selection geometry also drives mouse hit tests. Backend-specific Codex and
+  native adapters share display projection where their contracts agree; the
+  remaining protocol and task-lifecycle branches have different semantics.
+- CLI run/serve setup, JSON-RPC framing, provider HTTP/SSE envelopes, and
+  workspace path checks have already been consolidated at their shared
+  boundaries. Their remaining branches often enforce different authority,
+  wire, recovery, or output contracts.
 
-The queue and operation ledger already share durable file operations and each
-uses its own transition function for live writes and replay. A queue lease log
-stores only the changed lease fields; replacing it with a full record would
-increase write volume, and a naive replacement would lose the replay check
-that the record already exists.
-The Codex and MCP clients likewise share JSON-RPC framing and request tracking.
-The next durable-state cut must change the state representation or API shape,
-not repeat those existing extractions. A whole-queue snapshot per mutation would
-turn a small lease write into a write of the entire bounded queue; prototype a
-transactional record store only if it keeps per-mutation work bounded. A
-synthetic 10,000-record queue with 2 KiB payloads produced a 20.6 MB whole-state
-snapshot. Five synced rewrites took 33–37 ms each, versus under 0.2 ms for a
-small synced lease record on the same machine. That rules out whole-state
-rewrites as the default mutation path; it is not a production benchmark.
-Replacing Queue and OperationLog JSONL with SQLite is also a poor standalone
-route to the 30% target. Their 1,913 combined lines contain roughly 420 lines
-of clear replay, append, and compaction machinery; a shared transactional
-adapter, schema, and bounds handling would consume much of that saving. The
-lease, ordering, deduplication, revision, and checkpoint transitions would
-remain. Pre-release files would need no migration, but dropping that work does
-not make a 1,000-line net cut plausible from these two modules alone.
+## Next work
 
-The TUI now uses one state transition to select the model when a backend is
-chosen, whether selection came from opening a task or switching its backend.
-The catalog recovery flow warns and asks before replacing invalid data; the
-reported on-disk catalog now validates, and the TUI recovery tests pass.
+1. **Replace a complete state representation.** Trace queue, ledger, session,
+   and continuation records from command through replay and recovery. Prototype
+   one smaller representation with bounded mutation work and one live/replay
+   transition. Corrupt or partial current records must still be observable and
+   safe; old pre-release formats need no compatibility path.
+2. **Simplify runner effects end to end.** Map the owner and reader of each run
+   field and each outcome shape. Try one internal outcome contract spanning
+   interpretation, tool completion, event dispatch, and scheduling. Compare the
+   complete runner group before keeping it. Preserve append-before-dispatch,
+   provider call counts, batch order, cancellation origin, and approval fences.
+3. **Simplify TUI state and view together.** Search for state derived twice or
+   retained by two owners across app, state, view, and backends. Keep catalog
+   recovery, backend selection, approval, clipboard, and selection behavior.
+   Reject abstractions that merely move branches or slow interactive input.
+4. **Prune tests by behavioral value.** Remove constructor echoes, language or
+   library demonstrations, and superseded scenarios covered by a stronger
+   integration test. Keep cases that distinguish Alto behavior at malformed
+   input, authority, cancellation, concurrency, or corruption boundaries.
+   Resource-sensitive integration suites now run serially after intermittent
+   full-suite failures; their behavioral assertions remain.
 
-The CLI already shares one-shot and served-run provider/tool/prompt setup;
-their remaining approval, persistence, and output paths have different owners.
-The front-end registry likewise centralizes run completion, approval cleanup,
-and guarded queue calls. Folding its distinct read projections into another
-layer would add indirection without a useful reduction.
-The consumer's repeated lifecycle and option prose was condensed by 39 lines;
-that improves the source inventory but does not shrink executable code.
-The shared provider stream envelope now owns the response-byte limit for both
-OpenAI-compatible and Anthropic adapters. Decoder-local counters duplicated
-that guard and were removed; transport-level bounds still cover SSE, raw JSON,
-and HTTP error bodies.
-Model-catalog GETs and provider streams now share request-option assembly;
-extension options cannot replace their response callbacks or timeout guards.
-Network integration tests now run serially after parallel full-suite runs
-exposed socket timeouts; their behavioral assertions are unchanged.
-The separate Chat loop was a 33-line wrapper around Default. `chat_loop/1`
-now configures Default's tool-free mode directly; both full suites pass.
-The superseded Chat checkpoint assertions were removed. Codex history and live
-completed items now share one entry projection; queue, workspace, and provider
-validation also pass through errors without separate forwarding branches.
-The operation ledger now performs room planning inside its live/replay transition.
-Codex approval methods share one descriptor for labels and response shapes.
-Immutable conversation entries use a smaller v2 record: entry IDs are derived
-from session and revision, and retries compare decoded entries. A storage-test
-audit retained cases that distinguish live state, persisted state, and recovery.
-The registry's repeated option and contract prose was condensed by 48 source
-lines; this improves navigation but does not reduce executable code.
-The catalog now shares capacity-checked append and required-field validation
-between projects and tasks, reducing production code by 13 lines. A malformed
-task still blocks mutation until the caller explicitly replaces the catalog;
-the TUI warning and confirmation path remains covered. CLI key prompting now
-states its saved-key, empty-key, and new-key outcomes directly.
-
-The latest runner outcome prototype increased production code by two lines
-after formatting and left the branches intact, so it was discarded. A CLI
-mode-parameterized setup would likewise add branches around genuinely
-different terminal, listener, approval, and onboarding behavior. The TUI
-selection renderer cannot simply switch to full cell snapshots: that exports
-every cell at drag start and still leaves wide-glyph widths ambiguous. The
-large TUI app, provider, and workspace-tool test suites were checked for
-tautologies; their similar scenarios cover distinct boundaries. These findings
-rule out repeating those local helper extractions as a route to 30%.
-Further runner/front-end and TUI audits found no credible 150–200-line local
-extraction: root, parent, and child checkpoints already share serialization,
-while their remaining branches bind different authority; replacing the TUI's
-compact text index with exported cell maps would reintroduce a visible pause
-when starting a selection. A clone scan found no other long identical blocks
-outside a few small tool wrappers. Larger gains require replacing a whole
-representation or dropping an incidental policy, not shuffling helpers.
-An additional effect-flow prototype increased code after formatting, and a
-TUI navigation prototype did the same; both were reverted. The remaining
-model, tool-batch, and scheduler branches account for different event order,
-admission, cancellation, and replay responsibilities. Treat a claimed
-200-line runner cut as unproven until an end-to-end replacement is smaller.
-A new audit measured the runner group at 5,366 lines and found that singleton
-and batch outcomes still require distinct dispatch order. TUI modal and
-approval consolidation likewise added indirection without a net cut; no edits
-were kept from those probes.
-The TaskHost lifecycle audit likewise found no safe local cut: host and
-subscriber monitors, waiter timers, and capacity cleanup cover separate crash
-and cancellation paths. No TaskHost edits were made.
-Display output now uses Alto's shared UTF-8 byte truncator. Its previous
-grapheme-based clipping could exceed the advertised byte bound; the old
-multibyte test had asserted that accidental behavior and now checks the actual
-limit. A focused audit of context, codec, loop, and small provider tests found
-no full case that merely measured Elixir or library behavior; apparent overlaps
-covered different Alto limits or failure boundaries.
-The coding prompt builder now derives its two fragments directly from tool
-names instead of allocating an intermediate capability map. A direct test that
-only observed a prompt function returning its own literal construction was
-removed; the checkpoint integration test already proves callback invocation,
-system-message delivery, and no callback replay after resume. A separate TUI
-view audit found its three settings-width layouts and hit rectangles carry
-different presentation rules, so no view consolidation was kept.
-FFF's three declarative tool schemas now share their paging and content-search
-fields. This keeps the configured limits aligned while retaining every tool;
-the MCP integration test covers all three calls. Ripwire's action-specific
-flags and the webhook's separate run/enqueue admission paths carry distinct
-behavior, so this pass did not fold them into a generic adapter.
-Codex TUI history loading now has one eligibility gate for the selected
-backend, thread identity, empty transcript, in-flight dedupe, and live client.
-Operator listing now validates once and accumulates queue pages through one
-path; ledger precedence remains explicit. Audits of storage, prompt, example,
-and small context tests found no whole cases that merely assert a fixture or
-standard-library result. Their similar cases cover distinct publication,
-recovery, authority, or API boundaries. The CLI run/serve option pipeline was
-also already shared; its remaining approval and session rules differ.
-Fork preflight now reuses the conversation module's summary and storage-limit
-rules before branch records are created. The immutable revision files and
-mutable fenced head remain separate because they support branch fetch and
-crash-safe resume respectively. A subagent constructor test that echoed its
-own options and checked an isolated capacity rejection was removed; batch
-integration tests exercise actual child concurrency and admission.
-The isolated usage test equating the zero-value constructor with its nil
-fallback was removed; the remaining accounting tests cover provider fields,
-cache rates, cumulative totals, and explicit zero values. The repository-wide
-formatter check now passes.
-Subagent batch cancellation now accumulates skipped outcomes directly and calls
-the runner's cancellation callbacks without forwarding helpers. The scheduling
-loop, one shared drain deadline, and result ordering remain unchanged. Fresh
-audits of the protocol/listener boundary, queue, Git/search/edit tools, and
-several test suites found no substantial deletion that preserved their distinct
-wire, durability, safety, or regression contracts; these files were left intact.
-Tests aimed only at rejecting old internal queue, ledger, and checkpoint
-versions were removed; malformed current records and live recovery remain
-covered. A standalone first-request prefix diagnostic test was removed because
-the provider integration test already checks that result and its privacy
-boundary.
-
-A prototype made numbered conversation revisions their own head and removed
-the mutable pointer, but a missing newest revision then silently exposed an
-older transcript that could replay dispatched work. The prototype was
-reverted. Using the session event log as the pointer would require publish
-markers, shared locks, private record projection, and a log-bound redesign;
-it would add code and make resume scan the log. Keep an independent monotonic
-head marker unless a replacement can fail closed on missing current state.
-Live and restored tool results now share one completed-row formatter; read-file
-results still hide raw content in the terminal. CLI prompt selection is one
-decision instead of three one-use helpers. Both full suites pass.
-The attempted checkpoint/continuation and TUI-render projection audits found
-distinct durable phases and already-shared geometry, so they made no edits.
-The outcome class type now lives with its only consumer, the operation ledger;
-the empty `Effect.Outcome` module was removed. A TUI assertion that checked
-UTF-8 validity immediately after asserting the exact Unicode result was
-removed. A broader audit found no other safe deletions among small tests:
-their assertions cover Alto's effects, bounds, masking, and recovery behavior.
-The provider subtree already shares HTTP setup, SSE framing, and request
-envelopes; Anthropic and OpenAI streams retain distinct wire state. TUI task
-entries support concurrent streaming and navigation, so their storage cannot
-be collapsed within `State` and `Transcript` alone.
-
-## Next passes
-
-1. **Durable state machines.** Compare queue, operation ledger, session, and
-   continuation code at the record/transition boundary. Consolidate only
-   genuinely shared framing, validation, or atomic persistence. The approved
-   native v2 formats need no v1 compatibility path, but corrupt or partially
-   written current records must remain observable and safe. A transition
-   should have one live and replay implementation. The next prototype must
-   replace a complete representation or storage path, not another small
-   wrapper around the existing log operations. Do not swap the current logs
-   for SQLite solely to improve the source line count.
-2. **Runner state and effect flow.** The clearest remaining duplication is the
-   untyped outcome protocol between effect interpretation, tool completion,
-   event dispatch, and the scheduler: several tuple shapes carry the run,
-   events, failure or cancellation, and a pending approval frame. Prototype one
-   internal outcome type at that boundary, then compare the entire runner
-   module group before adopting it. Preserve append-before-dispatch, provider
-   call counts, batch event ordering, approval checkpoint fencing, and the
-   origin of cancellation. Map run-context fields to their owners and readers
-   as part of that prototype. Reject a design that merely relocates the
-   existing map or adds adapters without shrinking the complete flow; a local
-   `finish_effect` normalization already failed that test.
-3. **TUI state flow.** Keep catalog recovery, backend selection, approval,
-   clipboard, and selection capabilities. Look for state that the app stores
-   twice or re-derives on every event; move pure decisions to existing state or
-   view modules only when the complete TUI group shrinks and event races remain
-   testable. Do not collapse view geometry that also controls mouse hit tests
-   or text selection.
-4. **Other production surfaces.** Audit CLI, listeners, tools, and providers
-   for duplicated domain policy. Prefer one validation or display boundary
-   where callers really share a contract. Preserve externally configured
-   Ripwire, FFF, webhook, and other adapters even if no default config uses them.
-5. **Tests.** Remove tests that restate a constructor, the language, or a
-   library operation, and duplicate scenarios superseded by a stronger
-   integration test. Keep tests that establish Alto's behavior under malformed
-   input, cancellation, concurrency, data corruption, or authority checks.
-   Review the assertion and the behavior it protects, rather than deleting a
-   test solely because it is short.
-
-For each pass: state the capability and the behavior worth retaining, make one
-cohesive edit, run focused tests and both full suites when the change crosses
-a shared boundary, then compare
-production and test line counts. If a proposed abstraction does not improve
-readability and reduce net production code, revert it. The 30% figure is a
-baseline for the refactor, not a reason to erase useful safeguards or capabilities.
+For each pass, name the capability and its desired behavior, make one coherent
+edit, run focused tests, formatter, and the affected full suites, then compare
+production and test lines. Revert prototypes that add indirection without
+reducing the complete flow. The line target does not justify erasing current
+capabilities or useful safety checks.
