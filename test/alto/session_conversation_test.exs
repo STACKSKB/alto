@@ -319,15 +319,15 @@ defmodule Alto.SessionConversationTest do
     end
   end
 
-  test "a missing immutable head fails resume instead of returning a stale transcript", %{
+  test "a missing committed head fails resume instead of returning a stale transcript", %{
     dir: dir
   } do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     messages = [user("hello")]
     {:ok, _} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
-    File.rm!(Path.join([dir, "conversations", id, "revision-1.json"]))
+    File.rm!(Path.join(dir, id <> ".transcript.json"))
 
-    assert {:error, {:session_read_failed, {:conversation_revision_not_found, ^id, 1}}} =
+    assert {:error, {:session_corrupt, ^id, :transcript}} =
              Session.transcript(id, session_dir: dir)
   end
 end

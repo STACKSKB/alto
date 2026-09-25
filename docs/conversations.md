@@ -1,10 +1,10 @@
 # Conversation revisions and branches
 
-The `<session>.transcript.json` head stores the current revision and its dispatch
-fence in one atomic record. Each transcript update first writes an immutable
-revision under `conversations/<session>/`, linked to the revision it followed,
-then advances the head and clears the resolved fence. An interrupted head update
-leaves the prior fence intact. Obsolete head formats are rejected.
+The `<session>.transcript.json` head stores the latest transcript and its dispatch
+fence in one atomic record. Each transcript update archives the previous head as
+an immutable revision under `conversations/<session>/`, then commits the new head
+with its fence cleared. An interrupted head update leaves the prior fence intact;
+the archive write can be retried. Obsolete head formats are rejected.
 
 `Alto.Session.persist_settled/4` records a complete provider-history boundary.
 It rejects unanswered assistant tool calls, orphan tool replies, stale

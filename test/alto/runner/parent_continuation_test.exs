@@ -148,8 +148,8 @@ defmodule Alto.Runner.ParentContinuationTest do
   end
 
   defp only_cell!(parent) do
-    [key] = OperationLog.keys(parent)
-    {:ok, entry} = OperationLog.recovery(parent, key)
+    [entry] = OperationLog.entries(parent)
+    key = entry.operation_key
     identity = %{"key" => key, "generation" => entry.recovery["generation"]}
     {:ok, cell} = Continuation.restore(parent, identity)
     {cell, identity}

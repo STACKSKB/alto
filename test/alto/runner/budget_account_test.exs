@@ -123,7 +123,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert {:error, _reason} =
              Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
 
-    assert OperationLog.keys(ledger) == ["first"]
+    assert [%{operation_key: "first"}] = OperationLog.entries(ledger)
   end
 
   test "a stopped ledger denies reservations", %{ledger: ledger} do
