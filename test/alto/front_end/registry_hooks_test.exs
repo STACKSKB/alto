@@ -1,5 +1,5 @@
 defmodule Alto.FrontEnd.RegistryHooksTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.FrontEnd.Registry
   alias Alto.Protocol

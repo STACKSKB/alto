@@ -1,5 +1,5 @@
 defmodule Alto.Tools.RunCommandTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alto.Tool.Context
   alias Alto.Tools.RunCommand
