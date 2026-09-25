@@ -256,7 +256,7 @@ defmodule Alto.Runner.SerialCompactionTest do
     refute Enum.any?(result.events, &(&1.type == :context_compacted))
   end
 
-  test "the compatibility default still permits one compaction", %{dir: dir} do
+  test "the default permits one compaction", %{dir: dir} do
     assert {:error, {:transcript_limit, 400}, result} =
              Alto.run("go",
                provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},

@@ -34,12 +34,18 @@ defmodule Alto.OperationLog do
   defstruct @enforce_keys ++ [:lock, ops: %{}, order: []]
 
   @type op_key :: String.t()
+  @type outcome_class ::
+          :completed
+          | :rejected_before_dispatch
+          | :failed_known
+          | :unknown
+          | :requires_operator
   @type status ::
           :no_intent
           | {:intended}
           | {:dispatched, String.t()}
           | {:checkpointed, map(), String.t()}
-          | {:decided, Alto.Effect.Outcome.class(), map()}
+          | {:decided, outcome_class(), map()}
 
   ## Client API
 
@@ -111,7 +117,7 @@ defmodule Alto.OperationLog do
           GenServer.server(),
           op_key(),
           String.t(),
-          Alto.Effect.Outcome.class(),
+          outcome_class(),
           map()
         ) ::
           :ok | {:error, term()}

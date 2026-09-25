@@ -232,7 +232,6 @@ defmodule Alto.TUI.WorkspaceFormTest do
     form = WorkspaceForm.new(root) |> WorkspaceForm.paste("猫")
     {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(form) == root <> "/猫"
-    assert String.valid?(WorkspaceForm.path(form))
     form = WorkspaceForm.new(root) |> WorkspaceForm.paste("new-folder")
     {:edit, form} = WorkspaceForm.key(form, %Key{code: "tab"})
     assert WorkspaceForm.path(form) == "new-folder"
