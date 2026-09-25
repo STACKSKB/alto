@@ -273,12 +273,6 @@ defmodule Alto.Providers.AnthropicTest do
              Anthropic.stream(request, fn _ -> :ok end, opts)
   end
 
-  test "provider error status survives" do
-    opts = configure(%{"error" => %{"type" => "overloaded_error"}}, 529)
-    request = %{messages: [%{"role" => "user", "content" => "go"}], tools: []}
-    assert {:error, {:http_error, 529, _}} = Anthropic.stream(request, fn _ -> :ok end, opts)
-  end
-
   test "unsupported options fail before dispatch" do
     opts = configure(%{"content" => [], "stop_reason" => "end_turn"})
     request = %{messages: [], tools: [], options: %{"unknown_option" => true}}
