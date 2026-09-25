@@ -540,8 +540,19 @@ defmodule Alto.Runner.Execution do
 
   defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
     with {:ok, specs, concurrency} <- Children.validate_batch(data, run),
-         {:ok, status, outcomes, journal, run} <-
-           Children.run_children(specs, concurrency, run) do
+         {:ok, results, journal, run} <- spawn_agents(specs, concurrency, run) do
+      batch_completed(results, run, journal)
+    else
+      {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
+      {:cancelled, reason} -> {:cancelled, reason, run}
+      other -> other
+    end
+  end
+
+  defp interpret(%Effect{} = effect, run), do: {:error, {:unknown_effect, effect.kind}, run}
+
+  defp spawn_agents(specs, concurrency, run) do
+    with {:ok, status, outcomes, journal, run} <- Children.run_children(specs, concurrency, run) do
       {results, run} =
         Enum.map_reduce(outcomes, run, fn {id, outcome}, acc ->
           summary = Children.child_summary(id, outcome)
@@ -549,7 +560,7 @@ defmodule Alto.Runner.Execution do
         end)
 
       case status do
-        :ok -> batch_completed(results, run, journal)
+        :ok -> {:ok, results, journal, run}
         {:cancelled, reason} -> {:cancelled, reason, run}
         {:error, reason} -> {:error, reason, run}
       end
@@ -559,8 +570,6 @@ defmodule Alto.Runner.Execution do
       {:cancelled, reason} -> {:cancelled, reason, run}
     end
   end
-
-  defp interpret(%Effect{} = effect, run), do: {:error, {:unknown_effect, effect.kind}, run}
 
   defp request_context(request, run) do
     case Map.fetch(request, :context_message) do
@@ -828,7 +837,8 @@ defmodule Alto.Runner.Execution do
          {:ok, tool} <- fetch_tool(run.tools, job.name),
          :ok <- check_model_exposure(job.name, origin, run),
          {:ok, prepared, details} <-
-           Alto.Runner.Execution.Tool.prepare(tool, arguments, run) do
+           Alto.Runner.Execution.Tool.prepare(tool, arguments, run),
+         {:ok, prepared} <- prepare_agent_tool(tool, prepared, run) do
       {:ok,
        Map.merge(job, %{
          arguments: arguments,
@@ -841,6 +851,11 @@ defmodule Alto.Runner.Execution do
       {:error, reason} -> {:error, reason, job}
     end
   end
+
+  defp prepare_agent_tool(%{module: Alto.Tools.SpawnAgents, opts: opts}, prepared, run),
+    do: Alto.Subagents.Models.prepare(prepared, run, opts)
+
+  defp prepare_agent_tool(_tool, prepared, _run), do: {:ok, prepared}
 
   defp tool_arguments(call, :json), do: decode_arguments(Map.get(call, :arguments_json, "{}"))
 
@@ -888,18 +903,7 @@ defmodule Alto.Runner.Execution do
 
     with :continue <- Call.cancellation(run.cancel_ref),
          {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
-      Enum.each(ready, fn job ->
-        Alto.Events.notify(
-          run.event_sink,
-          Event.live(:tool_started, %{
-            call_id: job.id,
-            operation_id: job.op_id,
-            run_id: run.tool_context.session_id,
-            name: job.name,
-            summary: job.summary
-          })
-        )
-      end)
+      Enum.each(ready, &notify_tool_started(&1, run))
 
       response = Alto.Runner.ToolBatch.run(Enum.map(ready, &{&1.tool, &1.prepared}), run)
 
@@ -993,6 +997,81 @@ defmodule Alto.Runner.Execution do
 
       {:error, reason} ->
         {:done, {:error, reason, result(run, nil, :error)}}
+    end
+  end
+
+  defp notify_tool_started(job, run) do
+    Alto.Events.notify(
+      run.event_sink,
+      Event.live(:tool_started, %{
+        call_id: job.id,
+        operation_id: job.op_id,
+        run_id: run.tool_context.session_id,
+        name: job.name,
+        summary: job.summary
+      })
+    )
+  end
+
+  defp dispatch_tool_job(%{tool: %{module: Alto.Tools.ListAgentModels, opts: opts}} = job, run) do
+    with :continue <- Call.cancellation(run.cancel_ref),
+         {:ok, run} <- History.dispatch(run, [job.op_id]) do
+      notify_tool_started(job, run)
+
+      case Call.run(
+             fn -> Alto.Subagents.Models.list(job.prepared, run, opts) end,
+             Budget.timeout(run.budget, run.tool_timeout),
+             run.cancel_ref
+           ) do
+        {:ok, {:ok, value}} ->
+          outcome =
+            case Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes) do
+              :ok -> {:ok, value}
+              {:error, reason} -> {:error, reason}
+            end
+
+          finish_tool_job(job, {:ok, outcome}, run)
+
+        {:cancelled, reason} ->
+          {:cancelled, reason, run}
+
+        other ->
+          finish_tool_job(job, other, run)
+      end
+    else
+      {:cancelled, reason} -> {:cancelled, reason, run}
+      other -> other
+    end
+  end
+
+  defp dispatch_tool_job(%{tool: %{module: Alto.Tools.SpawnAgents}} = job, run) do
+    with {:ok, specs, concurrency} <- Children.validate_batch(job.prepared, run),
+         :continue <- Call.cancellation(run.cancel_ref),
+         {:ok, run} <- History.dispatch(run, [job.op_id]) do
+      notify_tool_started(job, run)
+
+      case spawn_agents(specs, concurrency, run) do
+        {:ok, results, journal, next} ->
+          value = Children.with_journal(%{results: results}, journal)
+
+          outcome =
+            case Alto.Runner.Execution.Tool.check_native_result(value, next.max_tool_result_bytes) do
+              :ok -> {:ok, value}
+              {:error, reason} -> {:unknown, reason}
+            end
+
+          finish_tool_job(job, {:ok, outcome}, next)
+
+        {:error, reason, next} ->
+          finish_tool_job(job, {:error, reason}, next)
+
+        {:cancelled, reason, next} ->
+          {:cancelled, reason, next}
+      end
+    else
+      {:error, reason} -> finish_tool_job(job, {:rejected, reason}, run)
+      {:cancelled, reason} -> {:cancelled, reason, run}
+      {:error, reason, next} -> {:error, reason, next}
     end
   end
 

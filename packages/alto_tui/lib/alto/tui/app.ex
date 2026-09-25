@@ -680,13 +680,14 @@ defmodule Alto.TUI.App do
       opts =
         state.run_options
         |> Keyword.drop([
-          :provider_profiles,
           :tui,
           :listeners,
           :queue,
           :runs,
           :sessions
         ])
+        |> Keyword.put(:provider_profiles, state.profiles)
+        |> Keyword.put(:credentials_path, state.credentials_path)
         |> Keyword.put(:approval, approval)
         |> Keyword.put(:cwd, project["root"])
 

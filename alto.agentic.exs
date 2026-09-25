@@ -77,6 +77,29 @@ ripwire_tools =
       [{Alto.Tools.Ripwire, executable: executable, executor: external_executor.(executable)}]
   end
 
+codex_agent =
+  {Alto.Tools.CodexAgent,
+   command: System.get_env("CODEX_BIN") || "codex", model: System.get_env("ALTO_CODEX_MODEL")}
+
+tools =
+  [
+    Alto.Tools.ListFiles,
+    Alto.Tools.ReadFile,
+    Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
+    Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
+    {Alto.Tools.GitInspect, executor: command_executor},
+    # Git mutation is a distinct, explicitly approved capability.
+    {Alto.Tools.GitMutate,
+     executor:
+       {Alto.Command.Executors.Bubblewrap,
+        Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
+    {Alto.Tools.RunCommand, executor: command_executor}
+  ] ++
+    if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++
+    fff_tools ++
+    ripwire_tools ++
+    [codex_agent] ++ Alto.Tools.agents()
+
 Alto.Config.new(
   provider_profiles: [
     [
@@ -91,23 +114,23 @@ Alto.Config.new(
   loop:
     Alto.default_loop(
       tool_execution: {:parallel, 4},
+      subagents:
+        Alto.Subagents.bounded(
+          max_depth: 1,
+          max_children: 4,
+          max_concurrency: 2,
+          sessions: :separate
+        ),
       context:
         Alto.Context.Window.new(compact_at: 0.85, reserve_output: 4_096, usage_estimation: true)
     ),
-  tools:
-    [
-      Alto.Tools.ListFiles,
-      Alto.Tools.ReadFile,
-      Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
-      Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
-      {Alto.Tools.GitInspect, executor: command_executor},
-      # Git mutation is a distinct, explicitly approved capability.
-      {Alto.Tools.GitMutate,
-       executor:
-         {Alto.Command.Executors.Bubblewrap,
-          Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
-      {Alto.Tools.RunCommand, executor: command_executor}
-    ] ++ if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++ fff_tools ++ ripwire_tools,
+  tools: tools,
+  model_tools:
+    Enum.map(tools -- [codex_agent], fn
+      {module, opts} -> module.name(opts)
+      module -> module.name([])
+    end),
+  tool_timeout: 120_000,
   tui_backends: [
     alto: {Alto.TUI.Backends.Native, label: "Alto native"},
     codex:

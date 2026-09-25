@@ -1,5 +1,83 @@
 # Alto subagents
 
+## Model-selected agents
+
+Add the agent tools without defining agent presets:
+
+```elixir
+Alto.Tools.agents()
+```
+
+This exposes `list_agent_models` and `spawn_agents`. Backends come from the
+run's existing `provider_profiles`, or its current provider when profiles are
+omitted. The shipped `alto.agentic.exs` uses OpenRouter's model discovery and
+registers `Alto.Tools.CodexAgent`, which also makes the `codex` backend available.
+The TUI forwards its configured providers and credential-store location.
+There is no separate agent catalog or fixed list of agent roles.
+
+`list_agent_models` discovers models at call time and returns backend IDs,
+model IDs, names, and discovery errors. Optional `backend`, `query`, `offset`,
+and `limit` arguments narrow or page results (50 per page by default, at most
+100). `next_offset` is null on the last page. Provider credentials and runtime
+configuration are never included in discovery results.
+
+Create agents by selecting backend and model IDs:
+
+```json
+{"agents": [{"id": "review", "backend": "openrouter", "model": "vendor/model-id", "task": "Review lib/alto/queue.ex for race conditions. Return findings only."}]}
+```
+
+Any model ID can be requested from a configured backend by default, including
+models not returned by discovery; the provider determines whether it can serve
+that model. The model cannot choose executable paths, provider modules,
+credentials, URLs, or permissions. Each child starts with its own task rather
+than the parent's conversation, and native children inherit the parent's tool
+capabilities and model exposure. Depth, approval, shared native budgets, and
+result bounds still apply.
+
+Users can explicitly restrict models and/or tool exposure:
+
+```elixir
+Alto.Tools.agents(models: %{"openrouter" => ["vendor/model-a", "vendor/model-b"]})
+Alto.Tools.agents(only: [:spawn_agents])
+Alto.Tools.agents(only: [:list_agent_models, :spawn_agents], models: %{"codex" => ["model-id"]})
+```
+
+An explicit `models:` map advertises those model IDs without needing remote
+discovery and rejects selections outside the map, including omitted backends.
+An empty map permits no models. `only:` selects tool names; omitting it includes
+the whole agent tool set, including future additions. Individual specifications
+such as `{Alto.Tools.SpawnAgents, models: %{"openrouter" => ["vendor/model-id"]}}`
+remain usable. Communication tools are not implemented yet.
+
+The default profile permits one level of delegation, four children per batch,
+two concurrent children, and separate child sessions. `spawn_agents` waits for
+ordered results and acts as a barrier among ordinary parallel tool calls.
+Multiple delegation calls can occur in one model response. A selected model
+and backend are retained through approval checkpoint restoration, while
+provider credentials are resolved from current configuration at dispatch.
+`credentials_path:` optionally selects the provider credential store.
+
+The Codex backend runs the chosen model through a providerless rule-loop child
+and `Alto.Tools.CodexAgent`. Register the adapter in runtime `tools` and hide its
+direct invocation from parent `model_tools`, as the shipped profile does. Each
+invocation owns a private App Server process. It uses read-only filesystem
+sandboxing, disables sandbox network access, rejects permission escalation,
+and bounds its lifetime and output. Cancellation and timeout interrupt the
+turn and close the process. Model discovery also owns and closes its connection
+and follows all returned model-list pages within a bounded page allowance.
+`CODEX_BIN` selects the executable; the requested model is passed to the turn.
+
+Codex owns its internal tools and model loop. Its internal model calls are
+**not counted against Alto's native model-request budget**; reported token
+usage is returned inside its tool value. Its configured integrations remain
+part of the external runtime's capabilities. The separate Codex TUI root
+backend does not expose these native Alto tools. The adapter follows the
+[App Server lifecycle](https://learn.chatgpt.com/docs/app-server).
+
+## Trusted-loop delegation
+
+
 Subagents are requested by a trusted loop through
 `Alto.Effect.spawn_agents/1`. A single child is a one-element batch:
 
@@ -42,7 +120,9 @@ string, mixed, and unknown keys are rejected. Each entry requires `:id` and
 `:task`, with optional `:profile_key`, loop, tools, model tools, maximum steps,
 and system prompt. IDs must be unique. A named provider is resolved by the
 parent loop's `resolve_child_provider(profile_key, parent_spec)` callback on both
-initial dispatch and recovery; raw provider configuration is rejected.
+initial dispatch and recovery. Requests with a `:model` also select a configured
+backend through the host, as model-facing delegation does. Raw provider
+configuration is rejected.
 The batch preserves input order in `data.results`, even when children finish in
 a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
 `reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.

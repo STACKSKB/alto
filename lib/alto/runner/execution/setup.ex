@@ -106,6 +106,8 @@ defmodule Alto.Runner.Execution.Setup do
 
     initial = %{
       loop_state: nil,
+      provider_profiles: Keyword.get(opts, :provider_profiles),
+      credentials_path: Keyword.get(opts, :credentials_path),
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       input: Keyword.get(opts, :input),
       resolved_operations: [],

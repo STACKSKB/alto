@@ -14,6 +14,7 @@ defmodule Alto.Config do
     :loop,
     :provider,
     :provider_profiles,
+    :credentials_path,
     :tools,
     :model_tools,
     :approval,

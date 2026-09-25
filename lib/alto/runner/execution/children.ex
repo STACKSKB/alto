@@ -17,12 +17,13 @@ defmodule Alto.Runner.Execution.Children do
                   max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
                   tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
                   loop: [type: {:or, [nil, {:struct, Alto.Loop.Spec}]}, default: nil],
+                  model: [type: {:or, [nil, :string]}, default: nil],
                   profile_key: [type: {:or, [nil, :string]}, default: nil],
                   system_prompt: [type: {:or, [nil, :string]}, default: nil],
                   model_tools: [type: {:or, [nil, {:list, :any}]}, default: nil]
                 )
 
-  @inherited_options ~w(provider_retries retry_policy tool_presenter checkpoint_version
+  @inherited_options ~w(provider_profiles credentials_path provider_retries retry_policy tool_presenter checkpoint_version
                         parent_expires_at_ms approval continuation_store
                         max_approval_details_bytes max_tool_result_bytes max_transcript_bytes
                         max_events session_dir)a
@@ -56,6 +57,9 @@ defmodule Alto.Runner.Execution.Children do
 
       is_nil(spec.task) or spec.task == "" ->
         {:error, {:invalid_spawn_field, :task, spec.task}}
+
+      is_binary(spec.model) and byte_size(spec.model) not in 1..256 ->
+        {:error, {:invalid_spawn_field, :model, spec.model}}
 
       is_binary(spec.profile_key) and byte_size(spec.profile_key) not in 1..256 ->
         {:error, {:invalid_spawn_field, :profile_key, spec.profile_key}}
@@ -384,6 +388,11 @@ defmodule Alto.Runner.Execution.Children do
   defp checkpoint_profile(spec),
     do: Map.drop(spec, [:workspace_assignment, :subagent_ticket, :resume_data])
 
+  defp resolve_child_provider(%{profile_key: key, model: model}, run)
+       when is_binary(key) and is_binary(model) do
+    resolve_provider(fn -> Alto.Subagents.Models.provider(key, model, run) end, run)
+  end
+
   defp resolve_child_provider(%{profile_key: nil}, run), do: {:ok, run.provider}
 
   defp resolve_child_provider(%{profile_key: key}, run) when is_binary(key) do
@@ -394,29 +403,36 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   defp resolve_named_provider(key, run) do
-    driver = run.spec.driver
+    resolve_provider(
+      fn ->
+        driver = run.spec.driver
 
-    if function_exported?(driver, :resolve_child_provider, 2) do
-      case Alto.Runner.Execution.Call.run(
-             fn -> driver.resolve_child_provider(key, run.spec) end,
-             Budget.timeout(run.budget, 30_000),
-             run.cancel_ref
-           ) do
-        {:ok, {:ok, provider}} ->
-          Alto.Runner.Execution.Setup.normalize_provider(provider)
+        if function_exported?(driver, :resolve_child_provider, 2),
+          do: driver.resolve_child_provider(key, run.spec),
+          else: {:error, :child_provider_resolver_required}
+      end,
+      run
+    )
+  end
 
-        {:ok, {:error, _} = error} ->
-          error
+  defp resolve_provider(resolve, run) do
+    case Alto.Runner.Execution.Call.run(
+           resolve,
+           Budget.timeout(run.budget, 30_000),
+           run.cancel_ref
+         ) do
+      {:ok, {:ok, provider}} ->
+        Alto.Runner.Execution.Setup.normalize_provider(provider)
 
-        {:cancelled, reason} ->
-          send(self(), {:alto_cancel, run.cancel_ref, reason})
-          {:error, {:cancelled, reason}}
+      {:ok, {:error, _} = error} ->
+        error
 
-        _ ->
-          {:error, :child_provider_resolution_failed}
-      end
-    else
-      {:error, :child_provider_resolver_required}
+      {:cancelled, reason} ->
+        send(self(), {:alto_cancel, run.cancel_ref, reason})
+        {:error, {:cancelled, reason}}
+
+      _ ->
+        {:error, :child_provider_resolution_failed}
     end
   end
 
