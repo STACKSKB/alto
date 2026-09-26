@@ -12,7 +12,7 @@ or a function receiving the prompt context. For example, use
 `prompt: "Answer concisely"` or `prompt: &Alto.Prompts.Coding.build/1`.
 Capture options in a closure, such as
 `prompt: &Alto.Prompts.Chat.build(&1, identity: "Answer concisely.")`.
-The CLI's `--system-prompt` and `--no-system-prompt` flags set this same option.
+CLI runs read this option from the selected `Alto.Config`.
 A resumed conversation retains its stored system message.
 
 ## Request diagnostics by composition
@@ -156,9 +156,10 @@ execution failures return errors. Command preparation resolves the requested
 program and freezes its invocation before approval.
 
 The library keeps executor selection explicit. `Alto.Command` still defaults to
-`Unsandboxed` for trusted host workflows; the CLI requires `--allow-command` for
-that authority. `--sandbox-command` and the shipped coding profile select
-Bubblewrap with networking disabled and existing `.git` metadata read-only.
+`Unsandboxed` for trusted host workflows. CLI configurations opt in by including
+`Alto.Tools.RunCommand` with the chosen executor in `tools:`. The shipped coding
+profile selects Bubblewrap with networking disabled and existing `.git` metadata
+read-only.
 Ordinary workspace files remain writable. This protects metadata, not all work
 against deletion; hosts can select `workspace: :read_only` or isolated workspaces.
 

@@ -17,8 +17,8 @@ mix deps.get
 mix alto --help
 ```
 
-The default CLI uses an OpenAI-compatible provider. Set a key and model, then
-run a task:
+The default CLI uses OpenRouter through an OpenAI-compatible provider. Set a key
+and model, then run a task:
 
 ```sh
 export ALTO_API_KEY="..."
@@ -26,17 +26,19 @@ export ALTO_MODEL="provider/model"
 mix alto "Explain this repository"
 ```
 
-For OpenRouter, use `OPENROUTER_API_KEY` and optionally
-`ALTO_BASE_URL=https://openrouter.ai/api/v1`. `--model` overrides
-`ALTO_MODEL` and saved preferences. `mix alto --setup` stores the OpenRouter
-key and model in the per-user credentials file with mode `0600`; credentials
-are never written to the workspace or session startup metadata.
+`OPENROUTER_API_KEY` is also accepted. `ALTO_MODEL` overrides the saved default.
+`mix alto --setup` stores the OpenRouter key and model in the per-user credentials
+file with mode `0600`; credentials are never written to the workspace or session
+startup metadata. Select other providers, models, transports, prompts, tools and
+limits through `mix alto --config FILE`. A configured provider is used as supplied,
+including its model and transport timeout; `provider_timeout` separately bounds
+the runner call.
 
 Build a standalone CLI with:
 
 ```sh
 mix escript.build
-./alto --model provider/model "Inspect this project"
+./alto "Inspect this project"
 ```
 
 The public source is [github.com/STACKSKB/alto](https://github.com/STACKSKB/alto).
@@ -87,22 +89,38 @@ tools, providers, and limits without exposing secrets.
 
 ## Workspace permissions and limits
 
-Listing, reading, and bounded literal search are available by default. File
-edits and whole-file writes require `--allow-write`. Command execution is
-disabled unless explicitly enabled:
+Listing, reading, and bounded literal search are available by default. Enable
+writes and commands in a trusted config file, for example `coding.exs`:
 
-```sh
-mix alto --allow-write --sandbox-command "Run the focused tests"
+```elixir
+Alto.Config.new(
+  tools: [
+    Alto.Tools.ListFiles,
+    Alto.Tools.ReadFile,
+    Alto.Tools.SearchFiles,
+    Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
+    Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
+    {Alto.Tools.RunCommand,
+     executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}}
+  ]
+)
 ```
 
-The Bubblewrap executor gives the command a writable workspace, a read-only
-runtime, a fresh temporary directory, and no network by default. With
-`--sandbox-command`, existing `.git` metadata is mounted read-only. CLI native
-file tools also protect `.git`; the coding profile
-provides a separate approved Git-mutation capability. Hosts can configure these
-policies independently (see [extension boundaries](docs/extensions.md)). Use
-`--allow-command` only for an explicitly unsandboxed executor. Alto prompts for
-mutating and command tools unless `--approve-all` is selected.
+Run it with `mix alto --config coding.exs "Run the focused tests"`. The Bubblewrap
+executor gives commands a writable workspace, a read-only runtime, a fresh
+temporary directory, and no network by default. The configuration above also
+protects `.git` from commands and native file edits. The full
+[`alto.agentic.exs`](./alto.agentic.exs) profile adds approved Git mutations and
+other coding tools.
+
+Execution settings live in `Alto.Config`: use `tools: []` to disable tools,
+`prompt: nil` to omit the system prompt, `project_instructions: nil` to skip
+workspace instructions, and `max_steps:` to bound model calls. An executor's
+`network: :inherit` enables network access; `Alto.Command.Executors.Unsandboxed`
+selects host execution. The CLI defaults to interactive approval for mutations;
+set `approval: Alto.Approvals.AllowAll` for an explicitly trusted unattended run.
+Served runs default to socket approvals and honor an explicit configured policy.
+See [extension boundaries](docs/extensions.md) for composition examples.
 
 The runner bounds model calls (`max_steps`), tool results, transcript and event
 bytes, provider and tool time, approvals, queue records, operation history,

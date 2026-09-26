@@ -83,6 +83,13 @@ defmodule Alto.CLITest do
     def start_link(_opts), do: {:error, :custom_listener_reached}
   end
 
+  defmodule CaptureListener do
+    def start_link(opts) do
+      send(Alto.CLITest, {:registry, Keyword.fetch!(opts, :registry)})
+      {:ok, self()}
+    end
+  end
+
   setup do
     root = Path.join(System.tmp_dir!(), "alto-cli-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
@@ -102,30 +109,7 @@ defmodule Alto.CLITest do
     assert {:error, "--setup requires an interactive terminal"} = Alto.CLI.run(["--setup"])
   end
 
-  test "rejects conflicting command execution modes before starting a provider" do
-    assert {:error, "choose either --allow-command or --sandbox-command, not both"} =
-             Alto.CLI.run([
-               "--no-config",
-               "--model",
-               "unused",
-               "--allow-command",
-               "--sandbox-command",
-               "task"
-             ])
-  end
-
-  test "requires sandbox mode before network inheritance can be enabled" do
-    assert {:error, "--allow-command-network requires --sandbox-command"} =
-             Alto.CLI.run([
-               "--no-config",
-               "--model",
-               "unused",
-               "--allow-command-network",
-               "task"
-             ])
-  end
-
-  test "runs without a model flag when compiled configuration supplies a provider", %{root: root} do
+  test "runs with the configured provider", %{root: root} do
     path = Path.join(root, "config.exs")
 
     File.write!(
@@ -149,7 +133,7 @@ defmodule Alto.CLITest do
              Alto.CLI.run(["--config", "unused.exs", "--no-config", "task"])
   end
 
-  test "explicit tool flags override configured tools", %{root: root} do
+  test "an explicitly empty tool list disables default tools", %{root: root} do
     path = Path.join(root, "config.exs")
 
     File.write!(
@@ -157,14 +141,14 @@ defmodule Alto.CLITest do
       """
       Alto.Config.new(
         provider: Alto.CLITest.NoToolsProvider,
-        tools: [Alto.Tools.ListFiles],
+        tools: [],
         prompt: nil
       )
       """
     )
 
     assert capture_io(fn ->
-             assert :ok = Alto.CLI.run(["--config", path, "--no-tools", "ignore tools"])
+             assert :ok = Alto.CLI.run(["--config", path, "ignore tools"])
            end) == "tool-free\n"
   end
 
@@ -205,27 +189,7 @@ defmodule Alto.CLITest do
            end) == "streamed\n"
   end
 
-  test "a model flag overrides only the configured provider's model", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      """
-      Alto.Config.new(
-        provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
-        tools: [],
-        prompt: nil
-      )
-      """
-    )
-
-    assert capture_io(fn ->
-             assert :ok =
-                      Alto.CLI.run(["--config", path, "--model", "override-model", "task"])
-           end) == "model=override-model\n"
-  end
-
-  test "a configured provider keeps its model when no model flag is given", %{root: root} do
+  test "a configured provider keeps its model", %{root: root} do
     path = Path.join(root, "config.exs")
 
     File.write!(
@@ -277,8 +241,7 @@ defmodule Alto.CLITest do
       "ALTO_API_KEY",
       "OPENROUTER_API_KEY",
       "OPENAI_API_KEY",
-      "ALTO_MODEL",
-      "ALTO_TEST_MISSING"
+      "ALTO_MODEL"
     ]
 
     previous = Map.new(names, &{&1, System.get_env(&1)})
@@ -303,77 +266,106 @@ defmodule Alto.CLITest do
         else: System.delete_env("XDG_CONFIG_HOME")
     end)
 
-    assert {:error, message} =
-             Alto.CLI.run([
-               "--no-config",
-               "--model",
-               "test-model",
-               "--api-key-env",
-               "ALTO_TEST_MISSING",
-               "model task"
-             ])
+    assert {:error, message} = Alto.CLI.run(["--no-config", "model task"])
 
     assert message =~ "OpenRouter API key required"
   end
 
-  test "a providerless server profile with a named Rule run stays alive without credentials", %{
-    root: root
-  } do
-    path = Path.join(root, "server-providerless.exs")
+  for approval <- [nil, Alto.Approvals.AllowAll] do
+    @approval approval
+    test "providerless served writes use #{approval || "socket approval by default"}", %{
+      root: root
+    } do
+      Process.register(self(), __MODULE__)
+      path = Path.join(root, "server.exs")
+      approval_option = if @approval, do: "approval: #{inspect(@approval)},", else: ""
 
-    File.write!(
-      path,
-      """
+      File.write!(path, """
       Alto.Config.new(
+        #{approval_option}
         provider: nil,
-        prompt: nil,
-        listeners: [],
-        runs: %{
-          "rule" => [
-            loop: Alto.rule_loop(steps: ["providerless_echo"]),
-            tools: [Alto.CLITest.ProviderlessTool]
-          ]
-        }
+        cwd: #{inspect(root)},
+        tools: [Alto.Tools.WriteFile],
+        listeners: [{Alto.CLITest.CaptureListener, []}],
+        runs: %{"rule" => [loop: Alto.rule_loop(steps: ["write_file"])]}
       )
-      """
-    )
+      """)
 
-    parent = self()
+      {server, monitor} = spawn_monitor(fn -> Alto.CLI.run(["--config", path, "--serve"]) end)
 
-    {pid, monitor} =
-      spawn_monitor(fn ->
-        send(parent, {:serve_result, Alto.CLI.run(["--config", path, "--serve"])})
-      end)
+      try do
+        assert_receive {:registry, registry}, 2_000
+        registry_monitor = Process.monitor(registry)
+        :ok = Alto.FrontEnd.Registry.request(registry, {:attach, self(), nil, 1, []})
+        client = self()
 
-    refute_receive {:serve_result, _result}, 300
-    assert Process.alive?(pid)
-    Process.exit(pid, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}, 1_000
+        puller =
+          Task.async(fn ->
+            Stream.repeatedly(fn ->
+              Alto.FrontEnd.Registry.pull(registry, client, 100)
+              Process.sleep(10)
+            end)
+            |> Stream.run()
+          end)
+
+        try do
+          task = JSON.encode!(%{path: "approved.txt", content: "configured write"})
+
+          assert {:ok, id} =
+                   Alto.FrontEnd.Registry.request(registry, {:start_run, "rule", task, []})
+
+          unless @approval do
+            assert_receive {:alto_notification, {:approval_request, ^id, request}}, 2_000
+            refute File.exists?(Path.join(root, "approved.txt"))
+
+            :ok =
+              Alto.FrontEnd.Registry.request(registry, {:approval_response, request.id, :approve})
+          end
+
+          assert_receive {:alto_notification, {:result, ^id, %{status: :ok}}}, 2_000
+          assert File.read!(Path.join(root, "approved.txt")) == "configured write"
+          assert Process.alive?(server)
+        after
+          Task.shutdown(puller, :brutal_kill)
+          Process.exit(server, :kill)
+        end
+
+        assert_receive {:DOWN, ^registry_monitor, :process, ^registry, _reason}, 2_000
+      after
+        Process.exit(server, :kill)
+        assert_receive {:DOWN, ^monitor, :process, ^server, :killed}, 2_000
+      end
+    end
   end
 
-  test "a base-url flag rebuilds the provider instead of using the configured one", %{root: root} do
-    path = Path.join(root, "config.exs")
+  test "one-shot config controls workspace, write authority and persistence", %{root: root} do
+    path = Path.join(root, "write.exs")
 
-    File.write!(
-      path,
-      """
-      Alto.Config.new(
-        provider: Alto.CLITest.ModelReportingProvider,
-        tools: [],
-        prompt: nil
-      )
-      """
+    File.write!(path, """
+    Alto.Config.new(
+      provider: nil,
+      cwd: #{inspect(root)},
+      session: nil,
+      loop: Alto.rule_loop(steps: ["write_file"]),
+      tools: [Alto.Tools.WriteFile],
+      approval: Alto.Approvals.AllowAll
     )
+    """)
 
-    previous = System.get_env("ALTO_MODEL")
-    System.delete_env("ALTO_MODEL")
+    stderr =
+      capture_io(:stderr, fn ->
+        assert capture_io(fn ->
+                 assert :ok =
+                          Alto.CLI.run([
+                            "--config",
+                            path,
+                            ~s({"path":"created.txt","content":"hello"})
+                          ])
+               end) == "\n"
+      end)
 
-    try do
-      assert {:error, "set --model or ALTO_MODEL"} =
-               Alto.CLI.run(["--config", path, "--base-url", "https://unit.test/v1", "task"])
-    after
-      if previous, do: System.put_env("ALTO_MODEL", previous)
-    end
+    refute stderr =~ "session"
+    assert File.read!(Path.join(root, "created.txt")) == "hello"
   end
 
   test "reports an invalid configuration return", %{root: root} do

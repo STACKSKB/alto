@@ -1,7 +1,6 @@
 defmodule Alto.CLI do
   @moduledoc "Plain-stdio command-line entry point for the execution host."
 
-  alias Alto.Approvals.AllowAll
   alias Alto.Approvals.Interactive
   alias Alto.Approvals.Socket, as: SocketApproval
   alias Alto.CLI.Arguments
@@ -14,12 +13,9 @@ defmodule Alto.CLI do
   alias Alto.Listeners.Webhook
   alias Alto.Providers.OpenAICompatible
   alias Alto.Session
-  alias Alto.Tools.EditFile
   alias Alto.Tools.ListFiles
   alias Alto.Tools.ReadFile
-  alias Alto.Tools.RunCommand
   alias Alto.Tools.SearchFiles
-  alias Alto.Tools.WriteFile
 
   @spec main([binary()]) :: no_return()
   def main(argv) do
@@ -60,8 +56,7 @@ defmodule Alto.CLI do
   defp execute(options, task_words) do
     with {:ok, task} <- task_text(task_words),
          {:ok, config} <- load_config(options),
-         {:ok, command_mode} <- command_mode(options),
-         {:ok, run_options, renderer} <- run_options(options, config, command_mode) do
+         {:ok, run_options, renderer} <- run_options(options, config) do
       try do
         result =
           case run_task(options, task, run_options) do
@@ -140,8 +135,7 @@ defmodule Alto.CLI do
   ## webhook endpoints such as `"job"`). The WebSocket client's config field
   ## defaults to `"default"`, and `start_run` with any other name fails with
   ## `unknown_config`. Runs started this way have no terminal to prompt on,
-  ## so approval is forced to `Alto.Approvals.Socket` unless the operator
-  ## explicitly passes `--approve-all`.
+  ## so approval defaults to `Alto.Approvals.Socket`; compiled policies are honored.
 
   @default_serve_port 4_747
   @default_webhook_port 4_748
@@ -165,8 +159,7 @@ defmodule Alto.CLI do
 
   defp do_serve(options) do
     with {:ok, config} <- load_config(options),
-         {:ok, command_mode} <- command_mode(options),
-         {:ok, base_options} <- serve_run_options(options, config, command_mode),
+         {:ok, base_options} <- serve_run_options(config),
          {:ok, listener_specs} <- serve_listener_specs(config, options),
          {:ok, queue} <- start_serve_queue(config),
          registry_opts = serve_registry_opts(config, queue, base_options),
@@ -183,7 +176,7 @@ defmodule Alto.CLI do
     end
   end
 
-  # Served-run session persistence (, explicit opt-in via the compiled
+  # Served-run session persistence is an explicit opt-in via the compiled
   # configuration's `sessions:` key: `true`, or `[session_dir: path]`).
   # Without it, served runs stay unpersisted; `session_dir:` alone selects
   # the directory resume reads from.
@@ -226,30 +219,21 @@ defmodule Alto.CLI do
     end
   end
 
-  defp serve_run_options(options, config, command_mode) do
-    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
+  defp serve_run_options(config) do
+    with {:ok, run_options} <- common_run_options(config) do
       {:ok,
        run_options
-       |> configure_serve_approval(options)
+       |> Keyword.put_new(:approval, SocketApproval)
        |> Keyword.drop([
          :listeners,
          :queue,
          :runs,
          :sessions,
          :session_dir,
-         :cwd,
          :event_sink,
          :session_id,
          :tool_context_metadata
        ])}
-    end
-  end
-
-  defp configure_serve_approval(run_options, options) do
-    if Keyword.get(options, :approve_all, false) do
-      Keyword.put(run_options, :approval, AllowAll)
-    else
-      Keyword.put(run_options, :approval, SocketApproval)
     end
   end
 
@@ -335,13 +319,13 @@ defmodule Alto.CLI do
 
   defp describe_listener(module, _opts, _listener), do: "started listener #{inspect(module)}"
 
-  defp setup(options, []) do
+  defp setup(_options, []) do
     if Onboarding.terminal?() do
       case Onboarding.resolve(
              force: true,
              interactive: true,
-             api_key: environment_api_key(options, :openrouter),
-             provider: {OpenAICompatible, discovery_provider_options(options)}
+             api_key: environment_api_key(),
+             provider: {OpenAICompatible, default_provider_options()}
            ) do
         {:ok, %{model: model}} ->
           IO.puts(:stderr, "OpenRouter setup complete. Default model: #{model}")
@@ -382,41 +366,37 @@ defmodule Alto.CLI do
     end
   end
 
-  defp run_options(options, config, command_mode) do
-    with {:ok, run_options} <- common_run_options(options, config, command_mode) do
+  defp run_options(options, config) do
+    with {:ok, run_options} <- common_run_options(config) do
       renderer = Renderer.start(Onboarding.terminal?())
 
       run_options =
         run_options
-        |> configure_approval(options)
+        |> Keyword.put_new(:approval, Interactive)
         |> configure_session(options)
-        |> Keyword.put(:cwd, File.cwd!())
+        |> Keyword.put_new(:cwd, File.cwd!())
         |> Alto.Events.attach(&send(renderer, {:event, &1}))
 
       {:ok, run_options, renderer}
     end
   end
 
-  defp common_run_options(options, config, command_mode) do
+  defp common_run_options(config) do
     configured = config |> Config.run_options() |> Keyword.drop([:tui])
 
-    with {:ok, provider, provider_timeout} <- provider(options, configured) do
+    provider =
+      case Keyword.fetch(configured, :provider) do
+        {:ok, provider} -> {:ok, provider}
+        :error -> default_provider()
+      end
+
+    with {:ok, provider} <- provider do
       {:ok,
        configured
        |> Keyword.put(:provider, provider)
-       |> configure_provider_timeout(provider_timeout)
-       |> configure_tools(options, command_mode)
-       |> Keyword.merge(Keyword.take(options, [:max_steps]))
-       |> configure_prompt(options)
-       |> configure_project_instructions(options)}
-    end
-  end
-
-  defp configure_project_instructions(run_options, options) do
-    if Keyword.get(options, :no_project_instructions, false) do
-      Keyword.put(run_options, :project_instructions, nil)
-    else
-      Keyword.put_new(run_options, :project_instructions, :auto)
+       |> Keyword.put_new(:tools, [ListFiles, ReadFile, SearchFiles])
+       |> Keyword.put_new(:prompt, if(provider, do: &Alto.Prompts.Coding.build/1))
+       |> Keyword.put_new(:project_instructions, :auto)}
     end
   end
 
@@ -426,136 +406,36 @@ defmodule Alto.CLI do
     if Keyword.get(options, :no_session, false) do
       Keyword.put(run_options, :session, nil)
     else
-      Keyword.put(run_options, :session, :new)
+      Keyword.put_new(run_options, :session, :new)
     end
   end
 
-  defp provider(options, configured) do
-    # A provider key with a nil value is an explicit providerless profile. An
-    # omitted key retains the default agent onboarding. CLI model/transport
-    # switches are deliberate overrides and therefore opt back into provider
-    # construction even for a providerless configuration.
-    transport_override? = Enum.any?([:base_url, :api_key_env], &Keyword.has_key?(options, &1))
+  defp default_provider do
+    options = default_provider_options()
 
-    case {transport_override?, Keyword.fetch(configured, :provider),
-          Keyword.has_key?(options, :model)} do
-      {false, {:ok, nil}, false} ->
-        {:ok, nil, provider_timeout(options)}
-
-      {false, {:ok, provider}, _} when not is_nil(provider) ->
-        {:ok, patch_model(provider, options), provider_timeout(options)}
-
-      _ ->
-        configured_provider(options)
+    with {:ok, selected} <-
+           Onboarding.resolve(
+             api_key: environment_api_key(),
+             model: System.get_env("ALTO_MODEL"),
+             interactive: Onboarding.terminal?(),
+             provider: {OpenAICompatible, options}
+           ) do
+      {:ok,
+       {OpenAICompatible,
+        Keyword.merge(options, model: selected.model, api_key: selected.api_key)}}
     end
   end
 
-  # A model flag overrides only the model of a configured provider; transport
-  # options and credentials chosen in the configuration stay intact.
-  defp patch_model({module, opts}, options) when is_atom(module) and is_list(opts) do
-    {module, patch_model_opts(opts, options)}
-  end
-
-  defp patch_model(module, options) when is_atom(module),
-    do: {module, patch_model_opts([], options)}
-
-  defp patch_model_opts(opts, options) do
-    case requested_model(options) do
-      model when is_binary(model) and model != "" -> Keyword.put(opts, :model, model)
-      _other -> opts
-    end
-  end
-
-  defp configured_provider(options) do
-    base_url = base_url(options)
-    timeout = Keyword.get(options, :timeout, 120_000)
-
-    with {:ok, selected} <- select_provider(options, base_url) do
-      provider_options = [
-        model: selected.model,
-        base_url: base_url,
-        api_key: selected.api_key,
-        timeout: timeout
-      ]
-
-      {:ok, {OpenAICompatible, provider_options}, timeout + 5_000}
-    end
-  end
-
-  defp select_provider(options, base_url) do
-    if openrouter?(base_url) do
-      Onboarding.resolve(
-        api_key: environment_api_key(options, :openrouter),
-        model: requested_model(options),
-        interactive: Onboarding.terminal?(),
-        provider: {OpenAICompatible, discovery_provider_options(options, base_url)}
-      )
-    else
-      with {:ok, model} <- required_model(options) do
-        {:ok, %{model: model, api_key: environment_api_key(options, :compatible)}}
-      end
-    end
-  end
-
-  defp discovery_provider_options(options, base_url \\ "https://openrouter.ai/api/v1") do
+  defp default_provider_options do
     [
-      base_url: base_url,
-      timeout: Keyword.get(options, :timeout, 120_000),
+      base_url: "https://openrouter.ai/api/v1",
+      timeout: 120_000,
       model_query: [supported_parameters: "tools", sort: "most-popular"]
     ]
   end
 
-  defp provider_timeout(options) do
-    if Keyword.has_key?(options, :timeout) do
-      Keyword.fetch!(options, :timeout) + 5_000
-    end
-  end
-
-  defp configure_provider_timeout(run_options, nil), do: run_options
-
-  defp configure_provider_timeout(run_options, provider_timeout),
-    do: Keyword.put(run_options, :provider_timeout, provider_timeout)
-
-  defp configure_tools(run_options, options, command_mode) do
-    if tool_flags?(options) or not Keyword.has_key?(run_options, :tools) do
-      write_enabled? = Keyword.get(options, :allow_write, false)
-      Keyword.put(run_options, :tools, tools(options, write_enabled?, command_mode))
-    else
-      run_options
-    end
-  end
-
-  defp tool_flags?(options) do
-    Enum.any?(
-      [:no_tools, :allow_write, :allow_command, :sandbox_command, :allow_command_network],
-      &Keyword.has_key?(options, &1)
-    )
-  end
-
-  defp configure_approval(run_options, options) do
-    cond do
-      Keyword.get(options, :approve_all, false) -> Keyword.put(run_options, :approval, AllowAll)
-      Keyword.has_key?(run_options, :approval) -> run_options
-      true -> Keyword.put(run_options, :approval, Interactive)
-    end
-  end
-
-  defp configure_prompt(run_options, options) do
-    cond do
-      Keyword.get(options, :no_system_prompt, false) -> Keyword.put(run_options, :prompt, nil)
-      prompt = Keyword.get(options, :system_prompt) -> Keyword.put(run_options, :prompt, prompt)
-      true -> Keyword.put_new(run_options, :prompt, &Alto.Prompts.Coding.build/1)
-    end
-  end
-
-  defp required_model(options) do
-    case requested_model(options) do
-      model when is_binary(model) and model != "" -> {:ok, model}
-      _other -> {:error, "set --model or ALTO_MODEL"}
-    end
-  end
-
-  defp requested_model(options), do: Keyword.get(options, :model) || System.get_env("ALTO_MODEL")
+  defp environment_api_key,
+    do: System.get_env("ALTO_API_KEY") || System.get_env("OPENROUTER_API_KEY")
 
   defp task_text([]) do
     if Onboarding.terminal?() do
@@ -569,82 +449,6 @@ defmodule Alto.CLI do
   end
 
   defp task_text(words), do: {:ok, Enum.join(words, " ")}
-
-  defp base_url(options) do
-    Keyword.get(options, :base_url) ||
-      System.get_env("ALTO_BASE_URL") ||
-      System.get_env("OPENROUTER_BASE_URL") ||
-      System.get_env("OPENAI_BASE_URL") ||
-      "https://openrouter.ai/api/v1"
-  end
-
-  defp environment_api_key(options, provider) do
-    case Keyword.get(options, :api_key_env) do
-      name when is_binary(name) ->
-        System.get_env(name)
-
-      _other when provider == :openrouter ->
-        System.get_env("ALTO_API_KEY") || System.get_env("OPENROUTER_API_KEY")
-
-      _other ->
-        System.get_env("ALTO_API_KEY") || System.get_env("OPENAI_API_KEY")
-    end
-  end
-
-  defp openrouter?(base_url) do
-    case URI.parse(base_url) do
-      %URI{host: "openrouter.ai"} -> true
-      %URI{host: host} when is_binary(host) -> String.ends_with?(host, ".openrouter.ai")
-      _other -> false
-    end
-  end
-
-  defp tools(options, write_enabled?, command_mode) do
-    if Keyword.get(options, :no_tools, false) do
-      []
-    else
-      [ListFiles, ReadFile, SearchFiles] ++
-        if(write_enabled?,
-          do: Enum.map([EditFile, WriteFile], &Alto.Tools.ProtectPaths.wrap(&1, [".git"])),
-          else: []
-        ) ++
-        command_tools(command_mode, options)
-    end
-  end
-
-  defp command_mode(options) do
-    case {Keyword.get(options, :allow_command, false),
-          Keyword.get(options, :sandbox_command, false),
-          Keyword.get(options, :allow_command_network, false)} do
-      {true, true, _} ->
-        {:error, "choose either --allow-command or --sandbox-command, not both"}
-
-      {_, false, true} ->
-        {:error, "--allow-command-network requires --sandbox-command"}
-
-      {_, true, _} ->
-        {:ok, :sandboxed}
-
-      {true, false, false} ->
-        {:ok, :unsandboxed}
-
-      _ ->
-        {:ok, :disabled}
-    end
-  end
-
-  defp command_tools(:disabled, _options), do: []
-  defp command_tools(:unsandboxed, _options), do: [RunCommand]
-
-  defp command_tools(:sandboxed, options) do
-    network =
-      if Keyword.get(options, :allow_command_network, false), do: :inherit, else: :disabled
-
-    [
-      {RunCommand,
-       executor: {Alto.Command.Executors.Bubblewrap, network: network, protected_paths: [".git"]}}
-    ]
-  end
 
   defp format_reason({:socket_bind_failed, path, :already_in_use}),
     do: "socket #{path} is already served by another Alto process"

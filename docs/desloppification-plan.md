@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,265 lines**, a **20.6% reduction**, with **3,807 lines remaining**.
+Current: **32,038 lines**, a **21.2% reduction**, with **3,580 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,17 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+The CLI now uses `Config.run_options` for execution settings instead of a parallel
+flag-to-provider/tool/prompt/sandbox compiler. Execution override flags are removed;
+all their capabilities remain available in trusted configuration. Setup, default
+OpenRouter onboarding, tasks/stdin, sessions, listener controls and serving remain.
+Configured workspace, persistence and approval choices are honored; served runs
+still default to socket approval. This pass removes **227 production lines**:
+**171 code/typespec**, **34 blank**, and **22 documentation/comment/help** lines.
+Obsolete flag-precedence tests are replaced by actual configured writes and served
+approval round trips, including an explicit unattended policy. All 1,077 core
+tests pass.
 
 Tool registration now builds one map containing runtime metadata and provider
 definitions. Model exposure projects that map in name order and intersects

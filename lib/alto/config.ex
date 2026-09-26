@@ -2,8 +2,8 @@ defmodule Alto.Config do
   @moduledoc """
   Trusted, compiled Elixir configuration for an Alto run.
 
-  A configuration file evaluates to this struct. The CLI owns its working
-  directory, renderer, and cancellation handle; configuration composes the
+  A configuration file evaluates to this struct. The CLI owns its renderer and
+  cancellation handle; configuration composes the working directory,
   loop, provider, tools, prompt, approval policy, and bounded runner options.
   """
 

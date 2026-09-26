@@ -123,7 +123,7 @@ defmodule Alto.CLI.Onboarding do
         {:error, reason} -> {:error, reason}
       end
     else
-      {:error, "model required; set --model or ALTO_MODEL, or run `alto --setup` in a terminal"}
+      {:error, "model required; set ALTO_MODEL, or run `alto --setup` in a terminal"}
     end
   end
 

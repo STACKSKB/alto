@@ -1,7 +1,7 @@
 # Full local coding-harness profile. Alto never auto-executes a repository
 # configuration; select it explicitly:
 #
-#   mix alto --config alto.agentic.exs --allow-write --sandbox-command "task"
+#   mix alto --config alto.agentic.exs "task"
 #
 # FFF and Ripwire stay independent installations. Their absolute paths may be
 # provided when the desktop process does not inherit the interactive PATH:
