@@ -10,30 +10,26 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule OnceLoop do
     @behaviour Alto.Loop
 
     @impl true
     def init({name, args}, _spec) do
-      Transition.continue(%{}, [
-        Effect.invoke_tool(%{id: "op-1", name: name, arguments: args})
-      ])
+      {:continue, %{}, [{:invoke_tool, %{id: "op-1", name: name, arguments: args}}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: data}, s, _spec) do
-      Transition.stop(s, {:completed, data})
+      {{:stop, {:completed, data}}, s, []}
     end
 
     def handle_event(%Event{type: :tool_failed, data: data}, s, _spec) do
-      Transition.stop(s, {:failed, data})
+      {{:stop, {:failed, data}}, s, []}
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule OkTool do
@@ -199,15 +195,15 @@ defmodule Alto.Runner.SerialOutcomeTest do
         @behaviour Alto.Loop
         @impl true
         def init(_task, _spec) do
-          Transition.continue(%{}, [Effect.invoke_tool(%{name: "ok_tool", arguments: "no"})])
+          {:continue, %{}, [{:invoke_tool, %{name: "ok_tool", arguments: "no"}}]}
         end
 
         @impl true
         def handle_event(%Event{type: :tool_failed, data: data}, s, _spec) do
-          Transition.stop(s, data)
+          {{:stop, data}, s, []}
         end
 
-        def handle_event(_e, s, _spec), do: Transition.continue(s)
+        def handle_event(_e, s, _spec), do: {:continue, s, []}
       end
 
       assert %Alto.Runner.Result{status: :ok} =

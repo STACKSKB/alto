@@ -1,7 +1,7 @@
 defmodule Alto.Runner.ParentContinuationTest do
   use ExUnit.Case, async: false
 
-  alias Alto.{Effect, Event, OperationLog, Transition}
+  alias Alto.{Event, OperationLog}
   alias Alto.Runner.{Budget.Account, Checkpoint}
   alias Alto.Subagents.Continuation
 
@@ -10,30 +10,31 @@ defmodule Alto.Runner.ParentContinuationTest do
 
     def init(%{agents: agents, before_children: true}, _spec),
       do:
-        Transition.continue(%{phase: "before", agents: agents}, [
-          Effect.invoke_tool(%{
-            id: "before",
-            name: "integrate",
-            arguments: %{"value" => "before"}
-          })
-        ])
+        {:continue, %{phase: "before", agents: agents},
+         [
+           {:invoke_tool,
+            %{
+              id: "before",
+              name: "integrate",
+              arguments: %{"value" => "before"}
+            }}
+         ]}
 
     def init(%{agents: agents}, _spec),
-      do: Transition.continue(%{phase: "children"}, [Effect.spawn_agents(%{agents: agents})])
+      do: {:continue, %{phase: "children"}, [{:spawn_agents, %{agents: agents}}]}
 
     def handle_event(%Event{type: :subagents_completed, data: %{results: results}}, state, _spec) do
       call = %{id: "integrate-1", name: "integrate", arguments: %{"value" => "joined"}}
-      Transition.continue(Map.put(state, :results, results), [Effect.invoke_tool(call)])
+      {:continue, Map.put(state, :results, results), [{:invoke_tool, call}]}
     end
 
     def handle_event(%Event{type: :tool_completed}, %{phase: "before"} = state, _spec),
-      do:
-        Transition.continue(%{phase: "children"}, [Effect.spawn_agents(%{agents: state.agents})])
+      do: {:continue, %{phase: "children"}, [{:spawn_agents, %{agents: state.agents}}]}
 
     def handle_event(%Event{type: :tool_completed, data: data}, state, _spec),
-      do: Transition.stop(state, %{results: state.results, tool: data})
+      do: {{:stop, %{results: state.results, tool: data}}, state, []}
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
 
     def dump_checkpoint(state, _spec), do: {:ok, state}
     def load_checkpoint(state, _spec), do: {:ok, state}
@@ -41,8 +42,8 @@ defmodule Alto.Runner.ParentContinuationTest do
 
   defmodule ReturnLoop do
     @behaviour Alto.Loop
-    def init(task, _spec), do: Transition.stop(nil, task)
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def init(task, _spec), do: {{:stop, task}, nil, []}
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule IntegrateTool do

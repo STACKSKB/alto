@@ -1,7 +1,7 @@
 defmodule Alto.Runner.SerialHybridTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Effect, Event, Session, Transition}
+  alias Alto.{Event, Session}
 
   defmodule NativeTool do
     use Alto.Tool, name: :native, execution_mode: :parallel, approval: :never
@@ -13,22 +13,22 @@ defmodule Alto.Runner.SerialHybridTest do
     @behaviour Alto.Loop
 
     def init(_task, _spec),
-      do: Transition.continue(%{step: 1}, [native("n1")])
+      do: {:continue, %{step: 1}, [native("n1")]}
 
     def handle_event(%Event{type: :tool_completed}, %{step: 1}, _spec),
-      do: Transition.continue(%{step: 2}, [Effect.request_model(%{})])
+      do: {:continue, %{step: 2}, [{:request_model, %{}}]}
 
     def handle_event(%Event{type: :model_completed}, %{step: 2}, _spec),
-      do: Transition.continue(%{step: 3}, [native("n2")])
+      do: {:continue, %{step: 3}, [native("n2")]}
 
     def handle_event(%Event{type: :tool_completed}, %{step: 3}, _spec),
-      do: Transition.continue(%{step: 4}, [Effect.request_model(%{})])
+      do: {:continue, %{step: 4}, [{:request_model, %{}}]}
 
     def handle_event(%Event{type: :model_completed, data: %{message: message}}, state, _spec),
-      do: Transition.stop(state, message)
+      do: {{:stop, message}, state, []}
 
     defp native(id),
-      do: Effect.invoke_tool(%{id: id, name: "native", arguments: %{"id" => id}})
+      do: {:invoke_tool, %{id: id, name: "native", arguments: %{"id" => id}}}
   end
 
   defmodule StrictProvider do

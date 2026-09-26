@@ -22,13 +22,9 @@ defmodule Alto.Runner.ContextPressureTest do
   defmodule Manual do
     @behaviour Alto.Loop
     def init(_, _),
-      do:
-        Alto.Transition.continue(nil, [
-          Alto.Effect.compact_context(),
-          Alto.Effect.request_model(%{})
-        ])
+      do: {:continue, nil, [{:compact_context, %{}}, {:request_model, %{}}]}
 
-    def handle_event(%{type: :model_completed}, state, _), do: Alto.Transition.stop(state, :done)
+    def handle_event(%{type: :model_completed}, state, _), do: {{:stop, :done}, state, []}
   end
 
   setup do

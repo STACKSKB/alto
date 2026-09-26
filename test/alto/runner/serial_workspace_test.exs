@@ -1,7 +1,7 @@
 defmodule Alto.Runner.SerialWorkspaceTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Effect, Event, OperationLog, Transition, Workspaces}
+  alias Alto.{Event, OperationLog, Workspaces}
 
   defmodule ApproveAll do
     @behaviour Alto.Approval
@@ -38,25 +38,27 @@ defmodule Alto.Runner.SerialWorkspaceTest do
 
     @impl true
     def init(%{content: content}, _spec) do
-      Transition.continue(%{}, [
-        Effect.invoke_tool(%{
-          id: "write",
-          name: "write_file",
-          arguments: %{"path" => "tracked.txt", "content" => content}
-        })
-      ])
+      {:continue, %{},
+       [
+         {:invoke_tool,
+          %{
+            id: "write",
+            name: "write_file",
+            arguments: %{"path" => "tracked.txt", "content" => content}
+          }}
+       ]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed}, state, _spec),
-      do: Transition.stop(state, :written)
+      do: {{:stop, :written}, state, []}
 
     @impl true
     def handle_event(%Event{type: :tool_failed, data: data}, state, _spec),
-      do: Transition.stop(state, {:failed, data.error})
+      do: {{:stop, {:failed, data.error}}, state, []}
 
     @impl true
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule BatchLoop do
@@ -64,14 +66,14 @@ defmodule Alto.Runner.SerialWorkspaceTest do
 
     @impl true
     def init(%{agents: agents}, _spec),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: agents}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _spec),
-      do: Transition.stop(state, {:completed, data.results})
+      do: {{:stop, {:completed, data.results}}, state, []}
 
     @impl true
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   setup do

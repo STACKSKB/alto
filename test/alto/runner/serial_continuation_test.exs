@@ -1,24 +1,24 @@
 defmodule Alto.Runner.SerialContinuationTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Effect, Event, OperationLog, Transition}
+  alias Alto.{Event, OperationLog}
   alias Alto.Subagents.Continuation
 
   defmodule Parent do
     @behaviour Alto.Loop
     def init(%{agents: agents}, _),
-      do: Transition.continue(nil, [Effect.spawn_agents(%{agents: agents})])
+      do: {:continue, nil, [{:spawn_agents, %{agents: agents}}]}
 
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _),
-      do: Transition.stop(state, data)
+      do: {{:stop, data}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
   end
 
   defmodule Return do
     @behaviour Alto.Loop
-    def init(task, _), do: Transition.stop(nil, task)
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def init(task, _), do: {{:stop, task}, nil, []}
+    def handle_event(_, state, _), do: {:continue, state, []}
   end
 
   defmodule BlockingProvider do

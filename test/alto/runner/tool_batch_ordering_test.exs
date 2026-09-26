@@ -1,9 +1,7 @@
 defmodule Alto.Runner.ToolBatchOrderingTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule Read do
     use Alto.Tool, name: :ordered_read, execution_mode: :parallel, approval: :never
@@ -48,16 +46,16 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
         %{id: "b", name: "ordered_read", arguments_json: JSON.encode!(%{id: "b"})}
       ]
 
-      Transition.continue(%{reads: 0, probes: 0}, [Effect.run_tools(calls, 2)])
+      {:continue, %{reads: 0, probes: 0}, [{:run_tools, %{calls: calls, max_concurrency: 2}}]}
     end
 
     def handle_event(%Event{type: :tool_completed, data: %{name: "ordered_read"}}, state, _) do
-      Transition.continue(%{state | reads: state.reads + 1})
+      {:continue, %{state | reads: state.reads + 1}, []}
     end
 
     def handle_event(%Event{type: :tool_completed, data: %{name: "batch_probe"}}, state, _) do
       next = %{state | probes: state.probes + 1}
-      if next.probes == 2, do: Transition.stop(next, :done), else: Transition.continue(next)
+      if next.probes == 2, do: {{:stop, :done}, next, []}, else: {:continue, next, []}
     end
   end
 
@@ -65,16 +63,18 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
     def call(%Event{} = event, _context, next, opts) do
       owner = Keyword.fetch!(opts, :owner)
       send(owner, {:middleware, event.type, event.data[:call_id], event.data[:name]})
-      transition = next.(event)
+      {terminal, state, effects} = transition = next.(event)
 
       if event.type == :tool_completed and event.data.name == "ordered_read" do
-        Transition.prepend_effects(transition, [
-          Effect.invoke_tool(%{
-            id: "probe-#{event.data.call_id}",
-            name: "batch_probe",
-            arguments: %{"source" => event.data.call_id}
-          })
-        ])
+        {terminal, state,
+         [
+           {:invoke_tool,
+            %{
+              id: "probe-#{event.data.call_id}",
+              name: "batch_probe",
+              arguments: %{"source" => event.data.call_id}
+            }}
+         ] ++ effects}
       else
         transition
       end

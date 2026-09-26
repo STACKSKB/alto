@@ -1,29 +1,28 @@
 defmodule Alto.Loops.ChatTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Runtime
 
   test "is swappable through the same loop specification and runtime" do
     spec = Alto.chat_loop()
-    initial = Runtime.init(spec, "hello")
+    {:continue, initial, effects} = Runtime.init(spec, "hello")
 
-    assert [%Effect{kind: :request_model, data: %{task: "hello"}}] = initial.effects
+    assert [{:request_model, %{task: "hello"}}] = effects
 
     completed =
       Runtime.dispatch(
         spec,
         Event.durable(:model_completed, %{message: "hi", tool_calls: []}),
-        initial.state
+        initial
       )
 
-    assert completed.status == {:stop, "hi"}
+    assert {{:stop, "hi"}, _, []} = completed
   end
 
   test "rejects tool calls instead of silently ignoring them" do
     spec = Alto.chat_loop(driver_options: [tool_execution: :serial])
-    initial = Runtime.init(spec, "hello")
+    {:continue, initial, _} = Runtime.init(spec, "hello")
 
     transition =
       Runtime.dispatch(
@@ -32,9 +31,9 @@ defmodule Alto.Loops.ChatTest do
           message: nil,
           tool_calls: [%{id: "call-1", name: "read_file", arguments_json: "{}"}]
         }),
-        initial.state
+        initial
       )
 
-    assert transition.status == {:error, {:tools_not_supported, ["call-1"]}}
+    assert {{:error, {:tools_not_supported, ["call-1"]}}, _, []} = transition
   end
 end

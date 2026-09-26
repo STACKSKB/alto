@@ -1,9 +1,9 @@
 defmodule Alto.Runner.ReleaseContractsTest do
   use ExUnit.Case, async: true
-  alias Alto.{Effect, Event, Transition}
+  alias Alto.Event
 
   defmodule Cycling do
-    def init(_, _), do: Transition.continue(nil, [Effect.emit(Event.live(:tick, %{}))])
+    def init(_, _), do: {:continue, nil, [{:emit, Event.live(:tick, %{})}]}
     def handle_event(_, _, _), do: init(nil, nil)
   end
 
@@ -30,8 +30,8 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   defmodule Request do
-    def init(task, _), do: Transition.continue(nil, [Effect.request_model(task)])
-    def handle_event(%Event{type: :model_completed}, state, _), do: Transition.stop(state, :done)
+    def init(task, _), do: {:continue, nil, [{:request_model, task}]}
+    def handle_event(%Event{type: :model_completed}, state, _), do: {{:stop, :done}, state, []}
   end
 
   defmodule Native do
@@ -45,27 +45,29 @@ defmodule Alto.Runner.ReleaseContractsTest do
   defmodule Parent do
     def init(_, _),
       do:
-        Transition.continue(nil, [
-          Effect.spawn_agents(%{
-            agents: [
-              %{
-                id: "child",
-                task: %{"value" => 42},
-                loop: Alto.rule_loop(steps: ["native"])
-              }
-            ]
-          })
-        ])
+        {:continue, nil,
+         [
+           {:spawn_agents,
+            %{
+              agents: [
+                %{
+                  id: "child",
+                  task: %{"value" => 42},
+                  loop: Alto.rule_loop(steps: ["native"])
+                }
+              ]
+            }}
+         ]}
 
     def handle_event(
           %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
           state,
           _
         ),
-        do: Transition.error(state, data.error)
+        do: {{:error, data.error}, state, []}
 
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
-      do: Transition.stop(state, data.output)
+      do: {{:stop, data.output}, state, []}
   end
 
   test "deterministic cycles consume a shared effect budget" do

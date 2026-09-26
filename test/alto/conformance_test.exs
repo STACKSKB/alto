@@ -10,9 +10,7 @@ defmodule Alto.ConformanceTest do
   alias Alto.Conformance.FakeService
   alias Alto.Conformance.FakeTool
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   setup do
     tag = System.unique_integer([:positive])
@@ -26,17 +24,17 @@ defmodule Alto.ConformanceTest do
     @behaviour Alto.Loop
     @impl true
     def init({name, args}, _spec) do
-      Transition.continue(%{}, [Effect.invoke_tool(%{id: "op-1", name: name, arguments: args})])
+      {:continue, %{}, [{:invoke_tool, %{id: "op-1", name: name, arguments: args}}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: data}, s, _spec),
-      do: Transition.stop(s, {:completed, data})
+      do: {{:stop, {:completed, data}}, s, []}
 
     def handle_event(%Event{type: :tool_failed, data: data}, s, _spec),
-      do: Transition.stop(s, {:failed, data})
+      do: {{:stop, {:failed, data}}, s, []}
 
-    def handle_event(_e, s, _spec), do: Transition.continue(s)
+    def handle_event(_e, s, _spec), do: {:continue, s, []}
   end
 
   test "committed-but-unacknowledged effects stay unknown", %{service: s} do

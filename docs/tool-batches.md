@@ -10,7 +10,7 @@ Alto.Config.new(
 )
 ```
 
-`Alto.Effect.run_tools(calls, concurrency)` exposes the same mechanism to other
+`{:run_tools, %{calls: calls, max_concurrency: concurrency}}` exposes the same mechanism to other
 trusted loops. The built-in execution host handles the effect. The default
 loop still emits serial calls unless configured otherwise.
 

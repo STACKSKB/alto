@@ -46,7 +46,7 @@ defmodule Alto.Tool.Registry do
   defp schema_opts(_module, opts, _child_limits), do: opts
 
   # Runtime capabilities (`:tools`) vs model exposure (`:model_tools`).
-  # Every registered tool is invokable via `Effect.invoke_tool/1`; only the
+  # Every registered tool is invokable via `{:invoke_tool, call}`; only the
   # projected subset reaches the provider's function definitions, so a
   # deterministic loop can hold application capabilities without showing
   # them to the model. `nil` (default) exposes everything, preserving

@@ -1,19 +1,19 @@
 defmodule Alto.Runner.SerialChildSessionsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Effect, Event, Session, Transition}
+  alias Alto.{Event, Session}
 
   defmodule BatchLoop do
     @behaviour Alto.Loop
     @impl true
     def init(%{agents: agents}, _),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: agents}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, s, _),
-      do: Transition.stop(s, {:completed, data.results})
+      do: {{:stop, {:completed, data.results}}, s, []}
 
-    def handle_event(_, s, _), do: Transition.continue(s)
+    def handle_event(_, s, _), do: {:continue, s, []}
 
     @impl true
     def resolve_child_provider(key, _spec) do

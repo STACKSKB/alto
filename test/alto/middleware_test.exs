@@ -1,7 +1,6 @@
 defmodule Alto.MiddlewareTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Loop
   alias Alto.Runtime
@@ -20,12 +19,12 @@ defmodule Alto.MiddlewareTest do
 
     spec = Alto.default_loop(middleware: Enum.map([:first, :second], trace))
 
-    initial = Runtime.init(spec, "answer")
+    {:continue, initial, _} = Runtime.init(spec, "answer")
 
     Runtime.dispatch(
       spec,
       Event.durable(:model_completed, %{message: "done", tool_calls: []}),
-      initial.state
+      initial
     )
 
     assert_receive {:middleware, :first, :before}
@@ -40,11 +39,12 @@ defmodule Alto.MiddlewareTest do
       assert context.workspace == "/repo"
 
       [
-        Effect.invoke_tool(%{
-          id: "commit-hook",
-          name: "git_commit",
-          arguments: %{if_dirty: true}
-        })
+        {:invoke_tool,
+         %{
+           id: "commit-hook",
+           name: "git_commit",
+           arguments: %{if_dirty: true}
+         }}
       ]
     end
 
@@ -52,33 +52,31 @@ defmodule Alto.MiddlewareTest do
       Alto.default_loop()
       |> Loop.after_event(:step_settled, commit_hook)
 
-    initial = Runtime.init(spec, "change a file")
+    {:continue, initial, _} = Runtime.init(spec, "change a file")
 
-    tools =
+    {:continue, tools, _} =
       Runtime.dispatch(
         spec,
         Event.durable(:model_completed, %{
           message: nil,
           tool_calls: [%{id: "edit", name: :edit, arguments: %{}}]
         }),
-        initial.state
+        initial
       )
 
-    completed =
+    {:continue, completed, [{:emit, settled}]} =
       Runtime.dispatch(
         spec,
         Event.durable(:tool_completed, %{call_id: "edit", result: :ok}),
-        tools.state
+        tools
       )
 
-    assert [%Effect{data: %{event: settled}}] = completed.effects
-
-    continuation =
-      Runtime.dispatch(spec, settled, completed.state, %{workspace: "/repo"})
+    {:continue, _, effects} =
+      Runtime.dispatch(spec, settled, completed, %{workspace: "/repo"})
 
     assert [
-             %Effect{kind: :invoke_tool, data: %{name: "git_commit"}},
-             %Effect{kind: :request_model}
-           ] = continuation.effects
+             {:invoke_tool, %{name: "git_commit"}},
+             {:request_model, _}
+           ] = effects
   end
 end

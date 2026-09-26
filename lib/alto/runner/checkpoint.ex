@@ -67,7 +67,7 @@ defmodule Alto.Runner.Checkpoint do
   @doc false
   def restore_execution(run, packet) do
     with {:ok, restored, frame} <- restore_snapshot(run, packet, "execution", nil, []) do
-      {:ok, restored, %{effects: frame.remaining, terminal: frame.terminal}}
+      {:ok, restored, {frame.remaining, frame.terminal}}
     end
   end
 
@@ -461,7 +461,7 @@ defmodule Alto.Runner.Checkpoint do
   defp valid_frame?(remaining, terminal) do
     is_list(remaining) and
       Enum.all?(remaining, fn
-        %Alto.Effect{kind: kind, data: data} ->
+        {kind, data} ->
           kind in [
             :emit,
             :request_model,
@@ -471,7 +471,7 @@ defmodule Alto.Runner.Checkpoint do
             :invoke_tool,
             :spawn_agents
           ] and
-            is_map(data)
+            if kind == :emit, do: match?(%Alto.Event{}, data), else: is_map(data)
 
         _ ->
           false

@@ -8,7 +8,7 @@ defmodule Alto.Loops.Rule do
   to the decoded task) or `%{tool: name, arguments: map() | :task}`, where
   `:task` means the decoded task object. An argument function of arity two receives
   the original task and prior native results in step order. The result is a list
-  of native tool values; provider serialization is not part of this interface. The loop emits `Effect.invoke_tool/1`
+  of native tool values; provider serialization is not part of this interface. The loop emits `{:invoke_tool, call}`
   effects — native argument maps, no JSON round-trip — so every invocation
   crosses the same prepare, approval, bounds, and supervision boundaries as a
   model-driven call. The run stops when the last tool completes and fails
@@ -23,10 +23,8 @@ defmodule Alto.Loops.Rule do
 
   @behaviour Alto.Loop
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Loop.Spec
-  alias Alto.Transition
 
   defstruct [:arguments, index: 1, results: []]
 
@@ -42,9 +40,9 @@ defmodule Alto.Loops.Rule do
     with {:ok, steps} <- steps(spec),
          {:ok, arguments} <- decode_task(task) do
       state = %__MODULE__{arguments: arguments}
-      Transition.continue(state, [invoke(state, hd(steps))])
+      {:continue, state, [invoke(state, hd(steps))]}
     else
-      {:error, reason} -> Transition.error(%__MODULE__{}, reason)
+      {:error, reason} -> {{:error, reason}, %__MODULE__{}, []}
     end
   end
 
@@ -59,14 +57,14 @@ defmodule Alto.Loops.Rule do
 
       case Enum.at(spec.driver_options[:steps], state.index) do
         nil ->
-          Transition.stop(state, Enum.reverse(state.results))
+          {{:stop, Enum.reverse(state.results)}, state, []}
 
         step ->
           next = %{state | index: state.index + 1}
-          Transition.continue(next, [invoke(next, step)])
+          {:continue, next, [invoke(next, step)]}
       end
     else
-      Transition.continue(state)
+      {:continue, state, []}
     end
   end
 
@@ -76,17 +74,15 @@ defmodule Alto.Loops.Rule do
         spec
       ) do
     if call_id == call_id(state) do
-      Transition.error(
-        state,
+      {{:error,
         {:rule_step_failed, state.index,
-         current_tool(Enum.at(spec.driver_options[:steps], state.index - 1)), error}
-      )
+         current_tool(Enum.at(spec.driver_options[:steps], state.index - 1)), error}}, state, []}
     else
-      Transition.continue(state)
+      {:continue, state, []}
     end
   end
 
-  def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: Transition.continue(state)
+  def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: {:continue, state, []}
 
   @impl true
   def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) when map_size(state) == 4 do
@@ -148,11 +144,12 @@ defmodule Alto.Loops.Rule do
   defp decode_task(_task), do: {:error, :invalid_task}
 
   defp invoke(%__MODULE__{} = state, step) do
-    Effect.invoke_tool(%{
-      id: call_id(state),
-      name: current_tool(step),
-      arguments: current_arguments(step, state)
-    })
+    {:invoke_tool,
+     %{
+       id: call_id(state),
+       name: current_tool(step),
+       arguments: current_arguments(step, state)
+     }}
   end
 
   defp call_id(%__MODULE__{index: index}), do: "rule-" <> Integer.to_string(index)

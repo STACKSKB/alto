@@ -26,15 +26,12 @@ defmodule Alto.Runner.MultimodalTest do
   defmodule Native do
     @behaviour Alto.Loop
     def init(_, _),
-      do:
-        Alto.Transition.continue(nil, [
-          Alto.Effect.invoke_tool(%{name: "picture", arguments: %{}})
-        ])
+      do: {:continue, nil, [{:invoke_tool, %{name: "picture", arguments: %{}}}]}
 
     def handle_event(%{type: :tool_completed}, state, _),
-      do: Alto.Transition.continue(state, [Alto.Effect.request_model(%{})])
+      do: {:continue, state, [{:request_model, %{}}]}
 
-    def handle_event(%{type: :model_completed}, state, _), do: Alto.Transition.stop(state, :done)
+    def handle_event(%{type: :model_completed}, state, _), do: {{:stop, :done}, state, []}
   end
 
   defp content, do: Alto.Content.new([Alto.Content.image("image/png", @png, 1, 1)])

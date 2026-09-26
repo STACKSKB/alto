@@ -64,17 +64,19 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
     @behaviour Alto.Loop
     @impl true
     def init(_task, _spec) do
-      Alto.Transition.continue(%{}, [
-        Alto.Effect.spawn_agents(%{
-          agents: [
-            %{
-              id: "sub-1",
-              task: "child",
-              profile_key: "blocking"
-            }
-          ]
-        })
-      ])
+      {:continue, %{},
+       [
+         {:spawn_agents,
+          %{
+            agents: [
+              %{
+                id: "sub-1",
+                task: "child",
+                profile_key: "blocking"
+              }
+            ]
+          }}
+       ]}
     end
 
     @impl true
@@ -83,12 +85,12 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
           s,
           _spec
         ),
-        do: Alto.Transition.stop(s, {:failed, data})
+        do: {{:stop, {:failed, data}}, s, []}
 
     def handle_event(%Alto.Event{type: :subagents_completed, data: %{results: [data]}}, s, _spec),
-      do: Alto.Transition.stop(s, {:completed, data})
+      do: {{:stop, {:completed, data}}, s, []}
 
-    def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
 
     @impl true
     def resolve_child_provider("blocking", spec) do

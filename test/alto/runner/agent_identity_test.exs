@@ -1,9 +1,7 @@
 defmodule Alto.Runner.AgentIdentityTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule CaptureTool do
     use Alto.Tool, name: :capture, execution_mode: :parallel, approval: :never
@@ -18,12 +16,12 @@ defmodule Alto.Runner.AgentIdentityTest do
   defmodule SpawnLoop do
     @behaviour Alto.Loop
     def init(%{spawn: request}, _spec),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [request]})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: [request]}}]}
 
     def handle_event(%Event{type: :subagents_completed}, state, _spec),
-      do: Transition.stop(state, :done)
+      do: {{:stop, :done}, state, []}
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   test "nested native tool contexts carry a host-derived identity" do

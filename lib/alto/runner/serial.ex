@@ -58,16 +58,16 @@ defmodule Alto.Runner.Serial do
   defp schedule(frame, context, nil, monitor),
     do: advance_frame(frame, context, nil, monitor)
 
-  defp schedule(%Execution.Frame{effects: []} = frame, context, controller, monitor),
+  defp schedule({[], _} = frame, context, controller, monitor),
     do: advance_frame(frame, context, controller, monitor)
 
-  defp schedule(frame, context, controller, monitor) do
+  defp schedule({effects, _} = frame, context, controller, monitor) do
     ref = make_ref()
 
     send(
       controller,
       {:alto_step_ready, %Ticket{pid: self(), ref: ref},
-       %{pending_effects: length(frame.effects), next_effect: hd(frame.effects).kind}}
+       %{pending_effects: length(effects), next_effect: elem(hd(effects), 0)}}
     )
 
     await_grant(ref, frame, context, controller, monitor)

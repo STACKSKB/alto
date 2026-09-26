@@ -15,9 +15,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   use ExUnit.Case, async: true
 
   alias Alto.Approval.Request, as: ApprovalRequest
-  alias Alto.Effect
+
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule RuleEchoTool do
     use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
@@ -121,13 +120,13 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     def handle_event(%Event{type: :tool_failed, data: %{error: error}}, state, _spec) do
       state
       |> Map.update!(:results, &[{:error, error} | &1])
-      |> then(&Transition.stop(&1, Enum.reverse(&1.results)))
+      |> then(&{{:stop, Enum.reverse(&1.results)}, &1, []})
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
 
     defp request_next(%{pending: []} = state),
-      do: Transition.stop(state, Enum.reverse(state.results))
+      do: {{:stop, Enum.reverse(state.results)}, state, []}
 
     defp request_next(%{pending: [value | rest]} = state) do
       call = %{
@@ -136,7 +135,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
         arguments_json: JSON.encode!(%{value: value})
       }
 
-      Transition.continue(%{state | pending: rest}, [Effect.run_tool(call)])
+      {:continue, %{state | pending: rest}, [{:run_tool, call}]}
     end
   end
 
@@ -168,29 +167,28 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     def init(:tuple_args, _spec) do
       call = %{:name => "echo_args", :arguments => %{"string_key" => "v", tuple: {1, 2}}}
 
-      Transition.continue(%{}, [Effect.invoke_tool(call)])
+      {:continue, %{}, [{:invoke_tool, call}]}
     end
 
     def init(:bad_args, _spec) do
-      Transition.continue(%{}, [Effect.invoke_tool(%{name: "echo", arguments: "not a map"})])
+      {:continue, %{}, [{:invoke_tool, %{name: "echo", arguments: "not a map"}}]}
     end
 
     def init(:guarded, _spec) do
-      Transition.continue(%{}, [
-        Effect.invoke_tool(%{id: "invoke-1", name: "echo", arguments: %{"value" => "x"}})
-      ])
+      {:continue, %{},
+       [{:invoke_tool, %{id: "invoke-1", name: "echo", arguments: %{"value" => "x"}}}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: %{value: output}}, _state, _spec) do
-      Transition.stop(%{}, output)
+      {{:stop, output}, %{}, []}
     end
 
     def handle_event(%Event{type: :tool_failed, data: %{error: error}}, _state, _spec) do
-      Transition.stop(%{}, {:error, error})
+      {{:stop, {:error, error}}, %{}, []}
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule StampRuleLoop do
@@ -199,19 +197,19 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     @impl true
     def init(value, _spec) do
       call = %{id: "rule-stamp", name: "stamp", arguments_json: JSON.encode!(%{value: value})}
-      Transition.continue(:requesting, [Effect.run_tool(call)])
+      {:continue, :requesting, [{:run_tool, call}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: %{value: output}}, state, _spec) do
-      Transition.stop(state, output)
+      {{:stop, output}, state, []}
     end
 
     def handle_event(%Event{type: :tool_failed, data: %{error: error}}, state, _spec) do
-      Transition.stop(state, {:error, error})
+      {{:stop, {:error, error}}, state, []}
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   test "the default model loop without a provider fails closed at its model effect" do
@@ -450,17 +448,15 @@ defmodule Alto.Runner.SerialRuleLoopTest do
       @behaviour Alto.Loop
       @impl true
       def init(_task, _spec) do
-        Alto.Transition.continue(%{}, [
-          Alto.Effect.invoke_tool(%{id: "hid-1", name: "hidden", arguments: %{}})
-        ])
+        {:continue, %{}, [{:invoke_tool, %{id: "hid-1", name: "hidden", arguments: %{}}}]}
       end
 
       @impl true
       def handle_event(%Alto.Event{type: :tool_completed, data: %{value: value}}, _s, _spec) do
-        Alto.Transition.stop(%{}, value)
+        {{:stop, value}, %{}, []}
       end
 
-      def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+      def handle_event(_event, state, _spec), do: {:continue, state, []}
     end
 
     assert %Alto.Runner.Result{status: :ok} =

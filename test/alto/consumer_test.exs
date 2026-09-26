@@ -114,18 +114,16 @@ defmodule Alto.ConsumerTest do
       @behaviour Alto.Loop
       @impl true
       def init(_task, _spec) do
-        Alto.Transition.continue(%{}, [
-          Alto.Effect.invoke_tool(%{id: "t-1", name: "sleepy", arguments: %{}})
-        ])
+        {:continue, %{}, [{:invoke_tool, %{id: "t-1", name: "sleepy", arguments: %{}}}]}
       end
 
       @impl true
       def handle_event(%Alto.Event{type: type, data: _data} = event, s, _spec)
           when type in [:tool_completed, :tool_failed] do
-        Alto.Transition.stop(s, event)
+        {{:stop, event}, s, []}
       end
 
-      def handle_event(_e, s, _spec), do: Alto.Transition.continue(s)
+      def handle_event(_e, s, _spec), do: {:continue, s, []}
     end
 
     {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})

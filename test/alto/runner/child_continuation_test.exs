@@ -1,6 +1,6 @@
 defmodule Alto.Runner.ChildContinuationTest do
   use ExUnit.Case, async: false
-  alias Alto.{Effect, Event, OperationLog, Transition}
+  alias Alto.{Event, OperationLog}
   alias Alto.Runner.Budget.Account
   alias Alto.Subagents.Continuation
 
@@ -8,19 +8,18 @@ defmodule Alto.Runner.ChildContinuationTest do
     @behaviour Alto.Loop
     def init(%{agents: agents}, spec) do
       File.write!(Path.join(spec.driver_options[:dir], "planner"), "1", [:append])
-      Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
+      {:continue, %{}, [{:spawn_agents, %{agents: agents}}]}
     end
 
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _spec) do
-      Transition.continue(Map.put(state, :results, data.results), [
-        Effect.invoke_tool(%{id: "integrate", name: "integrate", arguments: %{}})
-      ])
+      {:continue, Map.put(state, :results, data.results),
+       [{:invoke_tool, %{id: "integrate", name: "integrate", arguments: %{}}}]}
     end
 
     def handle_event(%Event{type: :tool_completed}, state, _spec),
-      do: Transition.stop(state, state.results)
+      do: {{:stop, state.results}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
     def dump_checkpoint(state, _), do: {:ok, state}
     def load_checkpoint(state, _), do: {:ok, state}
 

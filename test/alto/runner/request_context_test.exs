@@ -4,10 +4,10 @@ defmodule Alto.Runner.RequestContextTest do
   defmodule Loop do
     @behaviour Alto.Loop
     def init(context, _),
-      do: Alto.Transition.continue(%{}, [Alto.Effect.request_model(%{context_message: context})])
+      do: {:continue, %{}, [{:request_model, %{context_message: context}}]}
 
     def handle_event(%Alto.Event{type: :model_completed}, state, _),
-      do: Alto.Transition.stop(state, :done)
+      do: {{:stop, :done}, state, []}
   end
 
   defmodule Provider do

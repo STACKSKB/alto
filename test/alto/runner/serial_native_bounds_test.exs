@@ -74,19 +74,17 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
       id = Keyword.fetch!(spec.driver_options, :call_id)
       name = Keyword.fetch!(spec.driver_options, :tool)
 
-      Alto.Transition.continue(%{}, [
-        Alto.Effect.invoke_tool(%{id: id, name: name, arguments: %{}})
-      ])
+      {:continue, %{}, [{:invoke_tool, %{id: id, name: name, arguments: %{}}}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:completed, data})
+      do: {{:stop, {:completed, data}}, s, []}
 
     def handle_event(%Event{type: :tool_failed, data: data}, s, _),
-      do: Alto.Transition.stop(s, {:failed, data})
+      do: {{:stop, {:failed, data}}, s, []}
 
-    def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule ToolThenBigProvider do

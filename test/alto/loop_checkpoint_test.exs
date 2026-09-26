@@ -10,8 +10,12 @@ defmodule Alto.LoopCheckpointTest do
 
     assert {:ok, restored} = Default.load_checkpoint(state, spec)
 
-    next = Default.handle_event(Alto.Event.live(:input_received, %{text: "next"}), restored, spec)
-    assert [%{data: %{context: %{window: 1}}}] = next.effects
+    assert {:continue, _, [{:request_model, %{context: %{window: 1}}}]} =
+             Default.handle_event(
+               Alto.Event.live(:input_received, %{text: "next"}),
+               restored,
+               spec
+             )
   end
 
   test "rule checkpoint rejects invalid indices and malformed shapes" do

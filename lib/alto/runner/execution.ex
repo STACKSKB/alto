@@ -4,11 +4,6 @@ defmodule Alto.Runner.Execution do
 
   See `docs/runners.md#composition` for scheduler and component contracts.
   """
-  defmodule Frame do
-    @moduledoc "Pending ordered effects and the disposition after they drain."
-    defstruct effects: [], terminal: :continue
-    @type t :: %__MODULE__{effects: [Alto.Effect.t()], terminal: Alto.Transition.status()}
-  end
 
   @opaque context :: map()
 
@@ -27,13 +22,11 @@ defmodule Alto.Runner.Execution do
   alias Alto.Runner.Execution.{Call, Children, Events, Model, Operation}
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
   alias Alto.Runner.Execution.Session, as: RunSession
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Runner.Result
   alias Alto.Runner.Execution.History
   alias Alto.Runtime
   alias Alto.Session
-  alias Alto.Transition
   alias Alto.Usage
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
@@ -44,7 +37,7 @@ defmodule Alto.Runner.Execution do
   @type approval_spec :: module() | {module(), keyword()}
   @type run_result :: Result.t()
 
-  @spec run(term(), keyword(), (Frame.t(), context() -> run_result())) :: run_result()
+  @spec run(term(), keyword(), (Alto.Loop.frame(), context() -> run_result())) :: run_result()
   def run(task, opts, scheduler) do
     case Alto.Runner.Execution.Parent.options(opts) do
       {:ok, opts} -> run_opened(task, opts, scheduler)
@@ -170,20 +163,20 @@ defmodule Alto.Runner.Execution do
   defp schedule_outcome({:done, outcome}, _opts), do: outcome
   defp schedule_outcome(outcome, _opts), do: outcome
 
-  defp drive(%Transition{} = transition, run, remaining_effects) do
-    run = %{run | loop_state: transition.state}
+  defp drive({terminal, state, requested}, run, remaining_effects) do
+    run = %{run | loop_state: state}
 
     effects =
-      transition.effects ++ if(transition.status == :continue, do: remaining_effects, else: [])
+      requested ++ if(terminal == :continue, do: remaining_effects, else: [])
 
-    execute(effects, run, transition.status)
+    execute(effects, run, terminal)
   end
 
   defp execute(effects, run, terminal),
-    do: {:continue, %Frame{effects: effects, terminal: terminal}, run}
+    do: {:continue, {effects, terminal}, run}
 
   @doc "Execute at most one effect, returning the next frame or a final outcome."
-  def step(%Frame{effects: effects, terminal: terminal}, run) do
+  def step({effects, terminal}, run) do
     case {Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
       {{:cancelled, reason}, _} ->
         {:done, cancelled(reason, run)}
@@ -229,7 +222,7 @@ defmodule Alto.Runner.Execution do
     modes =
       cond do
         effects == [] and match?({:stop, _}, terminal) -> [:steer, :follow_up]
-        match?([%Effect{kind: :request_model} | _], effects) -> [:steer]
+        match?([{:request_model, _} | _], effects) -> [:steer]
         true -> []
       end
 
@@ -257,7 +250,7 @@ defmodule Alto.Runner.Execution do
 
               rest =
                 case effects do
-                  [%Effect{kind: :request_model} | rest] -> rest
+                  [{:request_model, _} | rest] -> rest
                   [] -> []
                 end
 
@@ -287,7 +280,7 @@ defmodule Alto.Runner.Execution do
 
   defp do_execute(
          [
-           %Effect{kind: :run_tools, data: %{calls: [_ | _] = calls, max_concurrency: limit}}
+           {:run_tools, %{calls: [_ | _] = calls, max_concurrency: limit}}
            | rest
          ],
          run,
@@ -296,21 +289,25 @@ defmodule Alto.Runner.Execution do
        when is_list(calls) and limit in 1..32 do
     group = calls |> Enum.take(limit) |> Enum.take_while(&parallel_call?(&1, run))
     pending = Enum.drop(calls, max(1, length(group)))
-    rest = if pending == [], do: rest, else: [Effect.run_tools(pending, limit) | rest]
+
+    rest =
+      if pending == [],
+        do: rest,
+        else: [{:run_tools, %{calls: pending, max_concurrency: limit}} | rest]
 
     # Approval and exclusive calls remain ordinary effects. The remaining batch
     # stays in its public representation even when an approval suspends execution.
     case group do
-      [] -> do_execute([Effect.run_tool(hd(calls)) | rest], run, terminal)
+      [] -> do_execute([{:run_tool, hd(calls)} | rest], run, terminal)
       group -> run_batch(group, run, rest, terminal)
     end
   end
 
-  defp do_execute([%Effect{kind: :run_tools} | _], run, _terminal),
+  defp do_execute([{:run_tools, _} | _], run, _terminal),
     do: {:done, result(run, nil, :error, :invalid_tool_batch)}
 
   defp do_execute(
-         [%Effect{kind: :spawn_agents, data: data} | rest],
+         [{:spawn_agents, data} | rest],
          %{
            continuation_store: store,
            budget: %{account: %Alto.Persistence.Retained{kind: Budget.Account}},
@@ -370,7 +367,7 @@ defmodule Alto.Runner.Execution do
 
   defp resume_checkpoint(run, %{"kind" => "execution"} = packet, :resume, _opts) do
     case checkpoint_call(fn -> Alto.Runner.Checkpoint.restore_execution(run, packet) end, run) do
-      {:ok, restored, frame} -> execute(frame.effects, restored, frame.terminal)
+      {:ok, restored, {effects, terminal}} -> execute(effects, restored, terminal)
       {:error, reason} -> ungranted_checkpoint(run, reason)
     end
   end
@@ -510,27 +507,27 @@ defmodule Alto.Runner.Execution do
 
   defp call_policy(fun, run) do
     case Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
-      %Transition{} = transition -> {:ok, transition}
+      {_, _, _} = transition -> {:ok, transition}
       {:error, _} = error -> error
       other -> {:error, {:invalid_transition, other}}
     end
   end
 
-  defp interpret(%Effect{kind: :emit, data: %{event: %Event{} = event}}, run) do
+  defp interpret({:emit, %Event{} = event}, run) do
     {:event, event, run}
   end
 
-  defp interpret(%Effect{kind: :compact_context, data: options}, run) do
+  defp interpret({:compact_context, options}, run) do
     RunTranscript.reduce(run,
       reason: :manual,
       required_headroom: Map.get(options, :required_headroom, 0)
     )
   end
 
-  defp interpret(%Effect{kind: :request_model}, %{provider: nil} = run),
+  defp interpret({:request_model, _}, %{provider: nil} = run),
     do: {:error, :provider_required, run}
 
-  defp interpret(%Effect{kind: :request_model, data: request}, run) do
+  defp interpret({:request_model, request}, run) do
     with {:ok, run} <- request_context(request, run),
          :ok <- Transcript.validate(Enum.reverse(run.messages_rev)),
          {:ok, request, run} <- prepare_model_context(request, run),
@@ -547,7 +544,7 @@ defmodule Alto.Runner.Execution do
   # shape here and is decoded exactly once, on the way in. The provider call
   # id (`call.id`) is correlation only; the runtime mints a globally unique
   # operation id per invocation for approval and event correlation.
-  defp interpret(%Effect{kind: :run_tool, data: call}, run) do
+  defp interpret({:run_tool, call}, run) do
     {op_id, run} = Operation.next(run)
     name = Map.get(call, :name)
 
@@ -555,12 +552,12 @@ defmodule Alto.Runner.Execution do
   end
 
   # Native invocation from loops and hooks: arguments are already a map.
-  defp interpret(%Effect{kind: :invoke_tool, data: call}, run) do
+  defp interpret({:invoke_tool, call}, run) do
     {op_id, run} = Operation.next(run)
     prepare_and_run_tool(call, :native, :native, op_id, run)
   end
 
-  defp interpret(%Effect{kind: :spawn_agents, data: data}, run) do
+  defp interpret({:spawn_agents, data}, run) do
     with {:ok, specs, concurrency} <- Children.validate_batch(data, run),
          {:ok, results, journal, run} <- spawn_agents(specs, concurrency, run) do
       batch_completed(results, run, journal)
@@ -571,7 +568,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp interpret(%Effect{} = effect, run), do: {:error, {:unknown_effect, effect.kind}, run}
+  defp interpret({kind, _}, run), do: {:error, {:unknown_effect, kind}, run}
 
   defp spawn_agents(specs, concurrency, run) do
     with {:ok, status, outcomes, journal, run} <- Children.run_children(specs, concurrency, run) do
@@ -972,12 +969,12 @@ defmodule Alto.Runner.Execution do
            fn -> Runtime.dispatch(run.spec, event, run.loop_state, runtime_context(run)) end,
            run
          ) do
-      {:ok, transition} ->
-        next = %{run | loop_state: transition.state}
+      {:ok, {status, state, requested}} ->
+        next = %{run | loop_state: state}
 
-        case transition.status do
-          :continue -> dispatch_batch(events, next, effects ++ transition.effects, rest, terminal)
-          terminal -> execute(effects ++ transition.effects, next, terminal)
+        case status do
+          :continue -> dispatch_batch(events, next, effects ++ requested, rest, terminal)
+          terminal -> execute(effects ++ requested, next, terminal)
         end
 
       {:error, reason} ->

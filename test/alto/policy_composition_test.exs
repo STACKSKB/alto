@@ -48,16 +48,16 @@ defmodule Alto.PolicyCompositionTest do
     @behaviour Alto.Loop
     def init(_task, _) do
       agent = %{id: "child", task: "work", loop: Alto.loop(Alto.PolicyCompositionTest.ChildLoop)}
-      Alto.Transition.continue(nil, [Alto.Effect.spawn_agents(%{agents: [agent]})])
+      {:continue, nil, [{:spawn_agents, %{agents: [agent]}}]}
     end
 
-    def handle_event(event, state, _), do: Alto.Transition.stop(state, event.type)
+    def handle_event(event, state, _), do: {{:stop, event.type}, state, []}
   end
 
   defmodule ChildLoop do
     @behaviour Alto.Loop
-    def init(_, _), do: Alto.Transition.stop(nil, "done")
-    def handle_event(_, state, _), do: Alto.Transition.stop(state, "done")
+    def init(_, _), do: {{:stop, "done"}, nil, []}
+    def handle_event(_, state, _), do: {{:stop, "done"}, state, []}
   end
 
   test "limits are resolved once per run instead of at every child projection" do

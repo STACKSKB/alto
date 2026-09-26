@@ -37,10 +37,10 @@ defmodule Alto.ReleaseRegressionTest do
   defmodule StrictLoop do
     @behaviour Alto.Loop
 
-    alias Alto.{Effect, Event, Transition}
+    alias Alto.Event
 
     @impl true
-    def init(_task, _spec), do: Transition.continue(%{step: 1}, [Effect.request_model(%{})])
+    def init(_task, _spec), do: {:continue, %{step: 1}, [{:request_model, %{}}]}
 
     @impl true
     def handle_event(
@@ -48,14 +48,14 @@ defmodule Alto.ReleaseRegressionTest do
           %{step: 1},
           _spec
         ) do
-      Transition.continue(%{step: 2}, [Effect.run_tool(call)])
+      {:continue, %{step: 2}, [{:run_tool, call}]}
     end
 
     def handle_event(%Event{type: :tool_completed}, %{step: 2}, _spec),
-      do: Transition.continue(%{step: 3}, [Effect.request_model(%{})])
+      do: {:continue, %{step: 3}, [{:request_model, %{}}]}
 
     def handle_event(%Event{type: :model_completed, data: %{tool_calls: []}}, state, _spec),
-      do: Transition.stop(state, :done)
+      do: {{:stop, :done}, state, []}
   end
 
   test "strict provider correlation preserves call ids while minting host operation ids" do

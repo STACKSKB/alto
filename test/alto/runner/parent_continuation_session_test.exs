@@ -1,24 +1,24 @@
 defmodule Alto.Runner.ParentContinuationSessionTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Event, OperationLog, Session, Transition}
+  alias Alto.{Event, OperationLog, Session}
   alias Alto.Runner.{Checkpoint, Execution}
   alias Alto.Runner.Budget.Account
   alias Alto.Subagents.Continuation
 
   defmodule JoinLoop do
     @behaviour Alto.Loop
-    def init(_task, _spec), do: Transition.continue(%{phase: :children})
+    def init(_task, _spec), do: {:continue, %{phase: :children}, []}
 
     def handle_event(%Event{type: :subagents_completed}, state, spec) do
       send(Keyword.fetch!(spec.driver_options, :observer), {:joining, self()})
 
       receive do
-        :continue -> Transition.stop(state, "joined once")
+        :continue -> {{:stop, "joined once"}, state, []}
       end
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
     def dump_checkpoint(state, _spec), do: {:ok, state}
     def load_checkpoint(state, _spec), do: {:ok, state}
   end

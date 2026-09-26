@@ -51,6 +51,7 @@ defmodule Alto.MixProject do
         "docs/parent-continuations.md",
         "docs/child-continuations.md",
         "docs/runners.md",
+        "docs/loop-contract.md",
         "docs/subagents.md",
         "docs/context-reduction.md",
         "docs/tool-batches.md",

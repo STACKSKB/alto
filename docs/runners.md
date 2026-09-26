@@ -82,8 +82,10 @@ the run. Child runs inherit the runner options and may issue their own tickets.
 
 The built-in scheduler uses `Alto.Runner.Execution.run/3` to assemble a run
 and `step/2` to execute at most one effect. A scheduler receives an opaque
-context and a frame, and chooses when to call `step/2`. It must return the
-terminal outcome so the assembly can persist the session and child result.
+context and a frame tuple `{effects, terminal}`, and chooses when to call `step/2`.
+Effects are `{kind, payload}` tuples; see the [loop contract](loop-contract.md).
+It must return the terminal outcome so the assembly can persist the session and
+child result.
 `check/1` and `abort/2` support schedulers which wait between effects.
 
 The lower-level components can also be used independently:

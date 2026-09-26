@@ -131,31 +131,28 @@ tree retains at most 256 addresses, including completed and failed instances.
 
 ## Trusted-loop delegation
 
-
 Subagents are requested by a trusted loop through
-`Alto.Effect.spawn_agents/1`. A single child is a one-element batch:
+`{:spawn_agents, %{agents: agents}}`. A single child is a one-element batch:
 
 ```elixir
 defmodule FanoutLoop do
   @behaviour Alto.Loop
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   @impl true
   def init(%{jobs: jobs}, _spec) do
     agents = Enum.map(jobs, fn {id, task} -> %{id: id, task: task} end)
-    Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
+    {:continue, %{}, [{:spawn_agents, %{agents: agents}}]}
   end
 
   @impl true
   def handle_event(%Event{type: :subagents_completed, data: data}, state, _spec) do
-    Transition.stop(state, data.results)
+    {{:stop, data.results}, state, []}
   end
 
   @impl true
-  def handle_event(_event, state, _spec), do: Transition.continue(state)
+  def handle_event(_event, state, _spec), do: {:continue, state, []}
 end
 
 Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
@@ -169,7 +166,7 @@ Alto.run(%{jobs: [{"a", "first task"}, {"b", "second task"}]},
   provider: MyProvider)
 ```
 
-`spawn_agents/1` accepts `%{agents: [...]}`. Each child is an atom-keyed map;
+The `:spawn_agents` payload is `%{agents: [...]}`. Each child is an atom-keyed map;
 string, mixed, and unknown keys are rejected. Each entry requires `:id` and
 `:task`, with optional `:profile_key`, loop, tools, model tools, maximum steps,
 and system prompt. IDs must be unique. A named provider is resolved by the

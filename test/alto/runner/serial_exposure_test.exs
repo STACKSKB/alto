@@ -13,9 +13,7 @@ defmodule Alto.Runner.SerialExposureTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule EchoTool do
     use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
@@ -81,26 +79,24 @@ defmodule Alto.Runner.SerialExposureTest do
     @behaviour Alto.Loop
     @impl true
     def init(_task, _spec) do
-      Transition.continue(%{}, [
-        Effect.invoke_tool(%{id: "hid-1", name: "hidden", arguments: %{}})
-      ])
+      {:continue, %{}, [{:invoke_tool, %{id: "hid-1", name: "hidden", arguments: %{}}}]}
     end
 
     @impl true
     def handle_event(%Event{type: :tool_completed, data: %{value: v}}, _s, _),
-      do: Transition.stop(%{}, v)
+      do: {{:stop, v}, %{}, []}
 
     def handle_event(%Event{type: :tool_failed, data: data}, s, _),
-      do: Transition.stop(s, {:failed, data})
+      do: {{:stop, {:failed, data}}, s, []}
 
-    def handle_event(_e, s, _), do: Transition.continue(s)
+    def handle_event(_e, s, _), do: {:continue, s, []}
   end
 
   defmodule SpawnOnceLoop do
     @behaviour Alto.Loop
     @impl true
     def init(%{spawn: spawn}, _spec),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: [spawn]}}]}
 
     @impl true
     def handle_event(
@@ -108,12 +104,12 @@ defmodule Alto.Runner.SerialExposureTest do
           s,
           _
         ),
-        do: Transition.stop(s, {:failed, data})
+        do: {{:stop, {:failed, data}}, s, []}
 
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, s, _),
-      do: Transition.stop(s, {:completed, data})
+      do: {{:stop, {:completed, data}}, s, []}
 
-    def handle_event(_e, s, _), do: Transition.continue(s)
+    def handle_event(_e, s, _), do: {:continue, s, []}
 
     @impl true
     def resolve_child_provider(key, spec) do

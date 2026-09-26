@@ -1,21 +1,19 @@
 defmodule Alto.Runner.SerialSubagentAuthorityTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
     @impl true
     def init(%{spawn: spawn}, _),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: [spawn]}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
-      do: Transition.stop(state, data)
+      do: {{:stop, data}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
 
     @impl true
     def resolve_child_provider(key, spec) do
@@ -30,13 +28,13 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     @behaviour Alto.Loop
     @impl true
     def init(%{spawns: spawns}, _),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: spawns})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: spawns}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _),
-      do: Transition.stop(state, {:completed, data})
+      do: {{:stop, {:completed, data}}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
 
     @impl true
     def resolve_child_provider(key, spec) do
@@ -50,27 +48,25 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
   defmodule SpawnLoop do
     @behaviour Alto.Loop
     def init(%{spawn: spawn}, _),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: [spawn]}}]}
 
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
-      do: Transition.stop(state, data)
+      do: {{:stop, data}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
   end
 
   defmodule NativeLoop do
     @behaviour Alto.Loop
     def init(%{name: name}, _),
       do:
-        Transition.continue(%{}, [
-          Effect.invoke_tool(%{id: "native", name: to_string(name), arguments: %{}})
-        ])
+        {:continue, %{}, [{:invoke_tool, %{id: "native", name: to_string(name), arguments: %{}}}]}
 
     def handle_event(%Event{type: type, data: data}, state, _)
         when type in [:tool_completed, :tool_failed],
-        do: Transition.stop(state, data)
+        do: {{:stop, data}, state, []}
 
-    def handle_event(_, state, _), do: Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
   end
 
   defmodule SafeTool do

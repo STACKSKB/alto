@@ -9,10 +9,8 @@ defmodule Alto.Loops.Default do
 
   @behaviour Alto.Loop
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Loop.Spec
-  alias Alto.Transition
 
   defstruct [:task, :phase, step: 1, observations: []]
 
@@ -31,18 +29,18 @@ defmodule Alto.Loops.Default do
   @impl true
   def init(task, %Spec{} = spec) do
     state = %__MODULE__{task: task, phase: :awaiting_model}
-    Transition.continue(state, [model_request(state, spec)])
+    {:continue, state, [model_request(state, spec)]}
   end
 
   @impl true
   def handle_event(%Event{type: :input_received, data: %{sender: %{kind: :agent}}}, state, spec) do
     next = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next, [model_request(next, spec)])
+    {:continue, next, [model_request(next, spec)]}
   end
 
   def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
     next = %{state | task: text, phase: :awaiting_model, step: state.step + 1, observations: []}
-    Transition.continue(next, [model_request(next, spec)])
+    {:continue, next, [model_request(next, spec)]}
   end
 
   def handle_event(
@@ -54,10 +52,10 @@ defmodule Alto.Loops.Default do
 
     case {mode, Map.get(data, :tool_calls, [])} do
       {:disabled, []} ->
-        Transition.stop(state, output)
+        {{:stop, output}, state, []}
 
       {:disabled, tool_calls} when is_list(tool_calls) ->
-        Transition.error(state, {:tools_not_supported, Enum.map(tool_calls, &Map.get(&1, :id))})
+        {{:error, {:tools_not_supported, Enum.map(tool_calls, &Map.get(&1, :id))}}, state, []}
 
       {_, []} ->
         settle(state, {:stop, output}, :completed)
@@ -69,12 +67,17 @@ defmodule Alto.Loops.Default do
 
         effects =
           case mode do
-            :serial -> Enum.map(tool_calls, &Effect.run_tool/1)
-            {:parallel, limit} when limit in 1..32 -> [Effect.run_tools(tool_calls, limit)]
-            other -> raise ArgumentError, "invalid tool_execution: #{inspect(other)}"
+            :serial ->
+              Enum.map(tool_calls, &{:run_tool, &1})
+
+            {:parallel, limit} when limit in 1..32 ->
+              [{:run_tools, %{calls: tool_calls, max_concurrency: limit}}]
+
+            other ->
+              raise ArgumentError, "invalid tool_execution: #{inspect(other)}"
           end
 
-        Transition.continue(%{state | phase: {:awaiting_tools, pending}}, effects)
+        {:continue, %{state | phase: {:awaiting_tools, pending}}, effects}
     end
   end
 
@@ -97,10 +100,10 @@ defmodule Alto.Loops.Default do
 
         if pending == %{},
           do: settle(next, :request_model, :tools_completed),
-          else: Transition.continue(%{next | phase: {:awaiting_tools, pending}})
+          else: {:continue, %{next | phase: {:awaiting_tools, pending}}, []}
 
       _other ->
-        Transition.error(state, {:unknown_tool_call, call_id})
+        {{:error, {:unknown_tool_call, call_id}}, state, []}
     end
   end
 
@@ -111,9 +114,10 @@ defmodule Alto.Loops.Default do
       ) do
     next_state = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
 
-    Transition.continue(next_state, [
-      model_request(next_state, spec, Enum.reverse(state.observations))
-    ])
+    {:continue, next_state,
+     [
+       model_request(next_state, spec, Enum.reverse(state.observations))
+     ]}
   end
 
   def handle_event(
@@ -121,7 +125,7 @@ defmodule Alto.Loops.Default do
         %__MODULE__{phase: {:settling, {:stop, result}}} = state,
         _spec
       ) do
-    Transition.stop(state, result)
+    {{:stop, result}, state, []}
   end
 
   # step_settled hooks may emit run_tool effects, so their tool results can
@@ -133,7 +137,7 @@ defmodule Alto.Loops.Default do
         _spec
       )
       when type in [:tool_completed, :tool_failed] do
-    Transition.stop(%{state | observations: [event | state.observations]}, result)
+    {{:stop, result}, %{state | observations: [event | state.observations]}, []}
   end
 
   def handle_event(
@@ -142,11 +146,11 @@ defmodule Alto.Loops.Default do
         _spec
       )
       when type in [:tool_completed, :tool_failed] do
-    Transition.continue(%{state | observations: [event | state.observations]})
+    {:continue, %{state | observations: [event | state.observations]}, []}
   end
 
   def handle_event(%Event{} = event, %__MODULE__{} = state, _spec) do
-    Transition.error(state, {:unexpected_event, event.type, state.phase})
+    {{:error, {:unexpected_event, event.type, state.phase}}, state, []}
   end
 
   @impl true
@@ -191,15 +195,16 @@ defmodule Alto.Loops.Default do
         outcome: outcome
       })
 
-    Transition.continue(%{state | phase: {:settling, continuation}}, [Effect.emit(event)])
+    {:continue, %{state | phase: {:settling, continuation}}, [{:emit, event}]}
   end
 
   defp model_request(state, spec, observations \\ []) do
-    Effect.request_model(%{
-      task: state.task,
-      step: state.step,
-      context: spec.context,
-      observations: observations
-    })
+    {:request_model,
+     %{
+       task: state.task,
+       step: state.step,
+       context: spec.context,
+       observations: observations
+     }}
   end
 end

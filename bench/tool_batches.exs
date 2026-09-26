@@ -1,9 +1,7 @@
 defmodule Alto.Bench.OfflineBatchLoop do
   @behaviour Alto.Loop
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   @impl true
   def init(_task, spec) do
@@ -21,11 +19,11 @@ defmodule Alto.Bench.OfflineBatchLoop do
 
     effects =
       case mode do
-        :serial -> Enum.map(calls, &Effect.run_tool/1)
-        :parallel -> [Effect.run_tools(calls, 4)]
+        :serial -> Enum.map(calls, &{:run_tool, &1})
+        :parallel -> [{:run_tools, %{calls: calls, max_concurrency: 4}}]
       end
 
-    Transition.continue(%{count: count, values: []}, effects)
+    {:continue, %{count: count, values: []}, effects}
   end
 
   @impl true
@@ -37,14 +35,14 @@ defmodule Alto.Bench.OfflineBatchLoop do
     values = [{call_id, value} | values]
 
     if length(values) == count,
-      do: Transition.stop(%{state | values: values}, Enum.reverse(values)),
-      else: Transition.continue(%{state | values: values})
+      do: {{:stop, Enum.reverse(values)}, %{state | values: values}, []},
+      else: {:continue, %{state | values: values}, []}
   end
 
   def handle_event(%Event{type: :tool_failed, data: data}, _state, _spec),
-    do: Transition.error(%{}, {:unexpected_tool_failure, data})
+    do: {{:error, {:unexpected_tool_failure, data}}, %{}, []}
 
-  def handle_event(%Event{}, state, _spec), do: Transition.continue(state)
+  def handle_event(%Event{}, state, _spec), do: {:continue, state, []}
 end
 
 defmodule Alto.Bench.OfflineReadTool do

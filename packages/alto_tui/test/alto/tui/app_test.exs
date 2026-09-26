@@ -42,8 +42,8 @@ defmodule Alto.TUI.AppTest do
   end
 
   defmodule StopLoop do
-    def init(_, _), do: Alto.Transition.stop(nil, :completed)
-    def handle_event(_, _, _), do: Alto.Transition.stop(nil, :completed)
+    def init(_, _), do: {{:stop, :completed}, nil, []}
+    def handle_event(_, _, _), do: {{:stop, :completed}, nil, []}
   end
 
   defmodule CustomBackend do
@@ -69,13 +69,13 @@ defmodule Alto.TUI.AppTest do
   defmodule ApprovalParent do
     def init(_, _) do
       child = %{id: "child", task: %{}, loop: Alto.rule_loop(steps: ["approve_child"])}
-      Alto.Transition.continue(nil, [Alto.Effect.spawn_agents(%{agents: [child]})])
+      {:continue, nil, [{:spawn_agents, %{agents: [child]}}]}
     end
 
     def handle_event(%{type: :subagents_completed}, state, _),
-      do: Alto.Transition.stop(state, :done)
+      do: {{:stop, :done}, state, []}
 
-    def handle_event(_, state, _), do: Alto.Transition.continue(state)
+    def handle_event(_, state, _), do: {:continue, state, []}
   end
 
   defmodule ControllableCodexClient do

@@ -164,13 +164,13 @@ defmodule Alto.Runner.SerialCompactionTest do
               arguments_json: JSON.encode!(%{value: String.duplicate("x", 300)})
             }
 
-      Alto.Transition.continue(0, [Alto.Effect.run_tools(calls, 2)])
+      {:continue, 0, [{:run_tools, %{calls: calls, max_concurrency: 2}}]}
     end
 
     def handle_event(%Event{type: :tool_completed}, count, _) do
       if count == 1,
-        do: Alto.Transition.stop(2, :done),
-        else: Alto.Transition.continue(1)
+        do: {{:stop, :done}, 2, []},
+        else: {:continue, 1, []}
     end
   end
 

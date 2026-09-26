@@ -128,18 +128,19 @@ defmodule Alto.Runner.Execution.Parent do
     case call(fn -> Continuation.join(cell) end, run) do
       {:ok, joined} ->
         with {:ok, results, run} <- Children.merge_retained(joined.results, run),
-             {:continue, frame, next} <- complete.(results, cell, run, rest, terminal),
+             {:continue, {effects, terminal}, next} <-
+               complete.(results, cell, run, rest, terminal),
              {:ok, next} <- History.persist(next, allow_pending: true),
              {:ok, packet} <-
                call(
                  fn ->
-                   Checkpoint.capture_parent(next, %{kind: :frame}, frame.effects, frame.terminal)
+                   Checkpoint.capture_parent(next, %{kind: :frame}, effects, terminal)
                  end,
                  next
                ),
              {:ok, ready} <-
                call(fn -> Continuation.ready(cell, joined.revision, packet) end, next) do
-          grant(cell, ready, next, frame.effects, frame.terminal)
+          grant(cell, ready, next, effects, terminal)
         else
           {:done, outcome} -> {:done, outcome}
           {:error, reason} -> {:error, reason, run}
@@ -157,7 +158,7 @@ defmodule Alto.Runner.Execution.Parent do
   defp grant(cell, snapshot, run, effects, terminal) do
     with :ok <- Budget.check(run.budget),
          {:ok, _} <- call(fn -> Continuation.claim(cell, snapshot.revision) end, run) do
-      {:continue, %Alto.Runner.Execution.Frame{effects: effects, terminal: terminal}, run}
+      {:continue, {effects, terminal}, run}
     else
       {:error, reason} -> {:error, reason, run}
     end

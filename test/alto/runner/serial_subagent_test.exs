@@ -7,11 +7,9 @@ defmodule Alto.Runner.SerialSubagentTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Session
   alias Alto.TestSupport.EchoTool
-  alias Alto.Transition
 
   defmodule GuardedEchoTool do
     use Alto.Tool, name: :guarded_echo, execution_mode: :parallel, approval: :required
@@ -102,7 +100,7 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     @impl true
     def init(%{spawn: spawn}, _spec) do
-      Transition.continue(%{}, [Effect.spawn_agents(%{agents: [spawn]})])
+      {:continue, %{}, [{:spawn_agents, %{agents: [spawn]}}]}
     end
 
     @impl true
@@ -111,14 +109,14 @@ defmodule Alto.Runner.SerialSubagentTest do
           state,
           _spec
         ) do
-      Transition.stop(state, {:failed, data})
+      {{:stop, {:failed, data}}, state, []}
     end
 
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _spec) do
-      Transition.stop(state, {:completed, data})
+      {{:stop, {:completed, data}}, state, []}
     end
 
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule ExplodingLoop do
@@ -128,7 +126,7 @@ defmodule Alto.Runner.SerialSubagentTest do
     def init(_task, _spec), do: raise("child boom")
 
     @impl true
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   setup do

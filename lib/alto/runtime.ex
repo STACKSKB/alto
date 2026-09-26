@@ -9,12 +9,11 @@ defmodule Alto.Runtime do
 
   alias Alto.Event
   alias Alto.Loop.Spec
-  alias Alto.Transition
 
-  @spec init(Spec.t(), term()) :: Transition.t()
+  @spec init(Spec.t(), term()) :: Alto.Loop.transition()
   def init(%Spec{driver: driver} = spec, task), do: driver.init(task, spec)
 
-  @spec dispatch(Spec.t(), Event.t(), term(), map()) :: Transition.t()
+  @spec dispatch(Spec.t(), Event.t(), term(), map()) :: Alto.Loop.transition()
   def dispatch(%Spec{driver: driver} = spec, %Event{} = event, state, context \\ %{}) do
     terminal = fn next_event -> driver.handle_event(next_event, state, spec) end
 

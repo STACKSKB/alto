@@ -1,14 +1,14 @@
 defmodule Alto.Runner.ParentCheckpointTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Effect, OperationLog, Usage}
+  alias Alto.{OperationLog, Usage}
   alias Alto.Runner.{Budget, Checkpoint}
   alias Alto.Runner.Budget.Account
 
   defmodule Loop do
     @behaviour Alto.Loop
-    def init(task, _spec), do: Alto.Transition.continue(task)
-    def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
+    def init(task, _spec), do: {:continue, task, []}
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
     def dump_checkpoint(state, _spec), do: {:ok, state}
     def load_checkpoint(state, _spec), do: {:ok, state}
   end
@@ -67,7 +67,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
   test "round trip preserves parent state and tail without an approval request", context do
     %{run: run, pending: pending, opts: opts} = context
     run = %{run | compaction_count: 2, usage: %{run.usage | context_window: 200_000}}
-    tail = [Effect.request_model(%{context_message: "integrate"})]
+    tail = [{:request_model, %{context_message: "integrate"}}]
     assert :ok = Budget.take(run.budget)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
 

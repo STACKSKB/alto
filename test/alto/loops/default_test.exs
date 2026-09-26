@@ -1,7 +1,6 @@
 defmodule Alto.Loops.DefaultTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
   alias Alto.Runtime
 
@@ -9,22 +8,14 @@ defmodule Alto.Loops.DefaultTest do
     context = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
     spec = Alto.default_loop(context: context)
 
-    transition = Runtime.init(spec, "fix the parser")
-
-    assert transition.status == :continue
-    assert transition.state.phase == :awaiting_model
-
-    assert [
-             %Effect{
-               kind: :request_model,
-               data: %{task: "fix the parser", step: 1, context: ^context}
-             }
-           ] = transition.effects
+    assert {:continue, %{phase: :awaiting_model},
+            [{:request_model, %{task: "fix the parser", step: 1, context: ^context}}]} =
+             Runtime.init(spec, "fix the parser")
   end
 
   test "waits for all tools, settles the step, then requests the model again" do
     spec = Alto.default_loop()
-    initial = Runtime.init(spec, "inspect the repository")
+    {:continue, initial, _} = Runtime.init(spec, "inspect the repository")
 
     model =
       Event.durable(:model_completed, %{
@@ -35,55 +26,40 @@ defmodule Alto.Loops.DefaultTest do
         ]
       })
 
-    tools = Runtime.dispatch(spec, model, initial.state)
+    assert {:continue, tools, [{:run_tool, _}, {:run_tool, _}]} =
+             Runtime.dispatch(spec, model, initial)
 
-    assert Enum.map(tools.effects, & &1.kind) == [:run_tool, :run_tool]
+    assert {:continue, first_result, []} =
+             Runtime.dispatch(
+               spec,
+               Event.durable(:tool_completed, %{call_id: "call-1", result: "matches"}),
+               tools
+             )
 
-    first_result =
-      Runtime.dispatch(
-        spec,
-        Event.durable(:tool_completed, %{call_id: "call-1", result: "matches"}),
-        tools.state
-      )
+    assert {:continue, second_result, [{:emit, %Event{type: :step_settled} = settled}]} =
+             Runtime.dispatch(
+               spec,
+               Event.durable(:tool_completed, %{call_id: "call-2", result: "diff"}),
+               first_result
+             )
 
-    assert first_result.effects == []
-
-    second_result =
-      Runtime.dispatch(
-        spec,
-        Event.durable(:tool_completed, %{call_id: "call-2", result: "diff"}),
-        first_result.state
-      )
-
-    assert [%Effect{kind: :emit, data: %{event: %Event{type: :step_settled} = settled}}] =
-             second_result.effects
-
-    next_step = Runtime.dispatch(spec, settled, second_result.state)
-
-    assert next_step.state.step == 2
-
-    assert [%Effect{kind: :request_model, data: %{step: 2, observations: observations}}] =
-             next_step.effects
+    assert {:continue, %{step: 2}, [{:request_model, %{step: 2, observations: observations}}]} =
+             Runtime.dispatch(spec, settled, second_result)
 
     assert Enum.map(observations, & &1.data.call_id) == ["call-1", "call-2"]
   end
 
   test "a final model response stops only after the step-settled boundary" do
     spec = Alto.default_loop()
-    initial = Runtime.init(spec, "answer briefly")
+    {:continue, initial, _} = Runtime.init(spec, "answer briefly")
 
-    completed =
-      Runtime.dispatch(
-        spec,
-        Event.durable(:model_completed, %{message: "done", tool_calls: []}),
-        initial.state
-      )
+    assert {:continue, completed, [{:emit, settled}]} =
+             Runtime.dispatch(
+               spec,
+               Event.durable(:model_completed, %{message: "done", tool_calls: []}),
+               initial
+             )
 
-    assert completed.status == :continue
-    assert [%Effect{kind: :emit, data: %{event: settled}}] = completed.effects
-
-    stopped = Runtime.dispatch(spec, settled, completed.state)
-
-    assert stopped.status == {:stop, "done"}
+    assert {{:stop, "done"}, _, []} = Runtime.dispatch(spec, settled, completed)
   end
 end

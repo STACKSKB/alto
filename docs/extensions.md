@@ -122,7 +122,8 @@ shape. Provider usage remains authoritative after a request completes.
 ## Hooks, commands, and clients
 
 Middleware is an ordered list of three-argument functions `(event, context, next)`.
-Call `next.(event)` to continue the chain and return an `Alto.Transition`.
+Call `next.(event)` to continue the chain and return a
+`{terminal, loop_state, effects}` transition. See the [loop contract](loop-contract.md).
 Use closures to bind options, or capture a reusable module function:
 
 ```elixir

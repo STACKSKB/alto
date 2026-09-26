@@ -23,7 +23,7 @@ ineffective, a request still fitting the hard window can proceed. A hard
 context-window failure attempts reduction too, but never sends an oversized
 request. Transcript byte overflow remains an independent trigger.
 
-Trusted loops can emit `Alto.Effect.compact_context/1` for manual reduction.
+Trusted loops can emit `{:compact_context, options}` for manual reduction.
 Independent hosts can call `Alto.Runner.Execution.Transcript.reduce/2` directly.
 The optional `required_headroom` specifies how many transcript bytes must fit
 afterwards. A successful reduction must strictly shrink the retained context;

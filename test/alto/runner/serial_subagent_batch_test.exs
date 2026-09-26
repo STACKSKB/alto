@@ -1,23 +1,21 @@
 defmodule Alto.Runner.SerialSubagentBatchTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Effect
   alias Alto.Event
-  alias Alto.Transition
 
   defmodule BatchLoop do
     @behaviour Alto.Loop
 
     @impl true
     def init(%{agents: agents}, _spec),
-      do: Transition.continue(%{}, [Effect.spawn_agents(%{agents: agents})])
+      do: {:continue, %{}, [{:spawn_agents, %{agents: agents}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _spec),
-      do: Transition.stop(state, {:completed, data})
+      do: {{:stop, {:completed, data}}, state, []}
 
     @impl true
-    def handle_event(_event, state, _spec), do: Transition.continue(state)
+    def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
   defmodule BlockingProvider do

@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,038 lines**, a **21.2% reduction**, with **3,580 lines remaining**.
+Current: **31,940 lines**, a **21.4% reduction**, with **3,482 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,17 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Loop transitions, effects and scheduler frames now use tagged tuples across the
+runtime, middleware, checkpoints and manual scheduler. Effect and Transition
+constructor modules and the embedded Frame struct are deleted, with no replacement
+constructors. Terminal tails, hook ordering, batch barriers and durable frame
+validation remain at their execution boundaries. The [loop contract](loop-contract.md)
+documents the tuples and preserves the removed modules' semantic guidance.
+This pass removes **98 production lines**: **49 code/typespec**, **15 blank**,
+and **34 source documentation/comment** lines. Fixtures and benchmarks now use the
+same values as production; no compatibility layer or migration was added. All
+1,077 core tests and 145 TUI tests pass.
 
 The CLI now uses `Config.run_options` for execution settings instead of a parallel
 flag-to-provider/tool/prompt/sandbox compiler. Execution override flags are removed;

@@ -720,11 +720,12 @@ defmodule Alto.Runner.SerialTest do
   test "a step_settled hook may run a tool before the next model request" do
     hook_effects = fn _event, _context ->
       [
-        Alto.Effect.run_tool(%{
-          id: "hook-echo",
-          name: "echo",
-          arguments_json: ~s({"value":"hook"})
-        })
+        {:run_tool,
+         %{
+           id: "hook-echo",
+           name: "echo",
+           arguments_json: ~s({"value":"hook"})
+         }}
       ]
     end
 
@@ -770,7 +771,7 @@ defmodule Alto.Runner.SerialTest do
 
   test "a step_settled hook tool failure is absorbed and the run continues" do
     hook_effects = fn _event, _context ->
-      [Alto.Effect.run_tool(%{id: "hook-missing", name: "missing_tool", arguments_json: "{}"})]
+      [{:run_tool, %{id: "hook-missing", name: "missing_tool", arguments_json: "{}"}}]
     end
 
     spec =
@@ -798,11 +799,12 @@ defmodule Alto.Runner.SerialTest do
   test "a hook tool effect after the final step keeps the stop result" do
     hook_effects = fn _event, _context ->
       [
-        Alto.Effect.run_tool(%{
-          id: "hook-echo",
-          name: "echo",
-          arguments_json: ~s({"value":"hook"})
-        })
+        {:run_tool,
+         %{
+           id: "hook-echo",
+           name: "echo",
+           arguments_json: ~s({"value":"hook"})
+         }}
       ]
     end
 
