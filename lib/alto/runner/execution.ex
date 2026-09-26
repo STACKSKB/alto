@@ -199,9 +199,13 @@ defmodule Alto.Runner.Execution do
       {:continue, :ok} ->
         run = activate_agents(run)
 
-        if Alto.Messaging.paused?(run.messaging) == true,
-          do: suspend_execution(effects, run, terminal),
-          else: admit_input(effects, run, terminal)
+        if Alto.Messaging.paused?(run.messaging) == true do
+          suspend(run, :execution_suspended, fn run ->
+            Alto.Runner.Checkpoint.capture_execution(run, effects, terminal)
+          end)
+        else
+          admit_input(effects, run, terminal)
+        end
     end
   end
 
@@ -210,18 +214,19 @@ defmodule Alto.Runner.Execution do
     Map.put(run, :activate_agents, false)
   end
 
-  defp suspend_execution(effects, run, terminal) do
-    with {:ok, run} <- History.persist(run, allow_pending: true),
-         {:ok, packet} <-
-           checkpoint_call(
-             fn -> Alto.Runner.Checkpoint.capture_execution(run, effects, terminal) end,
-             run
-           ) do
-      {:done,
-       {:error, :execution_suspended, %{result(run, nil, :checkpoint) | checkpoint: packet}}}
-    else
-      {:error, reason} -> {:done, {:error, reason, result(run, nil, :error)}}
-      {:error, reason, next} -> {:done, {:error, reason, result(next, nil, :error)}}
+  defp suspend(run, reason, capture) do
+    case History.persist(run, allow_pending: true) do
+      {:ok, next} ->
+        case checkpoint_call(fn -> capture.(next) end, next) do
+          {:ok, packet} ->
+            {:done, {:error, reason, %{result(next, nil, :checkpoint) | checkpoint: packet}}}
+
+          {:error, reason} ->
+            {:done, {:error, reason, result(next, nil, :error)}}
+        end
+
+      {:error, reason, next} ->
+        {:done, {:error, reason, result(next, nil, :error)}}
     end
   end
 
@@ -352,25 +357,11 @@ defmodule Alto.Runner.Execution do
   defp finish_effect(interpreted, rest, run, terminal) do
     case interpreted do
       {:suspend, pending, next_run} ->
-        with {:ok, next_run} <- History.persist(next_run, allow_pending: true) do
-          case checkpoint_call(
-                 fn ->
-                   if next_run.agent_depth > 0,
-                     do: Alto.Runner.Checkpoint.capture_child(next_run, pending, rest, terminal),
-                     else: Alto.Runner.Checkpoint.capture(next_run, pending, rest, terminal)
-                 end,
-                 next_run
-               ) do
-            {:ok, packet} ->
-              value = %{result(next_run, nil, :checkpoint) | checkpoint: packet}
-              {:done, {:error, :approval_suspended, value}}
-
-            {:error, reason} ->
-              {:done, {:error, reason, result(next_run, nil, :error)}}
-          end
-        else
-          {:error, reason, next_run} -> {:done, {:error, reason, result(next_run, nil, :error)}}
-        end
+        suspend(next_run, :approval_suspended, fn run ->
+          if run.agent_depth > 0,
+            do: Alto.Runner.Checkpoint.capture_child(run, pending, rest, terminal),
+            else: Alto.Runner.Checkpoint.capture(run, pending, rest, terminal)
+        end)
 
       {:error, reason} ->
         {:done, {:error, reason, result(run, nil, :error)}}
@@ -948,14 +939,14 @@ defmodule Alto.Runner.Execution do
 
   defp run_batch(calls, run, rest, terminal) do
     interpreted =
-      with {:ok, jobs_rev, run} <- prepare_batch(calls, run),
-           do: dispatch_tool_jobs(Enum.reverse(jobs_rev), run)
+      with {:ok, entries, run} <- prepare_batch(calls, run),
+           do: dispatch_tool_jobs(Enum.reverse(entries), run)
 
     finish_effect(interpreted, rest, run, terminal)
   end
 
-  defp dispatch_tool_jobs(jobs, run) do
-    ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
+  defp dispatch_tool_jobs(entries, run) do
+    ready = for {job, :ready} <- entries, do: job
 
     with {:ok, run} <- begin_tool_jobs(ready, run) do
       response = Alto.Runner.ToolBatch.run(Enum.map(ready, &{&1.tool, &1.prepared}), run)
@@ -967,9 +958,31 @@ defmodule Alto.Runner.Execution do
           {:error, reason, outcomes} -> {outcomes, reason}
         end
 
-      indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
-      outcomes = Enum.map(jobs, &Map.get(indexed, &1.op_id, {:rejected, &1[:error]}))
-      finish_tool_jobs(jobs, outcomes, run, stopped)
+      # ToolBatch returns one outcome per ready job in source order. Rejected
+      # entries do not consume worker outcomes, but retain their position.
+      {run, events, failure, []} =
+        Enum.reduce(entries, {run, [], nil, outcomes}, fn {job, admission},
+                                                          {run, events, failure, outcomes} ->
+          {outcome, outcomes} =
+            case admission do
+              :ready -> {hd(outcomes), tl(outcomes)}
+              rejected -> {rejected, outcomes}
+            end
+
+          case finish_tool_job(job, outcome, run) do
+            {:event, event, next} ->
+              {Events.record(next, event), [event | events], failure, outcomes}
+
+            {:error, reason, next} ->
+              {next, events, failure || reason, outcomes}
+          end
+        end)
+
+      # Commit every outcome before middleware-generated effects execute.
+      case stopped || failure do
+        nil -> {:events, Enum.reverse(events), run}
+        reason -> {:error, reason, run}
+      end
     end
   end
 
@@ -988,10 +1001,10 @@ defmodule Alto.Runner.Execution do
               {:halt, {:error, {:cancelled, reason}, run}}
 
             {:ok, job, _details} ->
-              {:cont, {:ok, [job | jobs], run}}
+              {:cont, {:ok, [{job, :ready} | jobs], run}}
 
             {:error, reason, job} ->
-              {:cont, {:ok, [Map.put(job, :error, reason) | jobs], run}}
+              {:cont, {:ok, [{job, {:rejected, reason}} | jobs], run}}
           end
 
         {:error, reason} ->
@@ -1001,29 +1014,6 @@ defmodule Alto.Runner.Execution do
           {:halt, {:error, {:cancelled, reason}, next}}
       end
     end)
-  end
-
-  defp finish_tool_jobs(jobs, outcomes, run, stopped) do
-    # All worker outcomes are folded before any middleware-generated effect
-    # executes. Each invocation is correlated and accounted exactly once.
-    {run, events, failure} =
-      Enum.zip(jobs, outcomes)
-      |> Enum.reduce({run, [], nil}, fn {job, outcome}, {run, events, failure} ->
-        interpreted = finish_tool_job(job, outcome, run)
-
-        case interpreted do
-          {:event, event, next} -> {Events.record(next, event), [event | events], failure}
-          {:error, reason, next} -> {next, events, failure || reason}
-        end
-      end)
-
-    case stopped || failure do
-      nil ->
-        {:events, Enum.reverse(events), run}
-
-      reason ->
-        {:error, reason, run}
-    end
   end
 
   defp dispatch_batch([], run, effects, rest, terminal),
@@ -1117,7 +1107,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([job], run)
+  defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([{job, :ready}], run)
 
   defp agent_operation(Alto.Tools.StartAgents, prepared, run) do
     # Async checkpoints use cooperative effect boundaries. Durable child-approval

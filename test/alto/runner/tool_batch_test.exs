@@ -88,21 +88,32 @@ defmodule Alto.Runner.ToolBatchTest do
     refute_receive {:prepared, "first"}, 10
   end
 
-  test "preparation happens once and rejected preparation never executes" do
-    assert {:ok, _} =
-             Alto.run(
-               "read",
-               options([
-                 call("a", %{value: "bad", reject: true}),
-                 call("b", %{value: "good"})
-               ])
-             )
+  test "prepared and rejected calls retain source order and execute only admitted work" do
+    for rejected <- [["a"], ["b"], ["a", "b"]] do
+      calls = for id <- ["a", "b"], do: call(id, %{value: id, reject: id in rejected})
+      assert {:ok, result} = Alto.run("read", options(calls))
 
-    assert_receive {:prepared, "bad"}
-    assert_receive {:prepared, "good"}
-    refute_receive {:prepared, _}, 20
-    refute_receive {:started, "bad", _}, 20
-    assert_receive {:started, "good", _}
+      for id <- ["a", "b"] do
+        assert_receive {:prepared, ^id}
+
+        if id in rejected,
+          do: refute_receive({:started, ^id, _}, 20),
+          else: assert_receive({:started, ^id, _})
+      end
+
+      refute_receive {:prepared, _}, 20
+      assert_receive {:history, history}
+      tools = Enum.filter(history, &(&1["role"] == "tool"))
+      assert Enum.map(tools, & &1["tool_call_id"]) == ["a", "b"]
+
+      outcomes =
+        for event <- result.events, event.type in [:tool_completed, :tool_failed], do: event.data
+
+      assert Enum.map(outcomes, & &1.call_id) == ["a", "b"]
+
+      assert Enum.filter(outcomes, &(&1.outcome == :rejected_before_dispatch))
+             |> Enum.map(& &1.call_id) == rejected
+    end
   end
 
   test "exclusive approval-requiring calls are barriers and denial prevents invocation" do

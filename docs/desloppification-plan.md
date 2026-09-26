@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,087 lines (16.2% below the original)**. **5,629 lines
+The current count is **34,065 lines (16.2% below the original)**. **5,607 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,14 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Approval and cooperative child suspension share history persistence, bounded
+  checkpoint capture, and result assembly through a capture callback. Capture
+  and failure results use the latest persisted run revision.
+- Tool batches carry explicit admission outcomes and consume worker results in
+  source order, removing the operation-ID index and reconstructed outcome list.
+  Rejected calls keep their event/transcript positions and never consume results.
+- Delegated Codex execution carries one turn state through notifications, dynamic
+  calls, steering, and follow-ups instead of repeatedly threading seven arguments.
 - Queue records have one map representation across storage, replay, and reads.
   Atomic snapshots replace the multi-record snapshot/checksum protocol; the
   snapshot format is version 8, with no migration. Ledger checkpoint operations
