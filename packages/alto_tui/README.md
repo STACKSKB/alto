@@ -62,8 +62,10 @@ Omitted labels and credential IDs use the profile ID; an omitted default model
 uses the provider's `:model` option. Explicit profiles do not accept map/keyword
 shorthands or string-only model catalogs.
 
-Provider and model forms show a cursor in the focused field. Type to edit, use
-Left/Right to move the cursor, and Tab to move between fields. API keys stay masked.
+Forms share the menu navigation: use Tab or Up/Down to select a field or action.
+The selected field is edited above the list; Left/Right moves its cursor. Enter
+advances to the next field or submits the last field, and Ctrl+S submits directly.
+API keys stay masked. Folder forms use Tab for path completion.
 
 While a run is active, the conversation border shows an animated stage and elapsed
 time, including waiting for the model, thinking, receiving text, running tools,

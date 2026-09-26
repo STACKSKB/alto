@@ -2,12 +2,12 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{Menu, State, TextForm}
+  alias Alto.TUI.{Menu, State}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Text.{Line, Span}
-  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, Popup, TextInput}
+  alias ExRatatui.Widgets.{Block, Clear, List, Paragraph, TextInput}
 
   @accent {:rgb, 105, 180, 255}
   @muted {:rgb, 116, 126, 140}
@@ -55,26 +55,14 @@ defmodule Alto.TUI.View do
   end
 
   @doc "Content that supports ordinary selection; chrome requires Alt+drag."
-  def selection_content(%State{overlay: %{fields: _} = form}, width, height) do
-    rect = content_rect(overlay_rect(form, width, height))
-    prefix = form.prefix_width
+  def selection_content(%State{overlay: %{editor?: true} = menu}, width, height) do
+    case Menu.selected(menu) do
+      %{input: _} ->
+        [editor_rect(menu, content_rect(overlay_rect(menu, width, height)))]
 
-    form.fields
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {field, row} ->
-      field_row = TextForm.field_row(row)
-
-      if ExRatatui.text_input_get_value(field.input) == "" or field_row >= rect.height,
-        do: [],
-        else: [
-          %Rect{
-            x: rect.x + prefix,
-            y: rect.y + field_row,
-            width: max(rect.width - prefix, 0),
-            height: 1
-          }
-        ]
-    end)
+      _ ->
+        []
+    end
   end
 
   def selection_content(%State{overlay: overlay}, _, _) when not is_nil(overlay), do: []
@@ -110,22 +98,19 @@ defmodule Alto.TUI.View do
   @doc "Resolve mouse coordinates to a semantic UI target."
   def hit_target(%State{overlay: overlay}, width, height, x, y) when not is_nil(overlay) do
     popup = overlay_rect(overlay, width, height)
+    inner = content_rect(popup)
+    list = menu_list_rect(overlay, inner)
+    {_items, offset} = Menu.window(overlay, list.height)
 
-    if PaneLayout.contains?(popup, x, y) do
-      row = y - popup.y - 1
+    cond do
+      PaneLayout.contains?(list, x, y) and y - list.y + offset < length(Menu.items(overlay)) ->
+        {:overlay_row, y - list.y + offset}
 
-      if PaneLayout.contains?(content_rect(popup), x, y) do
-        offset =
-          if Map.has_key?(overlay, :fields) or is_binary(Map.get(overlay, :message)),
-            do: 0,
-            else: max(overlay.index - (popup.height - 2) + 1, 0)
-
-        {:overlay_row, row + offset}
-      else
+      PaneLayout.contains?(popup, x, y) ->
         :overlay
-      end
-    else
-      :overlay_outside
+
+      true ->
+        :overlay_outside
     end
   end
 
@@ -509,120 +494,91 @@ defmodule Alto.TUI.View do
 
   defp add_overlay(widgets, nil, _root), do: widgets
 
-  defp add_overlay(widgets, %{fields: _} = form, root),
-    do: widgets ++ text_form_widgets(form, root)
+  defp add_overlay(widgets, menu, root) do
+    rect = overlay_rect(menu, root.width, root.height)
+    inner = content_rect(rect)
+    list_rect = menu_list_rect(menu, inner)
+    {items, offset} = Menu.window(menu, list_rect.height)
+    bg = style(fg: :white, bg: @panel_alt)
+    field = Menu.selected(menu)
 
-  defp add_overlay(widgets, overlay, root) do
-    items = Menu.items(overlay)
-    selected = safe_selected(overlay.index, items)
+    title =
+      if field && field[:input],
+        do: Menu.title(menu) <> " · " <> field.label,
+        else: Menu.title(menu)
 
-    list = %List{
-      items: Enum.map(items, & &1.label),
-      selected: selected,
-      highlight_symbol: "› ",
-      highlight_style: style(fg: :black, bg: @accent, modifiers: [:bold]),
-      style: style(fg: :white, bg: @panel_alt)
-    }
+    hint = menu[:hint] || "↑↓ · Enter · Esc"
+    title = " #{title} │ #{if(menu[:editor?], do: "^S save · ", else: "")}#{hint} "
 
-    content =
-      if is_binary(Map.get(overlay, :message)) do
-        %Paragraph{
-          text:
-            overlay_message_prefix(overlay) <>
-              overlay.message <>
-              "\n\n" <>
-              (items
-               |> Enum.with_index()
-               |> Enum.map_join("\n", fn {item, index} ->
-                 if index == selected, do: "› " <> item.label, else: "  " <> item.label
-               end)),
-          wrap: true,
-          style: style(fg: :white, bg: @panel_alt)
-        }
-      else
-        list
+    widgets ++
+      [
+        {%Clear{}, rect},
+        {%Paragraph{
+           text: menu[:error] || menu[:message] || menu[:intro] || "",
+           wrap: true,
+           style: bg,
+           block: overlay_block(title)
+         }, rect},
+        {%List{
+           items: Enum.map(items, & &1.label),
+           selected: menu.index - offset,
+           highlight_symbol: "› ",
+           highlight_style: style(fg: :black, bg: @accent),
+           style: bg
+         }, list_rect}
+      ] ++ menu_editor(menu, inner, bg)
+  end
+
+  defp menu_list_rect(menu, inner) do
+    header =
+      cond do
+        menu[:editor?] ->
+          if menu[:error],
+            do:
+              min(
+                tuple_size(Alto.TUI.Viewport.rows(menu.error, max(inner.width, 1))) + 3,
+                max(inner.height - 1, 0)
+              ),
+            else: 4
+
+        menu[:message] ->
+          min(
+            tuple_size(Alto.TUI.Viewport.rows(menu.message, max(inner.width, 1))) + 1,
+            max(inner.height - length(Menu.items(menu)), 0)
+          )
+
+        true ->
+          0
       end
 
-    popup = %Popup{
-      content: content,
-      block: overlay_block(" #{Menu.title(overlay)} │ ↑↓ · Enter · Esc "),
-      percent_width: 62,
-      percent_height: 62
-    }
-
-    widgets ++ [{popup, root}]
+    %{inner | y: inner.y + min(header, inner.height), height: max(inner.height - header, 0)}
   end
 
-  defp text_form_widgets(form, root) do
-    rect = overlay_rect(form, root.width, root.height)
-    inner = content_rect(rect)
-    bg = style(fg: :white, bg: @panel_alt)
+  defp menu_editor(%{editor?: true} = menu, inner, bg) do
+    case Menu.selected(menu) do
+      %{input: input} = field ->
+        state = if field[:secret?], do: Menu.masked_state(field), else: input
 
-    error_row = 2 + length(form.fields)
-    {button_row, _cancel_row} = TextForm.button_rows(form)
+        [
+          {%TextInput{
+             state: state,
+             placeholder: field[:placeholder] || field.label,
+             style: bg,
+             cursor_style: style(fg: :black, bg: @accent)
+           }, editor_rect(menu, inner)}
+        ]
 
-    rows =
-      [{if(form.error, do: "  ! " <> form.error, else: ""), error_row}] ++
-        Enum.with_index(form.buttons, fn label, index -> {"  " <> label, button_row + index} end)
-
-    background = [
-      {%Clear{}, rect},
-      {%Paragraph{
-         text: "  " <> form.intro,
-         style: bg,
-         block: overlay_block(" #{form.title} │ #{form.hint} ")
-       }, rect}
-    ]
-
-    background ++
-      Enum.flat_map(Enum.with_index(form.fields), &text_form_field(form, inner, bg, &1)) ++
-      Enum.map(rows, fn {text, row} -> {form_paragraph(text, bg), form_row(inner, row)} end)
-  end
-
-  defp text_form_field(form, inner, bg, {field, index}) do
-    active? = form.field_index == index
-    locked? = Map.get(field, :locked?, false)
-    secret? = Map.get(field, :secret?, false)
-    prefix_width = form.prefix_width
-
-    prefix =
-      if(active?, do: "› ", else: "  ") <> String.pad_trailing(field.label, prefix_width - 2)
-
-    row = form_row(inner, TextForm.field_row(index))
-    value = ExRatatui.text_input_get_value(field.input)
-
-    if active? and not locked? do
-      visible_prefix = min(prefix_width, row.width)
-      input_rect = %{row | x: row.x + visible_prefix, width: max(row.width - visible_prefix, 0)}
-      state = if secret?, do: TextForm.masked_state(field), else: field.input
-
-      [
-        {form_paragraph(prefix, bg), %{row | width: min(prefix_width, row.width)}},
-        {%TextInput{
-           state: state,
-           placeholder: Map.get(field, :placeholder),
-           placeholder_style: style(fg: @muted, bg: @panel_alt),
-           style: bg,
-           cursor_style: style(fg: :black, bg: @accent)
-         }, input_rect}
-      ]
-    else
-      display =
-        cond do
-          secret? and value != "" -> String.duplicate("•", length(String.codepoints(value)))
-          secret? -> Map.get(field, :placeholder, "")
-          true -> value
-        end
-
-      suffix = if locked?, do: "  (fixed)", else: ""
-      [{form_paragraph(prefix <> display <> suffix, bg), row}]
+      _ ->
+        []
     end
   end
 
-  defp form_row(inner, offset),
-    do: %{inner | y: inner.y + offset, height: min(max(inner.height - offset, 0), 1)}
+  defp menu_editor(_menu, _inner, _bg), do: []
 
-  defp form_paragraph(text, style), do: %Paragraph{text: text, wrap: false, style: style}
+  defp editor_rect(menu, inner) do
+    list = menu_list_rect(menu, inner)
+    %{inner | y: max(list.y - 2, inner.y), height: min(max(inner.height - 2, 0), 1)}
+  end
 
   @doc "Settings labels and exact click widths."
   def settings_segments(state) do
@@ -763,9 +719,6 @@ defmodule Alto.TUI.View do
 
   defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
 
-  defp overlay_rect(%{fields: _} = form, width, height),
-    do: popup_rect(width, height, form.width_percent, form.height_percent)
-
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
 
   defp popup_rect(width, height, width_percent, height_percent) do
@@ -817,12 +770,6 @@ defmodule Alto.TUI.View do
   defp context_labels(%{details_return_focus: focus}) when not is_nil(focus), do: {"OPEN", "O"}
   defp context_labels(%{details_visible?: true}), do: {"CTX", "C"}
   defp context_labels(_state), do: {"OFF", "X"}
-
-  defp overlay_message_prefix(%{kind: :model_error}),
-    do: "Could not load this provider's model catalog:\n"
-
-  defp overlay_message_prefix(%{kind: :codex_error}), do: "Codex App Server reported:\n"
-  defp overlay_message_prefix(_overlay), do: ""
 
   defp short(nil, _max), do: "—"
 

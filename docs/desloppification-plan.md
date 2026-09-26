@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,517 lines**, a **20.0% reduction**, with **4,059 lines remaining**.
+Current: **32,458 lines**, a **20.2% reduction**, with **4,000 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,14 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+TUI forms and menus now share one item list, selection, scrolling window,
+keyboard/paste handling, renderer and mouse hit-testing path. Fields use native
+inputs and actions use closures; the separate TextForm module is deleted. The
+selected field is edited above the list, with locked IDs, masked credentials,
+folder completion/creation and worktree actions retained. Empty menu space cannot
+activate actions. This pass removes **59 production lines**: **40 code/typespec**,
+**18 blank**, and **1 documentation/comment** line.
 
 Prompts, retry policies and tool presenters now use function callbacks. Configured
 options live in closures; the Prompt.Builder, Retry and ToolPresentation dispatch
@@ -181,7 +189,9 @@ been checked against callers; reject extractions that add adapters without
 removing implementation. Recent CLI/menu/selection reviews found no substantial
 remaining duplication; merely wrapping their distinct flows is not progress.
 Provider response/state prototypes were discarded: after formatting, they
-removed only five lines while adding a reconstruction step. Workspace lifecycle
+removed only five lines while adding a reconstruction step. A native Inspect
+diagnostic renderer was also discarded: preserving redaction and media handling
+left two recursive paths and only 23 lines saved before required fixes. Workspace lifecycle
 and listener audits likewise found no large duplicate flow beyond the existing
 shared storage, HTTP and connection mechanisms.
 
@@ -200,7 +210,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,083 core tests** and **143 TUI tests** with application
+The current code passes **1,083 core tests** and **145 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

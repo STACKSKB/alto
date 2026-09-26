@@ -312,7 +312,7 @@ defmodule Alto.TUI.AppTest do
         next
       end)
 
-    assert Alto.TUI.TextForm.value(typed.overlay) == "Second Project!"
+    assert Alto.TUI.Menu.value(typed.overlay, :path) == "Second Project!"
     {:noreply, opened} = App.handle_event(%Key{code: "enter"}, typed)
     assert opened.overlay == nil
     assert opened.selected_project_id != original
@@ -345,13 +345,16 @@ defmodule Alto.TUI.AppTest do
 
     {:noreply, returned} = App.handle_event(%Key{code: "esc"}, chooser)
     assert returned.overlay == form.overlay
-    assert Alto.TUI.TextForm.value(returned.overlay) == "a"
+    assert Alto.TUI.Menu.value(returned.overlay, :path) == "a"
     {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, returned)
     {:noreply, chooser} = App.handle_event(%Key{code: "down"}, chooser)
     {:noreply, selected} = App.handle_event(%Key{code: "enter"}, chooser)
-    assert Alto.TUI.TextForm.value(selected.overlay) == context.root <> "/another folder/"
+    assert Alto.TUI.Menu.value(selected.overlay, :path) == context.root <> "/another folder/"
     {:noreply, completed} = App.handle_event(%Key{code: "tab"}, selected)
-    assert Alto.TUI.TextForm.value(completed.overlay) == context.root <> "/another folder/nested/"
+
+    assert Alto.TUI.Menu.value(completed.overlay, :path) ==
+             context.root <> "/another folder/nested/"
+
     {:noreply, opened} = App.handle_event(%Key{code: "enter"}, completed)
     assert State.selected_project(opened)["root"] == context.root <> "/another folder/nested"
 
@@ -368,7 +371,7 @@ defmodule Alto.TUI.AppTest do
     {:noreply, clicked} =
       App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
 
-    assert Alto.TUI.TextForm.value(clicked.overlay) == context.root <> "/another folder/"
+    assert Alto.TUI.Menu.value(clicked.overlay, :path) == context.root <> "/another folder/"
   end
 
   test "folder completion preserves typed prefixes and saved folders remain explicit choices",
@@ -379,19 +382,19 @@ defmodule Alto.TUI.AppTest do
     state = state!(context)
     form = folder_form(state)
     {:noreply, empty} = App.handle_event(%Key{code: "tab"}, form)
-    assert Alto.TUI.TextForm.value(empty.overlay) == ""
+    assert Alto.TUI.Menu.value(empty.overlay, :path) == ""
     {:noreply, saved} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, empty)
     assert Enum.any?(saved.overlay.items, &(&1.label == context.root <> "/"))
     {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "pro"}, form)
     {:noreply, completed} = App.handle_event(%Key{code: "tab"}, form)
-    assert Alto.TUI.TextForm.value(completed.overlay) == context.root <> "/project-"
+    assert Alto.TUI.Menu.value(completed.overlay, :path) == context.root <> "/project-"
     {:noreply, unchanged} = App.handle_event(%Key{code: "tab"}, completed)
-    assert Alto.TUI.TextForm.value(unchanged.overlay) == context.root <> "/project-"
+    assert Alto.TUI.Menu.value(unchanged.overlay, :path) == context.root <> "/project-"
     {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, unchanged)
     assert length(chooser.overlay.items) == 2
     {:noreply, filtered} = App.handle_event(%ExRatatui.Event.Paste{content: "two"}, chooser)
     {:noreply, selected} = App.handle_event(%Key{code: "enter"}, filtered)
-    assert Alto.TUI.TextForm.value(selected.overlay) == context.root <> "/project-two/"
+    assert Alto.TUI.Menu.value(selected.overlay, :path) == context.root <> "/project-two/"
   end
 
   test "folder chooser mouse selection follows its scrolled viewport", context do
@@ -435,64 +438,70 @@ defmodule Alto.TUI.AppTest do
         selected
       )
 
-    assert Alto.TUI.TextForm.value(selected.overlay) == expected
+    assert Alto.TUI.Menu.value(selected.overlay, :path) == expected
   end
 
-  test "folder form exposes chooser and creation mouse controls on narrow terminals", context do
+  test "folder menu exposes scrolled chooser and creation controls on narrow terminals",
+       context do
     state = %{state!(context) | dimensions: {50, 16}}
     form = folder_form(state)
     {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "猫 folder"}, form)
+    form = put_in(form.overlay.index, 3)
     terminal = ExRatatui.init_test_terminal(50, 16)
-    ExRatatui.draw(terminal, View.widgets(form, %{width: 50, height: 16}))
-    screen = ExRatatui.get_buffer_content(terminal)
+    frame = %{width: 50, height: 16}
+    widgets = View.widgets(form, frame)
+    ExRatatui.draw(terminal, widgets)
+    assert ExRatatui.get_buffer_content(terminal) =~ "Choose folder"
 
-    for label <- ["Open folder", "Cancel", "Choose folder", "Create folder"],
-        do: assert(screen =~ label)
+    {%ExRatatui.Widgets.List{}, list} =
+      Enum.find(Enum.reverse(widgets), fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget)
+      end)
 
-    assert length(View.selection_content(form, 50, 16)) == 1
-    popup_x = div(50 - div(50 * 80, 100), 2)
-    popup_y = div(16 - div(16 * 65, 100), 2)
-    {first_button, _} = Alto.TUI.TextForm.button_rows(form.overlay)
-
-    assert View.hit_target(form, 50, 16, popup_x, popup_y + 1 + first_button + 3) == :overlay
-
-    {:noreply, chooser} =
-      App.handle_event(
-        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 2},
-        form
-      )
+    x = list.x + 1
+    y = list.y + list.height - 1
+    assert View.hit_target(form, 50, 16, x - 2, y) == :overlay
+    {:noreply, chooser} = App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, form)
 
     {:noreply, chooser} =
-      App.handle_event(
-        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 2},
-        chooser
-      )
+      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, chooser)
 
     assert chooser.overlay.kind == :folder
-
-    {:noreply, returned} =
-      App.handle_event(%Mouse{kind: "down", button: "left", x: 0, y: 0}, chooser)
-
-    {:noreply, returned} =
-      App.handle_event(%Mouse{kind: "up", button: "left", x: 0, y: 0}, returned)
-
+    {:noreply, returned} = App.handle_event(%Key{code: "esc"}, chooser)
     assert returned.overlay == form.overlay
+    {:noreply, returned} = App.handle_event(%Key{code: "down"}, returned)
+    ExRatatui.draw(terminal, View.widgets(returned, frame))
+    assert ExRatatui.get_buffer_content(terminal) =~ "Create folder"
 
     {:noreply, opened} =
-      App.handle_event(
-        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 3},
-        returned
-      )
+      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, returned)
 
-    {:noreply, opened} =
-      App.handle_event(
-        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 3},
-        opened
-      )
-
+    {:noreply, opened} = App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, opened)
     assert opened.overlay == nil
     assert File.dir?(Path.join(context.root, "猫 folder"))
-    assert State.selected_project(opened)["root"] == Path.join(context.root, "猫 folder")
+  end
+
+  test "blank menu rows cannot create a workspace", context do
+    form = folder_form(state!(context))
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "must-not-create"}, form)
+    {width, height} = form.dimensions
+    widgets = View.widgets(form, %{width: width, height: height})
+
+    {%ExRatatui.Widgets.List{}, list} =
+      Enum.find(Enum.reverse(widgets), fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget)
+      end)
+
+    x = list.x + 1
+    y = list.y + length(form.overlay.items)
+    assert View.hit_target(form, width, height, x, y) == :overlay
+    {:noreply, clicked} = App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, form)
+
+    {:noreply, clicked} =
+      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+
+    assert clicked.overlay == form.overlay
+    refute File.exists?(Path.join(context.root, "must-not-create"))
   end
 
   test "create folder opens the typed nested path without losing the draft", context do
@@ -519,7 +528,7 @@ defmodule Alto.TUI.AppTest do
     {:noreply, failed} = App.handle_event(%Key{code: "n", modifiers: ["ctrl"]}, form)
     assert failed.overlay.error =~ "already exists"
     assert failed.overlay.error =~ "Open folder"
-    assert Alto.TUI.TextForm.value(failed.overlay) == folder
+    assert Alto.TUI.Menu.value(failed.overlay, :path) == folder
     assert failed.selected_project_id == opened.selected_project_id
   end
 
@@ -861,14 +870,18 @@ defmodule Alto.TUI.AppTest do
 
     filtered = Enum.reduce(String.graphemes("read"), menu, &type.(&2, &1))
 
-    popup =
-      Enum.find_value(View.widgets(filtered, %{width: 120, height: 36}), fn
-        {%ExRatatui.Widgets.Popup{} = popup, _rect} -> popup
-        _ -> nil
+    widgets = View.widgets(filtered, %{width: 120, height: 36})
+
+    {header, _} =
+      Enum.find(Enum.reverse(widgets), fn {widget, _} -> Map.get(widget, :block) != nil end)
+
+    {list, _} =
+      Enum.find(Enum.reverse(widgets), fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget)
       end)
 
-    assert popup.block.title =~ "filter: read"
-    assert popup.content.items == ["READ · deny prepared mutations"]
+    assert header.block.title =~ "filter: read"
+    assert list.items == ["READ · deny prepared mutations"]
     {:noreply, selected} = App.handle_event(%Key{code: "enter"}, filtered)
     assert selected.approval_level == :read_only
     assert selected.overlay == nil
@@ -1175,18 +1188,19 @@ defmodule Alto.TUI.AppTest do
     state = put_in(state.overlay.index, index)
     {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
     assert state.overlay.kind == :provider_form
-    input = Enum.find(state.overlay.fields, &(&1.key == :api_key)).input
+    input = Alto.TUI.Menu.field(state.overlay, :api_key).input
     ExRatatui.text_input_set_value(input, "never-copy-this-secret")
+    state = put_in(state.overlay.index, 3)
     {:noreply, selected} = App.handle_event(%Key{code: "a", modifiers: ["ctrl", "shift"]}, state)
     {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, selected)
     assert copied.overlay.kind == :provider_form
     assert copied.clipboard_text =~ "••••"
     refute copied.clipboard_text =~ "never-copy-this-secret"
+    copied = put_in(copied.overlay.index, 0)
     {:noreply, pasted} = App.handle_event(%Key{code: "v", modifiers: ["ctrl"]}, copied)
 
-    assert ExRatatui.text_input_get_value(
-             Enum.find(pasted.overlay.fields, &(&1.key == :id)).input
-           ) =~ "from clipboard"
+    assert ExRatatui.text_input_get_value(Alto.TUI.Menu.field(pasted.overlay, :id).input) =~
+             "from clipboard"
   end
 
   test "backend recovery offers only configured alternatives and selects them", context do
@@ -1868,7 +1882,7 @@ defmodule Alto.TUI.AppTest do
     form = user_state(app).overlay
     assert form.kind == :provider_form
 
-    for field <- form.fields, field.key in [:label, :base_url, :model] do
+    for %{key: key} = field <- form.items, key in [:label, :base_url, :model] do
       value = %{label: "Updated", base_url: "http://new.test/v1", model: "new-model"}[field.key]
       ExRatatui.text_input_set_value(field.input, value)
     end
@@ -1911,7 +1925,7 @@ defmodule Alto.TUI.AppTest do
 
     form = user_state(app)
     assert form.overlay.kind == :provider_form
-    assert form.overlay.field_index == 0
+    assert form.overlay.index == 0
 
     values = %{
       id: "acme",
@@ -1921,10 +1935,14 @@ defmodule Alto.TUI.AppTest do
       model: "acme/coder"
     }
 
-    Enum.each(form.overlay.fields, fn field ->
+    Enum.each(Enum.filter(form.overlay.items, & &1[:input]), fn field ->
       ExRatatui.text_input_set_value(field.input, Map.fetch!(values, field.key))
     end)
 
+    Runtime.inject_event(app, %Key{code: "down", kind: "press"})
+    Runtime.inject_event(app, %Key{code: "down", kind: "press"})
+    Runtime.inject_event(app, %Key{code: "down", kind: "press"})
+    form = user_state(app)
     terminal = ExRatatui.init_test_terminal(150, 42)
     frame = %ExRatatui.Frame{width: 150, height: 42}
     assert :ok = ExRatatui.draw(terminal, View.widgets(form, frame))
@@ -1934,12 +1952,17 @@ defmodule Alto.TUI.AppTest do
     assert buffer =~ "••••"
     refute inspect(form) =~ "super-secret-key"
 
-    # The form uses the same geometry for rendering and mouse routing.
-    Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: 25, y: 13})
-    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: 25, y: 13})
-    assert user_state(app).overlay.field_index == 3
-    Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: 25, y: 16})
-    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: 25, y: 16})
+    # The menu list uses the same geometry for rendering and mouse routing.
+    {%ExRatatui.Widgets.List{}, list} =
+      Enum.find(Enum.reverse(View.widgets(form, frame)), fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget)
+      end)
+
+    Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: list.x + 2, y: list.y + 3})
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: list.x + 2, y: list.y + 3})
+    assert user_state(app).overlay.index == 3
+    Runtime.inject_event(app, %Mouse{kind: "down", button: "left", x: list.x + 2, y: list.y + 5})
+    Runtime.inject_event(app, %Mouse{kind: "up", button: "left", x: list.x + 2, y: list.y + 5})
     saved = user_state(app)
 
     assert saved.overlay == nil

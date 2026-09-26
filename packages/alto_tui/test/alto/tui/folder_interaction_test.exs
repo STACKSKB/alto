@@ -1,24 +1,28 @@
 defmodule Alto.TUI.FolderInteractionTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.TextForm
+  alias Alto.TUI.Menu
   alias ExRatatui.Event.Key
 
   test "native form editing preserves shifted Unicode and excludes command modifiers" do
-    form = TextForm.new(:workspace_form, "Folder", [{:path, "Folder", "", []}])
+    form =
+      Menu.form(:workspace_form, "Folder", [{:path, "Folder", "", []}],
+        buttons: [],
+        on_action: fn state, _ -> state end
+      )
 
     for code <- ["A", "_", "~", "!", "É"] do
-      {:edit, _} = TextForm.key(form, %Key{code: code, modifiers: ["shift"]})
+      {:edit, _} = Menu.key(form, %Key{code: code, modifiers: ["shift"]})
     end
 
-    assert TextForm.value(form) == "A_~!É"
+    assert Menu.value(form, :path) == "A_~!É"
 
     for modifiers <- [["ctrl"], ["alt"], ["super"], ["ctrl", "shift"]] do
-      {:edit, _} = TextForm.key(form, %Key{code: "X", modifiers: modifiers})
-      assert TextForm.value(form) == "A_~!É"
+      {:edit, _} = Menu.key(form, %Key{code: "X", modifiers: modifiers})
+      assert Menu.value(form, :path) == "A_~!É"
     end
 
-    {:edit, cleared} = TextForm.key(form, %Key{code: "u", modifiers: ["ctrl"]})
-    assert TextForm.value(cleared) == ""
+    {:edit, cleared} = Menu.key(form, %Key{code: "u", modifiers: ["ctrl"]})
+    assert Menu.value(cleared, :path) == ""
   end
 
   test "filesystem suggestions exclude files, respect hidden prefixes, and reject multiline paths" do

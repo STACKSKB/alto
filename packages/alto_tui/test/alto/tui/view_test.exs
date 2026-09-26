@@ -1,7 +1,7 @@
 defmodule Alto.TUI.ViewTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{State, TextForm, View}
+  alias Alto.TUI.{Menu, State, View}
   alias ExRatatui.Widgets.{Paragraph, TextInput}
 
   test "uses a native input with the saved-key placeholder" do
@@ -26,7 +26,7 @@ defmodule Alto.TUI.ViewTest do
     assert screen =~ "(saved — leave blank to keep)"
   end
 
-  test "shows the saved-key placeholder when another field is active" do
+  test "shows field choices while another field is edited" do
     state =
       base_state(%{
         field_index: 1,
@@ -37,8 +37,12 @@ defmodule Alto.TUI.ViewTest do
     terminal = ExRatatui.init_test_terminal(120, 36)
     assert :ok = ExRatatui.draw(terminal, View.widgets(state, frame()))
 
-    assert ExRatatui.get_buffer_content(terminal) =~
-             "API key       (saved — leave blank to keep)"
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "API key"
+    assert screen =~ "Name"
+
+    assert active_input(View.widgets(state, frame())).state ==
+             Menu.field(state.overlay, :label).input
   end
 
   test "keeps API keys masked while retaining the actual text cursor" do
@@ -105,21 +109,33 @@ defmodule Alto.TUI.ViewTest do
     assert status.text =~ "Esc stop"
   end
 
-  test "model buttons retain their mouse-routing rows" do
+  test "model action rows share the rendered menu geometry" do
     state = base_state(model_form(ExRatatui.text_input_new()))
     widgets = View.widgets(state, frame(80, 30))
 
-    rects =
-      for {%Paragraph{text: text}, rect} <- widgets,
-          text in ["  [ Use model ]", "  [ Cancel ]"],
-          into: %{},
-          do: {text, rect}
+    {%ExRatatui.Widgets.List{}, list} =
+      Enum.find(widgets, fn {widget, _} -> match?(%ExRatatui.Widgets.List{}, widget) end)
 
-    popup_y = div(30 - div(30 * 42, 100), 2)
-    assert rects["  [ Use model ]"].y == popup_y + 6
-    assert rects["  [ Cancel ]"].y == popup_y + 7
-    assert TextForm.click(state.overlay, rects["  [ Use model ]"].y - popup_y - 1) == :submit
-    assert TextForm.click(state.overlay, rects["  [ Cancel ]"].y - popup_y - 1) == :cancel
+    assert View.hit_target(state, 80, 30, list.x + 1, list.y + 1) == {:overlay_row, 1}
+    assert View.hit_target(state, 80, 30, list.x + 1, list.y + 2) == {:overlay_row, 2}
+    assert View.hit_target(state, 80, 30, list.x + 1, list.y + 3) == :overlay
+  end
+
+  test "wrapped validation errors precede the selected editor and action rows" do
+    state = base_state(model_form(ExRatatui.text_input_new()))
+
+    state =
+      put_in(state.overlay.error, "First failure line\nSecond failure line\nThird failure line")
+
+    widgets = View.widgets(state, frame(80, 30))
+    terminal = ExRatatui.init_test_terminal(80, 30)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+
+    for text <- ["First failure line", "Second failure line", "Third failure line"],
+        do: assert(screen =~ text)
+
+    assert active_input(widgets).state == Menu.field(state.overlay, :model).input
   end
 
   test "context percentage uses the selected task's usage limit" do
@@ -167,7 +183,8 @@ defmodule Alto.TUI.ViewTest do
       end)
 
     form =
-      TextForm.new(kind, Map.get(overlay, :title, "configure provider"), definitions,
+      Menu.form(kind, Map.get(overlay, :title, "configure provider"), definitions,
+        on_action: fn state, _ -> state end,
         intro: "Configure",
         hint: "Enter · Esc",
         prefix_width: if(provider?, do: 16, else: 12),
@@ -177,7 +194,16 @@ defmodule Alto.TUI.ViewTest do
         buttons: [if(provider?, do: "[ Save provider ]", else: "[ Use model ]"), "[ Cancel ]"]
       )
 
-    form = %{form | fields: Enum.zip_with(form.fields, fields, &Map.put(&1, :input, &2.input))}
+    inputs = Map.new(fields, &{&1.key, &1.input})
+
+    form = %{
+      form
+      | index: overlay[:field_index] || 0,
+        items:
+          Enum.map(form.items, fn item ->
+            if item[:input], do: %{item | input: inputs[item.key]}, else: item
+          end)
+    }
 
     %State{
       textarea: ExRatatui.textarea_new(),

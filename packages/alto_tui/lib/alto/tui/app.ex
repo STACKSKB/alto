@@ -6,7 +6,7 @@ defmodule Alto.TUI.App do
   alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Menu, Backend, Selection, State, TextForm, View}
+  alias Alto.TUI.{Menu, Backend, Selection, State, View}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -148,13 +148,8 @@ defmodule Alto.TUI.App do
   end
 
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
-       when not is_nil(overlay) do
-    if Map.has_key?(overlay, :fields) do
-      {:noreply, form_result(state, TextForm.paste(overlay, content))}
-    else
-      {:noreply, filter_overlay(state, overlay.filter <> content)}
-    end
-  end
+       when not is_nil(overlay),
+       do: {:noreply, %{state | overlay: Menu.paste(overlay, content)}}
 
   defp route_event(%Paste{}, %{details_return_focus: focus} = state) when not is_nil(focus),
     do: {:noreply, state, render?: false}
@@ -1039,13 +1034,13 @@ defmodule Alto.TUI.App do
        do: form_result(state, :choose)
 
   defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, %Key{code: "tab"}) do
-    case if(TextForm.value(form) == "",
+    case if(Menu.value(form, :path) == "",
            do: :empty,
-           else: Alto.Harness.Folders.suggest(TextForm.value(form), form.base)
+           else: Alto.Harness.Folders.suggest(Menu.value(form, :path), form.base)
          ) do
       {:ok, %{completion: completion}} when is_binary(completion) and completion != "" ->
-        ExRatatui.text_input_set_value(hd(form.fields).input, completion)
-        ExRatatui.text_input_handle_key(hd(form.fields).input, "end")
+        ExRatatui.text_input_set_value(Menu.field(form, :path).input, completion)
+        ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
         %{state | overlay: %{form | error: nil}}
 
       _ ->
@@ -1053,44 +1048,25 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp overlay_key(%{overlay: %{fields: _} = form} = state, key),
-    do: form_result(state, TextForm.key(form, key))
-
-  defp overlay_key(state, %Key{code: "esc"}), do: close_overlay(state)
-
-  defp overlay_key(state, %Key{code: code}) when code in ["up", "k", "down", "j"],
-    do: move_overlay(state, if(code in ["up", "k"], do: -1, else: 1))
-
-  defp overlay_key(state, %Key{code: "enter"}), do: select_overlay(state)
-
-  defp overlay_key(state, %Key{code: "backspace"}) do
-    filter =
-      String.slice(state.overlay.filter, 0, max(String.length(state.overlay.filter) - 1, 0))
-
-    filter_overlay(state, filter)
-  end
-
-  defp overlay_key(state, %Key{code: code, modifiers: modifiers})
-       when is_binary(code) and byte_size(code) > 0 do
-    if modifiers == [] and String.printable?(code) and String.length(code) == 1 do
-      filter_overlay(state, state.overlay.filter <> code)
-    else
-      state
+  defp overlay_key(state, key) do
+    case Menu.key(state.overlay, key) do
+      :cancel -> close_overlay(state)
+      :select -> select_overlay(state)
+      {:action, action} -> action.(state)
+      {:edit, overlay} -> %{state | overlay: overlay}
     end
   end
-
-  defp overlay_key(state, _key), do: state
-
-  defp filter_overlay(state, filter),
-    do: %{state | overlay: Menu.filter(state.overlay, filter)}
-
-  defp move_overlay(state, delta),
-    do: %{state | overlay: Menu.move(state.overlay, delta)}
 
   defp select_overlay(%{overlay: overlay} = state) do
     case Enum.at(Menu.items(overlay), overlay.index) do
       nil ->
         state
+
+      %{input: _} ->
+        state
+
+      %{action: action} ->
+        action.(state)
 
       %{value: nil} ->
         state
@@ -1100,8 +1076,8 @@ defmodule Alto.TUI.App do
 
       %{value: {:folder, path}} ->
         form = state.overlay.return_form
-        ExRatatui.text_input_set_value(hd(form.fields).input, path)
-        ExRatatui.text_input_handle_key(hd(form.fields).input, "end")
+        ExRatatui.text_input_set_value(Menu.field(form, :path).input, path)
+        ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
         %{state | overlay: %{form | error: nil}}
 
       %{value: :new_workspace} ->
@@ -1467,16 +1443,14 @@ defmodule Alto.TUI.App do
     %{
       state
       | overlay:
-          TextForm.new(
+          Menu.form(
             :provider_form,
             if(new?, do: "add provider", else: "configure #{profile.label}"),
             fields,
+            on_action: &form_result/2,
             intro: "Credentials are saved privately outside the workspace.",
             hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
             buttons: ["[ Save provider ]", "[ Cancel ]"],
-            prefix_width: 16,
-            width_percent: 72,
-            height_percent: 66,
             field_index: if(new?, do: 0, else: 3),
             after_save:
               if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
@@ -1492,18 +1466,16 @@ defmodule Alto.TUI.App do
     %{
       state
       | overlay:
-          TextForm.new(
+          Menu.form(
             :workspace_form,
             "Open folder",
             [{:path, "Folder", "", [placeholder: "/path/to/project"]}],
             base: base,
+            on_action: &form_result/2,
             intro: "Relative paths start from: #{base}",
             hint: "Tab complete · Ctrl+O choose · Ctrl+N create · Esc cancel",
             buttons: ["[ Open folder ]", "[ Cancel ]", "[ Choose folder ]", "[ Create folder ]"],
-            actions: [:submit, :cancel, :choose, :create],
-            prefix_width: 10,
-            width_percent: 80,
-            height_percent: 65
+            actions: [:submit, :cancel, :choose, :create]
           ),
         leader?: false
     }
@@ -1519,7 +1491,7 @@ defmodule Alto.TUI.App do
       state
       | leader?: false,
         overlay:
-          TextForm.new(
+          Menu.form(
             :worktree_form,
             "Create local worktree",
             [
@@ -1527,12 +1499,10 @@ defmodule Alto.TUI.App do
               {:ref, "Start ref", "HEAD", []},
               {:branch, "New branch", "", []}
             ],
+            on_action: &form_result/2,
             intro: "#{project["root"]} · committed files only",
             hint: "Tab next · Ctrl+S create · Esc cancel",
             buttons: ["[ Create & open ]", "[ Cancel ]"],
-            prefix_width: 14,
-            width_percent: 80,
-            height_percent: 65,
             source: project["root"]
           )
     }
@@ -1543,17 +1513,14 @@ defmodule Alto.TUI.App do
       state
       | selected_provider_id: profile_id,
         overlay:
-          TextForm.new(
+          Menu.form(
             :model_form,
             "exact model ID",
             [{:model, "Model ID", "", []}],
+            on_action: &form_result/2,
             intro: "Use the provider's exact model identifier.",
             hint: "Enter use · Esc",
             buttons: ["[ Use model ]", "[ Cancel ]"],
-            prefix_width: 12,
-            width_percent: 62,
-            height_percent: 42,
-            button_gap: 1,
             profile_id: profile_id
           )
     }
@@ -1564,7 +1531,7 @@ defmodule Alto.TUI.App do
   defp form_result(state, :cancel), do: close_overlay(state)
 
   defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :choose) do
-    path = TextForm.value(form)
+    path = Menu.value(form, :path)
 
     saved =
       if path == "",
@@ -1588,12 +1555,10 @@ defmodule Alto.TUI.App do
   end
 
   defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :create),
-    do: form_result(state, {:create, TextForm.value(form)})
+    do: form_result(state, {:create, Menu.value(form, :path)})
 
   defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :submit),
-    do: form_result(state, {:submit, TextForm.value(form)})
-
-  defp form_result(state, {:edit, form}), do: %{state | overlay: form}
+    do: form_result(state, {:submit, Menu.value(form, :path)})
 
   defp form_result(state, {:create, path}) do
     case Alto.Harness.Folders.create(path, state.overlay.base) do
@@ -1619,7 +1584,7 @@ defmodule Alto.TUI.App do
   end
 
   defp form_result(%{overlay: %{kind: :worktree_form} = form} = state, :submit) do
-    values = TextForm.values(form)
+    values = Menu.values(form)
     args = %{"name" => String.trim(values.name), "ref" => String.trim(values.ref)}
 
     args =
@@ -1653,7 +1618,7 @@ defmodule Alto.TUI.App do
     do: save_provider_form(state)
 
   defp form_result(%{overlay: %{kind: :model_form} = form} = state, :submit) do
-    model = form |> TextForm.value() |> String.trim()
+    model = form |> Menu.value(:model) |> String.trim()
 
     if model == "",
       do: put_in(state.overlay.error, "model ID is required"),
@@ -1661,9 +1626,9 @@ defmodule Alto.TUI.App do
   end
 
   defp save_provider_form(state) do
-    attrs = TextForm.values(state.overlay)
+    attrs = Menu.values(state.overlay)
 
-    api_key_field = Enum.find(state.overlay.fields, &(&1.key == :api_key))
+    api_key_field = Menu.field(state.overlay, :api_key)
 
     case ProviderStore.save(attrs, state.profiles, credentials_opts(state)) do
       {:ok, profiles} ->
@@ -1689,14 +1654,8 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp handle_overlay_click(%{overlay: %{fields: _} = form} = state, row),
-    do: form_result(state, TextForm.click(form, row))
-
-  defp handle_overlay_click(state, row),
-    do: state |> put_overlay_index(row - overlay_list_offset(state.overlay)) |> select_overlay()
-
-  defp overlay_list_offset(%{message: message}) when is_binary(message), do: 3
-  defp overlay_list_offset(_overlay), do: 0
+  defp handle_overlay_click(state, index),
+    do: state |> put_overlay_index(index) |> select_overlay()
 
   defp select_backend(state, backend) when is_atom(backend) do
     task = State.selected_task(state)
