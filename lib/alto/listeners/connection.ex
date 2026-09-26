@@ -13,6 +13,7 @@ defmodule Alto.Listeners.Connection do
   @claim_envelope_reserve 2_048
   @pull_batch 100
   @wakeup_ms 25
+  @direct_commands ~w(session_transcript list_agents approval_response queue_ack queue_release command)a
   @filters Map.new(~w(all accepted claimed parked unknown completed)a, &{Atom.to_string(&1), &1})
 
   def default_max_line_bytes, do: @default_max_line_bytes
@@ -37,11 +38,11 @@ defmodule Alto.Listeners.Connection do
 
   def command_lines(line, registry, max_line_bytes) do
     case Protocol.decode_command(line) do
-      {:ok, {:queue_claim, id, count, by}} ->
+      {:ok, {:queue_claim, id, [count, by]}} ->
         queue_claim(registry, id, count, by, max_line_bytes)
 
-      {:ok, command} ->
-        reply(elem(command, 1), execute(command, registry), max_line_bytes)
+      {:ok, {kind, id, args}} ->
+        reply(id, execute(kind, args, registry), max_line_bytes)
 
       {:error, {:unknown_type, id}} ->
         error_lines(id, "unknown_type", "unrecognized message type", max_line_bytes)
@@ -54,13 +55,13 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
-  defp execute({:attach, _, run_id, from_seq, domains}, registry) do
+  defp execute(:attach, [run_id, from_seq, domains], registry) do
     result = Registry.attach(registry, self(), run_id, from_seq, domains)
     Registry.pull(registry, self(), @pull_batch)
     result
   end
 
-  defp execute({:start_run, _, config, task, resume}, registry) do
+  defp execute(:start_run, [config, task, resume], registry) do
     opts = if resume, do: [resume: resume], else: []
 
     with {:ok, run_id} <- Registry.start_run(registry, config, task, opts) do
@@ -70,18 +71,11 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
-  defp execute({:runs, _}, registry) do
-    with {:ok, runs} <- Registry.runs(registry), do: {:ok, %{runs: runs}}
+  defp execute(kind, [], registry) when kind in [:runs, :sessions] do
+    with {:ok, items} <- apply(Registry, kind, [registry]), do: {:ok, %{kind => items}}
   end
 
-  defp execute({:sessions, _}, registry) do
-    with {:ok, sessions} <- Registry.sessions(registry), do: {:ok, %{sessions: sessions}}
-  end
-
-  defp execute({:session_transcript, _, session_id}, registry),
-    do: Registry.session_transcript(registry, session_id)
-
-  defp execute({:session_events, _, session_id, limit, cursor, run_id}, registry) do
+  defp execute(:session_events, [session_id, limit, cursor, run_id], registry) do
     with {:ok, page} <-
            Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
          {:ok, events} <- session_events_payload(page.events) do
@@ -89,7 +83,7 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
-  defp execute({:send_message, _, run_id, text, to, delivery, key, reply_to}, registry),
+  defp execute(:send_message, [run_id, text, to, delivery, key, reply_to], registry),
     do:
       Registry.send_message(registry, run_id,
         text: text,
@@ -99,30 +93,20 @@ defmodule Alto.Listeners.Connection do
         in_reply_to: reply_to
       )
 
-  defp execute({:list_agents, _, run_id}, registry), do: Registry.list_agents(registry, run_id)
-
-  defp execute({:cancel, _, run_id, reason}, registry),
+  defp execute(:cancel, [run_id, reason], registry),
     do: Registry.cancel(registry, run_id, reason || :user)
 
-  defp execute({:approval_response, _, request_id, decision}, registry),
-    do: Registry.approval_response(registry, request_id, decision)
-
-  defp execute({:queue_ack, _, claim_id}, registry), do: Registry.queue_ack(registry, claim_id)
-
-  defp execute({:queue_release, _, claim_id}, registry),
-    do: Registry.queue_release(registry, claim_id)
-
-  defp execute({:ops_list, _, limit, cursor, filter}, registry) do
+  defp execute(:ops_list, [limit, cursor, filter], registry) do
     # Protocol validates against a fixed set; no atoms are minted from wire input.
     opts = [limit: min(limit, 100), cursor: cursor]
     opts = if filter, do: Keyword.put(opts, :filter, Map.fetch!(@filters, filter)), else: opts
     Registry.ops_list(registry, opts)
   end
 
-  defp execute({:command, _, name, payload}, registry),
-    do: Registry.command(registry, name, payload)
+  defp execute(kind, args, registry) when kind in @direct_commands,
+    do: apply(Registry, kind, [registry | args])
 
-  defp execute({kind, _, _}, _registry) when kind in [:auth, :input, :reload],
+  defp execute(kind, _args, _registry) when kind in [:auth, :input, :reload],
     do: {:error, :unsupported}
 
   defp session_events_payload(records) do

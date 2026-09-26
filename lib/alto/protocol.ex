@@ -80,27 +80,26 @@ defmodule Alto.Protocol do
     "reload" => {:reload, [{:required, "config", :binary}]}
   }
 
-  @type command ::
-          {:attach, String.t(), String.t() | nil, pos_integer(), [atom()]}
-          | {:start_run, String.t(), String.t(), String.t(), String.t() | nil}
-          | {:send_message, String.t(), String.t(), String.t(), String.t() | nil,
-             :steer | :follow_up, String.t() | nil, String.t() | nil}
-          | {:list_agents, String.t(), String.t()}
-          | {:sessions, String.t()}
-          | {:runs, String.t()}
-          | {:session_transcript, String.t(), String.t()}
-          | {:session_events, String.t(), String.t(), pos_integer(), non_neg_integer(),
-             String.t() | nil}
-          | {:cancel, String.t(), String.t(), String.t() | nil}
-          | {:approval_response, String.t(), String.t(), :approve | {:deny, String.t()}}
-          | {:queue_claim, String.t(), pos_integer(), String.t() | nil}
-          | {:queue_ack, String.t(), String.t()}
-          | {:queue_release, String.t(), String.t()}
-          | {:ops_list, String.t(), pos_integer(), non_neg_integer(), String.t() | nil}
-          | {:reload, String.t(), String.t()}
-          | {:auth, String.t(), map()}
-          | {:input, String.t(), map()}
-          | {:command, String.t(), String.t(), map()}
+  @type command_kind ::
+          :attach
+          | :start_run
+          | :send_message
+          | :list_agents
+          | :sessions
+          | :runs
+          | :session_transcript
+          | :session_events
+          | :cancel
+          | :approval_response
+          | :queue_claim
+          | :queue_ack
+          | :queue_release
+          | :ops_list
+          | :reload
+          | :auth
+          | :input
+          | :command
+  @type command :: {command_kind(), String.t(), [term()]}
 
   @doc "The protocol version this codec speaks."
   @spec version() :: pos_integer()
@@ -245,6 +244,10 @@ defmodule Alto.Protocol do
   envelope with an unknown type decodes to `{:error, {:unknown_type, id}}` so
   the receiver can echo the correlation token; a field the v1 server must
   reject (start_run overrides) decodes to `{:error, :unsupported}`.
+
+  Commands have the shape `{kind, id, args}`. Arguments follow the order of
+  the trusted command schema; reserved auth/input commands carry their
+  original envelope as their sole argument.
   """
   @spec decode_command(binary()) ::
           {:ok, command()}
@@ -265,9 +268,9 @@ defmodule Alto.Protocol do
     end
   end
 
-  defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, object}}
+  defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, [object]}}
 
-  defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, object}}
+  defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, [object]}}
 
   defp decode_object(type, id, object) do
     case @command_specs do
@@ -276,7 +279,7 @@ defmodule Alto.Protocol do
           {:error, :unsupported}
         else
           with {:ok, values} <- Alto.Result.traverse(fields, &decode_field(object, &1)),
-               do: {:ok, List.to_tuple([command, id | values])}
+               do: {:ok, {command, id, values}}
         end
 
       _ ->

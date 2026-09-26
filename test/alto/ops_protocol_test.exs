@@ -51,12 +51,12 @@ defmodule Alto.OpsProtocolTest do
   end
 
   test "decode defaults and rejects bad pagination" do
-    assert {:ok, {:ops_list, "c-1", 20, 0, nil}} =
+    assert {:ok, {:ops_list, "c-1", [20, 0, nil]}} =
              Protocol.decode_command(
                JSON.encode!(%{"v" => 1, "type" => "ops_list", "id" => "c-1"})
              )
 
-    assert {:ok, {:ops_list, "c-2", 5, 10, "parked"}} =
+    assert {:ok, {:ops_list, "c-2", [5, 10, "parked"]}} =
              Protocol.decode_command(
                JSON.encode!(%{
                  "v" => 1,

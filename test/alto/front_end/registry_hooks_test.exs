@@ -140,7 +140,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
   end
 
   test "command envelopes require a binary name and map payload" do
-    assert {:ok, {:command, "c-1", "echo", %{"value" => 1}}} =
+    assert {:ok, {:command, "c-1", ["echo", %{"value" => 1}]}} =
              Protocol.decode_command(
                JSON.encode!(%{
                  "v" => 1,

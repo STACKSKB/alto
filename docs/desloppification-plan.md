@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,065 lines (16.2% below the original)**. **5,607 lines
+The current count is **34,046 lines (16.3% below the original)**. **5,588 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,10 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Decoded protocol commands share `{kind, id, args}` and a fixed allowlist
+  forwards direct registry calls. Runs/sessions share response assembly.
+- Subscriber delivery uses one `Enum.map_reduce` for notifications, released
+  buffer bytes, and durable replay cursors, removing intermediate lists.
 - Approval and cooperative child suspension share history persistence, bounded
   checkpoint capture, and result assembly through a capture callback. Capture
   and failure results use the latest persisted run revision.
@@ -184,3 +188,7 @@ and 2,400 complete multiline/cursor projections; all outputs matched.
 
 The shared JSON-RPC request/startup workflow passes 46 focused external-client,
 Codex-agent, and external-tool tests, plus the TUI backend integration suite.
+
+Protocol normalization matched the previous decoder across 8,721 input cases.
+Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including
+buffer limits, overflow, replay cursors, and disconnect decisions.

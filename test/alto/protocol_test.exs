@@ -212,11 +212,12 @@ defmodule Alto.ProtocolTest do
           "domains" => ["durable"]
         })
 
-      assert {:ok, {:attach, "c-3", "run-41", 4, [:durable]}} = Protocol.decode_command(full)
+      assert {:ok, {:attach, "c-3", ["run-41", 4, [:durable]]}} = Protocol.decode_command(full)
 
       minimal = JSON.encode!(%{"v" => 1, "type" => "attach", "id" => "c-3"})
 
-      assert {:ok, {:attach, "c-3", nil, 1, [:durable, :live]}} = Protocol.decode_command(minimal)
+      assert {:ok, {:attach, "c-3", [nil, 1, [:durable, :live]]}} =
+               Protocol.decode_command(minimal)
 
       bad = JSON.encode!(%{"v" => 1, "type" => "attach", "id" => "c-3", "domains" => ["nope"]})
       assert {:error, :invalid} = Protocol.decode_command(bad)
@@ -232,7 +233,7 @@ defmodule Alto.ProtocolTest do
           "task" => "Explain this repository"
         })
 
-      assert {:ok, {:start_run, "c-5", "my-alto-config", "Explain this repository", nil}} =
+      assert {:ok, {:start_run, "c-5", ["my-alto-config", "Explain this repository", nil]}} =
                Protocol.decode_command(good)
 
       resuming =
@@ -245,7 +246,7 @@ defmodule Alto.ProtocolTest do
           "resume" => "sess-abc123"
         })
 
-      assert {:ok, {:start_run, "c-5", "my-alto-config", "Follow up", "sess-abc123"}} =
+      assert {:ok, {:start_run, "c-5", ["my-alto-config", "Follow up", "sess-abc123"]}} =
                Protocol.decode_command(resuming)
 
       overrides =
@@ -275,7 +276,7 @@ defmodule Alto.ProtocolTest do
           "session_id" => "sess-1"
         })
 
-      assert {:ok, {:session_transcript, "c-9", "sess-1"}} = Protocol.decode_command(line)
+      assert {:ok, {:session_transcript, "c-9", ["sess-1"]}} = Protocol.decode_command(line)
 
       for key <- ["limit", "cursor"] do
         rejected = line |> JSON.decode!() |> Map.put(key, nil) |> JSON.encode!()
@@ -286,7 +287,7 @@ defmodule Alto.ProtocolTest do
     test "cancel requires a run id and carries an optional reason" do
       good = JSON.encode!(%{"v" => 1, "type" => "cancel", "id" => "c-6", "run_id" => "run-41"})
 
-      assert {:ok, {:cancel, "c-6", "run-41", nil}} = Protocol.decode_command(good)
+      assert {:ok, {:cancel, "c-6", ["run-41", nil]}} = Protocol.decode_command(good)
 
       with_reason =
         JSON.encode!(%{
@@ -297,7 +298,7 @@ defmodule Alto.ProtocolTest do
           "reason" => "operator_stop"
         })
 
-      assert {:ok, {:cancel, "c-6", "run-41", "operator_stop"}} =
+      assert {:ok, {:cancel, "c-6", ["run-41", "operator_stop"]}} =
                Protocol.decode_command(with_reason)
 
       assert {:error, :invalid} =
@@ -316,7 +317,7 @@ defmodule Alto.ProtocolTest do
           "decision" => "approve"
         })
 
-      assert {:ok, {:approval_response, "c-7", "call-1", :approve}} =
+      assert {:ok, {:approval_response, "c-7", ["call-1", :approve]}} =
                Protocol.decode_command(approve)
 
       deny =
@@ -328,13 +329,13 @@ defmodule Alto.ProtocolTest do
           "decision" => %{"deny" => "not today"}
         })
 
-      assert {:ok, {:approval_response, "c-8", "call-1", {:deny, "not today"}}} =
+      assert {:ok, {:approval_response, "c-8", ["call-1", {:deny, "not today"}]}} =
                Protocol.decode_command(deny)
     end
 
     test "queue commands decode with bounded counts and required claim ids" do
       minimal = JSON.encode!(%{"v" => 1, "type" => "queue_claim", "id" => "c-10"})
-      assert {:ok, {:queue_claim, "c-10", 1, nil}} = Protocol.decode_command(minimal)
+      assert {:ok, {:queue_claim, "c-10", [1, nil]}} = Protocol.decode_command(minimal)
 
       full =
         JSON.encode!(%{
@@ -345,7 +346,7 @@ defmodule Alto.ProtocolTest do
           "by" => "station-1"
         })
 
-      assert {:ok, {:queue_claim, "c-11", 5, "station-1"}} = Protocol.decode_command(full)
+      assert {:ok, {:queue_claim, "c-11", [5, "station-1"]}} = Protocol.decode_command(full)
 
       bad_count = JSON.encode!(%{"v" => 1, "type" => "queue_claim", "id" => "c-12", "count" => 0})
       assert {:error, :invalid} = Protocol.decode_command(bad_count)
@@ -353,7 +354,7 @@ defmodule Alto.ProtocolTest do
       ack =
         JSON.encode!(%{"v" => 1, "type" => "queue_ack", "id" => "c-13", "claim_id" => "clm-1"})
 
-      assert {:ok, {:queue_ack, "c-13", "clm-1"}} = Protocol.decode_command(ack)
+      assert {:ok, {:queue_ack, "c-13", ["clm-1"]}} = Protocol.decode_command(ack)
 
       ack_missing = JSON.encode!(%{"v" => 1, "type" => "queue_ack", "id" => "c-14"})
       assert {:error, :invalid} = Protocol.decode_command(ack_missing)
@@ -366,7 +367,7 @@ defmodule Alto.ProtocolTest do
           "claim_id" => "clm-1"
         })
 
-      assert {:ok, {:queue_release, "c-15", "clm-1"}} = Protocol.decode_command(release)
+      assert {:ok, {:queue_release, "c-15", ["clm-1"]}} = Protocol.decode_command(release)
     end
 
     test "command payloads stay maps and malformed required fields fail decoding" do
@@ -378,7 +379,7 @@ defmodule Alto.ProtocolTest do
         "payload" => %{"query" => [1, 2]}
       }
 
-      assert {:ok, {:command, "client", "inspect", %{"query" => [1, 2]}}} =
+      assert {:ok, {:command, "client", ["inspect", %{"query" => [1, 2]}]}} =
                Protocol.decode_command(JSON.encode!(envelope))
 
       for fields <- [
@@ -399,10 +400,10 @@ defmodule Alto.ProtocolTest do
 
     test "reserved types decode for the listener to reject explicitly" do
       auth = JSON.encode!(%{"v" => 1, "type" => "auth", "id" => "c-1", "token" => "t"})
-      assert {:ok, {:auth, "c-1", %{"token" => "t"}}} = Protocol.decode_command(auth)
+      assert {:ok, {:auth, "c-1", [%{"token" => "t"}]}} = Protocol.decode_command(auth)
 
       input = JSON.encode!(%{"v" => 1, "type" => "input", "id" => "c-2", "payload" => %{}})
-      assert {:ok, {:input, "c-2", %{"payload" => %{}}}} = Protocol.decode_command(input)
+      assert {:ok, {:input, "c-2", [%{"payload" => %{}}]}} = Protocol.decode_command(input)
     end
 
     test "unknown types, bad versions, and malformed JSON decode to bounded errors" do

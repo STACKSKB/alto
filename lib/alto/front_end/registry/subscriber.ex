@@ -60,19 +60,21 @@ defmodule Alto.FrontEnd.Registry.Subscriber do
   def pull(subscriber, count, disconnect_after_overflow) do
     taken = min(max(count, 0), subscriber.buffered_count)
     {batch, rest} = :queue.split(taken, subscriber.buffer)
-    pairs = :queue.to_list(batch)
-    deliveries = Enum.map(pairs, &elem(&1, 0))
-    bytes = Enum.reduce(pairs, 0, &(elem(&1, 1) + &2))
-    messages = Enum.map(deliveries, &{:alto_notification, &1})
 
-    subscriber =
-      %{
-        subscriber
-        | buffer: rest,
-          buffered_count: subscriber.buffered_count - taken,
-          buffered_bytes: subscriber.buffered_bytes - bytes
-      }
-      |> note_delivered(deliveries)
+    {messages, subscriber} =
+      Enum.map_reduce(:queue.to_list(batch), subscriber, fn {notification, bytes}, acc ->
+        last_seq =
+          case notification do
+            {:event, run_id, seq, _} when is_integer(seq) ->
+              Map.put(acc.last_durable_seq, run_id, seq)
+
+            _ ->
+              acc.last_durable_seq
+          end
+
+        {{:alto_notification, notification},
+         %{acc | buffered_bytes: acc.buffered_bytes - bytes, last_durable_seq: last_seq}}
+      end)
 
     {overflow_batch, rest_overflow} = Enum.split(subscriber.overflow, count)
 
@@ -83,7 +85,12 @@ defmodule Alto.FrontEnd.Registry.Subscriber do
 
     messages = messages ++ overflow_notifications
 
-    subscriber = %{subscriber | overflow: rest_overflow}
+    subscriber = %{
+      subscriber
+      | buffer: rest,
+        buffered_count: subscriber.buffered_count - taken,
+        overflow: rest_overflow
+    }
 
     disconnect? =
       disconnect_after_overflow == :immediately and overflow_batch != [] and
@@ -94,18 +101,5 @@ defmodule Alto.FrontEnd.Registry.Subscriber do
     else
       {subscriber, messages}
     end
-  end
-
-  defp note_delivered(subscriber, deliveries) do
-    last_durable_seq =
-      Enum.reduce(deliveries, subscriber.last_durable_seq, fn
-        {:event, run_id, seq, _event}, acc when is_integer(seq) ->
-          Map.put(acc, run_id, seq)
-
-        _other, acc ->
-          acc
-      end)
-
-    %{subscriber | last_durable_seq: last_durable_seq}
   end
 end
