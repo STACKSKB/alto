@@ -45,18 +45,18 @@ defmodule Alto.ConsumerTest do
   end
 
   test "accepted work completes: claim, run, ack", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:del-1", %{"body" => "x"})
+    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{"body" => "x"}, []})
     c = start_consumer!(queue: q, ledger: l, handler: done_handler(self()), by: "w-1")
 
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
     assert_received :handled
 
-    assert %{pending: 0, claimed: 0} = Queue.count(q)
-    assert {:decided, :completed, _} = OperationLog.status(l, "src:del-1")
+    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
+    assert {:decided, :completed, _} = OperationLog.request(l, {:status, "src:del-1"})
   end
 
   test "retry releases and advances the handler attempt number", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:del-1", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
     test_pid = self()
 
     handler = fn _payload, ctx ->
@@ -67,18 +67,18 @@ defmodule Alto.ConsumerTest do
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
 
     assert {:handled, [:released]} = Consumer.poll(c)
-    assert %{pending: 1, claimed: 0} = Queue.count(q)
-    assert 1 = OperationLog.attempts(l, "src:del-1")
+    assert %{pending: 1, claimed: 0} = Queue.request(q, :count)
+    assert 1 = OperationLog.request(l, {:attempts, "src:del-1"})
     assert_received {:ran, 1}
 
     # Second poll retries under the same identity.
     assert {:handled, [:released]} = Consumer.poll(c)
-    assert 2 = OperationLog.attempts(l, "src:del-1")
+    assert 2 = OperationLog.request(l, {:attempts, "src:del-1"})
     assert_received {:ran, 2}
   end
 
   test "attempts beyond the bound park for an operator", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:del-1", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
 
     c =
       start_consumer!(
@@ -93,9 +93,9 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:released]} = Consumer.poll(c)
     assert {:handled, [:parked]} = Consumer.poll(c)
 
-    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
-    assert %{pending: 0, claimed: 0} = Queue.count(q)
-    assert {:decided, :requires_operator, _} = OperationLog.status(l, "src:del-1")
+    assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
+    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
+    assert {:decided, :requires_operator, _} = OperationLog.request(l, {:status, "src:del-1"})
   end
 
   test "unknown short-run outcomes park before any repeat", %{queue: q, ledger: l} do
@@ -128,7 +128,7 @@ defmodule Alto.ConsumerTest do
       def handle_event(_e, s, _spec), do: Alto.Transition.continue(s)
     end
 
-    {:ok, _} = Queue.admit(q, "src:del-1", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
 
     handler = fn _payload, _ctx ->
       {:ok, result} =
@@ -150,8 +150,8 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [:parked]} = Consumer.poll(c)
 
     # Parked on first sight: the effect ran once, never twice.
-    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
-    assert %{pending: 0, claimed: 0} = Queue.count(q)
+    assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
+    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
   end
 
   test "a stale worker cannot ack a newer owner's claim", %{queue: q, ledger: l} do
@@ -174,7 +174,7 @@ defmodule Alto.ConsumerTest do
 
     on_exit(fn -> File.rm_rf!(dir) end)
 
-    {:ok, _} = Queue.admit(q2, "src:del-1", %{})
+    {:ok, _} = Queue.request(q2, {:admit, "src:del-1", %{}, []})
     test_pid = self()
 
     slow = fn _payload, _ctx ->
@@ -188,12 +188,12 @@ defmodule Alto.ConsumerTest do
     assert_received :slow_ran
 
     # The lease expired mid-work: the ack failed, the work is still live.
-    assert %{pending: 1, claimed: 0} = Queue.count(q2)
+    assert %{pending: 1, claimed: 0} = Queue.request(q2, :count)
 
     # The next owner reconciles through the ledger: decided, so ack only.
     c2 = start_consumer!(queue: q2, ledger: l, handler: done_handler(self()), by: "fast")
     assert {:handled, [:acked_decided]} = Consumer.poll(c2)
-    assert %{pending: 0, claimed: 0} = Queue.count(q2)
+    assert %{pending: 0, claimed: 0} = Queue.request(q2, :count)
 
     # The effect ran exactly once across both owners.
     refute_received :slow_ran
@@ -202,8 +202,8 @@ defmodule Alto.ConsumerTest do
   end
 
   test "two workers split work without double-handling", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:a", %{})
-    {:ok, _} = Queue.admit(q, "src:b", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:a", %{}, []})
+    {:ok, _} = Queue.request(q, {:admit, "src:b", %{}, []})
 
     test_pid = self()
 
@@ -221,19 +221,19 @@ defmodule Alto.ConsumerTest do
     assert_received {:ran, claim_a}
     assert_received {:ran, claim_b}
     assert claim_a != claim_b
-    assert %{pending: 0, claimed: 0} = Queue.count(q)
-    assert [] = entry_keys(OperationLog.entries(l, :open))
+    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
+    assert [] = entry_keys(OperationLog.request(l, {:entries, :open}))
   end
 
   test "duplicate deliveries reach the consumer once", %{queue: q, ledger: l} do
-    assert {:ok, _} = Queue.admit(q, "src:del-1", %{})
-    assert {:error, :duplicate} = Queue.admit(q, "src:del-1", %{})
+    assert {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
+    assert {:error, :duplicate} = Queue.request(q, {:admit, "src:del-1", %{}, []})
 
     c = start_consumer!(queue: q, ledger: l, handler: done_handler(self()), by: "w-1")
     assert {:handled, _} = Consumer.poll(c)
     assert_received :handled
 
-    assert {:error, :duplicate} = Queue.admit(q, "src:del-1", %{})
+    assert {:error, :duplicate} = Queue.request(q, {:admit, "src:del-1", %{}, []})
     assert :idle = Consumer.poll(c)
     refute_received :handled
   end
@@ -246,8 +246,8 @@ defmodule Alto.ConsumerTest do
     ldir = Path.join(dir, "cl")
     {:ok, _} = Queue.start_link(id: "cq#{tag}", dir: qdir, name: qname)
     {:ok, _} = OperationLog.start_link(id: "cl#{tag}", dir: ldir, name: lname)
-    {:ok, _} = Queue.put(qname, "job", %{value: 1})
-    {:ok, record} = Queue.lookup(qname, "job")
+    {:ok, _} = Queue.request(qname, {:put, "job", %{value: 1}, []})
+    {:ok, record} = Queue.request(qname, {:lookup, "job"})
     parent = self()
 
     c =
@@ -269,15 +269,13 @@ defmodule Alto.ConsumerTest do
     {:ok, _} = OperationLog.start_link(id: "cl#{tag}", dir: ldir, name: lname)
 
     {:ok, _} =
-      Queue.restore(
+      Queue.request(
         qname,
-        "business-generation:" <> record.generation_id,
-        record.generation_id,
-        %{value: 1},
-        recovery_revision: 3
+        {:restore, "business-generation:" <> record.generation_id, record.generation_id,
+         %{value: 1}, [recovery_revision: 3]}
       )
 
-    {:ok, _} = Queue.put(qname, "independent", %{value: 2})
+    {:ok, _} = Queue.request(qname, {:put, "independent", %{value: 2}, []})
 
     c2 =
       start_consumer!(
@@ -304,11 +302,11 @@ defmodule Alto.ConsumerTest do
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
-    {:ok, _} = Queue.put(q, "job-1", %{version: 1})
+    {:ok, _} = Queue.request(q, {:put, "job-1", %{version: 1}, []})
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
     assert_received {:handled_payload, %{version: 1}}
 
-    {:ok, _} = Queue.put(q, "job-1", %{version: 2})
+    {:ok, _} = Queue.request(q, {:put, "job-1", %{version: 2}, []})
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
     assert_received {:handled_payload, %{version: 2}}
   end
@@ -322,7 +320,7 @@ defmodule Alto.ConsumerTest do
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
-    {:ok, _} = Queue.put(q, "customer-42", %{version: 1})
+    {:ok, _} = Queue.request(q, {:put, "customer-42", %{version: 1}, []})
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
     assert_receive {:context, context}
     assert context.operation_key =~ "business-generation:gen-"
@@ -345,7 +343,7 @@ defmodule Alto.ConsumerTest do
     {:ok, _} = Queue.start_link(id: "cq#{tag}", dir: dir, name: qname, lease_ms: 30)
     on_exit(fn -> File.rm_rf!(dir) end)
 
-    {:ok, _} = Queue.admit(qname, "src:del-1", %{})
+    {:ok, _} = Queue.request(qname, {:admit, "src:del-1", %{}, []})
     test_pid = self()
 
     blocker = fn _payload, _ctx ->
@@ -365,7 +363,7 @@ defmodule Alto.ConsumerTest do
 
     poller = spawn(fn -> Consumer.poll(c1) end)
     assert_receive {:work_started, handler}, 2_000
-    {:ok, %{current_attempt: first_attempt}} = OperationLog.recovery(l, "src:del-1")
+    {:ok, %{current_attempt: first_attempt}} = OperationLog.request(l, {:recovery, "src:del-1"})
     monitor = Process.monitor(handler)
     # A true crash: unlike GenServer.stop/3 (which politely waits out the
     # in-flight call), :kill preempts it mid-dispatch.
@@ -380,27 +378,27 @@ defmodule Alto.ConsumerTest do
     c2 = start_consumer!(queue: qname, ledger: l, handler: done_handler(self()), by: "heir")
     assert {:handled, [:parked]} = Consumer.poll(c2)
 
-    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
+    assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
 
     assert {:ok, %{current_attempt: ^first_attempt, attempts: 1}} =
-             OperationLog.recovery(l, "src:del-1")
+             OperationLog.request(l, {:recovery, "src:del-1"})
 
     refute_received :handled
   end
 
   test "a crashing handler parks the work and spares the worker", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:del-1", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
 
     c =
       start_consumer!(queue: q, ledger: l, handler: fn _, _ -> raise "handler bug" end, by: "w-1")
 
     assert {:handled, [:parked]} = Consumer.poll(c)
     assert Process.alive?(c)
-    assert ["src:del-1"] = entry_keys(OperationLog.entries(l, :parked))
+    assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
   end
 
   test "a timed-out handler is terminated before work is parked", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:timeout", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:timeout", %{}, []})
     parent = self()
 
     handler = fn _, _ ->
@@ -415,7 +413,7 @@ defmodule Alto.ConsumerTest do
     assert Process.alive?(consumer)
 
     assert {:decided, :requires_operator, %{park_reason: :handler_timeout}} =
-             OperationLog.status(l, "src:timeout")
+             OperationLog.request(l, {:status, "src:timeout"})
   end
 
   test "consumer persists an authoritative unknown run verdict", %{queue: q, ledger: l} do
@@ -425,12 +423,12 @@ defmodule Alto.ConsumerTest do
       run_id: "run-unknown"
     }
 
-    {:ok, _} = Queue.admit(q, "src:unknown", %{})
+    {:ok, _} = Queue.request(q, {:admit, "src:unknown", %{}, []})
     c = start_consumer!(queue: q, ledger: l, handler: fn _, _ -> {:run, result} end)
 
     assert {:handled, [{:decided, :unknown}]} = Consumer.poll(c)
-    assert {:decided, :unknown, evidence} = OperationLog.status(l, "src:unknown")
+    assert {:decided, :unknown, evidence} = OperationLog.request(l, {:status, "src:unknown"})
     assert evidence.run_id == "run-unknown"
-    assert %{pending: 0, claimed: 0} = Queue.count(q)
+    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
   end
 end

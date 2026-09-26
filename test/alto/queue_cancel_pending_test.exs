@@ -14,30 +14,30 @@ defmodule Alto.QueueCancelPendingTest do
   end
 
   test "claimed key is preserved, then can be cancelled after release", %{name: name} do
-    {:ok, _} = Queue.put(name, "job", %{value: 1})
-    {:ok, [claimed]} = Queue.claim(name)
+    {:ok, _} = Queue.request(name, {:put, "job", %{value: 1}, []})
+    {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
 
-    assert {:error, {:key_claimed, "job"}} = Queue.cancel_pending(name, "job")
-    assert {:ok, %{status: :claimed, claim_id: claim_id}} = Queue.lookup(name, "job")
+    assert {:error, {:key_claimed, "job"}} = Queue.request(name, {:cancel_pending, "job"})
+    assert {:ok, %{status: :claimed, claim_id: claim_id}} = Queue.request(name, {:lookup, "job"})
     assert claim_id == claimed.claim_id
 
-    assert :ok = Queue.release(name, claim_id)
-    assert :ok = Queue.cancel_pending(name, "job")
-    assert {:error, :not_found} = Queue.lookup(name, "job")
+    assert :ok = Queue.request(name, {:settle, claim_id, :release, []})
+    assert :ok = Queue.request(name, {:cancel_pending, "job"})
+    assert {:error, :not_found} = Queue.request(name, {:lookup, "job"})
   end
 
   test "cancelled pending record stays absent after restart", %{dir: dir, name: name} do
-    {:ok, _} = Queue.put(name, "job", %{value: 1})
-    assert :ok = Queue.cancel_pending(name, "job")
+    {:ok, _} = Queue.request(name, {:put, "job", %{value: 1}, []})
+    assert :ok = Queue.request(name, {:cancel_pending, "job"})
     GenServer.stop(name)
 
     name2 = :"cancel_pending_restart_#{System.unique_integer([:positive])}"
     {:ok, _} = Queue.start_link(id: "q", dir: dir, name: name2)
-    assert {:error, :not_found} = Queue.lookup(name2, "job")
-    assert {:ok, []} = Queue.claim(name2)
+    assert {:error, :not_found} = Queue.request(name2, {:lookup, "job"})
+    assert {:ok, []} = Queue.request(name2, {:claim, 1, nil, :infinity, :all})
   end
 
   test "missing key is reported", %{name: name} do
-    assert {:error, :not_found} = Queue.cancel_pending(name, "missing")
+    assert {:error, :not_found} = Queue.request(name, {:cancel_pending, "missing"})
   end
 end

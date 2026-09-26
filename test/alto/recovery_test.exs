@@ -44,9 +44,9 @@ defmodule Alto.RecoveryTest do
     parent = self()
     consumer = start_consumer!(queue, ledger, fn _, _ -> {:park, :lost_response} end)
 
-    {:ok, _} = Queue.admit(queue, "src:delivery-1", %{document: 7})
+    {:ok, _} = Queue.request(queue, {:admit, "src:delivery-1", %{document: 7}, []})
     assert {:handled, [:parked]} = Consumer.poll(consumer)
-    assert {:ok, before} = OperationLog.recovery(ledger, "src:delivery-1")
+    assert {:ok, before} = OperationLog.request(ledger, {:recovery, "src:delivery-1"})
     assert before.recovery.payload == %{document: 7}
     assert before.outcome |> elem(0) == :requires_operator
 
@@ -56,19 +56,19 @@ defmodule Alto.RecoveryTest do
 
     queue = start_queue!(context.queue_dir)
     ledger = start_ledger!(context.ledger_dir)
-    assert {:ok, recovered} = OperationLog.recovery(ledger, "src:delivery-1")
+    assert {:ok, recovered} = OperationLog.request(ledger, {:recovery, "src:delivery-1"})
     assert recovered.recovery == before.recovery
 
     assert {:ok, resolved} =
-             OperationLog.reconcile(
+             OperationLog.request(
                ledger,
-               "src:delivery-1",
-               recovered.revision,
-               :confirmed_committed,
-               %{participant_receipt: "receipt-7"}
+               {:reconcile, "src:delivery-1", recovered.revision, :confirmed_committed,
+                %{participant_receipt: "receipt-7"}}
              )
 
-    assert {:decided, :completed, evidence} = OperationLog.status(ledger, "src:delivery-1")
+    assert {:decided, :completed, evidence} =
+             OperationLog.request(ledger, {:status, "src:delivery-1"})
+
     assert evidence.operator_resolution == :confirmed_committed
     assert resolved.revision == recovered.revision + 1
 
@@ -87,38 +87,31 @@ defmodule Alto.RecoveryTest do
     ledger = start_ledger!(context.ledger_dir)
     consumer = start_consumer!(queue, ledger, fn _, _ -> {:park, :needs_lookup} end)
 
-    {:ok, _} = Queue.admit(queue, "src:delivery-2", %{document: 8})
+    {:ok, _} = Queue.request(queue, {:admit, "src:delivery-2", %{document: 8}, []})
     assert {:handled, [:parked]} = Consumer.poll(consumer)
-    {:ok, parked} = OperationLog.recovery(ledger, "src:delivery-2")
+    {:ok, parked} = OperationLog.request(ledger, {:recovery, "src:delivery-2"})
 
     recovery = parked.recovery
 
     assert {:ok, _} =
-             Queue.restore(
+             Queue.request(
                queue,
-               parked.operation_key,
-               recovery.generation_id,
-               recovery.payload
+               {:restore, parked.operation_key, recovery.generation_id, recovery.payload, []}
              )
 
     assert {:ok, authorized} =
-             OperationLog.reconcile(
+             OperationLog.request(
                ledger,
-               parked.operation_key,
-               parked.revision,
-               :retry_permitted,
-               %{participant_lookup: :not_committed}
+               {:reconcile, parked.operation_key, parked.revision, :retry_permitted,
+                %{participant_lookup: :not_committed}}
              )
 
-    assert {:intended} = OperationLog.status(ledger, parked.operation_key)
+    assert {:intended} = OperationLog.request(ledger, {:status, parked.operation_key})
 
     assert {:error, :stale_revision} =
-             OperationLog.reconcile(
+             OperationLog.request(
                ledger,
-               parked.operation_key,
-               parked.revision,
-               :confirmed_committed,
-               %{}
+               {:reconcile, parked.operation_key, parked.revision, :confirmed_committed, %{}}
              )
 
     parent = self()
@@ -132,23 +125,20 @@ defmodule Alto.RecoveryTest do
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(retry_consumer)
     assert_receive {:retried, %{document: 8}, "src:delivery-2"}
     assert authorized.revision == parked.revision + 1
-    assert {:decided, :completed, _} = OperationLog.status(ledger, "src:delivery-2")
+    assert {:decided, :completed, _} = OperationLog.request(ledger, {:status, "src:delivery-2"})
   end
 
   test "retry is refused when the accepted input was not retained", context do
     ledger = start_ledger!(context.ledger_dir)
-    :ok = OperationLog.record_intent(ledger, "legacy-op", "tool", nil)
-    :ok = OperationLog.record_attempt(ledger, "legacy-op", "attempt-1")
-    :ok = OperationLog.record_outcome(ledger, "legacy-op", "attempt-1", :unknown)
-    {:ok, item} = OperationLog.recovery(ledger, "legacy-op")
+    :ok = OperationLog.request(ledger, {:intent, "legacy-op", "tool", nil, nil})
+    :ok = OperationLog.request(ledger, {:attempt, "legacy-op", "attempt-1"})
+    :ok = OperationLog.request(ledger, {:outcome, "legacy-op", "attempt-1", :unknown, %{}})
+    {:ok, item} = OperationLog.request(ledger, {:recovery, "legacy-op"})
 
     assert {:error, :recovery_unavailable} =
-             OperationLog.reconcile(
+             OperationLog.request(
                ledger,
-               "legacy-op",
-               item.revision,
-               :retry_permitted,
-               %{}
+               {:reconcile, "legacy-op", item.revision, :retry_permitted, %{}}
              )
   end
 end

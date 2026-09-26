@@ -252,7 +252,7 @@ generation that cannot restore an old snapshot.
 
 Active accounts cannot be evicted. The operation ledger's configured record,
 operation and log-size bounds still apply; log exhaustion denies reservations.
-`OperationLog.update_checkpoint/4` is the generic primitive used here: it
+`OperationLog.request(ledger, {:checkpoint_update, key, revision, replacement})` is the generic primitive used here: it
 replaces active retained data at an expected revision without releasing the
 checkpoint or granting an execution attempt. Application code remains
 responsible for its own retained-data schema and authority. Older Alto readers
@@ -424,7 +424,7 @@ without letting a model choose its sender identity. Identity does not itself
 start a mailbox, authorize a recipient, persist child execution or isolate a
 workspace; these remain separate policies and mechanisms.
 
-`Alto.Queue.claim_matching/5` provides an optional generic storage primitive
+`Alto.Queue.request(queue, {:claim, count, by, max_bytes, selector})` provides an optional generic storage primitive
 for addressed consumers. A bounded exact map selector filters payload fields
 inside the atomic claim operation, before applying existing due-time, FIFO,
 wire-byte and lease rules. Unrelated records are not claimed. The queue remains

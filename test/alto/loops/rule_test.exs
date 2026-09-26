@@ -151,7 +151,7 @@ defmodule Alto.Loops.RuleTest do
 
       assert is_integer(record_id)
 
-      assert %{pending: 1} = Alto.Queue.count(queue)
+      assert %{pending: 1} = Alto.Queue.request(queue, :count)
 
       assert {:ok, result} =
                Alto.run(~s({"key": "job-1"}),
@@ -160,7 +160,7 @@ defmodule Alto.Loops.RuleTest do
                )
 
       assert [%{cancelled: true}] = result.output
-      assert %{pending: 0} = Alto.Queue.count(queue)
+      assert %{pending: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "queue_put updates a pending key in place (revision bumps)", %{queue: queue} do
@@ -176,7 +176,7 @@ defmodule Alto.Loops.RuleTest do
                  queue: queue
                )
 
-      assert %{pending: 1} = Alto.Queue.count(queue)
+      assert %{pending: 1} = Alto.Queue.request(queue, :count)
     end
 
     test "queue_cancel of an unknown key is a no-op success", %{queue: queue} do

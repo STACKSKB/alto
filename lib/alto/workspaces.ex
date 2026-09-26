@@ -70,7 +70,8 @@ defmodule Alto.Workspaces do
       }
 
       locked(manager, id, fn ->
-        with :ok <- OperationLog.record_intent(manager.ledger, id, "workspace", nil, workspace),
+        with :ok <-
+               OperationLog.request(manager.ledger, {:intent, id, "workspace", nil, workspace}),
              {:ok, info} <- get(manager, id),
              true <- Map.take(info.workspace, Map.keys(workspace)) == workspace do
           case info.status do
@@ -91,7 +92,7 @@ defmodule Alto.Workspaces do
   @doc "Read one consistent ledger status/revision without changing resource state."
   def get(%__MODULE__{} = manager, id) do
     with :ok <- valid_id(id),
-         {:ok, entry} <- OperationLog.recovery(manager.ledger, id),
+         {:ok, entry} <- OperationLog.request(manager.ledger, {:recovery, id}),
          true <- entry.tool == "workspace" and is_map(entry.recovery) do
       {status, workspace} = view(entry)
       {:ok, %{id: id, revision: entry.revision, status: status, workspace: workspace}}
@@ -332,10 +333,14 @@ defmodule Alto.Workspaces do
              {:ok, _} <- File.rm_rf(path),
              :ok <- Alto.AtomicFile.sync_directory(manager.root),
              :ok <-
-               OperationLog.record_outcome(manager.ledger, id, attempt, :completed, %{
-                 "status" => "discarded",
-                 "note" => note
-               }) do
+               OperationLog.request(
+                 manager.ledger,
+                 {:outcome, id, attempt, :completed,
+                  %{
+                    "status" => "discarded",
+                    "note" => note
+                  }}
+               ) do
           get(manager, id)
         end
       end)
@@ -348,7 +353,7 @@ defmodule Alto.Workspaces do
     id = workspace["id"]
     attempt = attempt_id()
 
-    with :ok <- OperationLog.record_attempt(manager.ledger, id, attempt),
+    with :ok <- OperationLog.request(manager.ledger, {:attempt, id, attempt}),
          :ok <- Storage.ensure_private_dir(Path.dirname(workspace["cwd"]), owned: true),
          :ok <-
            manager.backend.checkout(
@@ -362,23 +367,31 @@ defmodule Alto.Workspaces do
 
   defp checkpoint(manager, id, attempt, phase, workspace) do
     with :ok <-
-           OperationLog.record_checkpoint(manager.ledger, id, attempt, %{
-             "version" => 1,
-             "phase" => phase,
-             "workspace" => workspace
-           }),
+           OperationLog.request(
+             manager.ledger,
+             {:checkpoint, id, attempt,
+              %{
+                "version" => 1,
+                "phase" => phase,
+                "workspace" => workspace
+              }}
+           ),
          do: get(manager, id)
   end
 
   defp activate(manager, %{status: status} = info, action)
        when status in ["ready", "worked", "frozen", "applied"] do
     with {:ok, _} <-
-           OperationLog.resume_checkpoint(manager.ledger, info.id, info.revision, %{
-             "action" => action
-           }) do
+           OperationLog.request(
+             manager.ledger,
+             {:resume_checkpoint, info.id, info.revision,
+              %{
+                "action" => action
+              }}
+           ) do
       attempt = attempt_id()
 
-      with :ok <- OperationLog.record_attempt(manager.ledger, info.id, attempt),
+      with :ok <- OperationLog.request(manager.ledger, {:attempt, info.id, attempt}),
            do: {:ok, attempt}
     end
   end
@@ -386,11 +399,12 @@ defmodule Alto.Workspaces do
   defp activate(manager, %{status: status, id: id}, "discard")
        when status in ["intended", "pending_action"] do
     attempt = attempt_id()
-    with :ok <- OperationLog.record_attempt(manager.ledger, id, attempt), do: {:ok, attempt}
+    with :ok <- OperationLog.request(manager.ledger, {:attempt, id, attempt}), do: {:ok, attempt}
   end
 
   defp activate(manager, %{status: "in_progress", id: id}, "discard") do
-    with {:ok, %{current_attempt: attempt}} <- OperationLog.recovery(manager.ledger, id),
+    with {:ok, %{current_attempt: attempt}} <-
+           OperationLog.request(manager.ledger, {:recovery, id}),
          do: {:ok, attempt}
   end
 

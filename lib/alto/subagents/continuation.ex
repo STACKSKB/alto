@@ -106,7 +106,7 @@ defmodule Alto.Subagents.Continuation do
     with {:ok, deadline} <- Retained.deadline(opts),
          :ok <- valid_key(key) do
       safe(fn ->
-        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+        with {:ok, entry} <- Retained.request(ledger, {:recovery, key}, deadline),
              :ok <- valid_initial(entry),
              batch = %__MODULE__{
                ledger: ledger,
@@ -133,7 +133,7 @@ defmodule Alto.Subagents.Continuation do
   end
 
   defp list_entries(ledger, metadata_filter, deadline) do
-    with entries when is_list(entries) <- Retained.entries(ledger, deadline),
+    with entries when is_list(entries) <- Retained.request(ledger, {:entries, :all}, deadline),
          {:ok, items} <-
            entries
            |> Enum.filter(&(&1.tool == @kind))
@@ -438,7 +438,11 @@ defmodule Alto.Subagents.Continuation do
   defp replace(batch, snapshot, packet) do
     safe(fn ->
       with {:ok, entry} <-
-             Retained.cas(batch.ledger, batch.key, snapshot.revision, packet, batch.deadline) do
+             Retained.request(
+               batch.ledger,
+               {:checkpoint_update, batch.key, snapshot.revision, packet},
+               batch.deadline
+             ) do
         snapshot(entry, batch.generation)
       end
     end)
@@ -472,19 +476,17 @@ defmodule Alto.Subagents.Continuation do
   defp retire_snapshot(_, %{state: :retired}), do: :ok
 
   defp retire_snapshot(batch, %{state: :active} = snapshot) do
-    Retained.retire(
+    Retained.request(
       batch.ledger,
-      batch.key,
-      snapshot.revision,
-      %{"action" => @retire, "generation" => batch.generation},
-      @retire,
-      %{"generation" => batch.generation, "joined" => true},
+      {:retire_checkpoint, batch.key, snapshot.revision,
+       %{"action" => @retire, "generation" => batch.generation}, @retire,
+       %{"generation" => batch.generation, "joined" => true}},
       batch.deadline
     )
   end
 
   defp snapshot_read(batch) do
-    with {:ok, entry} <- Retained.read(batch.ledger, batch.key, batch.deadline),
+    with {:ok, entry} <- Retained.request(batch.ledger, {:recovery, batch.key}, batch.deadline),
          :ok <- valid_initial(entry) do
       snapshot(entry, batch.generation)
     end

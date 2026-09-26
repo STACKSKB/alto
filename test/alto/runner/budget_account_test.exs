@@ -20,14 +20,14 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert {:ok, %{revision: 1, packet: packet, state: :active}} = Account.read(account)
     assert packet["effects_used"] == 0
     assert packet["model_requests_used"] == 0
-    assert OperationLog.attempts(ledger, "atomic-open") == 1
+    assert OperationLog.request(ledger, {:attempts, "atomic-open"}) == 1
 
     assert {:ok, reopened} =
              Account.open(ledger, "atomic-open", max_effects: 2, max_model_requests: 3)
 
     assert Account.identity(reopened) == Account.identity(account)
     assert {:ok, %{revision: 1}} = Account.read(reopened)
-    assert OperationLog.attempts(ledger, "atomic-open") == 1
+    assert OperationLog.request(ledger, {:attempts, "atomic-open"}) == 1
   end
 
   test "concurrent reservations stop exactly at each cap and read counts consistently", %{
@@ -100,19 +100,22 @@ defmodule Alto.Runner.BudgetAccountTest do
 
     assert :ok = Account.take(account, :effect, 2)
     {:ok, before} = Account.read(account)
-    attempts = OperationLog.attempts(ledger, "lookup")
+    attempts = OperationLog.request(ledger, {:attempts, "lookup"})
 
     assert {:ok, looked_up, snapshot} = Account.lookup(ledger, "lookup")
     assert Account.identity(looked_up) == Account.identity(account)
     assert snapshot == before
-    assert OperationLog.attempts(ledger, "lookup") == attempts
+    assert OperationLog.request(ledger, {:attempts, "lookup"}) == attempts
     assert Account.read(account) == {:ok, before}
 
     assert {:error, :not_found} = Account.lookup(ledger, "missing")
     assert {:error, :invalid_retained_options} = Account.lookup(ledger, "lookup", typo: 1)
-    assert :ok = OperationLog.record_intent(ledger, "foreign", "other_kind", nil, %{})
+    assert :ok = OperationLog.request(ledger, {:intent, "foreign", "other_kind", nil, %{}})
     assert {:error, :invalid_budget_account} = Account.lookup(ledger, "foreign")
-    assert :ok = OperationLog.record_intent(ledger, "malformed", "alto_budget_account", nil, %{})
+
+    assert :ok =
+             OperationLog.request(ledger, {:intent, "malformed", "alto_budget_account", nil, %{}})
+
     assert {:error, :invalid_budget_account} = Account.lookup(ledger, "malformed")
   end
 
@@ -123,7 +126,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert {:error, _reason} =
              Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
 
-    assert [%{operation_key: "first"}] = OperationLog.entries(ledger)
+    assert [%{operation_key: "first"}] = OperationLog.request(ledger, {:entries, :all})
   end
 
   test "a stopped ledger denies reservations", %{ledger: ledger} do
@@ -164,7 +167,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert after_restart.state == :closed
     assert after_restart.packet == closed.packet
     assert :ok = Account.close(restored, after_restart.revision)
-    assert OperationLog.attempts(restarted, "closed") == 2
+    assert OperationLog.request(restarted, {:attempts, "closed"}) == 2
   end
 
   test "failed closure append leaves the active checkpoint intact across restart", %{
@@ -175,13 +178,13 @@ defmodule Alto.Runner.BudgetAccountTest do
     {:ok, account} = Account.open(ledger, "closing-atomic", max_effects: 2, max_model_requests: 2)
     assert :ok = Account.take(account, :effect, 2)
     {:ok, active} = Account.read(account)
-    attempts = OperationLog.attempts(ledger, account.key)
+    attempts = OperationLog.request(ledger, {:attempts, account.key})
     size = File.stat!(Path.join(dir, "budget.jsonl")).size
     :sys.replace_state(ledger, fn state -> %{state | max_log_bytes: size + 1} end)
 
     assert {:error, {:ledger_log_too_large, _, _}} = Account.close(account, active.revision)
     assert Account.read(account) == {:ok, active}
-    assert OperationLog.attempts(ledger, account.key) == attempts
+    assert OperationLog.request(ledger, {:attempts, account.key}) == attempts
 
     stop_supervised!(OperationLog)
     restarted = start_supervised!({OperationLog, opts})
@@ -193,7 +196,7 @@ defmodule Alto.Runner.BudgetAccountTest do
              Account.read(restored)
 
     assert revision == active.revision + 1
-    assert OperationLog.attempts(restarted, account.key) == attempts + 1
+    assert OperationLog.request(restarted, {:attempts, account.key}) == attempts + 1
   end
 
   test "an old account generation cannot close a replacement", %{ledger: ledger} do

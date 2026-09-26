@@ -87,155 +87,81 @@ defmodule Alto.Queue do
     if Alto.Storage.valid_id?(id), do: :ok, else: {:error, {:invalid_queue_id, id}}
   end
 
-  @doc """
-  Idempotent upsert keyed by `key`. Pending records update in place
-  (revision bumps); claimed keys reject; blanked keys re-queue fresh.
-
-  This is the *business-key* path: last-arrival-wins by arrival order. It
-  never consults the completed-delivery window — use `admit/3` for source
-  delivery identity.
-  Pass `delay_ms: non_neg_integer()` for relative scheduling or
-  `not_before_ms: non_neg_integer()` for an absolute due time. The default
-  is immediate eligibility.
-  """
-  @spec put(GenServer.server(), binary(), term(), keyword()) ::
-          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
-          | {:error, term()}
-  def put(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
-    GenServer.call(server, {:put, key, payload, opts})
-  end
+  @type request ::
+          {:put | :admit, binary(), term(), keyword()}
+          | {:restore, binary(), binary(), map(), keyword()}
+          | {:claim, pos_integer(), term(), non_neg_integer() | :infinity, map() | :all}
+          | {:settle, String.t(), :ack | :release, keyword()}
+          | {:cancel | :cancel_pending | :lookup, binary()}
+          | {:snapshot_page, non_neg_integer(), pos_integer()}
+          | :count
+          | :compact
 
   @doc """
-  Insert-only source admission keyed by `key` (callers pass a namespaced
-  delivery key such as `"endpoint-path:delivery-id"`).
+  Execute a queue request. Supply every tuple field explicitly.
 
-  First wins: a pending key answers `{:error, :duplicate}` without touching
-  the stored bytes (even when the redelivered body differs); a claimed key
-  answers `{:error, {:key_claimed, key}}`; a key blanked within the
-  `max_completed` window answers `{:error, :duplicate}` without creating a
-  second work item. Only a fresh key creates a record.
-  Pass the same optional scheduling keys as `put/4`; duplicate admissions
-  never modify the original schedule.
+  `:put` upserts a business key (pending revisions increase; claimed keys reject)
+  without consulting completed deliveries. `:admit` inserts a delivery key only
+  once, including within the completed-key window; duplicates never reschedule.
+  Both accept `delay_ms:` or `not_before_ms:` options. `:restore` admits an
+  operator-authorized recovery envelope; `recovery_revision:` distinguishes later
+  ledger-approved grants. Ledger reconciliation remains a separate authorization.
+
+  `:claim` leases a FIFO prefix of due matching records, capped at 1,000. Use
+  `:all` for unfiltered claims, or a non-empty selector map of at most eight UTF-8
+  string keys (1..100 bytes) with scalar or flat scalar-list values, bounded to
+  4 KiB. Selectors are never persisted. The byte budget bounds the JSON array of
+  claimed views; `:infinity` disables it. An oversized first record returns
+  `{:error, {:record_too_large, details}}` without leasing anything.
+
+  `:settle` acknowledges (removes) a claim or releases it to pending, optionally
+  with `delay_ms:`. `:cancel` removes a key; `:cancel_pending` rejects claimed keys.
+  `:count` reports pending/claimed counts. `:lookup` reads by key; `:snapshot_page`
+  reads at most 100 records without reclaiming leases.
+
+  `:compact` replaces history with retained state, preserving live claims, due
+  times, identity, ordering, and completed keys. Pass `:infinity` as its timeout;
+  other calls default to 5,000 ms.
   """
-  @spec admit(GenServer.server(), binary(), term(), keyword()) ::
-          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
-          | {:error, term()}
-  def admit(server \\ __MODULE__, key, payload, opts \\ []) when is_list(opts) do
-    GenServer.call(server, {:admit, key, payload, opts})
-  end
+  @spec request(GenServer.server(), request(), timeout()) :: term()
+  def request(server, message, timeout \\ 5_000)
 
-  @doc """
-  Restore one operator-authorized recovery envelope under its original
-  semantic operation identity. The derived recovery delivery key is
-  insert-only, so repeating the same restore is harmless. An optional
-  recovery_revision positive integer derives a distinct key for each later
-  ledger-approved grant; ledger reconciliation remains a separate required
-  authorization step.
-  """
-  @spec restore(GenServer.server(), binary(), binary(), map(), keyword()) ::
-          {:ok, %{id: pos_integer(), revision: pos_integer(), status: :pending}}
-          | {:error, term()}
-  def restore(server \\ __MODULE__, operation_key, generation_id, payload, opts \\ [])
-      when is_list(opts) do
-    GenServer.call(server, {:restore, operation_key, generation_id, payload, opts})
-  end
-
-  @doc "Claim up to `count` oldest pending records under a fresh lease."
-  @spec claim(GenServer.server(), pos_integer(), term()) :: {:ok, [map()]}
-  def claim(server \\ __MODULE__, count \\ 1, by \\ nil) when is_integer(count) and count >= 1 do
-    GenServer.call(server, {:claim, min(count, @max_claim_count), by, :infinity, %{}})
-  end
-
-  @doc """
-  Atomically claim due records whose map payload contains every key/value in
-  `selector`, preserving FIFO order among matching records. The selector is a
-  non-empty map of at most eight UTF-8 string keys (1..100 bytes) and scalar
-  values or flat lists of scalar values; its encoded term is bounded to 4 KiB.
-  Matching scans the bounded queue globally, then applies the existing
-  `max_bytes` wire budget and durable batch claim. Unrelated records remain
-  pending. No selector is persisted and no executable predicate is accepted.
-  """
-  @spec claim_matching(GenServer.server(), map(), pos_integer(), term(), non_neg_integer()) ::
-          {:ok, [map()]} | {:error, term()}
-  def claim_matching(server \\ __MODULE__, selector, count \\ 1, by \\ nil, max_bytes)
-      when is_integer(count) and count >= 1 and is_integer(max_bytes) and max_bytes >= 0 do
+  def request(server, {:claim, count, by, max_bytes, selector}, timeout)
+      when is_integer(count) and count >= 1 and
+             (max_bytes == :infinity or (is_integer(max_bytes) and max_bytes >= 0)) do
     with :ok <- validate_selector(selector) do
       GenServer.call(
         server,
-        {:claim, min(count, @max_claim_count), by, max_bytes, selector}
+        {:claim, min(count, @max_claim_count), by, max_bytes, selector},
+        timeout
       )
     end
   end
 
-  @doc """
-  Claim up to `count` oldest pending records whose encoded wire form fits
-  in `max_bytes` (JSON array bytes of the claimed views).
+  def request(server, {:snapshot_page, cursor, limit}, timeout)
+      when is_integer(cursor) and cursor >= 0 and is_integer(limit) and limit >= 1,
+      do: GenServer.call(server, {:snapshot_page, cursor, min(limit, @max_list_records)}, timeout)
 
-  Records are selected oldest-first as a fitting prefix: claiming stops
-  before the first record that would overflow the budget, so every leased
-  record is deliverable. A lone oversized head answers
-  `{:error, {:record_too_large, %{id: id, key: key, size: bytes}}}` with
-  nothing leased — the record stays pending for an operator to inspect or
-  cancel by key.
-  """
-  @spec claim_bounded(GenServer.server(), pos_integer(), term(), non_neg_integer()) ::
-          {:ok, [map()]} | {:error, term()}
-  def claim_bounded(server \\ __MODULE__, count \\ 1, by \\ nil, max_bytes)
-      when is_integer(count) and count >= 1 and is_integer(max_bytes) and max_bytes >= 0 do
-    GenServer.call(server, {:claim, min(count, @max_claim_count), by, max_bytes, %{}})
-  end
+  def request(server, {:lookup, key} = message, timeout) when is_binary(key),
+    do: GenServer.call(server, message, timeout)
 
-  @doc "Blank a claimed record (it was handled). The record is removed."
-  @spec ack(GenServer.server(), String.t()) :: :ok | {:error, :not_found | :lease_expired}
-  def ack(server \\ __MODULE__, claim_id) do
-    GenServer.call(server, {:settle, claim_id, :ack, []})
-  end
+  def request(server, {tag, _key, _value, opts} = message, timeout)
+      when tag in [:put, :admit] and is_list(opts),
+      do: GenServer.call(server, message, timeout)
 
-  @doc "Return a claim to pending (the client failed before finishing). Pass `delay_ms:` to delay it."
-  @spec release(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
-  def release(server \\ __MODULE__, claim_id, opts \\ []) when is_list(opts) do
-    GenServer.call(server, {:settle, claim_id, :release, opts})
-  end
+  def request(server, {:settle, _claim, action, opts} = message, timeout)
+      when action in [:ack, :release] and is_list(opts),
+      do: GenServer.call(server, message, timeout)
 
-  @doc "Blank every record for `key` (record cancellation)."
-  @spec cancel(GenServer.server(), binary()) :: :ok | {:error, :not_found}
-  def cancel(server \\ __MODULE__, key) do
-    GenServer.call(server, {:cancel, key})
-  end
+  def request(server, {:restore, _key, _generation, _payload, opts} = message, timeout)
+      when is_list(opts),
+      do: GenServer.call(server, message, timeout)
 
-  @doc "Cancel key only when every matching live record is pending."
-  @spec cancel_pending(GenServer.server(), binary()) ::
-          :ok | {:error, :not_found | {:key_claimed, binary()} | term()}
-  def cancel_pending(server \\ __MODULE__, key) do
-    GenServer.call(server, {:cancel_pending, key})
-  end
+  def request(server, {tag, _key} = message, timeout) when tag in [:cancel, :cancel_pending],
+    do: GenServer.call(server, message, timeout)
 
-  @doc "Pending and claimed counts."
-  @spec count(GenServer.server()) :: %{pending: non_neg_integer(), claimed: non_neg_integer()}
-  def count(server \\ __MODULE__) do
-    GenServer.call(server, :count)
-  end
-
-  @doc "Read one bounded live-record page without reclaiming leases."
-  @spec snapshot_page(GenServer.server(), non_neg_integer(), pos_integer()) ::
-          {:ok, %{records: [map()], next_cursor: non_neg_integer() | nil}} | {:error, term()}
-  def snapshot_page(server \\ __MODULE__, cursor, limit \\ @max_list_records)
-      when is_integer(cursor) and cursor >= 0 and is_integer(limit) and limit >= 1 do
-    GenServer.call(server, {:snapshot_page, cursor, min(limit, @max_list_records)})
-  end
-
-  @doc "Find a live record by key without an oldest-page window."
-  @spec lookup(GenServer.server(), binary()) :: {:ok, map()} | {:error, :not_found}
-  def lookup(server \\ __MODULE__, key) when is_binary(key) do
-    GenServer.call(server, {:lookup, key})
-  end
-
-  @doc """
-  Replace historical log entries with the current queue and retained dedup keys.
-  Keeps live claims, due times, record identity, ordering and the configured
-  completed window unchanged. This is state retention, not an audit archive.
-  """
-  def compact(server \\ __MODULE__), do: GenServer.call(server, :compact, :infinity)
+  def request(server, message, timeout) when message in [:count, :compact],
+    do: GenServer.call(server, message, timeout)
 
   ## Server implementation
 
@@ -496,11 +422,13 @@ defmodule Alto.Queue do
     end
   end
 
-  defp matches_selector?(_record, selector) when map_size(selector) == 0, do: true
+  defp matches_selector?(_record, :all), do: true
 
   defp matches_selector?(%{payload: payload}, selector) when is_map(payload) do
     Enum.all?(selector, fn {key, value} -> Map.get(payload, key, :__missing__) === value end)
   end
+
+  defp validate_selector(:all), do: :ok
 
   defp validate_selector(selector) when is_map(selector) and map_size(selector) in 1..8 do
     valid? =

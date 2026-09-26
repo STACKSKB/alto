@@ -295,9 +295,13 @@ defmodule Alto.WorkspacesTest do
     File.write!(Path.join(ready.workspace["cwd"], "partial"), "preserve")
 
     assert {:ok, _} =
-             OperationLog.resume_checkpoint(m.ledger, ready.id, ready.revision, %{
-               "action" => "use"
-             })
+             OperationLog.request(
+               m.ledger,
+               {:resume_checkpoint, ready.id, ready.revision,
+                %{
+                  "action" => "use"
+                }}
+             )
 
     assert {:ok, pending} = Workspaces.get(m, ready.id)
     assert pending.status == "pending_action"

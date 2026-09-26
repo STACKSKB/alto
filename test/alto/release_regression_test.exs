@@ -86,10 +86,10 @@ defmodule Alto.ReleaseRegressionTest do
 
     {:ok, queue} = Queue.start_link(id: "q", dir: Path.join(dir, "q"), name: nil)
     {:ok, ledger} = OperationLog.start_link(id: "l", dir: Path.join(dir, "l"), name: nil)
-    {:ok, _} = Queue.admit(queue, "src:unknown", %{})
-    :ok = OperationLog.record_intent(ledger, "src:unknown", "tool", "src:unknown")
-    :ok = OperationLog.record_attempt(ledger, "src:unknown", "attempt-1")
-    :ok = OperationLog.record_outcome(ledger, "src:unknown", "attempt-1", :unknown)
+    {:ok, _} = Queue.request(queue, {:admit, "src:unknown", %{}, []})
+    :ok = OperationLog.request(ledger, {:intent, "src:unknown", "tool", "src:unknown", nil})
+    :ok = OperationLog.request(ledger, {:attempt, "src:unknown", "attempt-1"})
+    :ok = OperationLog.request(ledger, {:outcome, "src:unknown", "attempt-1", :unknown, %{}})
 
     assert {:ok, %{items: [%{status: :unknown}]}} = Ops.list(queue, ledger, filter: :unknown)
 

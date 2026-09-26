@@ -29,7 +29,7 @@ defmodule Alto.Tools.QueueCancel do
 
     case Map.get(arguments, "key") do
       key when is_binary(key) ->
-        case Queue.cancel(queue, key) do
+        case Queue.request(queue, {:cancel, key}) do
           :ok -> {:ok, %{cancelled: true}}
           {:error, :not_found} -> {:ok, %{cancelled: false}}
           {:error, reason} -> {:error, reason}

@@ -446,16 +446,21 @@ defmodule Alto.FrontEnd.Registry do
   def handle_call({:queue_claim, count, by, max_bytes}, _from, state) do
     budget = max_bytes || state.max_claim_bytes
 
-    {:reply, queue_op(state, fn -> Alto.Queue.claim_bounded(state.queue, count, by, budget) end),
+    {:reply,
+     queue_op(state, fn -> Alto.Queue.request(state.queue, {:claim, count, by, budget, :all}) end),
      state}
   end
 
   def handle_call({:queue_ack, claim_id}, _from, state) do
-    {:reply, queue_op(state, fn -> Alto.Queue.ack(state.queue, claim_id) end), state}
+    {:reply,
+     queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :ack, []}) end),
+     state}
   end
 
   def handle_call({:queue_release, claim_id}, _from, state) do
-    {:reply, queue_op(state, fn -> Alto.Queue.release(state.queue, claim_id) end), state}
+    {:reply,
+     queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :release, []}) end),
+     state}
   end
 
   def handle_call({:ops_list, opts}, _from, state) do

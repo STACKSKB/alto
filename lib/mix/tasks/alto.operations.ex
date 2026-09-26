@@ -53,19 +53,20 @@ defmodule Mix.Tasks.Alto.Operations do
 
   defp execute(ledger, ["list"], _opts) do
     ledger
-    |> Alto.OperationLog.entries()
+    |> Alto.OperationLog.request({:entries, :all})
     |> Enum.filter(&listed?/1)
     |> Enum.sort_by(&list_rank/1)
   end
 
-  defp execute(ledger, ["show", key], _opts), do: Alto.OperationLog.recovery(ledger, key)
+  defp execute(ledger, ["show", key], _opts),
+    do: Alto.OperationLog.request(ledger, {:recovery, key})
 
   defp execute(ledger, ["reconcile", key], opts) do
     with revision when is_integer(revision) and revision > 0 <- opts[:revision],
          {:ok, resolution} <- Map.fetch(@resolutions, opts[:resolution]),
          {:ok, evidence} when is_map(evidence) and map_size(evidence) > 0 <-
            JSON.decode(opts[:evidence] || "null") do
-      Alto.OperationLog.reconcile(ledger, key, revision, resolution, evidence)
+      Alto.OperationLog.request(ledger, {:reconcile, key, revision, resolution, evidence})
     else
       _ ->
         Mix.raise(

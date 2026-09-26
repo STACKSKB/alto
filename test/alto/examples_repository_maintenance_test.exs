@@ -177,7 +177,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
     {:ok, restarted} = Alto.Queue.start_link(opts)
     on_exit(fn -> if Process.alive?(restarted), do: GenServer.stop(restarted) end)
     assert {:error, :duplicate} = RepositoryMaintenance.Workflow.admit(restarted, report)
-    assert %{pending: 1, claimed: 0} = Alto.Queue.count(restarted)
+    assert %{pending: 1, claimed: 0} = Alto.Queue.request(restarted, :count)
   end
 
   test "the webhook adapter sends verified JSON through the CLI admission path" do
@@ -217,7 +217,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
               records: [%{key: "github:http-1", payload: %{"report" => report}}],
               next_cursor: nil
             }} =
-             Alto.Queue.snapshot_page(queue, 0)
+             Alto.Queue.request(queue, {:snapshot_page, 0, 100})
 
     assert report["source"] == "github"
     assert report["delivery_id"] == "http-1"
@@ -250,7 +250,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                tests: ["sh", "-c", "exit 7"]
              )
 
-    assert %{pending: 0, claimed: 1} = Alto.Queue.count(queue)
+    assert %{pending: 0, claimed: 1} = Alto.Queue.request(queue, :count)
     assert [error] = Path.wildcard(Path.join(state_dir, "errors/*.json"))
     assert String.contains?(File.read!(error), "tests_failed")
     assert [checkout] = Path.wildcard(Path.join(state_dir, "worktrees/*"))

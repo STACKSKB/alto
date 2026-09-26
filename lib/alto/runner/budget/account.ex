@@ -59,7 +59,7 @@ defmodule Alto.Runner.Budget.Account do
   def lookup(ledger, key, opts \\ []) do
     with {:ok, deadline} <- Retained.deadline(opts) do
       safe(fn ->
-        with {:ok, entry} <- Retained.read(ledger, key, deadline),
+        with {:ok, entry} <- Retained.request(ledger, {:recovery, key}, deadline),
              :ok <- valid_initial(entry),
              :ok <- valid_packet(entry.checkpoint, entry.recovery),
              {:ok, state} <- lifecycle(entry) do
@@ -158,13 +158,11 @@ defmodule Alto.Runner.Budget.Account do
   defp close_snapshot(_, %{state: :closed}), do: :ok
 
   defp close_snapshot(account, %{state: :active} = snapshot) do
-    Retained.retire(
+    Retained.request(
       account.ledger,
-      account.key,
-      snapshot.revision,
-      %{"action" => "close_budget", "generation" => account.generation},
-      @close,
-      Map.take(snapshot.packet, @limits ++ @counters)
+      {:retire_checkpoint, account.key, snapshot.revision,
+       %{"action" => "close_budget", "generation" => account.generation}, @close,
+       Map.take(snapshot.packet, @limits ++ @counters)}
     )
   end
 
@@ -177,7 +175,11 @@ defmodule Alto.Runner.Budget.Account do
         if replacement == packet do
           {:ok, current}
         else
-          case Retained.cas(account.ledger, account.key, revision, replacement, deadline) do
+          case Retained.request(
+                 account.ledger,
+                 {:checkpoint_update, account.key, revision, replacement},
+                 deadline
+               ) do
             {:ok, entry} -> {:ok, %{revision: entry.revision, packet: entry.checkpoint}}
             {:error, :stale_revision} -> update(account, fun, deadline)
             {:error, _} = error -> error

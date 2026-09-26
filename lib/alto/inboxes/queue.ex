@@ -23,6 +23,6 @@ defmodule Alto.Inboxes.Queue do
   @impl true
   def admit(delivery_key, payload, opts) do
     queue = Keyword.fetch!(opts, :queue)
-    Alto.Queue.admit(queue, delivery_key, payload)
+    Alto.Queue.request(queue, {:admit, delivery_key, payload, []})
   end
 end

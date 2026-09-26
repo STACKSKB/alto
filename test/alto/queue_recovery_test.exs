@@ -19,24 +19,31 @@ defmodule Alto.QueueRecoveryTest do
   end
 
   test "default restore remains idempotent", %{name: name} do
-    assert {:ok, first} = Queue.restore(name, "op-1", "gen-1", %{value: 1})
-    assert {:error, :duplicate} = Queue.restore(name, "op-1", "gen-1", %{value: 1})
-    assert {:ok, [record]} = Queue.claim(name)
+    assert {:ok, first} = Queue.request(name, {:restore, "op-1", "gen-1", %{value: 1}, []})
+
+    assert {:error, :duplicate} =
+             Queue.request(name, {:restore, "op-1", "gen-1", %{value: 1}, []})
+
+    assert {:ok, [record]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
     assert record.id == first.id
     assert record.operation_key == "op-1"
   end
 
   test "same grant deduplicates after ack and later grant is distinct", %{name: name} do
-    assert {:ok, first} = Queue.restore(name, "op-1", "gen-1", %{value: 1}, recovery_revision: 4)
-    assert {:ok, [claimed]} = Queue.claim(name)
-    assert :ok = Queue.ack(name, claimed.claim_id)
+    assert {:ok, first} =
+             Queue.request(name, {:restore, "op-1", "gen-1", %{value: 1}, [recovery_revision: 4]})
+
+    assert {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
+    assert :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
 
     assert {:error, :duplicate} =
-             Queue.restore(name, "op-1", "gen-1", %{value: 1}, recovery_revision: 4)
+             Queue.request(name, {:restore, "op-1", "gen-1", %{value: 1}, [recovery_revision: 4]})
 
-    assert {:ok, second} = Queue.restore(name, "op-1", "gen-1", %{value: 2}, recovery_revision: 5)
+    assert {:ok, second} =
+             Queue.request(name, {:restore, "op-1", "gen-1", %{value: 2}, [recovery_revision: 5]})
+
     assert second.id != first.id
-    assert {:ok, [record]} = Queue.claim(name)
+    assert {:ok, [record]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
     assert record.operation_key == "op-1"
     assert record.generation_id == "gen-1"
     assert record.payload == %{value: 2}
@@ -44,6 +51,6 @@ defmodule Alto.QueueRecoveryTest do
 
   test "revision must be positive", %{name: name} do
     assert {:error, {:invalid_recovery_revision, 0}} =
-             Queue.restore(name, "op-1", "gen-1", %{}, recovery_revision: 0)
+             Queue.request(name, {:restore, "op-1", "gen-1", %{}, [recovery_revision: 0]})
   end
 end

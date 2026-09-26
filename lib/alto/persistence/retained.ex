@@ -36,59 +36,16 @@ defmodule Alto.Persistence.Retained do
 
   def call_timeout(_), do: 0
 
-  @doc "Read a retained operation under the supplied deadline."
-  def read(ledger, key, deadline \\ :infinity) do
+  @doc "Execute a native ledger request under the supplied absolute monotonic deadline."
+  @spec request(GenServer.server(), OperationLog.request(), integer() | :infinity) :: term()
+  def request(ledger, message, deadline \\ :infinity) do
     with :ok <- deadline_ok(deadline),
-         do: OperationLog.recovery(ledger, key, call_timeout(deadline))
-  end
-
-  @doc "Read one consistent set of operation views under the supplied deadline."
-  def entries(ledger, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         do: OperationLog.entries(ledger, :all, call_timeout(deadline))
+         do: OperationLog.request(ledger, message, call_timeout(deadline))
   end
 
   @doc "Create an internal checkpoint atomically, or read the existing record."
   def ensure_checkpoint(ledger, key, tool, recovery, attempt, packet, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline),
-         :ok <-
-           OperationLog.retain(
-             ledger,
-             key,
-             tool,
-             recovery,
-             attempt,
-             packet,
-             call_timeout(deadline)
-           ),
-         do: read(ledger, key, deadline)
-  end
-
-  @doc "Apply a replacement at an exact retained revision."
-  def cas(ledger, key, expected_revision, replacement, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline) do
-      OperationLog.update_checkpoint(
-        ledger,
-        key,
-        expected_revision,
-        replacement,
-        call_timeout(deadline)
-      )
-    end
-  end
-
-  @doc "Retire a checkpoint atomically after validating its viewed revision."
-  def retire(ledger, key, revision, decision, attempt, evidence, deadline \\ :infinity) do
-    with :ok <- deadline_ok(deadline) do
-      OperationLog.retire_checkpoint(
-        ledger,
-        key,
-        revision,
-        decision,
-        attempt,
-        evidence,
-        call_timeout(deadline)
-      )
-    end
+    with :ok <- request(ledger, {:retain, key, tool, recovery, attempt, packet}, deadline),
+         do: request(ledger, {:recovery, key}, deadline)
   end
 end

@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,916 lines (16.6% below the original)**. **5,458 lines
+The current count is **33,744 lines (17.0% below the original)**. **5,286 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,12 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Queue and operation-ledger clients use their native request tuples directly.
+  Retained records apply deadlines to that same ledger contract, removing a
+  second set of forwarding operations. Queue claims share count/byte bounds and
+  selector validation; initialization keeps its separate deadline checks.
+  Existing compaction calls retain infinite timeouts, and storage formats and
+  append-before-publication behavior are unchanged.
 - Registry clients use one typed atom/tuple request contract through to the
   GenServer, replacing twenty forwarding APIs and their duplicated documentation.
   Transports retain their fixed wire-command allowlist and normalization;
@@ -191,7 +197,7 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,068 core tests and
+The combined cleanup and messaging worktree passes **1,069 core tests and
 142 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
@@ -213,6 +219,11 @@ Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including
 buffer limits, overflow, replay cursors, and disconnect decisions.
 All 144 converted registry calls were compared against their prior message
 arguments, including explicit defaults, before running the complete suites.
+The queue/ledger pass removes 172 production lines after formatting and caller
+expansion, including duplicate API documentation. Its 803 converted calls were
+checked against the original wrapper ASTs, including default arguments, timeouts,
+and retained-record deadlines. Consumer settlement uses the same request path;
+an invalid settlement cannot kill the queue or consume a live claim.
 
 Terminal exit coverage sends real Ctrl+G/Q and Ctrl+C through a PTY and checks
 mode-reset output before logging returns to the console. The documented

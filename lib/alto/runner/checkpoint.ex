@@ -98,7 +98,7 @@ defmodule Alto.Runner.Checkpoint do
     with :ok <- parent_capabilities(run),
          true <- valid_parent_pending?(pending),
          true <- valid_frame?(remaining, terminal),
-         {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
+         {:ok, store} <- OperationLog.request(run.continuation_store, :identity, 100),
          authority <- Map.take(run, @authority_fields),
          true <- valid_authority?(authority),
          expires <- parent_expiry(run),
@@ -142,7 +142,7 @@ defmodule Alto.Runner.Checkpoint do
          true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
          true <- packet["kind"] == "parent",
          {:ok, _} <- encode(packet),
-         {:ok, store} <- OperationLog.identity(run.continuation_store, 100),
+         {:ok, store} <- OperationLog.request(run.continuation_store, :identity, 100),
          {:ok,
           %{
             run: saved,
@@ -192,7 +192,7 @@ defmodule Alto.Runner.Checkpoint do
          true <- run.agent_depth > 0,
          true <- is_map(run.child_profile) and not Map.has_key?(run.child_profile, :provider),
          true <- is_struct(run.budget.account, Budget.Account),
-         {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
+         {:ok, store} <- OperationLog.request(ticket.batch.ledger, :identity, 100),
          {:ok, packet} <- capture(%{run | agent_depth: 0}, pending, remaining, terminal),
          authority <- Map.take(run, @authority_fields),
          true <- valid_authority?(authority),
@@ -232,7 +232,7 @@ defmodule Alto.Runner.Checkpoint do
   def restore_child(run, packet, decision, opts) do
     with {:ok, binding} <- child_binding(packet),
          %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
-         {:ok, store} <- OperationLog.identity(ticket.batch.ledger, 100),
+         {:ok, store} <- OperationLog.request(ticket.batch.ledger, :identity, 100),
          true <- binding.journal == Alto.Subagents.Continuation.identity(ticket.batch),
          true <-
            binding.store == store and binding.id == ticket.id and
@@ -625,7 +625,7 @@ defmodule Alto.Runner.Checkpoint do
   defp stable_resource(value) when is_pid(value) or is_atom(value) or is_tuple(value) do
     result =
       try do
-        OperationLog.identity(value, 100)
+        OperationLog.request(value, :identity, 100)
       catch
         :exit, reason -> {:error, reason}
       end

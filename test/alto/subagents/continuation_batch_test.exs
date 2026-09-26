@@ -34,12 +34,12 @@ defmodule Alto.Subagents.ContinuationTest do
     assert packet["phase"] == "children"
     assert packet["join"] == nil
     assert Enum.sort(Map.keys(packet["children"])) == ["a", "b"]
-    assert OperationLog.attempts(ledger, "batch-atomic-open") == 1
+    assert OperationLog.request(ledger, {:attempts, "batch-atomic-open"}) == 1
 
     assert {:ok, reopened} = Continuation.open(ledger, "batch-atomic-open", ["a", "b"])
     assert Continuation.identity(reopened) == Continuation.identity(batch)
     assert {:ok, %{revision: 1}} = Continuation.read(reopened)
-    assert OperationLog.attempts(ledger, "batch-atomic-open") == 1
+    assert OperationLog.request(ledger, {:attempts, "batch-atomic-open"}) == 1
   end
 
   test "concurrent dispatch grants a child exactly once", %{dir: dir, id: id} do
@@ -92,7 +92,7 @@ defmodule Alto.Subagents.ContinuationTest do
     assert {:error, :invalid_retained_options} =
              Continuation.lookup(ledger, "batch-lookup", typo: true)
 
-    assert :ok = OperationLog.record_intent(ledger, "wrong-kind", "other", nil, %{})
+    assert :ok = OperationLog.request(ledger, {:intent, "wrong-kind", "other", nil, %{}})
     assert {:error, :invalid_batch} = Continuation.lookup(ledger, "wrong-kind")
   end
 
@@ -202,7 +202,7 @@ defmodule Alto.Subagents.ContinuationTest do
     {:ok, joined} = Continuation.join(batch)
     {:ok, acknowledged} = Continuation.acknowledge(batch, joined.revision, %{"saved" => true})
 
-    attempts = OperationLog.attempts(ledger, batch.key)
+    attempts = OperationLog.request(ledger, {:attempts, batch.key})
     size = File.stat!(Path.join(dir, id <> ".jsonl")).size
     :sys.replace_state(ledger, fn state -> %{state | max_log_bytes: size + 1} end)
 
@@ -210,7 +210,7 @@ defmodule Alto.Subagents.ContinuationTest do
              Continuation.retire(batch, acknowledged.revision)
 
     assert Continuation.read(batch) == {:ok, acknowledged}
-    assert OperationLog.attempts(ledger, batch.key) == attempts
+    assert OperationLog.request(ledger, {:attempts, batch.key}) == attempts
 
     stop_supervised!(child_id)
     %{ledger: restarted} = start_ledger!(dir, id)
@@ -219,7 +219,7 @@ defmodule Alto.Subagents.ContinuationTest do
     assert :ok = Continuation.retire(restored, acknowledged.revision)
     assert {:ok, %{state: :retired, revision: revision}} = Continuation.read(restored)
     assert revision == acknowledged.revision + 1
-    assert OperationLog.attempts(restarted, batch.key) == attempts + 1
+    assert OperationLog.request(restarted, {:attempts, batch.key}) == attempts + 1
   end
 
   test "concurrent retirement calls converge on one terminal record", %{dir: dir, id: id} do
@@ -244,7 +244,7 @@ defmodule Alto.Subagents.ContinuationTest do
 
     assert {:ok, %{state: :retired, revision: revision}} = Continuation.read(batch)
     assert revision == acknowledged.revision + 1
-    assert OperationLog.attempts(ledger, batch.key) == 2
+    assert OperationLog.request(ledger, {:attempts, batch.key}) == 2
   end
 
   test "nonportable and oversized results never replace the dispatched state", %{dir: dir, id: id} do
@@ -330,7 +330,7 @@ defmodule Alto.Subagents.ContinuationTest do
     assert Enum.all?(results, &match?({:ok, _}, &1))
     assert {:ok, joined} = Continuation.join(batch)
     assert joined.results == Enum.map(ids, &{&1, &1})
-    assert OperationLog.attempts(ledger, "many") == 1
+    assert OperationLog.request(ledger, {:attempts, "many"}) == 1
   end
 
   test "approval decisions and grants are fenced independently from sibling changes", %{

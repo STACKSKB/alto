@@ -449,8 +449,8 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
         queue: queue
       )
 
-      {:ok, _} = Alto.Queue.admit(queue, "src:del-1", %{"body" => "x"})
-      assert %{pending: 1} = Alto.Queue.count(queue)
+      {:ok, _} = Alto.Queue.request(queue, {:admit, "src:del-1", %{"body" => "x"}, []})
+      assert %{pending: 1} = Alto.Queue.request(queue, :count)
 
       {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
       assert {:ok, "finished"} = attach_collect(registry, run_id)
@@ -463,7 +463,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       # Resume is transcript continuity, not workflow replay: the inbox is
       # exactly as the runs left it.
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
     end
   end
 

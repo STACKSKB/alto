@@ -49,7 +49,7 @@ defmodule Alto.Listeners.ConnectionQueueTest do
     registry: registry,
     queue: queue
   } do
-    assert {:ok, %{id: id}} = Alto.Queue.put(queue, "job-1", %{lines: 3})
+    assert {:ok, %{id: id}} = Alto.Queue.request(queue, {:put, "job-1", %{lines: 3}, []})
 
     claim =
       run(
@@ -76,7 +76,7 @@ defmodule Alto.Listeners.ConnectionQueueTest do
       )
 
     assert ack["type"] == "ok"
-    assert %{pending: 0, claimed: 0} = Alto.Queue.count(queue)
+    assert %{pending: 0, claimed: 0} = Alto.Queue.request(queue, :count)
   end
 
   test "unknown claim ids answer not_found, and no queue answers unsupported", %{
@@ -126,7 +126,8 @@ defmodule Alto.Listeners.ConnectionQueueTest do
       queue: queue
     } do
       for n <- 1..20 do
-        {:ok, _} = Alto.Queue.put(queue, "job-#{n}", %{pad: String.duplicate("x", 60_000)})
+        {:ok, _} =
+          Alto.Queue.request(queue, {:put, "job-#{n}", %{pad: String.duplicate("x", 60_000)}, []})
       end
 
       claim =
@@ -147,18 +148,18 @@ defmodule Alto.Listeners.ConnectionQueueTest do
       assert length(returned) > 0
 
       # Every leased record was delivered: no invisible leases.
-      assert %{pending: pending, claimed: claimed} = Alto.Queue.count(queue)
+      assert %{pending: pending, claimed: claimed} = Alto.Queue.request(queue, :count)
       assert pending + claimed == 20
       assert claimed == length(returned)
 
       # The rest is still claimable work.
-      assert {:ok, rest} = Alto.Queue.claim(queue, 20, "station-2")
+      assert {:ok, rest} = Alto.Queue.request(queue, {:claim, 20, "station-2", :infinity, :all})
       assert length(rest) == pending
     end
 
     test "listener-specific limits bound the reply", %{registry: registry, queue: queue} do
-      {:ok, _} = Alto.Queue.put(queue, "a", %{n: 1})
-      {:ok, _} = Alto.Queue.put(queue, "b", %{n: 2})
+      {:ok, _} = Alto.Queue.request(queue, {:put, "a", %{n: 1}, []})
+      {:ok, _} = Alto.Queue.request(queue, {:put, "b", %{n: 2}, []})
 
       claim =
         run_with_limit(
@@ -176,7 +177,8 @@ defmodule Alto.Listeners.ConnectionQueueTest do
       registry: registry,
       queue: queue
     } do
-      {:ok, _} = Alto.Queue.put(queue, "big", %{pad: String.duplicate("x", 60_000)})
+      {:ok, _} =
+        Alto.Queue.request(queue, {:put, "big", %{pad: String.duplicate("x", 60_000)}, []})
 
       claim =
         run_with_limit(
@@ -188,7 +190,7 @@ defmodule Alto.Listeners.ConnectionQueueTest do
       assert claim["type"] == "error"
       assert claim["code"] == "internal"
       assert ["record_too_large", %{"key" => "big"}] = claim["detail"]["$tuple"]
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "a dead queue answers errors while the registry stays alive", %{
@@ -244,7 +246,7 @@ defmodule Alto.Listeners.ConnectionQueueTest do
     end
 
     test "disconnect expiry reclaims; stale handles stay dead", %{queue: queue} do
-      {:ok, _} = Alto.Queue.put(queue, "job-1", %{n: 1})
+      {:ok, _} = Alto.Queue.request(queue, {:put, "job-1", %{n: 1}, []})
 
       # Drive expiry explicitly so persistence latency cannot expire the new lease.
       dir =
@@ -265,16 +267,16 @@ defmodule Alto.Listeners.ConnectionQueueTest do
 
       on_exit(fn -> File.rm_rf!(dir) end)
 
-      {:ok, _} = Alto.Queue.put(name, "job", %{})
-      {:ok, [first]} = Alto.Queue.claim(name, 1, "gone-station")
+      {:ok, _} = Alto.Queue.request(name, {:put, "job", %{}, []})
+      {:ok, [first]} = Alto.Queue.request(name, {:claim, 1, "gone-station", :infinity, :all})
       # The client disconnects without acking; the lease expires.
       :atomics.add(clock, 1, 60)
-      {:ok, [second]} = Alto.Queue.claim(name, 1, "next-station")
+      {:ok, [second]} = Alto.Queue.request(name, {:claim, 1, "next-station", :infinity, :all})
 
       assert second.id == first.id
       assert second.claim_id != first.claim_id
-      assert {:error, :not_found} = Alto.Queue.ack(name, first.claim_id)
-      assert :ok = Alto.Queue.ack(name, second.claim_id)
+      assert {:error, :not_found} = Alto.Queue.request(name, {:settle, first.claim_id, :ack, []})
+      assert :ok = Alto.Queue.request(name, {:settle, second.claim_id, :ack, []})
     end
   end
 end

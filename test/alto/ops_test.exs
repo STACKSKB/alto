@@ -38,9 +38,9 @@ defmodule Alto.OpsTest do
   end
 
   test "accepted and claimed work show source and correlation", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "/hooks/events:del-1", %{"body" => "x"})
-    {:ok, _} = Queue.put(q, "job-9", %{"total" => 1})
-    {:ok, [claimed]} = Queue.claim(q, 1, "station-1")
+    {:ok, _} = Queue.request(q, {:admit, "/hooks/events:del-1", %{"body" => "x"}, []})
+    {:ok, _} = Queue.request(q, {:put, "job-9", %{"total" => 1}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "station-1", :infinity, :all})
 
     {:ok, %{items: items}} = Ops.list(q, l, limit: 20)
     by_key = Map.new(items, &{&1.key, &1})
@@ -61,7 +61,7 @@ defmodule Alto.OpsTest do
     :yes = :global.register_name(name, Process.whereis(ledger))
     on_exit(fn -> :global.unregister_name(name) end)
 
-    {:ok, _} = Queue.put(queue, "job", %{})
+    {:ok, _} = Queue.request(queue, {:put, "job", %{}, []})
 
     assert {:ok, %{items: [%{key: "job", status: :accepted}]}} =
              Ops.list(queue, {:global, name})
@@ -69,8 +69,8 @@ defmodule Alto.OpsTest do
 
   @tag lease_ms: 50
   test "stale claims are visible accurately without mutating", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:stale", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "slow")
+    {:ok, _} = Queue.request(q, {:admit, "src:stale", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "slow", :infinity, :all})
     Process.sleep(120)
 
     assert {:ok, item} = Ops.get(q, l, "src:stale")
@@ -82,7 +82,7 @@ defmodule Alto.OpsTest do
 
   test "inspection reaches live work beyond the oldest bounded page", %{queue: q, ledger: l} do
     for n <- 1..105 do
-      {:ok, _} = Queue.put(q, "job-#{n}", %{n: n})
+      {:ok, _} = Queue.request(q, {:put, "job-#{n}", %{n: n}, []})
     end
 
     assert {:ok, item} = Ops.get(q, l, "job-105")
@@ -106,25 +106,28 @@ defmodule Alto.OpsTest do
     ledger: l,
     tag: tag
   } do
-    {:ok, _} = Queue.admit(q, "src:park-me", %{"body" => "x"})
-    {:ok, [claimed]} = Queue.claim(q, 1, "w")
-    :ok = OperationLog.record_intent(l, "src:park-me", "print", "src:park-me")
-    :ok = OperationLog.record_attempt(l, "src:park-me", claimed.claim_id)
+    {:ok, _} = Queue.request(q, {:admit, "src:park-me", %{"body" => "x"}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, "src:park-me", "print", "src:park-me", nil})
+    :ok = OperationLog.request(l, {:attempt, "src:park-me", claimed.claim_id})
 
     :ok =
-      OperationLog.record_outcome(l, "src:park-me", claimed.claim_id, :requires_operator, %{
-        park_reason: :handler_crashed,
-        detail: String.duplicate("x", 5_000)
-      })
+      OperationLog.request(
+        l,
+        {:outcome, "src:park-me", claimed.claim_id, :requires_operator,
+         %{
+           park_reason: :handler_crashed,
+           detail: String.duplicate("x", 5_000)
+         }}
+      )
 
-    :ok = Queue.ack(q, claimed.claim_id)
+    :ok = Queue.request(q, {:settle, claimed.claim_id, :ack, []})
 
     {:ok, %{items: [parked]}} = Ops.list(q, l, filter: :parked)
     assert parked.key == "src:park-me"
     assert parked.status == :parked
     assert parked.safe_to_retry == false
     assert byte_size(parked.reason) <= 501
-    assert parked.recovery =~ "record_outcome"
 
     # Restart both stores over the same logs: parked work is still found.
     GenServer.stop(Process.whereis(q))
@@ -141,10 +144,10 @@ defmodule Alto.OpsTest do
   end
 
   test "unknown work is never shown as safely retryable", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.admit(q, "src:mystery", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "w")
-    :ok = OperationLog.record_intent(l, "src:mystery", "print", "src:mystery")
-    :ok = OperationLog.record_attempt(l, "src:mystery", claimed.claim_id)
+    {:ok, _} = Queue.request(q, {:admit, "src:mystery", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, "src:mystery", "print", "src:mystery", nil})
+    :ok = OperationLog.request(l, {:attempt, "src:mystery", claimed.claim_id})
 
     {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
     assert item.key == "src:mystery"
@@ -157,16 +160,20 @@ defmodule Alto.OpsTest do
     queue: q,
     ledger: l
   } do
-    {:ok, _} = Queue.admit(q, "src:identity", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "w")
+    {:ok, _} = Queue.request(q, {:admit, "src:identity", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
 
     :ok =
-      OperationLog.record_intent(l, "src:identity", "print", "src:identity", %{
-        generation_id: "recovery-generation",
-        payload: String.duplicate("x", 5_000)
-      })
+      OperationLog.request(
+        l,
+        {:intent, "src:identity", "print", "src:identity",
+         %{
+           generation_id: "recovery-generation",
+           payload: String.duplicate("x", 5_000)
+         }}
+      )
 
-    :ok = OperationLog.record_attempt(l, "src:identity", claimed.claim_id)
+    :ok = OperationLog.request(l, {:attempt, "src:identity", claimed.claim_id})
 
     assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
     assert item.operation_revision == 2
@@ -180,20 +187,18 @@ defmodule Alto.OpsTest do
     queue: q,
     ledger: l
   } do
-    {:ok, _} = Queue.put(q, "job-display", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "w")
+    {:ok, _} = Queue.request(q, {:put, "job-display", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
     operation_key = "business-generation:" <> claimed.generation_id
 
     :ok =
-      OperationLog.record_intent(
+      OperationLog.request(
         l,
-        operation_key,
-        "print",
-        "job-display",
-        %{key: "job-display", generation_id: claimed.generation_id, payload: %{}}
+        {:intent, operation_key, "print", "job-display",
+         %{key: "job-display", generation_id: claimed.generation_id, payload: %{}}}
       )
 
-    :ok = OperationLog.record_attempt(l, operation_key, claimed.claim_id)
+    :ok = OperationLog.request(l, {:attempt, operation_key, claimed.claim_id})
 
     assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
     assert item.key == "job-display"
@@ -207,20 +212,24 @@ defmodule Alto.OpsTest do
     queue: q,
     ledger: l
   } do
-    {:ok, _} = Queue.put(q, "same-display", %{})
-    {:ok, [old_claim]} = Queue.claim(q, 1, "w")
+    {:ok, _} = Queue.request(q, {:put, "same-display", %{}, []})
+    {:ok, [old_claim]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
     old_operation = "business-generation:" <> old_claim.generation_id
 
     :ok =
-      OperationLog.record_intent(l, old_operation, "print", "same-display", %{
-        key: "same-display",
-        generation_id: old_claim.generation_id
-      })
+      OperationLog.request(
+        l,
+        {:intent, old_operation, "print", "same-display",
+         %{
+           key: "same-display",
+           generation_id: old_claim.generation_id
+         }}
+      )
 
-    :ok = OperationLog.record_attempt(l, old_operation, old_claim.claim_id)
-    :ok = OperationLog.record_outcome(l, old_operation, old_claim.claim_id, :completed, %{})
-    :ok = Queue.ack(q, old_claim.claim_id)
-    {:ok, _} = Queue.put(q, "same-display", %{})
+    :ok = OperationLog.request(l, {:attempt, old_operation, old_claim.claim_id})
+    :ok = OperationLog.request(l, {:outcome, old_operation, old_claim.claim_id, :completed, %{}})
+    :ok = Queue.request(q, {:settle, old_claim.claim_id, :ack, []})
+    {:ok, _} = Queue.request(q, {:put, "same-display", %{}, []})
 
     assert {:ok, %{items: items}} = Ops.list(q, l)
     assert Enum.map(items, & &1.key) == ["same-display", "same-display"]
@@ -231,10 +240,10 @@ defmodule Alto.OpsTest do
 
   test "restored work joins ledger state by its explicit operation key", %{queue: q, ledger: l} do
     operation_key = "src:restored-operation"
-    {:ok, _} = Queue.restore(q, operation_key, "generation-1", %{})
-    {:ok, [claimed]} = Queue.claim(q, 1, "w")
-    :ok = OperationLog.record_intent(l, operation_key, "print", claimed.key)
-    :ok = OperationLog.record_attempt(l, operation_key, claimed.claim_id)
+    {:ok, _} = Queue.request(q, {:restore, operation_key, "generation-1", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, operation_key, "print", claimed.key, nil})
+    :ok = OperationLog.request(l, {:attempt, operation_key, claimed.claim_id})
 
     assert {:ok, %{items: [item]}} = Ops.list(q, l)
     assert item.status == :unknown
@@ -249,12 +258,12 @@ defmodule Alto.OpsTest do
   } do
     for n <- 1..5 do
       key = "src:done-#{n}"
-      {:ok, _} = Queue.admit(q, key, %{})
-      {:ok, [claimed]} = Queue.claim(q, 1, "w")
-      :ok = OperationLog.record_intent(l, key, "print", key)
-      :ok = OperationLog.record_attempt(l, key, claimed.claim_id)
-      :ok = OperationLog.record_outcome(l, key, claimed.claim_id, :completed, %{n: n})
-      :ok = Queue.ack(q, claimed.claim_id)
+      {:ok, _} = Queue.request(q, {:admit, key, %{}, []})
+      {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+      :ok = OperationLog.request(l, {:intent, key, "print", key, nil})
+      :ok = OperationLog.request(l, {:attempt, key, claimed.claim_id})
+      :ok = OperationLog.request(l, {:outcome, key, claimed.claim_id, :completed, %{n: n}})
+      :ok = Queue.request(q, {:settle, claimed.claim_id, :ack, []})
     end
 
     {:ok, %{items: page1, next_cursor: cursor}} = Ops.list(q, l, filter: :completed, limit: 2)

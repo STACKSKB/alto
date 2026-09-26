@@ -16,11 +16,11 @@ defmodule Alto.OperationLogRejectTest do
   end
 
   test "rejects intended and survives restart", %{dir: dir, name: name} do
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
-    assert :ok = OperationLog.reject_intended(name, "op", 1, %{status: "cancelled"})
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
+    assert :ok = OperationLog.request(name, {:reject_intended, "op", 1, %{status: "cancelled"}})
 
     assert {:decided, :rejected_before_dispatch, %{status: "cancelled"}} =
-             OperationLog.status(name, "op")
+             OperationLog.request(name, {:status, "op"})
 
     GenServer.stop(name)
 
@@ -28,26 +28,31 @@ defmodule Alto.OperationLogRejectTest do
       String.to_atom("reject_restart_" <> Integer.to_string(System.unique_integer([:positive])))
 
     {:ok, _} = OperationLog.start_link(id: "l", dir: dir, name: name2)
-    assert {:decided, :rejected_before_dispatch, _} = OperationLog.status(name2, "op")
+    assert {:decided, :rejected_before_dispatch, _} = OperationLog.request(name2, {:status, "op"})
   end
 
   test "fences stale revisions and active attempts", %{name: name} do
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
-    assert {:error, :stale_revision} = OperationLog.reject_intended(name, "op", 2, %{})
-    :ok = OperationLog.record_attempt(name, "op", "live")
-    assert {:error, :attempt_in_flight} = OperationLog.reject_intended(name, "op", 2, %{})
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
+
+    assert {:error, :stale_revision} =
+             OperationLog.request(name, {:reject_intended, "op", 2, %{}})
+
+    :ok = OperationLog.request(name, {:attempt, "op", "live"})
+
+    assert {:error, :attempt_in_flight} =
+             OperationLog.request(name, {:reject_intended, "op", 2, %{}})
   end
 
   test "released retry can be rejected", %{name: name} do
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
-    :ok = OperationLog.record_attempt(name, "op", "try")
-    :ok = OperationLog.record_release(name, "op", "try")
-    assert :ok = OperationLog.reject_intended(name, "op", 3, %{})
-    assert {:decided, :rejected_before_dispatch, _} = OperationLog.status(name, "op")
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
+    :ok = OperationLog.request(name, {:attempt, "op", "try"})
+    :ok = OperationLog.request(name, {:release, "op", "try"})
+    assert :ok = OperationLog.request(name, {:reject_intended, "op", 3, %{}})
+    assert {:decided, :rejected_before_dispatch, _} = OperationLog.request(name, {:status, "op"})
   end
 
   test "a partial reject tail does not create an attempt", %{dir: dir, name: name} do
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
     GenServer.stop(name)
     path = Path.join(dir, "l.jsonl")
 
@@ -61,15 +66,15 @@ defmodule Alto.OperationLogRejectTest do
       String.to_atom("reject_partial_" <> Integer.to_string(System.unique_integer([:positive])))
 
     {:ok, _} = OperationLog.start_link(id: "l", dir: dir, name: name2)
-    assert {:intended} = OperationLog.status(name2, "op")
-    assert {:ok, _} = OperationLog.recovery(name2, "op")
+    assert {:intended} = OperationLog.request(name2, {:status, "op"})
+    assert {:ok, _} = OperationLog.request(name2, {:recovery, "op"})
   end
 
   test "decided rejection cannot be overwritten", %{name: name} do
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
-    :ok = OperationLog.reject_intended(name, "op", 1, %{})
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
+    :ok = OperationLog.request(name, {:reject_intended, "op", 1, %{}})
 
-    assert OperationLog.reject_intended(name, "op", 1, %{}) in [
+    assert OperationLog.request(name, {:reject_intended, "op", 1, %{}}) in [
              {:error, :already_decided},
              {:error, :stale_revision}
            ]
@@ -78,12 +83,15 @@ defmodule Alto.OperationLogRejectTest do
   test "full attempt history is rejected without poisoning the log", %{dir: dir} do
     name = String.to_atom("reject_full_" <> Integer.to_string(System.unique_integer([:positive])))
     {:ok, _} = OperationLog.start_link(id: "full", dir: dir, name: name, max_attempts: 1)
-    :ok = OperationLog.record_intent(name, "op", "tool", nil)
-    :ok = OperationLog.record_attempt(name, "op", "try")
-    :ok = OperationLog.record_release(name, "op", "try")
+    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
+    :ok = OperationLog.request(name, {:attempt, "op", "try"})
+    :ok = OperationLog.request(name, {:release, "op", "try"})
     path = Path.join(dir, "full.jsonl")
     before = File.read!(path)
-    assert {:error, :attempt_history_full} = OperationLog.reject_intended(name, "op", 3, %{})
+
+    assert {:error, :attempt_history_full} =
+             OperationLog.request(name, {:reject_intended, "op", 3, %{}})
+
     assert File.read!(path) == before
     GenServer.stop(name)
 
@@ -93,6 +101,6 @@ defmodule Alto.OperationLogRejectTest do
       )
 
     {:ok, _} = OperationLog.start_link(id: "full", dir: dir, name: name2, max_attempts: 1)
-    assert {:intended} = OperationLog.status(name2, "op")
+    assert {:intended} = OperationLog.request(name2, {:status, "op"})
   end
 end

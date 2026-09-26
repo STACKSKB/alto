@@ -5,9 +5,9 @@ priorities or start workers. Compose it with supervised Alto.Consumer processes
 or another host using the claim/ack contract.
 
 ```elixir
-Alto.Queue.admit(queue, "source:delivery-id", payload, delay_ms: 60_000)
-Alto.Queue.put(queue, "job-key", payload, not_before_ms: unix_time_ms)
-Alto.Queue.release(queue, claim_id, delay_ms: 30_000)
+Alto.Queue.request(queue, {:admit, "source:delivery-id", payload, [delay_ms: 60_000]})
+Alto.Queue.request(queue, {:put, "job-key", payload, [not_before_ms: unix_time_ms]})
+Alto.Queue.request(queue, {:settle, claim_id, :release, [delay_ms: 30_000]})
 ```
 
 Claims, including byte-bounded claims used by Consumer, skip pending records
@@ -15,7 +15,7 @@ whose due time has not arrived. Eligible records retain FIFO order. Existing
 calls without scheduling options remain immediately eligible. Admission keeps
 the first payload and schedule; business-key updates explicitly replace both.
 
-`release(queue, claim_id, delay_ms: delay)` persists a new due time under the
+`Queue.request(queue, {:settle, claim_id, :release, [delay_ms: delay]})` persists a new due time under the
 current lease fence. An expired or replaced owner cannot reschedule a newer
 claim. This API does not establish retry safety: the host must still respect
 OperationLog outcomes and never repeat an uncertain effect automatically.
@@ -38,7 +38,7 @@ remain the admission-to-execution mechanism.
 
 Queues keep append-only history by default. Hosts that need bounded retained
 state rather than historical audit entries can set `auto_compact: true` or call
-`Alto.Queue.compact/1` explicitly. Automatic compaction runs before a new append
+`Alto.Queue.request(queue, :compact, :infinity)` explicitly. Automatic compaction runs before a new append
 would exceed `max_log_bytes`. It retains every pending and claimed record in
 FIFO order, portable term payloads, revisions, generation/operation identities, delayed
 due times and active claim IDs/owners/lease deadlines. It does not reclaim
@@ -58,5 +58,5 @@ lines encode native queue mutations. An incomplete snapshot fails closed; only
 later torn appends receive normal tail repair. This is the current prerelease
 format; older queue logs are not migrated. Payloads and claim owners must be
 portable data; process IDs, references, ports, and functions are rejected.
-`compact/1` reports byte counts and retained live/completed counts. This is a
+The `:compact` request reports byte counts and retained live/completed counts. This is a
 queue-state maintenance operation, not an audit-log export.

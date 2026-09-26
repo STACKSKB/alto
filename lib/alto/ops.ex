@@ -177,7 +177,7 @@ defmodule Alto.Ops do
 
   defp snapshot_pages(queue, cursor, acc) do
     try do
-      case Alto.Queue.snapshot_page(queue, cursor, 100) do
+      case Alto.Queue.request(queue, {:snapshot_page, cursor, 100}) do
         {:ok, %{records: records, next_cursor: next_cursor}} ->
           acc = Enum.reverse(records, acc)
 
@@ -194,7 +194,8 @@ defmodule Alto.Ops do
   end
 
   defp ledger_items_complete(ledger, live_by_operation) do
-    with {:ok, entries} <- ledger_call(fn -> Alto.OperationLog.entries(ledger) end) do
+    with {:ok, entries} <-
+           ledger_call(fn -> Alto.OperationLog.request(ledger, {:entries, :all}) end) do
       {:ok,
        entries
        |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
@@ -234,7 +235,7 @@ defmodule Alto.Ops do
   defp ledger_disposition({:decided, :requires_operator, evidence}),
     do:
       {:parked, reason_of(evidence, :parked),
-       "operator reviews evidence, then record_outcome + admit a new delivery to re-run"}
+       "operator reviews evidence, then record an outcome and admit a new delivery to re-run"}
 
   defp ledger_disposition({:decided, class, evidence})
        when class in [:completed, :failed_known, :rejected_before_dispatch],
@@ -250,12 +251,12 @@ defmodule Alto.Ops do
   defp ledger_disposition({:dispatched, _attempt}),
     do:
       {:unknown, "dispatched without outcome; reconcile with the participant or park",
-       "reconcile with the authoritative participant, then record_outcome (never blind retry)"}
+       "reconcile with the authoritative participant, then record an outcome (never blind retry)"}
 
   defp ledger_disposition({:intended}),
     do:
       {:unknown, "live work gone with no recorded outcome; operator review",
-       "review inbox/audit; record_outcome under the operation identity if warranted"}
+       "review inbox/audit; record an outcome under the operation identity if warranted"}
 
   defp ledger_disposition(_status), do: nil
 

@@ -83,7 +83,7 @@ defmodule Alto.OpsProtocolTest do
     queue: queue,
     registry: registry
   } do
-    {:ok, _} = Queue.admit(queue, "/hooks/events:del-1", %{"body" => "x"})
+    {:ok, _} = Queue.request(queue, {:admit, "/hooks/events:del-1", %{"body" => "x"}, []})
 
     reply =
       run(
@@ -112,12 +112,12 @@ defmodule Alto.OpsProtocolTest do
   } do
     for n <- 1..3 do
       key = "src:done-#{n}"
-      {:ok, _} = Queue.admit(queue, key, %{})
-      {:ok, [claimed]} = Queue.claim(queue, 1, "w")
-      :ok = OperationLog.record_intent(ledger, key, "print", key)
-      :ok = OperationLog.record_attempt(ledger, key, claimed.claim_id)
-      :ok = OperationLog.record_outcome(ledger, key, claimed.claim_id, :completed, %{})
-      :ok = Queue.ack(queue, claimed.claim_id)
+      {:ok, _} = Queue.request(queue, {:admit, key, %{}, []})
+      {:ok, [claimed]} = Queue.request(queue, {:claim, 1, "w", :infinity, :all})
+      :ok = OperationLog.request(ledger, {:intent, key, "print", key, nil})
+      :ok = OperationLog.request(ledger, {:attempt, key, claimed.claim_id})
+      :ok = OperationLog.request(ledger, {:outcome, key, claimed.claim_id, :completed, %{}})
+      :ok = Queue.request(queue, {:settle, claimed.claim_id, :ack, []})
     end
 
     page1 =
@@ -157,10 +157,10 @@ defmodule Alto.OpsProtocolTest do
     ledger: ledger,
     registry: registry
   } do
-    {:ok, _} = Queue.admit(queue, "src:mystery", %{})
-    {:ok, [claimed]} = Queue.claim(queue, 1, "w")
-    :ok = OperationLog.record_intent(ledger, "src:mystery", "print", "src:mystery")
-    :ok = OperationLog.record_attempt(ledger, "src:mystery", claimed.claim_id)
+    {:ok, _} = Queue.request(queue, {:admit, "src:mystery", %{}, []})
+    {:ok, [claimed]} = Queue.request(queue, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(ledger, {:intent, "src:mystery", "print", "src:mystery", nil})
+    :ok = OperationLog.request(ledger, {:attempt, "src:mystery", claimed.claim_id})
 
     reply =
       run(
@@ -188,11 +188,11 @@ defmodule Alto.OpsProtocolTest do
   end
 
   test "an oversized page answers internal without mutating", %{queue: queue, registry: registry} do
-    {:ok, _} = Queue.put(queue, "big", %{pad: String.duplicate("x", 5_000)})
+    {:ok, _} = Queue.request(queue, {:put, "big", %{pad: String.duplicate("x", 5_000)}, []})
 
     reply = run(JSON.encode!(%{"v" => 1, "type" => "ops_list", "id" => "c-1"}), registry, 200)
 
     assert reply["code"] == "internal"
-    assert %{pending: 1, claimed: 0} = Queue.count(queue)
+    assert %{pending: 1, claimed: 0} = Queue.request(queue, :count)
   end
 end

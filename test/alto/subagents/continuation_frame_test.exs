@@ -64,7 +64,7 @@ defmodule Alto.Subagents.ContinuationFrameTest do
   test "pending parent packet is immutable recovery and bounded", %{ledger: ledger} do
     pending = %{"frame" => String.duplicate("p", 200_000)}
     assert {:ok, cell} = Continuation.open(ledger, "large", [], %{}, parent: pending)
-    assert {:ok, entry} = OperationLog.recovery(ledger, "large")
+    assert {:ok, entry} = OperationLog.request(ledger, {:recovery, "large"})
     assert entry.recovery["parent"] == pending
     assert {:ok, %{parent: ^pending}} = Continuation.read(cell)
 
@@ -73,16 +73,13 @@ defmodule Alto.Subagents.ContinuationFrameTest do
   end
 
   test "foreign records are excluded from discovery", %{ledger: ledger} do
-    assert :ok = OperationLog.record_intent(ledger, "foreign", "other", nil, %{})
+    assert :ok = OperationLog.request(ledger, {:intent, "foreign", "other", nil, %{}})
     assert {:ok, []} = Continuation.list(ledger)
 
     assert :ok =
-             OperationLog.record_intent(
+             OperationLog.request(
                ledger,
-               "corrupt-owned",
-               "alto_subagent_continuation",
-               nil,
-               %{}
+               {:intent, "corrupt-owned", "alto_subagent_continuation", nil, %{}}
              )
 
     assert {:error, :invalid_batch} = Continuation.list(ledger)
@@ -114,11 +111,10 @@ defmodule Alto.Subagents.ContinuationFrameTest do
       assert {:ok, snapshot} = Continuation.read(cell)
 
       assert {:ok, _} =
-               OperationLog.update_checkpoint(
+               OperationLog.request(
                  ledger,
-                 key,
-                 snapshot.revision,
-                 %{snapshot.packet | "children" => children}
+                 {:checkpoint_update, key, snapshot.revision,
+                  %{snapshot.packet | "children" => children}}
                )
 
       assert {:error, :invalid_batch} = Continuation.read(cell)

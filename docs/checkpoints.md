@@ -18,13 +18,14 @@ The runner does not persist or authorize its own continuation. A durable host
 uses the existing operation ledger and queue:
 
 1. Record intent and the current dispatch attempt before running.
-2. `record_checkpoint(ledger, key, attempt, packet)` persists the checkpoint.
+2. `OperationLog.request(ledger, {:checkpoint, key, attempt, packet})` persists the checkpoint.
 3. Acknowledge the queue claim only after that write succeeds. `Alto.Consumer`
    implements this ordering for a `{:checkpoint, packet}` handler return.
 4. Display the approval and current ledger revision. Record a host decision with
-   `resume_checkpoint(ledger, key, revision, decision_map)` before readmission.
-5. Restore a queue delivery using `Queue.restore/5` and the returned revision as
-   `recovery_revision`. The next attempt must be written before continuation.
+   `OperationLog.request(ledger, {:resume_checkpoint, key, revision, decision_map})` before readmission.
+5. Restore a queue delivery using
+   `Queue.request(queue, {:restore, key, generation, payload, [recovery_revision: revision]})`
+   with the returned revision. The next attempt must be written before continuation.
 6. Run with trusted options `checkpoint: {packet, :approve | :deny}`. The trusted
    registry API accepts the same option; socket `start_run` never accepts it.
 
@@ -37,7 +38,7 @@ approval following a later uncertain dispatch. Queue-full admission and crashes
 between the grant and queue restoration remain host recovery responsibilities.
 The Zekkyou task host implements these policies.
 
-`resume_checkpoint` accepts an opaque bounded JSON decision map. It is a generic
+The `:resume_checkpoint` request accepts an opaque bounded JSON decision map. It is a generic
 host decision boundary, not a tool permission policy. First decision wins by
 revision. Checkpointed operations cannot accept another attempt, outcome or
 release until explicitly resumed. Their records are not evicted as completed

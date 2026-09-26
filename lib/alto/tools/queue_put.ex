@@ -32,7 +32,7 @@ defmodule Alto.Tools.QueuePut do
 
     case Map.get(arguments, "key") do
       key when is_binary(key) ->
-        Queue.put(queue, key, Map.get(arguments, "payload", %{}))
+        Queue.request(queue, {:put, key, Map.get(arguments, "payload", %{}), []})
 
       _other ->
         {:error, :invalid_key}

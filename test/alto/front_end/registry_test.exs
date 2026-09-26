@@ -739,7 +739,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     } do
       start_registry(registry, root, queue: queue)
 
-      assert {:ok, %{id: id}} = Alto.Queue.put(queue, "job-1", %{lines: 3})
+      assert {:ok, %{id: id}} = Alto.Queue.request(queue, {:put, "job-1", %{lines: 3}, []})
 
       # The claim_id is only known through the facade's reply.
       assert {:ok, [claimed]} = Registry.request(registry, {:queue_claim, 1, "station-1", nil})
@@ -748,11 +748,11 @@ defmodule Alto.FrontEnd.RegistryTest do
       assert :ok = Registry.request(registry, {:queue_release, claimed.claim_id})
 
       assert {:ok, %{records: [%{id: ^id, status: :pending}], next_cursor: nil}} =
-               Alto.Queue.snapshot_page(queue, 0)
+               Alto.Queue.request(queue, {:snapshot_page, 0, 100})
 
       {:ok, [reclaimed]} = Registry.request(registry, {:queue_claim, 1, "station-1", nil})
       assert :ok = Registry.request(registry, {:queue_ack, reclaimed.claim_id})
-      assert %{pending: 0, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 0, claimed: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "ack of a dead claim and queue-less registries fail closed", %{

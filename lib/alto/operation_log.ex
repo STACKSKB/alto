@@ -65,131 +65,48 @@ defmodule Alto.OperationLog do
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []), do: Alto.Storage.dir("operation_logs", Keyword.get(opts, :dir))
 
-  @spec record_intent(GenServer.server(), op_key(), binary(), binary() | nil, map() | nil) ::
-          :ok | {:error, term()}
-  def record_intent(
-        server \\ __MODULE__,
-        op_key,
-        tool,
-        inbox_key,
-        recovery \\ nil,
-        timeout \\ 5_000
-      ) do
-    GenServer.call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
-  end
+  @type request ::
+          {:intent, op_key(), binary(), binary() | nil, map() | nil}
+          | {:retain, op_key(), binary(), map() | nil, binary(), map()}
+          | {:retire_checkpoint, op_key(), pos_integer(), map(), binary(), map()}
+          | {:attempt, op_key(), binary()}
+          | {:release, op_key(), binary()}
+          | {:outcome, op_key(), binary(), outcome_class(), map()}
+          | {:checkpoint, op_key(), binary(), map()}
+          | {:checkpoint_update, op_key(), pos_integer(), map()}
+          | {:resume_checkpoint, op_key(), pos_integer(), map()}
+          | {:status, op_key()}
+          | {:attempts, op_key()}
+          | {:reject_intended, op_key(), pos_integer(), map()}
+          | {:entries, :all | :open | :parked}
+          | {:recovery, op_key()}
+          | :identity
+          | {:reconcile, op_key(), pos_integer(), atom(), map()}
 
-  @doc "Create a retained checkpoint atomically if absent; an existing record is unchanged."
-  def retain(server \\ __MODULE__, op_key, tool, recovery, attempt, checkpoint, timeout \\ 5_000) do
-    GenServer.call(server, {:retain, op_key, tool, recovery, attempt, checkpoint}, timeout)
-  end
+  @doc """
+  Execute a native ledger request. Mutation tuples are the same commands written
+  to the durable log; validation, evidence scrubbing, revision checks, and durable
+  publication happen in the ledger process. Supply all tuple fields explicitly,
+  including absent recovery (`nil`) and empty evidence (`%{}`).
 
-  @doc "Retire an internal checkpoint at an exact revision in one durable write."
-  def retire_checkpoint(
-        server \\ __MODULE__,
-        op_key,
-        revision,
-        decision,
-        attempt,
-        evidence,
-        timeout \\ 5_000
-      ) do
-    GenServer.call(
-      server,
-      {:retire_checkpoint, op_key, revision, decision, attempt, evidence},
-      timeout
-    )
-  end
+  `:retain` atomically creates a checkpoint if absent and leaves an existing
+  record unchanged. `:retire_checkpoint` retires one at its exact revision.
+  `{:entries, filter}` returns bounded canonical views, oldest first, with
+  `:all`, `:open`, or `:parked`; invalid filters fail before contacting the ledger.
+  `{:recovery, key}` reads one view, and `:identity` reads the store identity.
+  Calls use a 5,000 ms timeout unless explicitly overridden.
+  """
+  @spec request(GenServer.server(), request(), timeout()) ::
+          :ok | status() | non_neg_integer() | [map()] | {:ok, map()} | {:error, term()}
+  def request(server, message, timeout \\ 5_000)
 
-  @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
-  def record_attempt(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
-    GenServer.call(server, {:attempt, op_key, attempt_id}, timeout)
-  end
+  def request(server, {:entries, filter} = message, timeout)
+      when filter in [:all, :open, :parked],
+      do: GenServer.call(server, message, timeout)
 
-  @spec record_release(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
-  def record_release(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
-    GenServer.call(server, {:release, op_key, attempt_id}, timeout)
-  end
-
-  @spec record_outcome(
-          GenServer.server(),
-          op_key(),
-          String.t(),
-          outcome_class(),
-          map()
-        ) ::
-          :ok | {:error, term()}
-  def record_outcome(
-        server \\ __MODULE__,
-        op_key,
-        attempt_id,
-        class,
-        evidence \\ %{},
-        timeout \\ 5_000
-      ) do
-    GenServer.call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
-  end
-
-  def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint, timeout \\ 5_000) do
-    GenServer.call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
-  end
-
-  def update_checkpoint(
-        server \\ __MODULE__,
-        op_key,
-        expected_revision,
-        checkpoint,
-        timeout \\ 5_000
-      ) do
-    GenServer.call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
-  end
-
-  def resume_checkpoint(
-        server \\ __MODULE__,
-        op_key,
-        expected_revision,
-        decision,
-        timeout \\ 5_000
-      ) do
-    GenServer.call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
-  end
-
-  @spec status(GenServer.server(), op_key()) :: status()
-  def status(server \\ __MODULE__, op_key) do
-    GenServer.call(server, {:status, op_key})
-  end
-
-  @spec attempts(GenServer.server(), op_key()) :: non_neg_integer()
-  def attempts(server \\ __MODULE__, op_key) do
-    GenServer.call(server, {:attempts, op_key})
-  end
-
-  @spec reject_intended(GenServer.server(), op_key(), pos_integer(), map()) ::
-          :ok | {:error, term()}
-  def reject_intended(server \\ __MODULE__, op_key, expected_revision, evidence \\ %{}) do
-    GenServer.call(server, {:reject_intended, op_key, expected_revision, evidence})
-  end
-
-  @doc "Bounded canonical operation views, oldest first."
-  @spec entries(GenServer.server(), :all | :open | :parked, timeout()) :: [map()]
-  def entries(server \\ __MODULE__, filter \\ :all, timeout \\ 5_000)
-      when filter in [:all, :open, :parked] do
-    GenServer.call(server, {:entries, filter}, timeout)
-  end
-
-  @spec recovery(GenServer.server(), op_key()) :: {:ok, map()} | {:error, :not_found}
-  def recovery(server \\ __MODULE__, op_key, timeout \\ 5_000) do
-    GenServer.call(server, {:recovery, op_key}, timeout)
-  end
-
-  def identity(server \\ __MODULE__, timeout \\ 5_000) do
-    GenServer.call(server, :identity, timeout)
-  end
-
-  @spec reconcile(GenServer.server(), op_key(), pos_integer(), atom(), map()) ::
-          {:ok, map()} | {:error, term()}
-  def reconcile(server \\ __MODULE__, op_key, expected_revision, resolution, evidence \\ %{}) do
-    GenServer.call(server, {:reconcile, op_key, expected_revision, resolution, evidence})
-  end
+  def request(server, message, timeout)
+      when not is_tuple(message) or tuple_size(message) != 2 or elem(message, 0) != :entries,
+      do: GenServer.call(server, message, timeout)
 
   @spec scrub(map()) :: map()
   def scrub(evidence) when is_map(evidence) do

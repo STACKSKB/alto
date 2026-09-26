@@ -28,10 +28,14 @@ defmodule RepositoryMaintenance.Workflow do
     with :ok <- validate_report(report),
          body <- JSON.encode!(report),
          true <- byte_size(body) <= @max_report_bytes or {:error, :report_too_large} do
-      Alto.Queue.admit(queue, report["source"] <> ":" <> report["delivery_id"], %{
-        "body" => body,
-        "report" => report
-      })
+      Alto.Queue.request(
+        queue,
+        {:admit, report["source"] <> ":" <> report["delivery_id"],
+         %{
+           "body" => body,
+           "report" => report
+         }, []}
+      )
     end
   end
 
@@ -60,7 +64,7 @@ defmodule RepositoryMaintenance.Workflow do
   end
 
   defp process_claim(queue, repo, opts) do
-    case Alto.Queue.claim(queue, 1, "repository-maintenance") do
+    case Alto.Queue.request(queue, {:claim, 1, "repository-maintenance", :infinity, :all}) do
       {:ok, [record]} ->
         case checkout(repo, record.payload["report"]["commit"], opts) do
           {:ok, checkout} ->
@@ -72,7 +76,7 @@ defmodule RepositoryMaintenance.Workflow do
 
             case result do
               {:ok, manifest} ->
-                case Alto.Queue.ack(queue, record.claim_id) do
+                case Alto.Queue.request(queue, {:settle, record.claim_id, :ack, []}) do
                   :ok ->
                     {:ok, manifest}
 

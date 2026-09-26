@@ -557,7 +557,7 @@ defmodule Alto.Listeners.WebhookTest do
       body = ~s({"id": 7, "total": "40.00"})
       assert post_event(port, body: body, delivery_id: "inbox-del-1") =~ "200 OK"
 
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
 
       assert {:ok,
               %{
@@ -568,17 +568,19 @@ defmodule Alto.Listeners.WebhookTest do
                   }
                 ],
                 next_cursor: nil
-              }} = Alto.Queue.snapshot_page(queue, 0)
+              }} = Alto.Queue.request(queue, {:snapshot_page, 0, 100})
 
       # The sender's retry is a durable no-op, still 200.
       assert post_event(port, body: body, delivery_id: "inbox-del-1") =~ "200 OK"
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
 
       # And the record is claimable work: input >= inbox >> 200 -> Claim -> Ack.
-      assert {:ok, [claimed]} = Alto.Queue.claim(queue, 1, "station-1")
+      assert {:ok, [claimed]} =
+               Alto.Queue.request(queue, {:claim, 1, "station-1", :infinity, :all})
+
       assert claimed.key == "/hooks/events:inbox-del-1"
-      assert :ok = Alto.Queue.ack(queue, claimed.claim_id)
-      assert %{pending: 0, claimed: 0} = Alto.Queue.count(queue)
+      assert :ok = Alto.Queue.request(queue, {:settle, claimed.claim_id, :ack, []})
+      assert %{pending: 0, claimed: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "a claimed key answers 200 duplicate instead of failing the sender", %{
@@ -589,12 +591,14 @@ defmodule Alto.Listeners.WebhookTest do
       port = start_listener(listener, registry, [enqueue_endpoint(queue)])
 
       assert post_event(port, delivery_id: "inbox-busy") =~ "200 OK"
-      assert {:ok, [_claimed]} = Alto.Queue.claim(queue, 1, "station-1")
+
+      assert {:ok, [_claimed]} =
+               Alto.Queue.request(queue, {:claim, 1, "station-1", :infinity, :all})
 
       # Someone is actively job it: still 200, never a 500 the sender
       # would (correctly) retry into a duplicate print.
       assert post_event(port, delivery_id: "inbox-busy") =~ "200 OK"
-      assert %{pending: 0, claimed: 1} = Alto.Queue.count(queue)
+      assert %{pending: 0, claimed: 1} = Alto.Queue.request(queue, :count)
     end
 
     test "a full inbox answers 503 so the sender retries; nothing is lost", %{
@@ -602,14 +606,14 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!(max_records: 1)
-      {:ok, _} = Alto.Queue.put(queue, "filler", %{n: 1})
+      {:ok, _} = Alto.Queue.request(queue, {:put, "filler", %{n: 1}, []})
       port = start_listener(listener, registry, [enqueue_endpoint(queue)])
 
       assert post_event(port, delivery_id: "inbox-overflow") =~ "503"
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
 
       assert {:ok, %{records: [%{key: "filler"}], next_cursor: nil}} =
-               Alto.Queue.snapshot_page(queue, 0)
+               Alto.Queue.request(queue, {:snapshot_page, 0, 100})
     end
 
     test "an oversized inbox payload is rejected, never truncated", %{
@@ -620,7 +624,7 @@ defmodule Alto.Listeners.WebhookTest do
       port = start_listener(listener, registry, [enqueue_endpoint(queue)])
 
       assert post_event(port, delivery_id: "inbox-big") =~ "413"
-      assert %{pending: 0} = Alto.Queue.count(queue)
+      assert %{pending: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "an unreachable inbox fails closed with 500 so the sender retries", %{
@@ -660,9 +664,11 @@ defmodule Alto.Listeners.WebhookTest do
       assert post(port, "/hooks/a", body, signed_headers(body, "shared-del")) =~ "200 OK"
       assert post(port, "/hooks/b", body, signed_headers(body, "shared-del")) =~ "200 OK"
 
-      assert %{pending: 2} = Alto.Queue.count(queue)
+      assert %{pending: 2} = Alto.Queue.request(queue, :count)
 
-      assert {:ok, %{records: records, next_cursor: nil}} = Alto.Queue.snapshot_page(queue, 0)
+      assert {:ok, %{records: records, next_cursor: nil}} =
+               Alto.Queue.request(queue, {:snapshot_page, 0, 100})
+
       keys = records |> Enum.map(& &1.key) |> Enum.sort()
       assert keys == ["/hooks/a:shared-del", "/hooks/b:shared-del"]
     end
@@ -684,7 +690,7 @@ defmodule Alto.Listeners.WebhookTest do
         |> Enum.map(fn {:ok, response} -> response end)
 
       assert Enum.all?(responses, &(&1 =~ "200 OK"))
-      assert %{pending: 1, claimed: 0} = Alto.Queue.count(queue)
+      assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
     end
 
     test "ack then restart: the redelivery is still a duplicate", %{
@@ -703,15 +709,18 @@ defmodule Alto.Listeners.WebhookTest do
       body = ~s({"id": 3})
 
       assert post(port, "/hooks/events", body, signed_headers(body, "survive")) =~ "200 OK"
-      assert {:ok, [claimed]} = Alto.Queue.claim(name, 1, "station-1")
-      :ok = Alto.Queue.ack(name, claimed.claim_id)
+
+      assert {:ok, [claimed]} =
+               Alto.Queue.request(name, {:claim, 1, "station-1", :infinity, :all})
+
+      :ok = Alto.Queue.request(name, {:settle, claimed.claim_id, :ack, []})
 
       # Crash between commit and any later response: only the log survives.
       GenServer.stop(pid)
       {:ok, _} = Alto.Queue.start_link(id: id, dir: dir, name: name)
 
       assert post(port, "/hooks/events", body, signed_headers(body, "survive")) =~ "200 OK"
-      assert %{pending: 0, claimed: 0} = Alto.Queue.count(name)
+      assert %{pending: 0, claimed: 0} = Alto.Queue.request(name, :count)
     end
 
     test "a conflicting redelivered body keeps the first bytes", %{
@@ -728,7 +737,7 @@ defmodule Alto.Listeners.WebhookTest do
       assert post(port, "/hooks/events", second, signed_headers(second, "conflict")) =~ "200 OK"
 
       assert {:ok, %{records: [%{payload: %{"body" => ^first}}], next_cursor: nil}} =
-               Alto.Queue.snapshot_page(queue, 0)
+               Alto.Queue.request(queue, {:snapshot_page, 0, 100})
     end
 
     test "an overlong delivery id is rejected before storage", %{
@@ -739,7 +748,7 @@ defmodule Alto.Listeners.WebhookTest do
       port = start_listener(listener, registry, [enqueue_endpoint(queue)])
 
       assert post_event(port, delivery_id: String.duplicate("d", 201)) =~ "400"
-      assert %{pending: 0} = Alto.Queue.count(queue)
+      assert %{pending: 0} = Alto.Queue.request(queue, :count)
     end
 
     defp signed_headers(body, delivery_id) do
