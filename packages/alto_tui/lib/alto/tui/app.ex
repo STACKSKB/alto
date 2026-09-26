@@ -391,7 +391,7 @@ defmodule Alto.TUI.App do
          {:ok, state} <- ensure_input(state, task_id),
          input <- Map.fetch!(state.inputs, task_id),
          :ok <- one_follow_up_available(input, mode),
-         {:ok, _input_id} <- Alto.Input.put(input, prompt, mode) do
+         {:ok, _input_id} <- Alto.Messaging.send(input, text: prompt, delivery: mode) do
       ExRatatui.textarea_set_value(state.textarea, "")
 
       state
@@ -447,7 +447,7 @@ defmodule Alto.TUI.App do
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
       {false, input} when is_pid(input) and map_size(state.runs) < 32 ->
-        case Alto.Input.take(input) do
+        case Alto.Input.take(input, :user) do
           :empty ->
             state
 

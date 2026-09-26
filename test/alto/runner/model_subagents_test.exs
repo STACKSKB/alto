@@ -171,7 +171,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
     end
   end
 
-  test "spawn schema advertises the effective child limit" do
+  test "delegation schemas advertise the effective child limit" do
     for max_children <- [1, 4, 12] do
       calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
 
@@ -183,8 +183,11 @@ defmodule Alto.Runner.ModelSubagentsTest do
       assert {:ok, _} = Alto.run("delegate", options(calls, loop: loop))
       assert_receive {:request, request}
       assert_receive {:request, _}
-      schema = Enum.find(request.tools, &(&1["function"]["name"] == "spawn_agents"))
-      assert schema["function"]["parameters"][:properties][:agents][:maxItems] == max_children
+
+      for name <- ["spawn_agents", "start_agents"] do
+        schema = Enum.find(request.tools, &(&1["function"]["name"] == name))
+        assert schema["function"]["parameters"][:properties][:agents][:maxItems] == max_children
+      end
     end
   end
 

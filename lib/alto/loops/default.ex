@@ -35,6 +35,11 @@ defmodule Alto.Loops.Default do
   end
 
   @impl true
+  def handle_event(%Event{type: :input_received, data: %{sender: %{kind: :agent}}}, state, spec) do
+    next = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
+    Transition.continue(next, [model_request(next, spec)])
+  end
+
   def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
     next = %{state | task: text, phase: :awaiting_model, step: state.step + 1, observations: []}
     Transition.continue(next, [model_request(next, spec)])

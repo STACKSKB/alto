@@ -190,7 +190,9 @@ files before integrating into the source working tree. The index stays unchanged
 Disjoint patches can be reviewed together and applied independently; overlapping
 edits invalidate the saved approval. Applied patches remain available for review
 until explicitly discarded. Named agent profiles, approval and integration
-selection, and communication policy remain host concerns.
+selection remain host concerns. User steering and agent messages share bounded
+input channels; `start_agents`, `send_message`, and `wait_agents` support
+interactive teams. See [subagents](docs/subagents.md).
 
 Host extension boundaries, input transforms, and provider-aware context
 estimates are described in [docs/extensions.md](docs/extensions.md).

@@ -89,6 +89,18 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
+  defp execute({:send_message, _, run_id, text, to, delivery, key, reply_to}, registry),
+    do:
+      Registry.send_message(registry, run_id,
+        text: text,
+        to: to,
+        delivery: delivery,
+        idempotency_key: key,
+        in_reply_to: reply_to
+      )
+
+  defp execute({:list_agents, _, run_id}, registry), do: Registry.list_agents(registry, run_id)
+
   defp execute({:cancel, _, run_id, reason}, registry),
     do: Registry.cancel(registry, run_id, reason || :user)
 
@@ -195,6 +207,15 @@ defmodule Alto.Listeners.Connection do
     do: lines(Protocol.envelope("error", id, %{code: code, detail: detail}, max))
 
   defp lines({:ok, line}), do: [line]
+
+  defp error_code(:recipient_closed), do: "closed"
+
+  defp error_code(reason) when reason in [:input_capacity, :receipt_capacity, :agent_capacity],
+    do: "capacity"
+
+  defp error_code(reason) when reason in [:invalid_message, :idempotency_conflict], do: "invalid"
+  defp error_code(:unknown_agent), do: "not_found"
+  defp error_code(:messaging_unsupported), do: "unsupported"
 
   defp error_code(reason) when reason in [:unknown_run, :unknown_command],
     do: Atom.to_string(reason)

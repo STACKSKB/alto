@@ -12,9 +12,10 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 documentation, generated output, and dependencies are counted separately.
 
 The earlier pass reached 32,747 lines; model-selected subagents then added 593,
-bringing the starting point for this follow-up to 33,340. The current worktree
-removes 879 production lines, leaving **32,461 (20.2% below the original)**.
-**4,003 lines remain** to reach the target. The reduction includes 15 lines of
+bringing the starting point for this follow-up to 33,340. Cleanup removed 879
+production lines, reaching 32,461. Shared agent messaging then added 1,073 net
+lines after integration, leaving **33,534 (17.5% below the original)**.
+**5,076 lines remain** to reach the target. The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
 
 Reproduce the production count with:
@@ -80,7 +81,7 @@ Tool JSON fallback normalizes unsupported terms while preserving the result
 shape, so a tuple error cannot hide successful sibling output, run IDs, or usage.
 Native values and custom JSON encoders keep their existing fast path.
 
-The spawn schema reflects the resolved child limit. Regression tests cover
+The spawn and async-start schemas reflect the resolved child limit. Regression tests cover
 schema limits 1, 4, and 12; five children run under limit 5 and are rejected
 before dispatch under limit 4.
 
@@ -103,9 +104,9 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The latest core run completed 1,042 tests with one outdated exact usage-map
-assertion; that assertion is corrected and its regression passes. All **141 TUI
-tests pass**. Rerun the full core suite after integrating agent messaging.
+The integrated messaging and cleanup worktree passes **1,055 core tests and
+141 TUI tests**. A subsequent focused run passes all 28 delegation/messaging
+tests, including the added async mixed-error regression and both schema limits.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and

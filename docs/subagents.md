@@ -8,7 +8,8 @@ Add the agent tools without defining agent presets:
 Alto.Tools.agents()
 ```
 
-This exposes `list_agent_models` and `spawn_agents`. Backends come from the
+This exposes `list_agent_models`, `spawn_agents`, `start_agents`, `wait_agents`,
+`list_agents`, and `send_message`. Backends come from the
 run's existing `provider_profiles`, or its current provider when profiles are
 omitted. The shipped `alto.agentic.exs` uses OpenRouter's model discovery and
 registers `Alto.Tools.CodexAgent`, which also makes the `codex` backend available.
@@ -48,7 +49,8 @@ discovery and rejects selections outside the map, including omitted backends.
 An empty map permits no models. `only:` selects tool names; omitting it includes
 the whole agent tool set, including future additions. Individual specifications
 such as `{Alto.Tools.SpawnAgents, models: %{"openrouter" => ["vendor/model-id"]}}`
-remain usable. Communication tools are not implemented yet.
+remain usable. The communication tools use the same bounded input channels as
+user steering.
 
 The default profile permits one level of delegation, four children per batch,
 two concurrent children, and separate child sessions. `spawn_agents` waits for
@@ -74,6 +76,49 @@ usage is returned inside its tool value. Its configured integrations remain
 part of the external runtime's capabilities. The separate Codex TUI root
 backend does not expose these native Alto tools. The adapter follows the
 [App Server lifecycle](https://learn.chatgpt.com/docs/app-server).
+
+## Interactive teams
+
+`start_agents` accepts the same arguments and approval policy as `spawn_agents`,
+but returns an ordered `agents` list containing each display `id`, opaque
+`agent_id`, and status immediately after admission. `list_agents` discovers all
+addresses in the execution tree, including `self`, parent address, lifecycle
+status, and whether the backend supports messaging. Use opaque addresses in
+messages; display labels can repeat across batches.
+
+```json
+{"to": "agent-...", "text": "The parser also needs to handle empty input", "delivery": "steer"}
+```
+
+`send_message` accepts `to`, `text`, optional `delivery` (`steer` or `follow_up`),
+`idempotency_key`, and `in_reply_to`. Identity comes from the runtime, never the
+model's arguments. Its result is a queued receipt, not a synchronous reply.
+See [interactive input](interactive-input.md) for delivery and retention bounds.
+
+`wait_agents` accepts child addresses and an optional `timeout_ms` (0–60,000;
+default 30,000). It returns on any selected child's completion, incoming steering,
+or timeout. Results preserve the requested order; completed child summaries
+include usage and outcome. An empty address list waits only for steering.
+Already completed children return immediately, so omit them when waiting for
+remaining children. Responses and tool calls settle before received messages
+are inserted into provider history.
+
+Async starts share the parent's concurrency ceiling across calls. A child in
+`wait_agents` releases its parent's execution slot so a queued sibling can run,
+and reacquires a slot before returning to model/tool execution. Waiting remains
+subject to cancellation and the root deadline; reacquiring a busy slot can take
+longer than the requested wait timeout. Child usage is merged once, even if a
+result is observed repeatedly. Ending or cancelling a parent cancels its live
+children and prevents queued children from starting. A final answer does not
+leave detached workers behind.
+
+`spawn_agents` retains its existing blocking batch and durable-continuation
+semantics. Async agents are in-memory resources: `start_agents` explicitly
+rejects configurations with `checkpoint_version` or `continuation_store` rather
+than producing a checkpoint that loses live children. Existing blocking batches
+retain their per-batch concurrency limits. All modes inherit tool authority,
+approvals, depth limits, and the root effect/model-request budget. The execution
+tree retains at most 256 addresses, including completed and failed instances.
 
 ## Trusted-loop delegation
 

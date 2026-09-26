@@ -3,7 +3,11 @@ defmodule Alto.Tools do
 
   @agent_tools [
     list_agent_models: Alto.Tools.ListAgentModels,
-    spawn_agents: Alto.Tools.SpawnAgents
+    spawn_agents: Alto.Tools.SpawnAgents,
+    start_agents: Alto.Tools.StartAgents,
+    wait_agents: Alto.Tools.WaitAgents,
+    send_message: Alto.Tools.SendMessage,
+    list_agents: Alto.Tools.ListAgents
   ]
 
   @doc """

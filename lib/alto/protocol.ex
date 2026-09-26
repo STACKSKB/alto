@@ -26,6 +26,17 @@ defmodule Alto.Protocol do
   @unsupported_fields %{"start_run" => ["overrides"], "session_transcript" => ["limit", "cursor"]}
   @command_specs %{
     "runs" => {:runs, []},
+    "list_agents" => {:list_agents, [{:required, "run_id", :binary}]},
+    "send_message" =>
+      {:send_message,
+       [
+         {:required, "run_id", :binary},
+         {:required, "text", :binary},
+         {:optional, "to", :binary, nil},
+         {:optional, "delivery", :delivery, :steer},
+         {:optional, "idempotency_key", :binary, nil},
+         {:optional, "in_reply_to", :binary, nil}
+       ]},
     "sessions" => {:sessions, []},
     "start_run" =>
       {:start_run,
@@ -72,6 +83,9 @@ defmodule Alto.Protocol do
   @type command ::
           {:attach, String.t(), String.t() | nil, pos_integer(), [atom()]}
           | {:start_run, String.t(), String.t(), String.t(), String.t() | nil}
+          | {:send_message, String.t(), String.t(), String.t(), String.t() | nil,
+             :steer | :follow_up, String.t() | nil, String.t() | nil}
+          | {:list_agents, String.t(), String.t()}
           | {:sessions, String.t()}
           | {:runs, String.t()}
           | {:session_transcript, String.t(), String.t()}
@@ -282,6 +296,9 @@ defmodule Alto.Protocol do
       value -> validate_field(value, type)
     end
   end
+
+  defp validate_field("steer", :delivery), do: {:ok, :steer}
+  defp validate_field("follow_up", :delivery), do: {:ok, :follow_up}
 
   defp validate_field(value, :binary) when is_binary(value), do: {:ok, value}
 

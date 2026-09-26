@@ -18,6 +18,8 @@ defmodule Alto.FrontEnd.Registry do
     :id,
     :handle,
     :completion_ref,
+    :input,
+    :messaging,
     :session_id,
     :task_preview,
     :config_name,
@@ -178,6 +180,15 @@ defmodule Alto.FrontEnd.Registry do
     GenServer.call(server, {:detach, client_pid})
   end
 
+  @doc "Queue user input for a resident run or one of its agents."
+  def send_message(server, run_id, opts),
+    do: GenServer.call(server, {:send_message, run_id, opts})
+
+  def list_agents(server, run_id), do: GenServer.call(server, {:list_agents, run_id})
+
+  @doc "Inspect pending root messages, including after completion."
+  def input_status(server, run_id), do: GenServer.call(server, {:input_status, run_id})
+
   @doc "Cooperatively cancel a run; any known run replies ok."
   @spec cancel(GenServer.server(), String.t(), term()) :: :ok | {:error, :unknown_run}
   def cancel(server \\ __MODULE__, run_id, reason) do
@@ -318,6 +329,8 @@ defmodule Alto.FrontEnd.Registry do
          {:ok, session_opts} <- execution_session_opts(opts, config_opts, state) do
       run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
       me = self()
+      {:ok, input} = Alto.Input.start_link()
+      {:ok, messaging} = Alto.Messaging.start_link(owner: self())
 
       run_opts =
         config_opts
@@ -326,6 +339,8 @@ defmodule Alto.FrontEnd.Registry do
         |> Keyword.put_new(:cwd, state.cwd)
         |> Keyword.put_new(:project_instructions, :auto)
         |> Keyword.put(:session_id, run_id)
+        |> Keyword.put(:input, input)
+        |> Keyword.put(:messaging, messaging)
         |> Keyword.put(:owner, owner)
         |> Keyword.put(:tool_context_metadata, %{front_end_registry: me})
         |> Alto.Events.attach(fn event ->
@@ -339,6 +354,8 @@ defmodule Alto.FrontEnd.Registry do
             id: run_id,
             handle: handle,
             completion_ref: completion_ref,
+            input: input,
+            messaging: messaging,
             session_id: Keyword.get(session_opts, :session),
             task_preview: String.slice(task, 0, 120),
             config_name: config_name,
@@ -349,6 +366,8 @@ defmodule Alto.FrontEnd.Registry do
           {:reply, {:ok, run_id}, %{state | runs: Map.put(state.runs, run_id, run)}}
 
         {:error, reason} ->
+          GenServer.stop(messaging)
+          GenServer.stop(input)
           {:reply, {:error, reason}, state}
       end
     else
@@ -465,6 +484,53 @@ defmodule Alto.FrontEnd.Registry do
       end
 
     {:reply, :ok, next}
+  end
+
+  def handle_call({:send_message, run_id, opts}, _from, state) do
+    reply =
+      case state.runs[run_id] do
+        nil ->
+          {:error, :unknown_run}
+
+        %{result: :running} = run ->
+          {to, opts} = Keyword.pop(opts, :to)
+
+          if to,
+            do: Alto.Messaging.send(run.messaging, to, opts),
+            else: Alto.Messaging.send(run.input, opts)
+
+        run ->
+          {to, opts} = Keyword.pop(opts, :to)
+
+          if to,
+            do: Alto.Messaging.send(run.messaging, to, opts),
+            else: Alto.Messaging.duplicate(run.input, opts)
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:list_agents, run_id}, _from, state) do
+    reply =
+      case state.runs[run_id] do
+        nil ->
+          {:error, :unknown_run}
+
+        run ->
+          with {:ok, agents} <- Alto.Messaging.list(run.messaging), do: {:ok, %{agents: agents}}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:input_status, run_id}, _from, state) do
+    reply =
+      case state.runs[run_id] do
+        nil -> {:error, :unknown_run}
+        run -> {:ok, Alto.Input.list(run.input)}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:cancel, run_id, reason}, _from, state) do
@@ -593,6 +659,7 @@ defmodule Alto.FrontEnd.Registry do
   @impl true
   def terminate(_reason, state) do
     Enum.each(state.subscribers, fn {pid, _subscriber} -> send(pid, :alto_close) end)
+    Enum.each(state.runs, fn {_, run} -> close_channels(run) end)
     :ok
   end
 
@@ -778,6 +845,7 @@ defmodule Alto.FrontEnd.Registry do
     overflow = max(length(order) - limit, 0)
 
     {evict, order} = Enum.split(order, overflow)
+    Enum.each(evict, &close_channels(state.runs[&1]))
 
     subscribers =
       Map.new(state.subscribers, fn {pid, sub} ->
@@ -785,6 +853,12 @@ defmodule Alto.FrontEnd.Registry do
       end)
 
     %{state | runs: Map.drop(state.runs, evict), finished_order: order, subscribers: subscribers}
+  end
+
+  defp close_channels(run) do
+    Enum.each([run.messaging, run.input], fn pid ->
+      if is_pid(pid) and Process.alive?(pid), do: GenServer.stop(pid)
+    end)
   end
 
   defp model_requests_of(nil), do: 0

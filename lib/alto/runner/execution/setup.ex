@@ -110,6 +110,10 @@ defmodule Alto.Runner.Execution.Setup do
       credentials_path: Keyword.get(opts, :credentials_path),
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
       input: Keyword.get(opts, :input),
+      messaging: Keyword.get(opts, :messaging),
+      async_agents: Keyword.get(opts, :async_agents),
+      agent_scheduler: Keyword.get(opts, :agent_scheduler),
+      execution_owner: Keyword.get(opts, :execution_owner),
       resolved_operations: [],
       history_digest: nil,
       resume_context_observation:
@@ -126,7 +130,8 @@ defmodule Alto.Runner.Execution.Setup do
         session_id: session_id,
         cwd: cwd,
         metadata: Keyword.get(opts, :tool_context_metadata, %{}),
-        agent_identity: agent_identity
+        agent_identity: agent_identity,
+        messaging: Keyword.get(opts, :messaging)
       },
       model_requests: 0,
       usage: Usage.new(),

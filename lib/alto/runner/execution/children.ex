@@ -295,17 +295,47 @@ defmodule Alto.Runner.Execution.Children do
 
   # Resource setup/capture are bounded, cancellable operations. Worker execution
   # stays in this owned run process, holding the resource lock until it returns.
-  defp start_subagent(spec, run) do
-    with {:ok, provider} <- resolve_child_provider(spec, run) do
-      if is_nil(provider) and is_nil(spec.loop) do
-        {:error, :provider_required}
-      else
-        sub_opts = child_options(spec, run, provider)
+  def start_subagent(spec, run) do
+    with {:ok, [spec]} <- register_agents([spec], run) do
+      result =
+        with {:ok, provider} <- resolve_child_provider(spec, run) do
+          if is_nil(provider) and is_nil(spec.loop) do
+            {:error, :provider_required}
+          else
+            sub_opts = child_options(spec, run, provider)
 
-        with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run) do
-          Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+            with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run),
+                 do: Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
+          end
         end
-      end
+
+      if match?({:error, _}, result), do: Alto.Messaging.close(spec.messaging)
+      result
+    end
+  end
+
+  def register_agents(specs, run) do
+    options =
+      specs
+      |> Enum.reject(&Map.has_key?(&1, :messaging))
+      |> Enum.map(fn spec ->
+        [label: spec.id, parent: run.messaging.id, supported: spec.profile_key != "codex"]
+      end)
+
+    with {:ok, senders} <- Alto.Messaging.register_many(run.messaging.router, options) do
+      {specs, []} =
+        Enum.map_reduce(specs, senders, fn spec, remaining ->
+          case spec do
+            %{messaging: _} ->
+              {spec, remaining}
+
+            _ ->
+              [sender | remaining] = remaining
+              {Map.put(spec, :messaging, sender), remaining}
+          end
+        end)
+
+      {:ok, specs}
     end
   end
 
@@ -355,7 +385,9 @@ defmodule Alto.Runner.Execution.Children do
           max_effects: run.budget.max_effects,
           max_model_requests: run.budget.max_model_requests,
           run_timeout: Budget.remaining(run.budget),
-          owner: self(),
+          owner: run.execution_owner,
+          messaging: spec.messaging,
+          agent_scheduler: Map.get(spec, :agent_scheduler),
           parent_max_agent_depth: run.max_agent_depth,
           max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
           provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
@@ -377,7 +409,14 @@ defmodule Alto.Runner.Execution.Children do
   # The retained profile contains only the trusted resolver key, never provider
   # configuration or credentials.
   defp checkpoint_profile(spec),
-    do: Map.drop(spec, [:workspace_assignment, :subagent_ticket, :resume_data])
+    do:
+      Map.drop(spec, [
+        :workspace_assignment,
+        :subagent_ticket,
+        :resume_data,
+        :messaging,
+        :agent_scheduler
+      ])
 
   defp resolve_child_provider(%{profile_key: key, model: model}, run)
        when is_binary(key) and is_binary(model) do

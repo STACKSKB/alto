@@ -218,7 +218,7 @@ repeated; durable events were already streamed.
 ```
 
 Codes: `unknown_type`, `invalid`, `unknown_run`, `not_found`, `unsupported`,
-`internal`.
+`internal`, `closed`, `capacity`.
 
 ## Messages: client → server
 
@@ -370,6 +370,38 @@ Replay describes successfully persisted records. Session logging is
 best-effort, and this cursor cannot prove that every execution event was
 written. Persistence degradation remains part of the run result; `gap: false`
 is not a claim that an execution had no persistence failures.
+
+**`send_message`** — enqueue user steering or a follow-up through shared input.
+
+```json
+{"v": 1, "type": "send_message", "id": "c-20", "run_id": "run-41",
+ "text": "Focus on the parser", "delivery": "steer", "idempotency_key": "submission-1"}
+```
+
+`text` is required. `delivery` defaults to `steer`, or may be `follow_up`.
+Optional `to` selects an opaque agent address within that run's tree; omit it
+for the root input channel. Optional `in_reply_to` correlates a response.
+The runtime derives user identity; clients cannot set sender identity or roles.
+An `ok` reply contains `message_id` and `status` (`queued`, or `consumed` on a
+retry after transcript insertion). The `input_received` event reports actual
+consumption with the same ID. Neither status means the agent obeyed the message.
+Identical idempotency keys deduplicate within the recipient channel; changed
+content under the same key is rejected. These receipts and queues are in memory.
+Unknown runs, closed recipients, full channels, and unsupported backends fail
+explicitly; submission does not start a new run or interrupt an active tool.
+
+**`list_agents`** — inspect addresses in one resident run's execution tree.
+
+```json
+{"v": 1, "type": "list_agents", "id": "c-21", "run_id": "run-41"}
+```
+
+The `ok` reply contains `agents` with `agent_id`, display `label`, `parent`,
+`status`, and `messaging` capability. At most 256 addresses are retained per tree.
+Root registration is asynchronous, so an immediate listing may be empty.
+The registry keeps channels with its bounded retained-run window; they are
+released on eviction. Trusted hosts can inspect unconsumed root submissions with
+`Alto.FrontEnd.Registry.input_status/2`.
 
 **`cancel`** — cooperative cancellation via the existing handle API.
 

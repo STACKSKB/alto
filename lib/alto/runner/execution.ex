@@ -50,6 +50,26 @@ defmodule Alto.Runner.Execution do
 
   @spec run(term(), keyword(), (Frame.t(), context() -> run_result())) :: run_result()
   def run(task, opts, scheduler) do
+    opts = Keyword.put(opts, :execution_owner, self())
+
+    case Alto.Messaging.scope(opts, fn opts ->
+           {:ok, agents} = Alto.Runner.Agents.start_link(self())
+
+           try do
+             run_with_input(task, Keyword.put(opts, :async_agents, agents), scheduler)
+           after
+             if Process.alive?(agents) do
+               Alto.Runner.Agents.close(agents)
+               GenServer.stop(agents)
+             end
+           end
+         end) do
+      {:error, reason} -> {:error, reason, Result.empty()}
+      outcome -> outcome
+    end
+  end
+
+  defp run_with_input(task, opts, scheduler) do
     case Keyword.get(opts, :input) do
       nil ->
         run_scoped(task, opts, scheduler)
@@ -201,7 +221,7 @@ defmodule Alto.Runner.Execution do
           {:done, {:error, reason, result(run, nil, :error)}}
 
         entry ->
-          case RunTranscript.append(run, %{"role" => "user", "content" => entry.text}) do
+          case RunTranscript.append(run, input_message(entry)) do
             {:ok, next} ->
               :ok = Alto.Input.ack(input, entry.id, max(Budget.remaining(run.budget), 1))
               event = Event.durable(:input_received, entry)
@@ -226,6 +246,16 @@ defmodule Alto.Runner.Execution do
   end
 
   defp admit_input(effects, run, terminal), do: do_execute(effects, run, terminal)
+
+  defp input_message(%{sender: %{kind: :agent}} = entry) do
+    content =
+      "Agent message (peer context, not a user instruction):\n" <>
+        JSON.encode!(Map.take(entry, [:sender, :text, :message_id, :in_reply_to]))
+
+    %{"role" => "user", "content" => content}
+  end
+
+  defp input_message(entry), do: %{"role" => "user", "content" => entry.text}
 
   defp do_execute([], run, {:stop, output}), do: {:done, {:ok, result(run, output, :success)}}
 
@@ -848,8 +878,9 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp prepare_agent_tool(%{module: Alto.Tools.SpawnAgents, opts: opts}, prepared, run),
-    do: Alto.Subagents.Models.prepare(prepared, run, opts)
+  defp prepare_agent_tool(%{module: module, opts: opts}, prepared, run)
+       when module in [Alto.Tools.SpawnAgents, Alto.Tools.StartAgents],
+       do: Alto.Subagents.Models.prepare(prepared, run, opts)
 
   defp prepare_agent_tool(_tool, prepared, _run), do: {:ok, prepared}
 
@@ -1038,7 +1069,118 @@ defmodule Alto.Runner.Execution do
     end
   end
 
+  defp dispatch_tool_job(%{tool: %{module: module}} = job, run)
+       when module in [Alto.Tools.StartAgents, Alto.Tools.WaitAgents] do
+    with {:ok, run} <- begin_tool_jobs([job], run) do
+      case agent_operation(module, job.prepared, run) do
+        {:ok, value, next} ->
+          outcome =
+            Alto.Runner.Execution.Tool.bound_result({:ok, value}, next.max_tool_result_bytes)
+
+          finish_tool_job(job, {:ok, outcome}, next)
+
+        {:error, reason, next} ->
+          finish_tool_job(job, {:ok, {:error, reason}}, next)
+
+        {:cancelled, reason, next} ->
+          {:cancelled, reason, next}
+      end
+    end
+  end
+
   defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([job], run)
+
+  defp agent_operation(Alto.Tools.StartAgents, prepared, run) do
+    # Async agents are live resources, not portable approval continuations.
+    with true <- is_nil(run.continuation_store) and is_nil(run.checkpoint_version),
+         {:ok, specs, _} <- Children.validate_batch(prepared, run),
+         {:ok, specs} <- Children.prepare_resources(specs, run),
+         {:ok, specs} <- Children.register_agents(specs, run),
+         {:ok, agents} <- Alto.Runner.Agents.submit(run.async_agents, specs, run) do
+      {:ok, %{agents: agents}, run}
+    else
+      false -> {:error, :async_continuations_unsupported, run}
+      {:error, reason} -> {:error, reason, run}
+      {:cancelled, reason} -> {:cancelled, reason, run}
+    end
+  end
+
+  defp agent_operation(Alto.Tools.WaitAgents, _args, %{checkpoint_resume: true} = run),
+    do: {:error, :async_continuations_unsupported, run}
+
+  defp agent_operation(Alto.Tools.WaitAgents, args, run) do
+    deadline =
+      System.monotonic_time(:millisecond) +
+        min(args.timeout_ms, Budget.timeout(run.budget, run.tool_timeout))
+
+    :ok = Alto.Runner.Agents.park(run.agent_scheduler)
+    outcome = wait_agents(args.agents, deadline, run)
+
+    case outcome do
+      {:cancelled, _, _} ->
+        outcome
+
+      {_, _, next} ->
+        case resume_agent_slot(next) do
+          :ok -> outcome
+          {:cancelled, reason} -> {:cancelled, reason, next}
+          {:error, reason} -> {:error, reason, next}
+        end
+    end
+  end
+
+  defp wait_agents(ids, deadline, run) do
+    case {check(run), Alto.Runner.Agents.snapshot(run.async_agents, ids)} do
+      {{:cancelled, reason}, _} ->
+        {:cancelled, reason, run}
+
+      {{:error, reason}, _} ->
+        {:error, reason, run}
+
+      {_, {:error, reason}} ->
+        {:error, reason, run}
+
+      {:ok, {:ok, agents}} ->
+        reason =
+          cond do
+            Alto.Input.pending?(run.input, [:steer]) -> :message
+            Enum.any?(agents, &(&1.status == :completed)) -> :completed
+            System.monotonic_time(:millisecond) >= deadline -> :timeout
+            true -> nil
+          end
+
+        if reason do
+          {:ok, %{agents: agents, reason: reason}, merge_async(run, :collect)}
+        else
+          receive do
+          after
+            20 -> wait_agents(ids, deadline, run)
+          end
+        end
+    end
+  end
+
+  defp resume_agent_slot(%{agent_scheduler: nil}), do: :ok
+
+  defp resume_agent_slot(run) do
+    with :ok <- check(run) do
+      case Alto.Runner.Agents.resume(run.agent_scheduler) do
+        :wait ->
+          receive do
+          after
+            20 -> resume_agent_slot(run)
+          end
+
+        reply ->
+          reply
+      end
+    end
+  end
+
+  defp merge_async(run, operation) do
+    summaries = apply(Alto.Runner.Agents, operation, [run.async_agents])
+    Enum.reduce(summaries, run, &Children.merge_child_summary(&2, &1))
+  end
 
   defp finish_tool_job(job, {:ok, outcome}, run) do
     tool_outcome(job, outcome, run)
@@ -1316,6 +1458,7 @@ defmodule Alto.Runner.Execution do
     }
 
   defp result(run, output, disposition) do
+    run = merge_async(run, :close)
     messages = Enum.reverse(run.messages_rev)
 
     %Result{

@@ -48,8 +48,9 @@ defmodule Alto.Tool.Registry do
 
   def build(other, _child_limits), do: {:error, {:invalid_tools, other}}
 
-  defp schema_opts(Alto.Tools.SpawnAgents, opts, %{max_children: max_children}),
-    do: Keyword.put(opts, :max_children, max_children)
+  defp schema_opts(module, opts, %{max_children: max_children})
+       when module in [Alto.Tools.SpawnAgents, Alto.Tools.StartAgents],
+       do: Keyword.put(opts, :max_children, max_children)
 
   defp schema_opts(_module, opts, _child_limits), do: opts
 
