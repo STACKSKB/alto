@@ -31,10 +31,36 @@ defmodule Alto.Harness.CatalogTest do
              )
 
     assert updated["conversation_id"] == "sess-a"
-    assert {:ok, [^updated]} = Catalog.tasks(first["id"], opts)
-    assert {:ok, []} = Catalog.tasks(second["id"], opts)
-    assert {:ok, projects} = Catalog.projects(opts)
+    assert {:ok, projects, tasks} = Catalog.navigation(opts)
+    assert tasks[first["id"]] == [updated]
+    assert tasks[second["id"]] == []
     assert MapSet.new(projects, & &1["id"]) == MapSet.new([first["id"], second["id"]])
+
+    {:ok, older} = Catalog.create_task(first["id"], "Earlier task", opts)
+    {:ok, archived} = Catalog.update_task(older["id"], %{"status" => "archived"}, opts)
+    {:ok, catalog} = Catalog.read(opts)
+    updated = Map.put(updated, "updated_at_ms", 20)
+    archived = Map.put(archived, "updated_at_ms", 10)
+    orphan = Map.merge(updated, %{"id" => "orphan", "project_id" => "missing"})
+    first = Map.put(first, "last_opened_at_ms", 10)
+    second = Map.put(second, "last_opened_at_ms", 20)
+
+    File.write!(
+      opts[:path],
+      JSON.encode!(%{
+        catalog
+        | "projects" => [first, second],
+          "tasks" => [archived, orphan, updated]
+      })
+    )
+
+    assert {:ok, [^second, ^first], tasks} = Catalog.navigation(opts)
+    assert tasks == %{first["id"] => [updated], second["id"] => []}
+
+    assert {:ok, [^second, ^first], tasks} =
+             Catalog.navigation(Keyword.put(opts, :archived, true))
+
+    assert tasks == %{first["id"] => [updated, archived], second["id"] => []}
   end
 
   test "closing only changes navigation and reopening restores the same project and tasks", %{
@@ -46,15 +72,16 @@ defmodule Alto.Harness.CatalogTest do
     {:ok, task} = Catalog.create_task(project["id"], "Still running", opts)
     assert {:ok, closed} = Catalog.close_project(project["id"], opts)
     assert closed["closed"]
-    assert {:ok, [^closed]} = Catalog.projects(opts)
-    assert {:ok, [^task]} = Catalog.tasks(project["id"], opts)
+    assert {:ok, [^closed], tasks} = Catalog.navigation(opts)
+    assert tasks[project["id"]] == [task]
     assert File.read!(Path.join(root, "keep.txt")) == "keep"
     assert {:ok, touched} = Catalog.register_project(root, Keyword.put(opts, :reopen, false))
     assert touched["closed"]
     assert {:ok, reopened} = Catalog.register_project(root, opts)
     assert reopened["id"] == project["id"]
     refute reopened["closed"]
-    assert {:ok, [^task]} = Catalog.tasks(reopened["id"], opts)
+    assert {:ok, [^reopened], tasks} = Catalog.navigation(opts)
+    assert tasks[reopened["id"]] == [task]
     assert {:error, {:unknown_project, "missing"}} = Catalog.close_project("missing", opts)
   end
 

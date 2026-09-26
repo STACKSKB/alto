@@ -4,17 +4,6 @@ defmodule Alto.Queue do
   JSONL log at `queues/<id>.jsonl`. Portable term payloads survive restarts;
   acknowledgements and cancellations append tombstones.
 
-  `put/4` uses business keys: a pending key updates its payload and revision,
-  a claimed key rejects, and a blanked key may be queued again. `admit/4`
-  uses delivery keys: the first pending value wins, claimed keys reject, and
-  completed keys remain duplicates until they leave the bounded window.
-  Webhook admission namespaces keys by endpoint and delivery id.
-
-  `claim/3` leases the oldest pending records. Leases survive restart and
-  expire lazily back to pending. `claim_bounded/4` also limits encoded wire
-  bytes; an oversized head leases nothing. `ack/2` completes and tombstones
-  a claim, `release/2` returns it to pending, and `cancel/2` completes a key.
-
   Record count, completed keys, payloads, keys, and log bytes are bounded.
   Mutations are appended and file-synced before acknowledgement; creation
   and repair sync the directory. A failed append leaves memory unchanged.
@@ -71,9 +60,6 @@ defmodule Alto.Queue do
     * `:auto_compact` — replace history with retained state when full (default false);
     * `:lease_ms` — claim lease (default 300,000);
     * `:clock` — zero-arity millisecond clock (default system time).
-
-  A torn append tail is discarded and the acknowledged prefix atomically
-  restored; complete corruption prevents startup.
   """
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
@@ -248,7 +234,6 @@ defmodule Alto.Queue do
   Replace historical log entries with the current queue and retained dedup keys.
   Keeps live claims, due times, record identity, ordering and the configured
   completed window unchanged. This is state retention, not an audit archive.
-  Logs use one format for immediate, scheduled, and retained records.
   """
   def compact(server \\ __MODULE__), do: GenServer.call(server, :compact, :infinity)
 
@@ -291,8 +276,6 @@ defmodule Alto.Queue do
 
   defp replay_lines(_state, []), do: {:error, :invalid_queue_snapshot}
 
-  # The same native commands update live and replayed state. Encoding belongs
-  # only at the storage boundary.
   defp apply_command({:put, record}, state) when is_map(record) do
     with true <- Enum.sort(Map.keys(record)) == @record_fields,
          true <- is_binary(record.key) and is_integer(record.revision) and record.revision >= 1,
@@ -756,8 +739,6 @@ defmodule Alto.Queue do
     end
   end
 
-  # One append per mutation, file-synced before acknowledgement. A failed
-  # write leaves state untouched: memory and disk stay in agreement.
   defp append(state, commands) do
     with {:ok, lines} <- Alto.Result.traverse(commands, &encode_command/1),
          :ok <- ensure_log_room(state, IO.iodata_length(lines)),

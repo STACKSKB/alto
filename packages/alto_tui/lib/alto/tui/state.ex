@@ -85,8 +85,7 @@ defmodule Alto.TUI.State do
          {:ok, profiles} <-
            ProviderStore.profiles(configured_profiles, credentials_path: credentials_path),
          {:ok, selected_project} <- Catalog.register_project(root, catalog_opts),
-         {:ok, projects} <- Catalog.projects(catalog_opts),
-         {:ok, tasks} <- load_tasks(projects, catalog_opts) do
+         {:ok, projects, tasks} <- Catalog.navigation(catalog_opts) do
       selected_task = tasks |> Map.get(selected_project["id"], []) |> List.first()
       profile = List.first(profiles)
       tui_options = Keyword.get(run_options, :tui, [])
@@ -355,8 +354,7 @@ defmodule Alto.TUI.State do
       root = Path.expand(path, base)
 
       with {:ok, project} <- Catalog.register_project(root, state.catalog_opts),
-           {:ok, projects} <- Catalog.projects(state.catalog_opts),
-           {:ok, tasks} <- load_tasks(projects, state.catalog_opts) do
+           {:ok, projects, tasks} <- Catalog.navigation(state.catalog_opts) do
         {:ok,
          %{state | projects: projects, tasks: tasks, selected_project_id: project["id"]}
          |> close_details_drawer()
@@ -626,13 +624,6 @@ defmodule Alto.TUI.State do
   end
 
   defp merge_record_usage(_record, usage), do: usage
-
-  defp load_tasks(projects, opts) do
-    Alto.Result.reduce(projects, %{}, fn project, acc ->
-      with {:ok, tasks} <- Catalog.tasks(project["id"], opts),
-           do: {:ok, Map.put(acc, project["id"], tasks)}
-    end)
-  end
 
   defp bounded_entries(entries) when is_list(entries) do
     entries

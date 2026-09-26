@@ -23,6 +23,11 @@ defmodule Alto.Runner.Execution.Setup do
   ]
   @limits_schema NimbleOptions.new!(@limits_options)
 
+  @option_fields ~w(provider_profiles credentials_path input messaging async_agents
+                    agent_scheduler execution_owner checkpoint_version subagent_ticket child_profile
+                    child_resume parent_expires_at_ms continuation_store cancel_ref session
+                    session_dir retry_policy tool_presenter)a
+
   def open(task, opts) do
     spec = Keyword.get(opts, :loop, Alto.default_loop())
 
@@ -109,26 +114,15 @@ defmodule Alto.Runner.Execution.Setup do
         identity -> identity
       end
 
+    options = Map.new(@option_fields, &{&1, Keyword.get(opts, &1)})
+
     initial = %{
       loop_state: nil,
-      provider_profiles: Keyword.get(opts, :provider_profiles),
-      credentials_path: Keyword.get(opts, :credentials_path),
       runner: Keyword.get(opts, :runner, Alto.Runner.default()),
-      input: Keyword.get(opts, :input),
-      messaging: Keyword.get(opts, :messaging),
-      async_agents: Keyword.get(opts, :async_agents),
-      agent_scheduler: Keyword.get(opts, :agent_scheduler),
-      execution_owner: Keyword.get(opts, :execution_owner),
       resolved_operations: [],
       history_digest: nil,
       resume_context_observation:
         Map.get(Keyword.get(opts, :resume) || %{}, :context_observation),
-      checkpoint_version: Keyword.get(opts, :checkpoint_version),
-      subagent_ticket: Keyword.get(opts, :subagent_ticket),
-      child_profile: Keyword.get(opts, :child_profile),
-      child_resume: Keyword.get(opts, :child_resume),
-      parent_expires_at_ms: Keyword.get(opts, :parent_expires_at_ms),
-      continuation_store: Keyword.get(opts, :continuation_store),
       checkpoint_resume:
         not is_nil(Keyword.get(opts, :checkpoint)) or not is_nil(Keyword.get(opts, :continuation)),
       tool_context: %Context{
@@ -154,12 +148,7 @@ defmodule Alto.Runner.Execution.Setup do
       persistence_errors: [],
       request_model_tools: nil,
       event_sink: Keyword.get(opts, :event_sink, fn _event -> :ok end),
-      cancel_ref: Keyword.get(opts, :cancel_ref),
-      session: Keyword.get(opts, :session),
-      session_dir: Keyword.get(opts, :session_dir),
       compaction_count: 0,
-      retry_policy: Keyword.get(opts, :retry_policy),
-      tool_presenter: Keyword.get(opts, :tool_presenter),
       agent_identity: agent_identity,
       max_agent_depth:
         min(
@@ -174,7 +163,7 @@ defmodule Alto.Runner.Execution.Setup do
     }
 
     if Alto.AgentIdentity.valid?(agent_identity),
-      do: {:ok, Map.merge(initial, settings)},
+      do: {:ok, options |> Map.merge(initial) |> Map.merge(settings)},
       else: {:error, {:invalid_option, :agent_identity, agent_identity}}
   end
 

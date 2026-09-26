@@ -2,10 +2,6 @@ defmodule Alto.Subagents.Continuation do
   @moduledoc """
   Durable child dispatch and retained join results on an `Alto.OperationLog`.
 
-  A standalone batch remains a nonterminal checkpoint after every child has
-  finished; explicit join acknowledgement and retirement make it eligible for
-  ledger eviction. A parent-backed aggregate instead advances atomically from
-  `children` to `ready` and then grants its frame once by moving to `claimed`.
   Dispatch and parent grants are single-use: uncertainty never grants permission
   to repeat work. The host still owns execution, authority, budgets and recovery.
   """

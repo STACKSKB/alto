@@ -303,7 +303,8 @@ defmodule Alto.TUI.AppTest do
     assert closed.selected_project_id == original
     assert closed.selected_task_id == nil
     refute Enum.any?(State.rail_rows(closed), &(&1.id in [other, task["id"]]))
-    assert {:ok, [^task]} = Alto.Harness.Catalog.tasks(other, state.catalog_opts)
+    assert {:ok, _projects, tasks} = Alto.Harness.Catalog.navigation(state.catalog_opts)
+    assert tasks[other] == [task]
     assert File.dir?(folder)
     assert ExRatatui.textarea_get_value(closed.textarea) == "keep draft"
     restarted = state!(context)

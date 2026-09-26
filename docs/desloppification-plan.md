@@ -11,19 +11,11 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The earlier pass reached 32,747 lines; model-selected subagents then added 593,
-bringing the starting point for this follow-up to 33,340. Cleanup removed 879
-production lines, reaching 32,461. Shared agent messaging then added 1,073 net
-lines after integration. Input, retained-state and capability cleanup removed
-another 86 lines. Reusing ThousandIsland for Unix socket supervision removes
-69 more, reaching 33,379. Composable messaging transports, async checkpointing
-and live Codex delivery then added 1,014 net production lines after integration.
-Unifying child construction and removing obsolete messaging capability state
-removed another 20 lines. Canonical reader operations and shared restored-agent
-construction removed 22 more. The current count is **34,351 (15.5% below the original)**. **5,893 lines remain**
-to reach the unchanged target.
-The reduction includes 15 lines of
-duplicate Registry documentation; examples separately lose 39 implementation lines.
+The current count is **34,298 lines (15.6% below the original)**. **5,840 lines
+remain** to reach the unchanged target. Added model-selection and messaging
+features are included in this count; their growth does not reset the baseline.
+The reduction includes removed duplicate source documentation. Examples
+separately lose 39 implementation lines.
 
 Reproduce the production count with:
 
@@ -64,6 +56,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   share their existing state updates. Discovered model catalogs override profiles,
   including when discovery returns an empty catalog. Codex context limits live in
   per-task usage, removing the global value that leaked across task selection.
+  Navigation reads one catalog snapshot for projects and grouped tasks instead
+  of rereading the document for each project; ordering and filtering are preserved.
 - Codex UI and delegated agents share bounded model pagination. Provider discovery
   and streaming share Req response handling. Validated Anthropic tool-input maps
   bypass JSON round trips. Provider observers use the existing notification helper.
@@ -93,6 +87,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   Fresh and restored async children share entry construction. Codex initial and
   follow-up turns share request fields. The obsolete unsupported-agent flag,
   rejection branch and test-only setup are removed; registered agents have channels.
+  Execution setup copies optional fields through one explicit projection, with
+  derived state and defaults kept separate.
   Input claims return their reader token directly. Native and delegated readers
   use the same read/acknowledgement operations; the second PID-based API and
   forwarding dispatcher are gone. Restored agents reuse normal registration.

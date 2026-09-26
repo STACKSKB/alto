@@ -242,7 +242,6 @@ defmodule Alto.OperationLog do
 
   defp scrub_command(command), do: command
 
-  # Derive the transition, durably append it, then publish it.
   defp commit(state, command) do
     case transition(state, command) do
       {:ok, _next, :noop} ->
@@ -524,7 +523,6 @@ defmodule Alto.OperationLog do
 
   defp maybe_make_room(state, _command), do: {:ok, state}
 
-  # The same pure state transition serves live commands and durable replay.
   defp transition(state, command) do
     op = elem(command, 1)
 

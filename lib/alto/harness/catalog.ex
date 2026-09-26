@@ -169,27 +169,19 @@ defmodule Alto.Harness.Catalog do
     end
   end
 
-  @doc "List projects by recency."
-  @spec projects(keyword()) :: {:ok, [project()]} | {:error, term()}
-  def projects(opts \\ []) do
+  @doc "Load navigation in one snapshot, ordered by recency and excluding archived tasks by default."
+  @spec navigation(keyword()) :: {:ok, [project()], %{String.t() => [task()]}} | {:error, term()}
+  def navigation(opts \\ []) do
     with {:ok, catalog} <- read(opts) do
-      {:ok, Enum.sort_by(catalog["projects"], & &1["last_opened_at_ms"], :desc)}
-    end
-  end
+      projects = Enum.sort_by(catalog["projects"], & &1["last_opened_at_ms"], :desc)
 
-  @doc "List one project's tasks by recency, optionally including archived tasks."
-  @spec tasks(String.t(), keyword()) :: {:ok, [task()]} | {:error, term()}
-  def tasks(project_id, opts \\ []) when is_binary(project_id) do
-    archived? = Keyword.get(opts, :archived, false)
-
-    with {:ok, catalog} <- read(opts) do
       tasks =
         catalog["tasks"]
-        |> Enum.filter(&(&1["project_id"] == project_id))
-        |> Enum.filter(&(archived? or &1["status"] != "archived"))
+        |> Enum.filter(&(Keyword.get(opts, :archived, false) or &1["status"] != "archived"))
         |> Enum.sort_by(& &1["updated_at_ms"], :desc)
+        |> Enum.group_by(& &1["project_id"])
 
-      {:ok, tasks}
+      {:ok, projects, Map.new(projects, &{&1["id"], Map.get(tasks, &1["id"], [])})}
     end
   end
 
