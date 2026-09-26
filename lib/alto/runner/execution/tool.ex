@@ -103,9 +103,12 @@ defmodule Alto.Runner.Execution.Tool do
         other -> other
       end
 
-    case check_native_result(value, limit) do
-      :ok -> outcome
-      {:error, reason} -> {:unknown, reason}
+    case {check_native_result(value, limit), outcome} do
+      {:ok, {:ok, value}} -> {:completed, value}
+      {:ok, {:error, reason}} -> {:failed_known, reason}
+      {:ok, {:unknown, reason}} -> {:unknown, reason}
+      {:ok, other} -> {:unknown, {:invalid_tool_return, other}}
+      {{:error, reason}, _} -> {:unknown, reason}
     end
   end
 

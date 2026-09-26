@@ -108,16 +108,19 @@ defmodule Alto.Workspaces.ApplyTest do
     assert {:ok, _} =
              OperationLog.request(
                c.manager.ledger,
-               {:resume_checkpoint, a.id, a.revision,
+               {:checkpoint_update, a.id, a.revision,
                 %{
-                  "action" => "apply"
+                  version: 2,
+                  id: a.id,
+                  status: "in_progress",
+                  action: "apply",
+                  workspace: a.workspace
                 }}
              )
 
     assert {:ok, pending} = Workspaces.get(c.manager, a.id)
-    assert pending.status == "pending_action"
+    assert pending.status == "in_progress"
     assert pending.workspace["patch_sha256"] == a.workspace["patch_sha256"]
-    assert :ok = OperationLog.request(c.manager.ledger, {:attempt, a.id, "interrupted"})
     stop_supervised!(OperationLog)
     ledger = start_supervised!({OperationLog, c.opts})
     m = %{c.manager | ledger: ledger}

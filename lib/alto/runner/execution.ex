@@ -454,7 +454,7 @@ defmodule Alto.Runner.Execution do
         job = Map.merge(job, %{tool: tool, summary: tool_summary(run, job.name, job.arguments)})
         dispatch_tool_job(job, run)
       else
-        finish_tool_job(job, {:rejected, {:approval_denied, :user}}, run)
+        commit_tool_outcome(job, {:rejected_before_dispatch, {:approval_denied, :user}}, run)
       end
 
     finish_effect(interpreted, frame.remaining, run, frame.terminal)
@@ -859,17 +859,17 @@ defmodule Alto.Runner.Execution do
             {:suspend, %{request: request, job: Map.drop(job, [:tool, :summary])}, run}
 
           {:deny, reason} ->
-            finish_tool_job(job, {:rejected, {:approval_denied, reason}}, run)
+            commit_tool_outcome(job, {:rejected_before_dispatch, {:approval_denied, reason}}, run)
 
           {:error, reason} ->
-            finish_tool_job(job, {:rejected, {:approval_failed, reason}}, run)
+            commit_tool_outcome(job, {:rejected_before_dispatch, {:approval_failed, reason}}, run)
 
           {:cancelled, reason} ->
             {:cancelled, reason, run}
         end
 
       {:error, reason, job} ->
-        finish_tool_job(job, {:rejected, reason}, run)
+        commit_tool_outcome(job, {:rejected_before_dispatch, reason}, run)
 
       {:cancelled, reason} ->
         {:cancelled, reason, run}
@@ -969,7 +969,7 @@ defmodule Alto.Runner.Execution do
               rejected -> {rejected, outcomes}
             end
 
-          case finish_tool_job(job, outcome, run) do
+          case commit_tool_outcome(job, outcome, run) do
             {:event, event, next} ->
               {Events.record(next, event), [event | events], failure, outcomes}
 
@@ -1004,7 +1004,7 @@ defmodule Alto.Runner.Execution do
               {:cont, {:ok, [{job, :ready} | jobs], run}}
 
             {:error, reason, job} ->
-              {:cont, {:ok, [{job, {:rejected, reason}} | jobs], run}}
+              {:cont, {:ok, [{job, {:rejected_before_dispatch, reason}} | jobs], run}}
           end
 
         {:error, reason} ->
@@ -1071,7 +1071,7 @@ defmodule Alto.Runner.Execution do
              do: {:ok, Children.with_journal(%{results: results}, journal), next}
       end)
     else
-      {:error, reason} -> finish_tool_job(job, {:rejected, reason}, run)
+      {:error, reason} -> commit_tool_outcome(job, {:rejected_before_dispatch, reason}, run)
       other -> other
     end
   end
@@ -1090,13 +1090,13 @@ defmodule Alto.Runner.Execution do
           outcome =
             Alto.Runner.Execution.Tool.bound_result({:ok, value}, next.max_tool_result_bytes)
 
-          finish_tool_job(job, {:ok, outcome}, next)
+          commit_tool_outcome(job, outcome, next)
 
         {:error, reason, next} ->
           outcome =
-            if error_class == :known, do: {:ok, {:error, reason}}, else: {:error, reason}
+            if error_class == :known, do: {:failed_known, reason}, else: {:unknown, reason}
 
-          finish_tool_job(job, outcome, next)
+          commit_tool_outcome(job, outcome, next)
 
         {:cancelled, reason, next} ->
           {:cancelled, reason, next}
@@ -1201,69 +1201,27 @@ defmodule Alto.Runner.Execution do
     Enum.reduce(summaries, run, &Children.merge_child_summary(&2, &1))
   end
 
-  defp finish_tool_job(job, {:ok, outcome}, run) do
-    tool_outcome(job, outcome, run)
-    |> tool_event_summary(job.summary)
-  end
-
-  defp finish_tool_job(job, {:rejected, reason}, run),
-    do: tool_failure(job, reason, :rejected_before_dispatch, run)
-
-  defp finish_tool_job(job, {:error, reason}, run),
-    do: tool_failure(job, reason, :unknown, run)
-
-  defp tool_event_summary({:event, event, run}, summary),
-    do: {:event, %{event | data: Map.put(event.data, :summary, summary)}, run}
-
-  defp tool_event_summary(other, _summary), do: other
-
-  defp tool_outcome(job, {:ok, value}, run) do
+  defp tool_result_content({:completed, value}, run) do
     # Workers bound native values before returning them. Provider content has
     # a separate encoding bound and is not duplicated in the completion event.
-    with {:ok, content} <- model_result_content(value, run) do
-      commit_tool_outcome(
-        job,
-        content,
-        %{value: value, outcome: :completed},
-        run
-      )
-    else
-      {:error, reason} ->
-        tool_failure(job, reason, :unknown, run)
+    case model_result_content(value, run) do
+      {:ok, content} -> {content, %{value: value, outcome: :completed}}
+      {:error, reason} -> tool_result_content({:unknown, reason}, run)
     end
   end
 
-  defp tool_outcome(job, {:error, reason}, run),
-    do: tool_failure(job, reason, :failed_known, run)
-
-  defp tool_outcome(job, {:unknown, reason}, run), do: tool_failure(job, reason, :unknown, run)
-
-  defp tool_outcome(job, other, run),
-    do: tool_failure(job, {:invalid_tool_return, other}, :unknown, run)
-
-  # : every tool failure carries an outcome class alongside the reason.
-  # Pre-dispatch sites pass `:rejected_before_dispatch` (non-commit proven);
-  # the participant's own error passes `:failed_known`; supervision silence
-  # (timeout/crash) and uninterpretable returns pass `:unknown`. Event types
-  # are unchanged — loops keep matching on type.
-  defp tool_failure(job, reason, outcome, run) do
-    bounded_reason = bound_failure_reason(reason, run.max_tool_result_bytes)
+  defp tool_result_content({outcome, reason}, run) do
+    reason = bound_failure_reason(reason, run.max_tool_result_bytes)
 
     content =
-      encode_tool_result(
-        %{error: Alto.Protocol.encode_term(bounded_reason)},
-        run.max_tool_result_bytes
-      )
+      encode_tool_result(%{error: Alto.Protocol.encode_term(reason)}, run.max_tool_result_bytes)
 
-    commit_tool_outcome(
-      job,
-      content,
-      %{error: bounded_reason, outcome: outcome},
-      run
-    )
+    {content, %{error: reason, outcome: outcome}}
   end
 
-  defp commit_tool_outcome(job, content, %{outcome: outcome} = data, run) do
+  defp commit_tool_outcome(job, outcome, run) do
+    {content, %{outcome: outcome} = data} = tool_result_content(outcome, run)
+
     {type, status} =
       if outcome == :completed,
         do: {:tool_completed, :completed},
@@ -1285,7 +1243,8 @@ defmodule Alto.Runner.Execution do
           name: job.name
         }
 
-        {:event, Event.durable(type, Map.merge(common, data)), run}
+        data = Map.merge(Map.take(job, [:summary]), Map.merge(common, data))
+        {:event, Event.durable(type, data), run}
 
       {:error, reason, run} ->
         run = if outcome == :completed, do: Events.merge_verdict(run, :unknown), else: run

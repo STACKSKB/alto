@@ -225,6 +225,21 @@ defmodule Alto.Ops do
 
   defp ledger_rows(%{status: {:intended}}, live) when not is_nil(live), do: []
 
+  defp ledger_rows(
+         %{tool: "workspace", status: {:checkpointed, %{version: 2, status: phase}, _}} = entry,
+         live
+       )
+       when phase in ["intended", "in_progress"] do
+    [
+      ledger_item(
+        entry,
+        live,
+        {:unknown, "workspace #{phase}; no settled outcome",
+         "review the retained workspace; discard at its current revision, never blind retry"}
+      )
+    ]
+  end
+
   defp ledger_rows(entry, live) do
     case ledger_disposition(entry.status) do
       nil -> []

@@ -215,8 +215,10 @@ defmodule Alto.WorkspacesTest do
   test "a crashed creation survives ledger restart and never recreates itself", %{
     manager: m,
     snapshot: s,
-    ledger_opts: opts
+    ledger_opts: opts,
+    source: source
   } do
+    queue = start_supervised!({Alto.Queue, id: "ops", name: nil, dir: Path.join(source, "queue")})
     m = %{m | backend_options: [block: true, owner: self()]}
 
     task =
@@ -226,7 +228,12 @@ defmodule Alto.WorkspacesTest do
 
     assert_receive {:creating, path}, 2_000
     id = path |> Path.dirname() |> Path.basename()
-    assert {:ok, %{status: "in_progress"}} = Workspaces.get(m, id)
+    assert {:ok, active} = Workspaces.get(m, id)
+    assert active.status == "in_progress"
+    assert {:ok, inspected} = Alto.Ops.get(queue, m.ledger, id)
+    assert inspected.status == :unknown
+    refute inspected.safe_to_retry
+    assert inspected.operation_revision == active.revision
     assert {:error, {:storage_lock_timeout, _, _}} = Workspaces.discard(m, id, 2, "busy")
     Task.shutdown(task, :brutal_kill)
     stop_supervised!(OperationLog)
@@ -234,6 +241,10 @@ defmodule Alto.WorkspacesTest do
     m = %{m | ledger: ledger}
     assert {:ok, recovered} = Workspaces.get(m, id)
     assert recovered.status == "in_progress"
+    assert {:ok, inspected} = Alto.Ops.get(queue, m.ledger, id)
+    assert inspected.status == :unknown
+    refute inspected.safe_to_retry
+    assert inspected.operation_revision == recovered.revision
     assert File.read!(Path.join(path, "partial")) == "created"
     assert {:error, {:workspace_requires_review, ^id}} = Workspaces.create(m, s, owner("crash"))
     refute_receive {:creating, _}, 100
@@ -287,7 +298,7 @@ defmodule Alto.WorkspacesTest do
     assert {:ok, %{status: "ready"}} = Workspaces.create(m, s, owner("c"))
   end
 
-  test "a crash between continuation grant and dispatch never recreates the checkout", %{
+  test "an interrupted activation never recreates the checkout", %{
     manager: m,
     snapshot: s
   } do
@@ -297,14 +308,18 @@ defmodule Alto.WorkspacesTest do
     assert {:ok, _} =
              OperationLog.request(
                m.ledger,
-               {:resume_checkpoint, ready.id, ready.revision,
+               {:checkpoint_update, ready.id, ready.revision,
                 %{
-                  "action" => "use"
+                  version: 2,
+                  id: ready.id,
+                  status: "in_progress",
+                  action: "use",
+                  workspace: ready.workspace
                 }}
              )
 
     assert {:ok, pending} = Workspaces.get(m, ready.id)
-    assert pending.status == "pending_action"
+    assert pending.status == "in_progress"
     assert {:error, {:workspace_requires_review, _}} = Workspaces.create(m, s, owner("grant-gap"))
     assert File.read!(Path.join(ready.workspace["cwd"], "partial")) == "preserve"
 

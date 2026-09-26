@@ -71,11 +71,15 @@ defmodule Alto.Workspaces do
 
       locked(manager, id, fn ->
         with :ok <-
-               OperationLog.request(manager.ledger, {:intent, id, "workspace", nil, workspace}),
+               OperationLog.request(
+                 manager.ledger,
+                 {:retain, id, "workspace", workspace, attempt_id(),
+                  %{version: 2, id: id, status: "intended", workspace: workspace, action: nil}}
+               ),
              {:ok, info} <- get(manager, id),
              true <- Map.take(info.workspace, Map.keys(workspace)) == workspace do
           case info.status do
-            "intended" -> create_workspace(manager, workspace)
+            "intended" -> create_workspace(manager, info)
             status when status in ["ready", "worked", "frozen", "applied"] -> {:ok, info}
             _ -> {:error, {:workspace_requires_review, id}}
           end
@@ -92,11 +96,24 @@ defmodule Alto.Workspaces do
   @doc "Read one consistent ledger status/revision without changing resource state."
   def get(%__MODULE__{} = manager, id) do
     with :ok <- valid_id(id),
-         {:ok, entry} <- OperationLog.request(manager.ledger, {:recovery, id}),
-         true <- entry.tool == "workspace" and is_map(entry.recovery) do
-      {status, workspace} = view(entry)
-      {:ok, %{id: id, revision: entry.revision, status: status, workspace: workspace}}
+         {:ok,
+          %{
+            tool: "workspace",
+            checkpoint: %{version: 2, id: ^id, status: _, workspace: workspace} = info
+          } = entry} <- OperationLog.request(manager.ledger, {:recovery, id}),
+         true <- is_map(workspace) do
+      case entry.status do
+        {:checkpointed, _, _} ->
+          {:ok, Map.put(info, :revision, entry.revision)}
+
+        {:decided, :completed, %{"status" => "discarded"}} ->
+          {:ok, Map.merge(info, %{revision: entry.revision, status: "discarded"})}
+
+        _ ->
+          {:error, :invalid_workspace_record}
+      end
     else
+      {:ok, _} -> {:error, :invalid_workspace_record}
       false -> {:error, :invalid_workspace_record}
       {:error, _} = error -> error
     end
@@ -128,12 +145,12 @@ defmodule Alto.Workspaces do
       with {:ok, info} <- expect(manager, id, revision),
            true <- info.status == expected_status,
            {:ok, admitted} <- admit.(info.workspace),
-           {:ok, attempt} <- activate(manager, info, "use") do
+           {:ok, info} <- activate(manager, info, "use") do
         result = execute.(info.workspace, admitted)
 
         recorded =
           try do
-            checkpoint(manager, id, attempt, "worked", info.workspace)
+            checkpoint(manager, info, %{status: "worked"})
           catch
             kind, reason -> {:error, {kind, reason}}
           end
@@ -154,7 +171,7 @@ defmodule Alto.Workspaces do
     locked(manager, id, fn ->
       with {:ok, info} <- expect(manager, id, revision),
            true <- info.status in ["ready", "worked"],
-           {:ok, attempt} <- activate(manager, info, "freeze"),
+           {:ok, info} <- activate(manager, info, "freeze"),
            {:ok, patch} <-
              manager.backend.diff(
                info.workspace["snapshot"],
@@ -173,7 +190,7 @@ defmodule Alto.Workspaces do
             "patch_bytes" => byte_size(patch)
           })
 
-        checkpoint(manager, id, attempt, "frozen", workspace)
+        checkpoint(manager, info, %{status: "frozen", workspace: workspace})
       else
         false -> {:error, :workspace_not_freezable}
         {:error, _} = error -> error
@@ -184,7 +201,7 @@ defmodule Alto.Workspaces do
   @doc "Read a retained captured patch whose bounded bytes still match its recorded hash."
   def patch(%__MODULE__{} = manager, id) do
     with {:ok, %{status: status, workspace: workspace}}
-         when status in ["frozen", "applied", "in_progress", "pending_action"] <-
+         when status in ["frozen", "applied", "in_progress"] <-
            get(manager, id),
          true <- workspace["patch_path"] == Path.join([manager.root, id, "patch.diff"]),
          :ok <- safe_path(workspace["patch_path"]),
@@ -267,8 +284,8 @@ defmodule Alto.Workspaces do
                    integration,
                    info.workspace["patch_path"]
                  ),
-               {:ok, attempt} <- activate(manager, info, "apply") do
-            apply_dispatched(manager, info, attempt, integration)
+               {:ok, info} <- activate(manager, info, "apply") do
+            apply_dispatched(manager, info, integration)
           end
         end)
       else
@@ -290,7 +307,7 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp apply_dispatched(manager, info, attempt, integration) do
+  defp apply_dispatched(manager, info, integration) do
     with {:ok, evidence} <-
            manager.backend.apply(
              info.workspace["source"],
@@ -299,13 +316,10 @@ defmodule Alto.Workspaces do
              manager.backend_options
            ),
          {:ok, updated} <-
-           checkpoint(
-             manager,
-             info.id,
-             attempt,
-             "applied",
-             Map.put(info.workspace, "application", evidence)
-           ) do
+           checkpoint(manager, info, %{
+             status: "applied",
+             workspace: Map.put(info.workspace, "application", evidence)
+           }) do
       {:ok, updated}
     else
       {:unknown, _} = uncertain -> uncertain
@@ -327,7 +341,7 @@ defmodule Alto.Workspaces do
     with true <- is_binary(note) and byte_size(note) in 1..4_096 and String.valid?(note) do
       locked(manager, id, fn ->
         with {:ok, info} <- expect(manager, id, revision, false),
-             {:ok, attempt} <- activate(manager, info, "discard"),
+             {:ok, info} <- activate(manager, info, "discard"),
              path <- Path.join(manager.root, id),
              :ok <- safe_path(path),
              {:ok, _} <- File.rm_rf(path),
@@ -335,7 +349,7 @@ defmodule Alto.Workspaces do
              :ok <-
                OperationLog.request(
                  manager.ledger,
-                 {:outcome, id, attempt, :completed,
+                 {:retire_checkpoint, id, info.revision, %{"action" => "discard"}, attempt_id(),
                   %{
                     "status" => "discarded",
                     "note" => note
@@ -349,11 +363,10 @@ defmodule Alto.Workspaces do
     end
   end
 
-  defp create_workspace(manager, workspace) do
-    id = workspace["id"]
-    attempt = attempt_id()
+  defp create_workspace(manager, info) do
+    workspace = info.workspace
 
-    with :ok <- OperationLog.request(manager.ledger, {:attempt, id, attempt}),
+    with {:ok, info} <- activate(manager, info, "create"),
          :ok <- Storage.ensure_private_dir(Path.dirname(workspace["cwd"]), owned: true),
          :ok <-
            manager.backend.checkout(
@@ -361,52 +374,25 @@ defmodule Alto.Workspaces do
              workspace["cwd"],
              manager.backend_options
            ) do
-      checkpoint(manager, id, attempt, "ready", workspace)
+      checkpoint(manager, info, %{status: "ready"})
     end
   end
 
-  defp checkpoint(manager, id, attempt, phase, workspace) do
-    with :ok <-
+  defp checkpoint(manager, info, changes) do
+    packet = info |> Map.merge(Map.put_new(changes, :action, nil)) |> Map.delete(:revision)
+
+    with {:ok, updated} <-
            OperationLog.request(
              manager.ledger,
-             {:checkpoint, id, attempt,
-              %{
-                "version" => 1,
-                "phase" => phase,
-                "workspace" => workspace
-              }}
+             {:checkpoint_update, info.id, info.revision, packet}
            ),
-         do: get(manager, id)
+         do: {:ok, Map.put(updated.checkpoint, :revision, updated.revision)}
   end
 
   defp activate(manager, %{status: status} = info, action)
-       when status in ["ready", "worked", "frozen", "applied"] do
-    with {:ok, _} <-
-           OperationLog.request(
-             manager.ledger,
-             {:resume_checkpoint, info.id, info.revision,
-              %{
-                "action" => action
-              }}
-           ) do
-      attempt = attempt_id()
-
-      with :ok <- OperationLog.request(manager.ledger, {:attempt, info.id, attempt}),
-           do: {:ok, attempt}
-    end
-  end
-
-  defp activate(manager, %{status: status, id: id}, "discard")
-       when status in ["intended", "pending_action"] do
-    attempt = attempt_id()
-    with :ok <- OperationLog.request(manager.ledger, {:attempt, id, attempt}), do: {:ok, attempt}
-  end
-
-  defp activate(manager, %{status: "in_progress", id: id}, "discard") do
-    with {:ok, %{current_attempt: attempt}} <-
-           OperationLog.request(manager.ledger, {:recovery, id}),
-         do: {:ok, attempt}
-  end
+       when status in ["intended", "ready", "worked", "frozen", "applied"] or
+              (status == "in_progress" and action == "discard"),
+       do: checkpoint(manager, info, %{status: "in_progress", action: action})
 
   defp activate(_manager, _info, _action), do: {:error, :workspace_requires_review}
 
@@ -425,21 +411,6 @@ defmodule Alto.Workspaces do
       {:error, _} = error -> error
     end
   end
-
-  defp view(%{
-         status: {:checkpointed, %{"version" => 1, "phase" => phase, "workspace" => workspace}, _}
-       }),
-       do: {phase, workspace}
-
-  defp view(%{status: {:decided, :completed, %{"status" => "discarded"}}, recovery: workspace}),
-    do: {"discarded", workspace}
-
-  defp view(%{status: {:intended}, checkpoint: %{"workspace" => workspace}}),
-    do: {"pending_action", workspace}
-
-  defp view(%{status: {:intended}, recovery: workspace}), do: {"intended", workspace}
-  defp view(%{checkpoint: %{"workspace" => workspace}}), do: {"in_progress", workspace}
-  defp view(%{recovery: workspace}), do: {"in_progress", workspace}
 
   defp locked(manager, id, fun) do
     with :ok <- valid_id(id),

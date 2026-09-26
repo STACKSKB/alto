@@ -12,7 +12,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,607 lines (17.3% below the original)**. **5,149 lines
+The current count is **33,555 lines (17.5% below the original)**. **5,097 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -28,6 +28,15 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Tool result bounding also classifies participant results. Serial, parallel and
+  agent tools share one outcome commit path for transcript, history and events;
+  the nested worker-result adapters and summary postprocessor are removed.
+  Prepared summaries now accompany uncertain failures and approval rejections.
+  Workspace actions update one canonical retained resource with revision fences,
+  replacing the repeated grant/attempt/checkpoint cycle and status translation.
+  Interrupted actions remain visible to operators; discard retires the resource.
+  These two changes remove 52 formatted production lines, not the larger
+  reduction sought. No new dependencies or migrations are introduced.
 - Approval, parent, child and cooperative execution checkpoints share one capture
   and restore pipeline. The encoded state owns the frame, budget and authority
   binding; child capture no longer pretends to be a root approval. Routing and
@@ -213,8 +222,12 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,069 core tests and
+The combined cleanup and messaging worktree passes **1,070 core tests and
 142 TUI tests**.
+The canonical tool outcomes and workspace resource lifecycle pass both full
+suites. Existing tests cover bounds, cancellation, sibling outcome retention,
+approval, workspace revision fencing and crash recovery. The crashed-workspace
+test also verifies operator visibility before and after ledger restart.
 The shared checkpoint pipeline passes those full suites. Its final envelope-bound
 correction is checked by the 72-test continuation suite, including large-state
 round trips and malformed budget/transcript rejection. Raw state remains bounded

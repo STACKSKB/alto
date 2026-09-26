@@ -35,11 +35,11 @@ defmodule Alto.Runner.ToolBatch do
     case {Call.cancellation(caps.cancel_ref), Budget.check(caps.budget)} do
       {{:cancelled, reason}, _} ->
         results = harvest(tasks, results)
-        {:cancelled, reason, ordered(tasks, results, {:error, :cancelled})}
+        {:cancelled, reason, ordered(tasks, results, {:unknown, :cancelled})}
 
       {_, {:error, reason}} ->
         results = harvest(tasks, results)
-        {:error, reason, ordered(tasks, results, {:error, reason})}
+        {:error, reason, ordered(tasks, results, {:unknown, reason})}
 
       {:continue, :ok} ->
         results = harvest(tasks, results)
@@ -49,7 +49,7 @@ defmodule Alto.Runner.ToolBatch do
             if not Map.has_key?(acc, task.ref) and
                  System.monotonic_time(:millisecond) >= deadline do
               Task.shutdown(task, :brutal_kill)
-              Map.put(acc, task.ref, {:error, :timeout})
+              Map.put(acc, task.ref, {:unknown, :timeout})
             else
               acc
             end
@@ -76,8 +76,8 @@ defmodule Alto.Runner.ToolBatch do
         acc
       else
         case Task.yield(task, 0) do
-          {:ok, value} -> Map.put(acc, task.ref, {:ok, value})
-          {:exit, reason} -> Map.put(acc, task.ref, {:error, reason})
+          {:ok, value} -> Map.put(acc, task.ref, value)
+          {:exit, reason} -> Map.put(acc, task.ref, {:unknown, reason})
           nil -> acc
         end
       end

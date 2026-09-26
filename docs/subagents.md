@@ -467,14 +467,16 @@ an operating-system security sandbox: unrestricted commands and custom tools
 retain their configured authority. Use an appropriate command executor when
 process-level filesystem or network isolation is required.
 
-Creation, worker use and patch capture are resource operations in the existing
-`Alto.OperationLog`. Dispatch is recorded before mutation. Ready, worked and
-frozen resources are nonterminal checkpoints and cannot be evicted to make room
-for another workspace. A process crash leaves its unfinished operation visible;
-Alto does not repeat it automatically. A grant interrupted before dispatch is
-also retained for review. Cooperative child cancellation releases its lock
-once the runner has stopped, while uncertain workspace failures propagate an
-unknown verdict to the parent.
+Creation, worker use and patch capture share a retained resource in the existing
+`Alto.OperationLog`. Each action atomically advances its exact revision to
+`in_progress` before mutation, then records the resulting resource at that
+revision. Ready, worked, frozen and applied resources remain nonterminal;
+explicit discard retires them and releases ledger capacity. A process crash
+leaves the resource visible for review through `Alto.Ops`; Alto does not repeat
+the action automatically. The version 2 packet stores the resource directly;
+there is no migration from earlier packets. Cooperative child cancellation
+releases its lock once the runner has stopped, while uncertain workspace
+failures propagate an unknown verdict to the parent.
 
 Completed child results contain a `workspace` map with its ID, revision,
 status and metadata, including the source commit and frozen patch hash.

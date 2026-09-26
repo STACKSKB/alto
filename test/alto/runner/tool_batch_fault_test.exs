@@ -46,7 +46,8 @@ defmodule Alto.Runner.ToolBatchFaultTest do
     :erlang.resume_process(coordinator)
 
     assert_receive {:batch_result,
-                    {:cancelled, :operator_stop, [{:ok, {:ok, :finished}}, {:error, :cancelled}]}}
+                    {:cancelled, :operator_stop,
+                     [{:completed, :finished}, {:unknown, :cancelled}]}}
 
     pending_ref = Process.monitor(pending)
     assert_receive {:DOWN, ^pending_ref, :process, ^pending, _}
