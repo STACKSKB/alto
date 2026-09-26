@@ -62,7 +62,10 @@ defmodule Alto.Runner.ContextPressureFaultTest do
     base = [
       session: :new,
       session_dir: directory,
-      resume: %{messages: messages, transcript_bytes: Alto.Context.Transcript.bytes(messages)},
+      resume: %{
+        "messages" => messages,
+        "transcript_bytes" => Alto.Context.Transcript.bytes(messages)
+      },
       loop:
         Alto.default_loop(
           context:

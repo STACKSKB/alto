@@ -258,7 +258,7 @@ defmodule Alto.Runner.ChildContinuationTest do
       assert {:ok, transcript} =
                Alto.Session.transcript(result.session_id, session_dir: context.dir)
 
-      assert transcript.messages == result.messages
+      assert transcript["messages"] == result.messages
     end
   end
 
@@ -332,12 +332,12 @@ defmodule Alto.Runner.ChildContinuationTest do
     assert {:ok, child_transcript} =
              Alto.Session.transcript(child.session_id, session_dir: context.dir)
 
-    assert child_transcript.revision == 1
+    assert child_transcript["revision"] == 1
 
     assert {:ok, transcript} =
              Alto.Session.transcript(result.session_id, session_dir: context.dir)
 
-    assert transcript.messages == result.messages
+    assert transcript["messages"] == result.messages
   end
 
   test "approved child resumes its worked workspace without preparing it again", context do

@@ -48,7 +48,7 @@ defmodule Alto.Runner.Execution.SessionTest do
     assert {:ok, records} = DurableSession.read(id, session_dir: dir)
     assert Enum.count(records, &(&1["type"] == "completed")) == 1
     assert {:ok, transcript} = DurableSession.transcript(id, session_dir: dir)
-    assert transcript.messages == [%{"role" => "user", "content" => "task"}]
+    assert transcript["messages"] == [%{"role" => "user", "content" => "task"}]
   end
 
   test "suspended checkpoint writes completion without a transcript", %{dir: dir} do

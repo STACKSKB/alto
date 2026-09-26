@@ -215,7 +215,9 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert is_binary(session_id)
 
       # Transcript continuity: the snapshot holds the full first run.
-      assert {:ok, %{messages: messages}} = Alto.Session.transcript(session_id, session_dir: dir)
+      assert {:ok, %{"messages" => messages}} =
+               Alto.Session.transcript(session_id, session_dir: dir)
+
       assert Enum.any?(messages, &(&1["role"] == "tool"))
 
       # Root summary over the audit log.
@@ -241,7 +243,9 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       tool_runs = drain(:tool_ran)
       assert tool_runs == []
 
-      assert {:ok, %{messages: messages2}} = Alto.Session.transcript(session_id, session_dir: dir)
+      assert {:ok, %{"messages" => messages2}} =
+               Alto.Session.transcript(session_id, session_dir: dir)
+
       assert length(messages2) > length(messages)
       assert List.last(messages2)["role"] in ["assistant", "user"]
 
@@ -358,7 +362,9 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       # Root snapshot ownership: the transcript holds only the root run's
       # single user message — the child never overwrote it.
-      assert {:ok, %{messages: [single]}} = Alto.Session.transcript(session_id, session_dir: dir)
+      assert {:ok, %{"messages" => [single]}} =
+               Alto.Session.transcript(session_id, session_dir: dir)
+
       assert single["role"] == "user"
     end
   end

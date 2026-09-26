@@ -44,9 +44,9 @@ defmodule Alto.SessionConversationTest do
                expected_revision: 0
              )
 
-    assert one.revision == 1
-    assert one.parent == nil
-    assert one.settled
+    assert one["revision"] == 1
+    assert one["parent"] == nil
+    assert one["settled"]
 
     assert {:ok, two} =
              Session.persist_settled(id, second, bytes(second),
@@ -54,18 +54,36 @@ defmodule Alto.SessionConversationTest do
                expected_revision: 1
              )
 
-    assert two.revision == 2
-    assert two.parent == %{session_id: id, revision: 1}
-    assert two.conversation_bytes > one.conversation_bytes
+    assert two["revision"] == 2
+    assert two["parent"] == %{"session_id" => id, "revision" => 1}
+    assert two["conversation_bytes"] > one["conversation_bytes"]
 
     assert {:ok, retained_one} = Session.conversation(id, 1, session_dir: dir)
-    assert retained_one.messages == first
+    assert retained_one["messages"] == first
 
-    assert {:ok, %{messages: ^second, revision: 2}} =
+    assert {:ok, %{"messages" => ^second, "revision" => 2}} =
              Session.transcript(id, session_dir: dir)
 
     assert {:ok, records} = Session.read(id, session_dir: dir)
     refute Enum.any?(records, &(&1["type"] == "completed"))
+  end
+
+  test "public revisions use the persisted record and derive byte accounting", %{dir: dir} do
+    {:ok, id} = Session.create("task", %{}, session_dir: dir)
+    messages = [user("one")]
+    assert {:ok, one} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    path = Path.join(dir, id <> ".transcript.json")
+    encoded = File.read!(path)
+    assert Map.delete(one, "conversation_bytes") == JSON.decode!(encoded)
+    assert one["conversation_bytes"] == byte_size(String.trim_trailing(encoded, "\n"))
+
+    assert {:ok, two} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    assert {:ok, retained} = Session.conversation(id, 1, session_dir: dir)
+    assert retained == one
+
+    assert two["conversation_bytes"] ==
+             one["conversation_bytes"] +
+               byte_size(String.trim_trailing(File.read!(path), "\n"))
   end
 
   test "a dispatch fence blocks an older snapshot and a recovery snapshot closes unknown calls",
@@ -73,7 +91,7 @@ defmodule Alto.SessionConversationTest do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     safe = [user("perform one effect")]
 
-    assert {:ok, %{revision: 1}} =
+    assert {:ok, %{"revision" => 1}} =
              Session.persist_settled(id, safe, bytes(safe),
                session_dir: dir,
                expected_revision: 0
@@ -102,7 +120,7 @@ defmodule Alto.SessionConversationTest do
                expected_revision: 1
              )
 
-    assert {:ok, %{messages: ^recovery, revision: 2} = snapshot} =
+    assert {:ok, %{"messages" => ^recovery, "revision" => 2} = snapshot} =
              Session.transcript(id, session_dir: dir)
 
     assert {:ok, closed} = Transcript.close_interrupted(recovery)
@@ -125,13 +143,13 @@ defmodule Alto.SessionConversationTest do
 
     settled = safe ++ [call("call-1"), reply("call-1")]
 
-    assert {:ok, %{revision: 2, settled: true}} =
+    assert {:ok, %{"revision" => 2, "settled" => true}} =
              Session.persist_settled(id, settled, bytes(settled),
                session_dir: dir,
                expected_revision: 1
              )
 
-    assert {:ok, %{messages: ^settled, revision: 2}} =
+    assert {:ok, %{"messages" => ^settled, "revision" => 2}} =
              Session.transcript(id, session_dir: dir)
   end
 
@@ -143,7 +161,7 @@ defmodule Alto.SessionConversationTest do
     assert {:ok, _} =
              Session.mark_dispatched(id, ["op-1"], session_dir: dir, run_id: "run-native")
 
-    assert {:ok, %{tool_call_ids: ["op-1", "op-2"]}} =
+    assert {:ok, %{"tool_call_ids" => ["op-1", "op-2"]}} =
              Session.mark_dispatched(id, ["op-2"],
                session_dir: dir,
                run_id: "run-native"
@@ -161,14 +179,14 @@ defmodule Alto.SessionConversationTest do
     assert {:error, {:session_unsettled_tool_dispatch, %{tool_call_ids: ["op-1", "op-2"]}}} =
              Session.transcript(id, session_dir: dir)
 
-    assert {:ok, %{revision: 2}} =
+    assert {:ok, %{"revision" => 2}} =
              Session.persist_settled(id, outcome, bytes(outcome),
                session_dir: dir,
                expected_revision: 1,
                resolved_operations: ["op-1", "op-2"]
              )
 
-    assert {:ok, %{messages: ^outcome}} = Session.transcript(id, session_dir: dir)
+    assert {:ok, %{"messages" => ^outcome}} = Session.transcript(id, session_dir: dir)
   end
 
   test "forks copy only a complete transcript and immutable provenance", %{dir: dir} do
@@ -207,12 +225,12 @@ defmodule Alto.SessionConversationTest do
 
     assert fork.session_id == "sess-branch"
     assert fork.source == %{session_id: source, revision: 1}
-    assert fork.transcript.messages == first
-    assert fork.transcript.revision == 1
+    assert fork.transcript["messages"] == first
+    assert fork.transcript["revision"] == 1
 
     assert {:ok, branch_entry} = Session.conversation("sess-branch", 1, session_dir: dir)
-    assert branch_entry.parent == %{session_id: source, revision: 1}
-    assert branch_entry.summary == "Explore another approach."
+    assert branch_entry["parent"] == %{"session_id" => source, "revision" => 1}
+    assert branch_entry["summary"] == "Explore another approach."
 
     branch_second = first ++ [user("branch only")]
 
@@ -222,14 +240,15 @@ defmodule Alto.SessionConversationTest do
                expected_revision: 1
              )
 
-    assert branch_head.parent == %{session_id: "sess-branch", revision: 1}
+    assert branch_head["parent"] == %{"session_id" => "sess-branch", "revision" => 1}
 
     assert {:error, {:session_unsettled_tool_dispatch, _}} =
              Session.transcript(source, session_dir: dir)
 
-    assert {:ok, %{messages: ^second}} = Session.conversation(source, :latest, session_dir: dir)
+    assert {:ok, %{"messages" => ^second}} =
+             Session.conversation(source, :latest, session_dir: dir)
 
-    assert {:ok, %{messages: ^branch_second}} =
+    assert {:ok, %{"messages" => ^branch_second}} =
              Session.transcript("sess-branch", session_dir: dir)
 
     assert {:ok, branch_records} = Session.read("sess-branch", session_dir: dir)
@@ -258,12 +277,14 @@ defmodule Alto.SessionConversationTest do
              Session.persist_settled(id, second, bytes(second),
                session_dir: dir,
                expected_revision: 1,
-               max_conversation_bytes: one.conversation_bytes + 1
+               max_conversation_bytes: one["conversation_bytes"] + 1
              )
 
-    assert limit.retained_bytes == one.conversation_bytes
+    assert limit.retained_bytes == one["conversation_bytes"]
     assert limit.attempted_bytes > limit.max_bytes
-    assert {:ok, %{messages: ^first, revision: 1}} = Session.transcript(id, session_dir: dir)
+
+    assert {:ok, %{"messages" => ^first, "revision" => 1}} =
+             Session.transcript(id, session_dir: dir)
 
     assert {:error, {:conversation_revision_not_found, ^id, 2}} =
              Session.conversation(id, 2, session_dir: dir)
@@ -284,7 +305,7 @@ defmodule Alto.SessionConversationTest do
     head_path = Path.join(dir, id <> ".transcript.json")
     fenced_head = File.read!(head_path)
     options = [session_dir: dir, expected_revision: 1, resolved_operations: ["op-1"]]
-    {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
+    {:ok, %{"revision" => 2}} = Session.persist_settled(id, messages, bytes(messages), options)
 
     # Model a crash after the immutable entry was written but before the head commit.
     File.write!(head_path, fenced_head)
@@ -295,10 +316,12 @@ defmodule Alto.SessionConversationTest do
     assert {:error, {:conversation_dispatch_conflict, _}} =
              Session.mark_dispatched(id, ["op-2"], session_dir: dir, run_id: "other-run")
 
-    assert {:ok, %{revision: 2}} = Session.persist_settled(id, messages, bytes(messages), options)
+    assert {:ok, %{"revision" => 2}} =
+             Session.persist_settled(id, messages, bytes(messages), options)
+
     assert {:ok, resumed} = Session.transcript(id, session_dir: dir)
-    assert resumed.revision == 2
-    refute Map.has_key?(resumed, :unsettled)
+    assert resumed["revision"] == 2
+    assert resumed["dispatch"] == nil
   end
 
   test "invalid or obsolete heads cannot discard an unresolved fence", %{dir: dir} do
@@ -309,7 +332,10 @@ defmodule Alto.SessionConversationTest do
     head = JSON.decode!(File.read!(path))
 
     for invalid <- [
-          Map.put(head, "dispatch", %{"tool_call_ids" => []}),
+          Map.put(head, "dispatch", %{"revision" => 1, "tool_call_ids" => []}),
+          Map.put(head, "dispatch", %{"revision" => 2, "tool_call_ids" => ["op-1"]}),
+          Map.delete(head, "retained_bytes_before"),
+          Map.delete(head, "dispatch"),
           %{"v" => 1, "revision" => 1}
         ] do
       File.write!(path, JSON.encode!(invalid))

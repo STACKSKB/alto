@@ -97,7 +97,7 @@ defmodule Alto.TUI.RunLifecycleTest do
 
     session_id = State.selected_task(state(app))["conversation_id"]
 
-    assert {:ok, %{messages: messages}} =
+    assert {:ok, %{"messages" => messages}} =
              Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
 
     assert Alto.ToolDisplay.transcript(messages) == expected

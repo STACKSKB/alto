@@ -7,7 +7,7 @@ defmodule Alto.Session.Conversation do
   alias Alto.Context.Transcript
   alias Alto.{DurableLog, Session, Storage}
 
-  @version 3
+  @version 4
   @max_entry_bytes 16_000_000
   @max_head_bytes @max_entry_bytes + 1_000_000
   @default_max_conversation_bytes 128_000_000
@@ -17,19 +17,8 @@ defmodule Alto.Session.Conversation do
   @max_tool_call_id_bytes 512
 
   @type revision :: pos_integer()
-  @type parent :: %{session_id: Session.session_id(), revision: revision()}
-  @type snapshot :: %{
-          required(:messages) => [map()],
-          required(:transcript_bytes) => non_neg_integer(),
-          required(:revision) => revision(),
-          required(:entry_session_id) => Session.session_id(),
-          required(:parent) => parent() | nil,
-          required(:summary) => String.t() | nil,
-          required(:settled) => boolean(),
-          required(:conversation_bytes) => non_neg_integer(),
-          optional(:unsettled) => map(),
-          optional(:context_observation) => map() | nil
-        }
+  @type parent :: %{required(String.t()) => Session.session_id() | revision()}
+  @type snapshot :: %{required(String.t()) => term()}
 
   @doc false
   def validate_fork_options(summary, max_bytes) do
@@ -59,7 +48,8 @@ defmodule Alto.Session.Conversation do
         "transcript_bytes" => transcript_bytes,
         "summary" => summary,
         "settled" => settled,
-        "context_observation" => Keyword.get(opts, :context_observation)
+        "context_observation" => Keyword.get(opts, :context_observation),
+        "dispatch" => nil
       }
 
       constraints = %{
@@ -76,7 +66,7 @@ defmodule Alto.Session.Conversation do
   @doc "Read the latest safe branch head for ordinary resume."
   @spec resume(Session.session_id(), keyword()) :: {:ok, snapshot()} | {:error, term()}
   def resume(id, opts \\ []) do
-    with_snapshot(id, opts, fn {snapshot, _entry} ->
+    with_snapshot(id, opts, fn snapshot ->
       with :ok <- resume_safety(snapshot, Keyword.get(opts, :allow_unsettled, false)),
            do: {:ok, snapshot}
     end)
@@ -87,9 +77,9 @@ defmodule Alto.Session.Conversation do
           {:ok, snapshot()} | {:error, term()}
   def fetch(id, revision \\ :latest, opts \\ []) do
     with {:ok, revision} <- requested_revision(revision) do
-      with_snapshot(id, opts, fn {head, _entry} ->
+      with_snapshot(id, opts, fn head ->
         with :ok <-
-               check_expected(id, Keyword.get(opts, :expected_revision, :any), head.revision),
+               check_expected(id, Keyword.get(opts, :expected_revision, :any), head["revision"]),
              do: select_revision(id, revision, head, opts)
       end)
     end
@@ -101,16 +91,16 @@ defmodule Alto.Session.Conversation do
   def mark_dispatched(id, tool_call_ids, opts \\ []) do
     with {:ok, ids} <- validate_tool_call_ids(tool_call_ids),
          {:ok, expected} <- expected_revision(Keyword.get(opts, :expected_revision, :any)) do
-      with_snapshot(id, opts, fn {snapshot, entry} ->
-        with :ok <- check_expected(id, expected, snapshot.revision) do
+      with_snapshot(id, opts, fn snapshot ->
+        with :ok <- check_expected(id, expected, snapshot["revision"]) do
           fence = %{
-            revision: snapshot.revision,
-            tool_call_ids: ids,
-            run_id: Keyword.get(opts, :run_id),
-            at_ms: System.system_time(:millisecond)
+            "revision" => snapshot["revision"],
+            "tool_call_ids" => ids,
+            "run_id" => Keyword.get(opts, :run_id),
+            "at_ms" => System.system_time(:millisecond)
           }
 
-          put_dispatch_fence(id, fence, Map.get(snapshot, :unsettled), entry, opts)
+          put_dispatch_fence(id, fence, snapshot, opts)
         end
       end)
     end
@@ -125,12 +115,11 @@ defmodule Alto.Session.Conversation do
   defp persist_locked(draft, constraints, opts) do
     id = draft["session_id"]
 
-    with {:ok, current_head} <- current_head(id, opts),
-         current <- current_head && elem(current_head, 0),
-         current_revision <- if(current, do: current.revision, else: 0),
-         retained_bytes <- if(current, do: current.conversation_bytes, else: 0),
+    with {:ok, current} <- current_head(id, opts),
+         current_revision <- if(current, do: current["revision"], else: 0),
+         retained_bytes <- if(current, do: current["conversation_bytes"], else: 0),
          :ok <- check_expected(id, constraints.expected, current_revision),
-         fence <- current && Map.get(current, :unsettled),
+         fence <- current && Map.get(current, "dispatch"),
          :ok <-
            resolve_dispatch_fence(
              id,
@@ -145,7 +134,7 @@ defmodule Alto.Session.Conversation do
          entry <-
            Map.merge(draft, %{
              "revision" => next_revision,
-             "parent" => encode_parent(parent),
+             "parent" => parent,
              "retained_bytes_before" => retained_bytes
            }),
          {:ok, encoded} <- encode_bounded(entry),
@@ -158,9 +147,9 @@ defmodule Alto.Session.Conversation do
              byte_size(encoded)
            ),
          :ok <- Storage.ensure_private_dir(conversation_dir(opts, id), owned: true),
-         :ok <- archive_current(id, current_head, opts),
-         snapshot <- snapshot(entry, byte_size(encoded)),
-         :ok <- write_head(id, entry, nil, opts) do
+         :ok <- archive_current(id, current, opts),
+         snapshot <- Map.put(entry, "conversation_bytes", conversation_bytes),
+         :ok <- write_head(id, entry, opts) do
       {:ok, snapshot}
     end
   end
@@ -175,36 +164,22 @@ defmodule Alto.Session.Conversation do
 
   defp archive_current(_id, nil, _opts), do: :ok
 
-  defp archive_current(id, {snapshot, entry}, opts) do
-    with {:ok, encoded} <- encode_bounded(entry),
-         do: put_entry(id, snapshot.revision, encoded, opts)
+  defp archive_current(id, snapshot, opts) do
+    with {:ok, encoded} <- encode_bounded(Map.put(snapshot, "dispatch", nil)),
+         do: put_entry(id, snapshot["revision"], encoded, opts)
   end
 
   defp resolve_parent(_id, nil, parent), do: {:ok, parent}
 
   defp resolve_parent(id, current, nil),
-    do: {:ok, %{session_id: id, revision: current.revision}}
+    do: {:ok, %{"session_id" => id, "revision" => current["revision"]}}
 
   defp resolve_parent(_id, current, requested) do
-    own = %{session_id: current.entry_session_id, revision: current.revision}
+    own = %{"session_id" => current["session_id"], "revision" => current["revision"]}
 
     if requested == own,
       do: {:ok, own},
       else: {:error, {:conversation_parent_conflict, %{current: own, requested: requested}}}
-  end
-
-  defp snapshot(entry, entry_bytes) do
-    %{
-      messages: entry["messages"],
-      context_observation: entry["context_observation"],
-      transcript_bytes: entry["transcript_bytes"],
-      revision: entry["revision"],
-      entry_session_id: entry["session_id"],
-      parent: decode_parent!(entry["parent"]),
-      summary: entry["summary"],
-      settled: entry["settled"],
-      conversation_bytes: entry["retained_bytes_before"] + entry_bytes
-    }
   end
 
   defp put_entry(id, revision, encoded, opts) do
@@ -230,9 +205,8 @@ defmodule Alto.Session.Conversation do
     end
   end
 
-  defp write_head(id, entry, fence, opts) do
+  defp write_head(id, record, opts) do
     path = transcript_path(opts, id)
-    record = Map.put(entry, "dispatch", fence && Map.delete(fence, :revision))
 
     with {:ok, encoded} <- encode_bounded(record, @max_head_bytes),
          :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
@@ -258,33 +232,30 @@ defmodule Alto.Session.Conversation do
   end
 
   defp decode_head(contents, id) do
-    with {:ok, %{"revision" => revision, "dispatch" => dispatch} = record} <-
-           JSON.decode(contents),
+    with {:ok, %{"revision" => revision} = record} <- JSON.decode(contents),
          {:ok, ^revision} <- requested_revision(revision),
-         {:ok, fence} <- decode_dispatch_fence(dispatch, revision),
-         entry <- Map.delete(record, "dispatch"),
-         {:ok, encoded} <- encode_bounded(entry),
-         {:ok, snapshot} <- entry_snapshot({:ok, entry}, byte_size(encoded), id, revision) do
-      snapshot = if fence, do: Map.put(snapshot, :unsettled, fence), else: snapshot
-      {:ok, {snapshot, entry}}
+         {:ok, snapshot} <- entry_snapshot({:ok, record}, id, revision) do
+      {:ok, snapshot}
     else
       _ -> {:error, {:session_corrupt, id, :transcript}}
     end
   end
 
   defp select_revision(_id, :latest, head, _opts), do: {:ok, head}
-  defp select_revision(_id, revision, %{revision: revision} = head, _opts), do: {:ok, head}
+  defp select_revision(_id, revision, %{"revision" => revision} = head, _opts), do: {:ok, head}
 
   defp select_revision(id, revision, _head, opts) do
     case Alto.BoundedFile.read(entry_path(opts, id, revision), @max_entry_bytes) do
-      {:ok, contents} -> entry_snapshot(JSON.decode(contents), byte_size(contents), id, revision)
+      {:ok, contents} -> entry_snapshot(JSON.decode(contents), id, revision, byte_size(contents))
       {:error, :enoent} -> {:error, {:conversation_revision_not_found, id, revision}}
       {:error, reason} -> {:error, {:conversation_read_failed, reason}}
     end
   end
 
-  defp entry_snapshot(decoded, entry_bytes, id, revision) do
-    with {:ok, entry} when is_map(entry) <- decoded,
+  defp entry_snapshot(decoded, id, revision, entry_bytes \\ nil) do
+    with {:ok, %{"dispatch" => dispatch} = entry} <- decoded,
+         true <- is_nil(entry_bytes) or is_nil(dispatch),
+         :ok <- validate_dispatch_fence(dispatch, revision),
          true <- entry["v"] == @version,
          true <- entry["session_id"] == id and entry["revision"] == revision,
          true <- is_list(entry["messages"]),
@@ -293,21 +264,24 @@ defmodule Alto.Session.Conversation do
          true <- entry["settled"] == settled,
          retained when is_integer(retained) and retained >= 0 <- entry["retained_bytes_before"],
          {:ok, _parent} <- optional_parent(entry["parent"]),
-         {:ok, _summary} <- optional_summary(entry["summary"]) do
-      {:ok, snapshot(entry, entry_bytes)}
+         {:ok, _summary} <- optional_summary(entry["summary"]),
+         {:ok, encoded} <- encode_bounded(Map.put(entry, "dispatch", nil)) do
+      {:ok, Map.put(entry, "conversation_bytes", retained + (entry_bytes || byte_size(encoded)))}
     else
       _ -> {:error, {:conversation_corrupt, id, revision}}
     end
   end
 
-  defp put_dispatch_fence(id, fence, current, entry, opts) do
+  defp put_dispatch_fence(id, fence, snapshot, opts) do
+    current = snapshot["dispatch"]
+
     cond do
-      current && current.run_id not in [nil, fence.run_id] && fence.run_id != nil ->
+      current && current["run_id"] not in [nil, fence["run_id"]] && fence["run_id"] != nil ->
         {:error,
          {:conversation_dispatch_conflict,
-          %{session_id: id, revision: fence.revision, current: current}}}
+          %{session_id: id, revision: fence["revision"], current: current}}}
 
-      current && current.tool_call_ids == fence.tool_call_ids ->
+      current && current["tool_call_ids"] == fence["tool_call_ids"] ->
         {:ok, current}
 
       true ->
@@ -315,43 +289,40 @@ defmodule Alto.Session.Conversation do
           if current do
             %{
               fence
-              | tool_call_ids: Enum.uniq(current.tool_call_ids ++ fence.tool_call_ids),
-                run_id: current.run_id || fence.run_id
+              | "tool_call_ids" => Enum.uniq(current["tool_call_ids"] ++ fence["tool_call_ids"]),
+                "run_id" => current["run_id"] || fence["run_id"]
             }
           else
             fence
           end
 
-        with {:ok, _ids} <- validate_tool_call_ids(merged.tool_call_ids),
-             :ok <- write_head(id, entry, merged, opts),
+        with {:ok, _ids} <- validate_tool_call_ids(merged["tool_call_ids"]),
+             :ok <- write_head(id, Map.put(snapshot, "dispatch", merged), opts),
              do: {:ok, merged}
     end
   end
 
-  defp decode_dispatch_fence(nil, _revision), do: {:ok, nil}
+  defp validate_dispatch_fence(nil, _revision), do: :ok
 
-  defp decode_dispatch_fence(record, revision) when is_map(record) do
-    with {:ok, ids} <- validate_tool_call_ids(record["tool_call_ids"]) do
-      {:ok,
-       %{revision: revision, tool_call_ids: ids, run_id: record["run_id"], at_ms: record["at_ms"]}}
-    end
+  defp validate_dispatch_fence(%{"revision" => revision, "tool_call_ids" => ids}, revision) do
+    with {:ok, _} <- validate_tool_call_ids(ids), do: :ok
   end
 
-  defp decode_dispatch_fence(_, _), do: {:error, :invalid_dispatch}
+  defp validate_dispatch_fence(_, _), do: {:error, :invalid_dispatch}
 
-  defp resume_safety(%{unsettled: fence} = snapshot, allow) do
+  defp resume_safety(%{"dispatch" => fence} = snapshot, allow) when not is_nil(fence) do
     if allow == true or
-         (not snapshot.settled and
-            dispatched_calls_retained?(snapshot.messages, fence.tool_call_ids)) do
+         (not snapshot["settled"] and
+            dispatched_calls_retained?(snapshot["messages"], fence["tool_call_ids"])) do
       :ok
     else
       {:error,
        {:session_unsettled_tool_dispatch,
         %{
-          session_id: snapshot.entry_session_id,
-          revision: snapshot.revision,
-          tool_call_ids: fence.tool_call_ids,
-          run_id: fence.run_id
+          session_id: snapshot["session_id"],
+          revision: snapshot["revision"],
+          tool_call_ids: fence["tool_call_ids"],
+          run_id: fence["run_id"]
         }}}
     end
   end
@@ -374,14 +345,14 @@ defmodule Alto.Session.Conversation do
 
   defp resolve_dispatch_fence(id, fence, messages, settled, resolved) do
     resolved = MapSet.union(retained_outcome_ids(messages, settled), MapSet.new(resolved))
-    unresolved = Enum.reject(fence.tool_call_ids, &MapSet.member?(resolved, &1))
+    unresolved = Enum.reject(fence["tool_call_ids"], &MapSet.member?(resolved, &1))
 
     if unresolved == [] do
       :ok
     else
       {:error,
        {:conversation_unresolved_dispatch,
-        %{session_id: id, revision: fence.revision, operation_ids: unresolved}}}
+        %{session_id: id, revision: fence["revision"], operation_ids: unresolved}}}
     end
   end
 
@@ -462,9 +433,6 @@ defmodule Alto.Session.Conversation do
 
   defp optional_parent(nil), do: {:ok, nil}
 
-  defp optional_parent(%{session_id: id, revision: revision}),
-    do: validate_parent(id, revision)
-
   defp optional_parent(%{"session_id" => id, "revision" => revision}),
     do: validate_parent(id, revision)
 
@@ -473,7 +441,7 @@ defmodule Alto.Session.Conversation do
   defp validate_parent(id, revision) do
     with :ok <- Session.validate_id(id),
          true <- is_integer(revision) and revision in 1..@max_revisions do
-      {:ok, %{session_id: id, revision: revision}}
+      {:ok, %{"session_id" => id, "revision" => revision}}
     else
       _ -> {:error, {:invalid_conversation_parent, %{session_id: id, revision: revision}}}
     end
@@ -508,18 +476,8 @@ defmodule Alto.Session.Conversation do
   defp validate_resolved_operations([]), do: {:ok, []}
   defp validate_resolved_operations(ids), do: validate_tool_call_ids(ids)
 
-  defp encode_parent(nil), do: nil
-
-  defp encode_parent(parent),
-    do: %{"session_id" => parent.session_id, "revision" => parent.revision}
-
-  defp decode_parent!(nil), do: nil
-
-  defp decode_parent!(parent),
-    do: %{session_id: parent["session_id"], revision: parent["revision"]}
-
   defp encode_bounded(record, max_bytes \\ @max_entry_bytes) do
-    encoded = JSON.encode!(record)
+    encoded = JSON.encode!(Map.delete(record, "conversation_bytes"))
 
     if byte_size(encoded) <= max_bytes,
       do: {:ok, encoded},

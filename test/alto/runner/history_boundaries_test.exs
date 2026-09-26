@@ -43,7 +43,7 @@ defmodule Alto.Runner.HistoryBoundariesTest do
     assert length(result.output) == 257
     assert result.persistence == :ok
     assert {:ok, snapshot} = Alto.Session.transcript(result.session_id, session_dir: dir)
-    assert snapshot.revision > 256
+    assert snapshot["revision"] > 256
   end
 
   test "a configured history cap fails before dispatch", %{opts: opts} do

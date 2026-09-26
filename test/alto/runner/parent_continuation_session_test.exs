@@ -99,8 +99,8 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     assert {:ok, winner} = Task.await(first, 5_000)
     assert winner.output == "joined once"
     assert {:ok, before} = Session.transcript(session, session_dir: dir)
-    assert before.messages == winner.messages
-    assert before.revision == 1
+    assert before["messages"] == winner.messages
+    assert before["revision"] == 1
     assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
 
     send(second_policy, :continue)

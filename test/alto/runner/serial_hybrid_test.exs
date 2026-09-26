@@ -95,7 +95,7 @@ defmodule Alto.Runner.SerialHybridTest do
     assert native_context_count(resumed.messages) == 4
     refute Enum.any?(resumed.messages, &(&1["role"] == "tool"))
 
-    assert {:ok, %{revision: 2, messages: messages}} =
+    assert {:ok, %{"revision" => 2, "messages" => messages}} =
              Session.transcript(first.session_id, session_dir: dir)
 
     assert messages == resumed.messages

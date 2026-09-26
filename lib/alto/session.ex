@@ -205,38 +205,38 @@ defmodule Alto.Session do
              summary,
              Keyword.fetch!(opts, :max_conversation_bytes)
            ),
-         true <- source.settled,
+         true <- source["settled"],
          :ok <-
            append(
              destination,
              started_record(%{
                run_id: nil,
                parent_session_id: id,
-               task: "Fork of #{id} at revision #{source.revision}",
+               task: "Fork of #{id} at revision #{source["revision"]}",
                provider: nil,
                model: nil,
                cwd: nil
              }),
              opts
            ),
-         :ok <- append(destination, forked_record(id, source.revision, summary), opts),
+         :ok <- append(destination, forked_record(id, source["revision"], summary), opts),
          {:ok, branch} <-
            Conversation.persist(
              destination,
-             source.messages,
-             source.transcript_bytes,
+             source["messages"],
+             source["transcript_bytes"],
              session_dir: Keyword.get(opts, :session_dir),
              expected_revision: 0,
-             parent: %{session_id: id, revision: source.revision},
+             parent: %{"session_id" => id, "revision" => source["revision"]},
              summary: summary,
              max_conversation_bytes: Keyword.fetch!(opts, :max_conversation_bytes)
            ) do
       {:ok,
        %{
          session_id: destination,
-         source: %{session_id: id, revision: source.revision},
+         source: %{session_id: id, revision: source["revision"]},
          summary: summary,
-         transcript: Map.take(branch, [:messages, :transcript_bytes, :revision])
+         transcript: branch
        }}
     else
       {:error, keys} when is_list(keys) -> {:error, {:invalid_fork_options, keys}}
@@ -248,12 +248,7 @@ defmodule Alto.Session do
   @doc "Load the transcript and revision as options for a resumed run."
   def resume_options(id, opts \\ []) do
     with {:ok, snapshot} <- transcript(id, Keyword.take(opts, [:session_dir])) do
-      {:ok,
-       [
-         session: id,
-         resume:
-           Map.take(snapshot, [:messages, :transcript_bytes, :revision, :context_observation])
-       ]}
+      {:ok, [session: id, resume: snapshot]}
     end
   end
 

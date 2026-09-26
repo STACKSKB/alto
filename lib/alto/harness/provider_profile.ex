@@ -78,7 +78,7 @@ defmodule Alto.Harness.ProviderProfile do
     end
   end
 
-  defp normalize(%__MODULE__{} = profile), do: validate(profile)
+  defp normalize(%__MODULE__{} = profile), do: normalize(Map.from_struct(profile))
 
   defp normalize(profile) when is_list(profile) do
     if Keyword.keyword?(profile),
@@ -86,52 +86,34 @@ defmodule Alto.Harness.ProviderProfile do
       else: {:error, :invalid_profile}
   end
 
-  defp normalize(%{options: _}), do: {:error, :profile_options_belong_in_provider_spec}
+  defp normalize(%{id: id, provider: provider} = values) do
+    provider = if is_atom(provider), do: {provider, []}, else: provider
 
-  defp normalize(%{provider: module} = profile) when is_atom(module) and not is_nil(module),
-    do: normalize(%{profile | provider: {module, []}})
+    with true <-
+           Map.keys(values) -- ~w(id label provider models default_model credential_id)a == [],
+         {module, options} <- provider,
+         true <- is_atom(module) and not is_nil(module) and Keyword.keyword?(options) do
+      profile = struct(__MODULE__, values)
 
-  defp normalize(%{id: id, provider: {module, options}} = profile)
-       when is_atom(module) and not is_nil(module) and is_list(options) do
-    validate(%__MODULE__{
-      id: id,
-      label: Map.get(profile, :label) || id,
-      provider: {module, options},
-      models: normalize_models(Map.get(profile, :models, :discover)),
-      default_model: Map.get(profile, :default_model),
-      credential_id: Map.get(profile, :credential_id) || id
-    })
-  end
+      profile = %{
+        profile
+        | provider: provider,
+          label: profile.label || id,
+          credential_id: profile.credential_id || id,
+          models: normalize_models(profile.models),
+          default_model: profile.default_model || Keyword.get(options, :model)
+      }
 
-  defp normalize(other), do: {:error, {:invalid_provider_profile, other}}
-
-  defp validate(%__MODULE__{} = profile) do
-    cond do
-      not valid_name?(profile.id) ->
-        {:error, {:invalid_profile_id, profile.id}}
-
-      not valid_name?(profile.label) ->
-        {:error, {:invalid_profile_label, profile.label}}
-
-      not valid_provider?(profile.provider) ->
-        {:error, {:invalid_profile_provider, profile.id}}
-
-      not valid_name?(profile.credential_id) ->
-        {:error, {:invalid_profile_credential_id, profile.credential_id}}
-
-      profile.models == :invalid ->
-        {:error, {:invalid_profile_models, profile.id}}
-
-      true ->
-        {_module, options} = profile.provider
-        {:ok, %{profile | default_model: profile.default_model || Keyword.get(options, :model)}}
+      if Enum.all?([profile.id, profile.label, profile.credential_id], &valid_name?/1) and
+           profile.models != :invalid,
+         do: {:ok, profile},
+         else: {:error, :invalid_profile}
+    else
+      _ -> {:error, :invalid_profile}
     end
   end
 
-  defp valid_provider?({module, options}),
-    do: is_atom(module) and not is_nil(module) and Keyword.keyword?(options)
-
-  defp valid_provider?(_other), do: false
+  defp normalize(_), do: {:error, :invalid_profile}
 
   defp normalize_models(:discover), do: :discover
 

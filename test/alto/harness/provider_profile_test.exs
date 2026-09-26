@@ -31,7 +31,7 @@ defmodule Alto.Harness.ProviderProfileTest do
   end
 
   test "rejects malformed provider options before reading model defaults" do
-    assert {:error, {:invalid_profile_provider, "invalid"}} =
+    assert {:error, :invalid_profile} =
              ProviderProfile.from_run_options(
                provider_profiles: [%{id: "invalid", provider: {Provider, [123]}}]
              )
@@ -41,7 +41,7 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert {:ok, [plain, configured]} =
              ProviderProfile.from_run_options(
                provider_profiles: [
-                 %{id: "plain", provider: Provider, models: ["small"]},
+                 %ProviderProfile{id: "plain", label: nil, provider: Provider, models: ["small"]},
                  %{id: "configured", provider: {Provider, model: "large", timeout: 500}}
                ]
              )
@@ -53,7 +53,7 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert configured.default_model == "large"
     assert configured.provider == {Provider, [model: "large", timeout: 500]}
 
-    assert {:error, :profile_options_belong_in_provider_spec} =
+    assert {:error, :invalid_profile} =
              ProviderProfile.from_run_options(
                provider_profiles: [
                  %{id: "split", provider: Provider, options: [model: "large"]}

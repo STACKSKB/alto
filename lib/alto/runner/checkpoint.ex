@@ -483,7 +483,7 @@ defmodule Alto.Runner.Checkpoint do
 
   defp transcript_revision(run) do
     case Alto.Session.transcript(run.session, session_dir: run.session_dir) do
-      {:ok, %{revision: revision}} -> {:ok, revision}
+      {:ok, %{"revision" => revision}} -> {:ok, revision}
       {:error, :no_resumable_transcript} -> {:ok, 0}
       {:error, _} = error -> error
     end

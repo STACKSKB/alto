@@ -6,6 +6,11 @@ an immutable revision under `conversations/<session>/`, then commits the new hea
 with its fence cleared. An interrupted head update leaves the prior fence intact;
 the archive write can be retried. Obsolete head formats are rejected.
 
+Conversation APIs return the same string-keyed record used by storage, with a
+derived `"conversation_bytes"` total. `"parent"` and `"dispatch"` also use string
+keys; `"dispatch"` is nil when no dispatch is outstanding. Pass this record
+directly as the runner’s `:resume` option.
+
 `Alto.Session.persist_settled/4` records a complete provider-history boundary.
 It rejects unanswered assistant tool calls, orphan tool replies, stale
 `expected_revision` values, and writes that would exceed
@@ -62,7 +67,7 @@ logs, credentials, or workspace state.
   )
 
 branch.session_id
-branch.transcript.messages
+branch.transcript["messages"]
 ```
 
 Use `Alto.Session.conversation/3` to inspect one retained revision directly.

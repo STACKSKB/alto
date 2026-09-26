@@ -100,15 +100,15 @@ defmodule Alto.Runner.SerialChildSessionsTest do
 
       assert {:ok, transcript} = Session.transcript(result.session_id, session_dir: dir)
 
-      assert Enum.filter(transcript.messages, &(&1["role"] == "user")) == [
+      assert Enum.filter(transcript["messages"], &(&1["role"] == "user")) == [
                %{"role" => "user", "content" => assignment.task}
              ]
 
-      assert Enum.filter(transcript.messages, &(&1["role"] == "assistant")) == [
+      assert Enum.filter(transcript["messages"], &(&1["role"] == "assistant")) == [
                %{"role" => "assistant", "content" => result.output}
              ]
 
-      assert transcript.revision == 1
+      assert transcript["revision"] == 1
 
       summary = Enum.find(sessions, &(&1.id == result.session_id))
       assert summary.task == assignment.task
@@ -122,7 +122,7 @@ defmodule Alto.Runner.SerialChildSessionsTest do
     assert {:ok, parent_transcript} = Session.transcript(parent.session_id, session_dir: dir)
 
     refute Enum.any?(
-             parent_transcript.messages,
+             parent_transcript["messages"],
              &(&1["role"] == "assistant" and &1["content"] in ["child-one", "child-two"])
            )
   end

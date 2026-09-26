@@ -44,7 +44,10 @@ defmodule Alto.Runner.ContextPressureTest do
     opts = [
       session: :new,
       session_dir: dir,
-      resume: %{messages: messages, transcript_bytes: Alto.Context.Transcript.bytes(messages)},
+      resume: %{
+        "messages" => messages,
+        "transcript_bytes" => Alto.Context.Transcript.bytes(messages)
+      },
       provider: {Provider, owner: self()},
       compaction: [
         strategy: {Reducer, owner: self()},

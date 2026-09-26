@@ -591,7 +591,7 @@ defmodule Alto.TUI.State do
 
   defp load_session_entries(session_id, opts) do
     case Session.transcript(session_id, Keyword.take(opts, [:session_dir])) do
-      {:ok, %{messages: messages}} -> Alto.ToolDisplay.transcript(messages)
+      {:ok, %{"messages" => messages}} -> Alto.ToolDisplay.transcript(messages)
       _error -> []
     end
   end

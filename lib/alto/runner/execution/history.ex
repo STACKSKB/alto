@@ -55,7 +55,7 @@ defmodule Alto.Runner.Execution.History do
         {:ok,
          %{
            run
-           | transcript_revision: snapshot.revision,
+           | transcript_revision: snapshot["revision"],
              resolved_operations: [],
              history_digest: digest
          }}

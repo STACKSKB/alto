@@ -106,7 +106,7 @@ defmodule Alto.Runner.Execution.Setup do
       resolved_operations: [],
       history_digest: nil,
       resume_context_observation:
-        Map.get(Keyword.get(opts, :resume) || %{}, :context_observation),
+        Map.get(Keyword.get(opts, :resume) || %{}, "context_observation"),
       checkpoint_resume:
         not is_nil(Keyword.get(opts, :checkpoint)) or not is_nil(Keyword.get(opts, :continuation)),
       session_id: session_id,
@@ -182,7 +182,7 @@ defmodule Alto.Runner.Execution.Setup do
       when is_integer(revision) and revision >= 0 ->
         revision
 
-      {_, _, %{revision: revision}} when is_integer(revision) and revision >= 1 ->
+      {_, _, %{"revision" => revision}} when is_integer(revision) and revision >= 1 ->
         revision
 
       _ ->
@@ -231,7 +231,7 @@ defmodule Alto.Runner.Execution.Setup do
       else: {:error, {:transcript_limit, max_transcript_bytes}}
   end
 
-  defp resume_history(%{messages: messages, transcript_bytes: bytes})
+  defp resume_history(%{"messages" => messages, "transcript_bytes" => bytes})
        when is_list(messages) and is_integer(bytes) and bytes >= 0,
        do: Transcript.close_interrupted(messages)
 

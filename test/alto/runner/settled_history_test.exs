@@ -69,8 +69,8 @@ defmodule Alto.Runner.SettledHistoryTest do
     assert_receive {:after_tool, history, _}, 1000
     assert {:error, _, _} = Alto.Runner.terminate(handle)
     assert {:ok, snapshot} = Alto.Session.transcript(id, session_dir: dir)
-    assert snapshot.messages == history
-    assert Enum.any?(snapshot.messages, &(&1["role"] == "tool" and &1["content"] == "changed"))
+    assert snapshot["messages"] == history
+    assert Enum.any?(snapshot["messages"], &(&1["role"] == "tool" and &1["content"] == "changed"))
     assert File.read!(Path.join(dir, "changed")) == "yes"
 
     resume_opts =
@@ -79,7 +79,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     assert {:ok, resumed} = Alto.resume(id, "continue", resume_opts)
     assert resumed.transcript_persisted
     assert {:ok, resumed_snapshot} = Alto.Session.transcript(id, session_dir: dir)
-    assert resumed.transcript_revision == resumed_snapshot.revision
+    assert resumed.transcript_revision == resumed_snapshot["revision"]
     assert Enum.any?(resumed.messages, &(&1["role"] == "tool" and &1["content"] == "changed"))
     assert Enum.any?(resumed.messages, &(&1 == %{"role" => "user", "content" => "continue"}))
   end
@@ -126,7 +126,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     assert result.transcript_persisted
     assert result.resolved_operations == []
     assert {:ok, snapshot} = Alto.Session.transcript(id, session_dir: dir)
-    assert result.transcript_revision == snapshot.revision
+    assert result.transcript_revision == snapshot["revision"]
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.outcome == :unknown))
   end
 
@@ -155,8 +155,8 @@ defmodule Alto.Runner.SettledHistoryTest do
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.outcome == :unknown))
 
     assert {:ok, snapshot} = Alto.Session.transcript(id, session_dir: dir)
-    assert snapshot.messages == result.messages
-    assert snapshot.revision == result.transcript_revision
+    assert snapshot["messages"] == result.messages
+    assert snapshot["revision"] == result.transcript_revision
   end
 
   test "settled history composes with suspended prepared approval", %{

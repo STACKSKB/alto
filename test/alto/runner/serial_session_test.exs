@@ -71,7 +71,9 @@ defmodule Alto.Runner.SerialSessionTest do
     assert completed["outcome"] == "ok"
     assert completed["model_requests"] == 1
 
-    assert {:ok, %{messages: messages}} = Session.transcript(result.session_id, session_dir: dir)
+    assert {:ok, %{"messages" => messages}} =
+             Session.transcript(result.session_id, session_dir: dir)
+
     assert messages == result.messages
   end
 
@@ -199,7 +201,7 @@ defmodule Alto.Runner.SerialSessionTest do
     assert {:ok, %{persistence: {:degraded, errors}}} = conflicted
     assert Enum.any?(errors, &match?({:session_conflict, _}, &1))
 
-    assert {:ok, %{revision: 2, messages: committed}} =
+    assert {:ok, %{"revision" => 2, "messages" => committed}} =
              Session.transcript(first.session_id, session_dir: dir)
 
     follow_ups =

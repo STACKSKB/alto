@@ -132,7 +132,7 @@ defmodule Alto.SessionTest do
 
     assert {:ok, _snapshot} = Session.persist_settled(id, messages, 42, session_dir: dir)
 
-    assert {:ok, %{messages: ^messages, transcript_bytes: 42, revision: 1}} =
+    assert {:ok, %{"messages" => ^messages, "transcript_bytes" => 42, "revision" => 1}} =
              Session.transcript(id, session_dir: dir)
 
     {:ok, bare} = Session.create("other", %{}, session_dir: dir)
@@ -148,7 +148,7 @@ defmodule Alto.SessionTest do
     second = first ++ [%{"role" => "assistant", "content" => "done"}]
     assert {:ok, _snapshot} = Session.persist_settled(id, second, 55, session_dir: dir)
 
-    assert {:ok, %{messages: ^second, transcript_bytes: 55, revision: 2}} =
+    assert {:ok, %{"messages" => ^second, "transcript_bytes" => 55, "revision" => 2}} =
              Session.transcript(id, session_dir: dir)
 
     # A crash between the temp write and the rename leaves the previous
@@ -175,7 +175,7 @@ defmodule Alto.SessionTest do
                expected_revision: 0
              )
 
-    assert {:ok, %{messages: ^first, revision: 1}} =
+    assert {:ok, %{"messages" => ^first, "revision" => 1}} =
              Session.transcript(id, session_dir: dir)
   end
 

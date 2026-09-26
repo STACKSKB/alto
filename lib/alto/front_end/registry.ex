@@ -302,12 +302,12 @@ defmodule Alto.FrontEnd.Registry do
     reply =
       with {:ok, transcript} <-
              Alto.Session.transcript(session_id, session_dir: state.session_dir),
-           messages = Enum.take(transcript.messages, -100) do
+           messages = Enum.take(transcript["messages"], -100) do
         {:ok,
          %{
            messages: messages,
-           revision: transcript.revision,
-           truncated: length(messages) < length(transcript.messages)
+           revision: transcript["revision"],
+           truncated: length(messages) < length(transcript["messages"])
          }}
       else
         {:error, reason} -> {:error, reason}

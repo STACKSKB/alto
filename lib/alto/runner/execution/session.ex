@@ -101,7 +101,7 @@ defmodule Alto.Runner.Execution.Session do
       {:ok, snapshot} ->
         {%{
            result
-           | transcript_revision: snapshot.revision,
+           | transcript_revision: snapshot["revision"],
              resolved_operations: [],
              transcript_persisted: true
          }, []}

@@ -31,8 +31,8 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     assert {:ok, snapshot} =
              Alto.Session.transcript(opts[:session], session_dir: opts[:session_dir])
 
-    assert Transcript.bytes(snapshot.messages) > 4_096
-    assert Enum.count(snapshot.messages, &(&1["role"] == "tool")) == 3
+    assert Transcript.bytes(snapshot["messages"]) > 4_096
+    assert Enum.count(snapshot["messages"], &(&1["role"] == "tool")) == 3
     snapshot
   end
 
@@ -42,7 +42,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     snapshot = seed(opts)
     assert {:ok, result} = Alto.run("continue", Keyword.put(opts, :resume, snapshot))
     refute compacted?(result)
-    assert Enum.take(result.messages, length(snapshot.messages)) == snapshot.messages
+    assert Enum.take(result.messages, length(snapshot["messages"])) == snapshot["messages"]
     assert result.model_requests == 1
   end
 
@@ -50,7 +50,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     snapshot = seed(opts)
     assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
     refute compacted?(result)
-    assert Enum.take(result.messages, length(snapshot.messages)) == snapshot.messages
+    assert Enum.take(result.messages, length(snapshot["messages"])) == snapshot["messages"]
   end
 
   test "actual observed pressure still compacts on resume", %{opts: opts} do
@@ -69,7 +69,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
   test "settled history boundaries preserve observations for resume", %{opts: opts} do
     opts = Keyword.put(opts, :session_history, :settled)
     snapshot = seed(opts)
-    assert is_map(snapshot.context_observation)
+    assert is_map(snapshot["context_observation"])
     assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
     refute compacted?(result)
   end
@@ -80,7 +80,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     for change <- [:missing, :version, :count, :tokens, :prefix, :tools] do
       local = Keyword.put(opts, :session, "corrupt-#{change}")
       snapshot = seed(local)
-      metadata = snapshot.context_observation
+      metadata = snapshot["context_observation"]
 
       broken =
         case change do
@@ -92,7 +92,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
           :tools -> Map.put(metadata, "tools_sha256", "invalid")
         end
 
-      snapshot = Map.put(snapshot, :context_observation, broken)
+      snapshot = Map.put(snapshot, "context_observation", broken)
       assert {:ok, result} = Alto.run("continue", Keyword.put(local, :resume, snapshot))
       assert compacted?(result)
     end
@@ -137,10 +137,12 @@ defmodule Alto.Runner.ResumeContextObservationTest do
 
           :history ->
             messages =
-              List.update_at(snapshot.messages, 0, &Map.put(&1, "content", "changed history"))
+              List.update_at(snapshot["messages"], 0, &Map.put(&1, "content", "changed history"))
 
             {local,
-             %{snapshot | messages: messages, transcript_bytes: Transcript.bytes(messages)}}
+             snapshot
+             |> Map.put("messages", messages)
+             |> Map.put("transcript_bytes", Transcript.bytes(messages))}
 
           :disabled ->
             loop = Alto.default_loop(context: Alto.Context.Window.new(usage_estimation: false))

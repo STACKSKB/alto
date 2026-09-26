@@ -68,7 +68,7 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
     assert {:ok, snapshot} =
              Alto.Session.transcript(opts[:session], session_dir: opts[:session_dir])
 
-    metadata = Map.get(snapshot, :context_observation)
+    metadata = Map.get(snapshot, "context_observation")
     assert is_map(metadata)
     encoded = JSON.encode!(metadata)
 

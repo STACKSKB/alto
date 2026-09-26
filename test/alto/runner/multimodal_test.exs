@@ -63,7 +63,7 @@ defmodule Alto.Runner.MultimodalTest do
              "Image · image/png · 1 × 1"
 
     assert {:ok, saved} = Alto.Session.transcript(result.session_id, session_dir: dir)
-    assert Enum.find(saved.messages, &(&1["role"] == "tool"))["content"] == tool["content"]
+    assert Enum.find(saved["messages"], &(&1["role"] == "tool"))["content"] == tool["content"]
   end
 
   test "typed payloads have no implicit presentation or base64 text projection" do
