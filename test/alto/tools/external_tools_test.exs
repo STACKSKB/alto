@@ -30,7 +30,7 @@ defmodule Alto.Tools.ExternalToolsTest do
 
   test "Git inspection delegates to the installed CLI with bounded output", %{context: context} do
     assert {:ok, %{output: output, exit_status: 0}} =
-             GitInspect.run(%{"action" => "status"}, context)
+             Alto.Tool.run(GitInspect, %{"action" => "status"}, context)
 
     assert output =~ "sample.txt"
   end
@@ -44,7 +44,7 @@ defmodule Alto.Tools.ExternalToolsTest do
     File.chmod!(executable, 0o755)
 
     assert {:ok, %{output: output}} =
-             GitInspect.run(%{"action" => "diff"}, context, executable: executable)
+             Alto.Tool.run(GitInspect, %{"action" => "diff"}, context, executable: executable)
 
     assert output =~ "--no-optional-locks\n"
     assert output =~ "core.fsmonitor=false\n"
@@ -68,14 +68,18 @@ defmodule Alto.Tools.ExternalToolsTest do
     File.write!(Path.join(root, "sample.txt"), "changed\n")
     System.cmd("git", ["config", "diff.external", helper], cd: root)
 
-    assert {:ok, %{output: output}} = GitInspect.run(%{"action" => "diff"}, context)
+    assert {:ok, %{output: output}} = Alto.Tool.run(GitInspect, %{"action" => "diff"}, context)
     refute File.exists?(marker)
     assert output =~ "sample.txt"
   end
 
   test "Git mutation freezes a narrow command before approval", %{context: context} do
     assert {:ok, %Prepared{} = prepared, details} =
-             GitMutate.prepare(%{"action" => "stage", "paths" => ["sample.txt"]}, context)
+             Alto.Tool.prepare(
+               GitMutate,
+               %{"action" => "stage", "paths" => ["sample.txt"]},
+               context
+             )
 
     assert details.command.args |> List.last() == ":(top,literal)sample.txt"
     assert prepared.approval_details.command.executable =~ "git"
@@ -83,20 +87,21 @@ defmodule Alto.Tools.ExternalToolsTest do
 
   test "Git rejects option-shaped refs and absolute or parent pathspecs", %{context: context} do
     assert {:error, {:invalid_git_ref, "--all"}} =
-             GitInspect.run(%{"action" => "show", "ref" => "--all"}, context)
+             Alto.Tool.run(GitInspect, %{"action" => "show", "ref" => "--all"}, context)
 
     assert {:error, {:invalid_git_path, "/tmp/x"}} =
-             GitMutate.prepare(%{"action" => "stage", "paths" => ["/tmp/x"]}, context)
+             Alto.Tool.prepare(GitMutate, %{"action" => "stage", "paths" => ["/tmp/x"]}, context)
 
     assert {:error, {:invalid_git_path, "../x"}} =
-             GitMutate.prepare(%{"action" => "stage", "paths" => ["../x"]}, context)
+             Alto.Tool.prepare(GitMutate, %{"action" => "stage", "paths" => ["../x"]}, context)
   end
 
   test "Git mutation reports known command failures and uncertain dispatches", %{context: context} do
     known_failure = {:ok, %{exit_status: 2, termination: :exit, output: "bad branch\n"}}
 
     assert {:ok, prepared, _details} =
-             GitMutate.prepare(
+             Alto.Tool.prepare(
+               GitMutate,
                %{"action" => "commit", "message" => "message"},
                context,
                executor: {ResultExecutor, result: known_failure}
@@ -108,7 +113,8 @@ defmodule Alto.Tools.ExternalToolsTest do
     timeout = {:ok, %{exit_status: nil, termination: :timeout, output: ""}}
 
     assert {:ok, prepared, _details} =
-             GitMutate.prepare(
+             Alto.Tool.prepare(
+               GitMutate,
                %{"action" => "commit", "message" => "message"},
                context,
                executor: {ResultExecutor, result: timeout}

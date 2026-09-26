@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadImage do
   @moduledoc "Bounded, workspace-confined PNG/JPEG reads for vision-capable models."
 
-  use Alto.Tool, name: :read_image, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :read_image, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Content
   alias Alto.BoundedFile
@@ -24,29 +24,13 @@ defmodule Alto.Tools.ReadImage do
   ]
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
-      %{
-        path: %{
-          type: "string",
-          description: "Workspace-relative or in-workspace absolute image path."
-        },
-        max_width: %{
-          type: "integer",
-          minimum: 1,
-          maximum: @hard_max_dimension,
-          description: "Optional maximum output width in pixels."
-        },
-        max_height: %{
-          type: "integer",
-          minimum: 1,
-          maximum: @hard_max_dimension,
-          description: "Optional maximum output height in pixels."
-        }
-      },
-      ["path"]
-    )
+  def arguments(_opts) do
+    {"Read a bounded PNG or JPEG from the workspace for a vision-capable model. Optional dimensions request a resize when a processor backend is configured.",
+     [
+       path: [type: :string, required: true],
+       max_width: [type: {:or, [{:in, 1..@hard_max_dimension}, {:in, [nil]}]}],
+       max_height: [type: {:or, [{:in, 1..@hard_max_dimension}, {:in, [nil]}]}]
+     ]}
   end
 
   @impl true
@@ -58,7 +42,6 @@ defmodule Alto.Tools.ReadImage do
     requested_height = Map.get(arguments, "max_height")
 
     with {:ok, config} <- config(opts),
-         :ok <- validate_requested_dimensions(requested_width, requested_height),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, source} <- read_bounded(resolved, config.max_encoded_bytes),
          {:ok, media_type, width, height} <- Metadata.inspect(source),
@@ -95,17 +78,6 @@ defmodule Alto.Tools.ReadImage do
   defp normalize_processor(nil), do: {:ok, nil}
 
   defp normalize_processor(spec), do: Alto.Capabilities.resolve(spec, Alto.Image.Processor)
-
-  defp validate_requested_dimensions(width, height) do
-    if valid_optional_dimension?(width) and valid_optional_dimension?(height),
-      do: :ok,
-      else: {:error, {:invalid_resize_dimensions, width, height}}
-  end
-
-  defp valid_optional_dimension?(nil), do: true
-
-  defp valid_optional_dimension?(dimension),
-    do: is_integer(dimension) and dimension > 0 and dimension <= @hard_max_dimension
 
   defp read_bounded(path, max_encoded_bytes) do
     limit = div(max_encoded_bytes, 4) * 3

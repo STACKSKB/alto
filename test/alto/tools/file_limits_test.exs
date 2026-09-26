@@ -13,7 +13,10 @@ defmodule Alto.Tools.FileLimitsTest do
 
   test "write previews preserve UTF-8 at configured byte boundaries", %{context: context} do
     assert {:ok, _prepared, %{preview: %{content: "a", truncated: true}}} =
-             Alto.Tools.WriteFile.prepare(%{"path" => "new.txt", "content" => "a😀"}, context,
+             Alto.Tool.prepare(
+               Alto.Tools.WriteFile,
+               %{"path" => "new.txt", "content" => "a😀"},
+               context,
                preview_bytes: 2
              )
   end
@@ -25,32 +28,36 @@ defmodule Alto.Tools.FileLimitsTest do
     for name <- ~w(a b c), do: File.write!(Path.join(root, name), name)
 
     assert {:ok, %{entries: entries, truncated: true}} =
-             ListFiles.run(%{}, context, max_entries: 2)
+             Alto.Tool.run(ListFiles, %{}, context, max_entries: 2)
 
     assert length(entries) == 2
 
     assert {:ok, %{entries: entries, truncated: false}} =
-             ListFiles.run(%{}, context, max_entries: 5)
+             Alto.Tool.run(ListFiles, %{}, context, max_entries: 5)
 
     assert length(entries) == 3
 
-    assert {:error, {:invalid_list_files_options, _}} =
-             ListFiles.run(%{}, context, max_entries: 0)
+    assert {:error, %NimbleOptions.ValidationError{key: :max_entries}} =
+             Alto.Tool.run(ListFiles, %{}, context, max_entries: 0)
   end
 
   test "read_file defaults to and enforces the host byte ceiling", %{root: root, context: context} do
     File.write!(Path.join(root, "sample.txt"), "abcdef")
 
     assert {:ok, %{content: "abc", truncated: true}} =
-             ReadFile.run(%{"path" => "sample.txt"}, context, max_bytes: 3)
+             Alto.Tool.run(ReadFile, %{"path" => "sample.txt"}, context, max_bytes: 3)
 
-    assert {:error, {:invalid_range, 0, 4}} =
-             ReadFile.run(%{"path" => "sample.txt", "limit" => 4}, context, max_bytes: 3)
+    assert {:error, %NimbleOptions.ValidationError{key: :limit}} =
+             Alto.Tool.run(ReadFile, %{"path" => "sample.txt", "limit" => 4}, context,
+               max_bytes: 3
+             )
 
     assert {:ok, %{content: "abcdef", truncated: false}} =
-             ReadFile.run(%{"path" => "sample.txt", "limit" => 6}, context, max_bytes: 6)
+             Alto.Tool.run(ReadFile, %{"path" => "sample.txt", "limit" => 6}, context,
+               max_bytes: 6
+             )
 
-    assert {:error, {:invalid_read_file_options, _}} =
-             ReadFile.run(%{"path" => "sample.txt"}, context, max_bytes: 0)
+    assert {:error, %NimbleOptions.ValidationError{key: :max_bytes}} =
+             Alto.Tool.run(ReadFile, %{"path" => "sample.txt"}, context, max_bytes: 0)
   end
 end

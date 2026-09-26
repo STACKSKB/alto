@@ -8,35 +8,24 @@ defmodule Alto.Tools.QueueCancel do
   idempotent. Same local-boundary trust decision as `Alto.Tools.QueuePut`.
   """
 
-  use Alto.Tool, name: :queue_cancel, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :queue_cancel, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Queue
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Remove all queued records carrying a dedup key (record cancellation).",
-      %{
-        key: %{type: "string", description: "The dedup key to blank."}
-      },
-      ["key"]
-    )
+  def arguments(_opts) do
+    {"Remove all queued records carrying a dedup key (record cancellation).",
+     [key: [type: :string, required: true]]}
   end
 
   @impl true
   def run(arguments, _context, opts \\ []) do
     queue = Keyword.get(opts, :queue, Alto.Queue)
 
-    case Map.get(arguments, "key") do
-      key when is_binary(key) ->
-        case Queue.request(queue, {:cancel, key}) do
-          :ok -> {:ok, %{cancelled: true}}
-          {:error, :not_found} -> {:ok, %{cancelled: false}}
-          {:error, reason} -> {:error, reason}
-        end
-
-      _other ->
-        {:error, :invalid_key}
+    case Queue.request(queue, {:cancel, arguments["key"]}) do
+      :ok -> {:ok, %{cancelled: true}}
+      {:error, :not_found} -> {:ok, %{cancelled: false}}
+      {:error, reason} -> {:error, reason}
     end
   end
 end

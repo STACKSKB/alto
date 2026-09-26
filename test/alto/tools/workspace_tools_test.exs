@@ -35,44 +35,45 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     %{root: root, context: %Context{session_id: "test", cwd: root}}
   end
 
-  defp prepared_run(tool, arguments, context, opts \\ []) do
-    with {:ok, prepared, _details} <- tool.prepare(arguments, context, opts),
-         do: tool.run(prepared, context, opts)
-  end
-
   test "reads and writes only bounded workspace paths", %{root: root, context: context} do
     assert {:ok, %{bytes_before: 0, bytes_after: 6}} =
-             prepared_run(WriteFile, %{"path" => "sample.txt", "content" => "abcdef"}, context)
+             Alto.Tool.run(WriteFile, %{"path" => "sample.txt", "content" => "abcdef"}, context)
 
     assert {:ok, %{content: "bcd", truncated: true}} =
-             ReadFile.run(%{"path" => "sample.txt", "offset" => 1, "limit" => 3}, context)
+             Alto.Tool.run(
+               ReadFile,
+               %{"path" => "sample.txt", "offset" => 1, "limit" => 3},
+               context
+             )
 
     for offset <- [6, 9] do
       assert {:ok, %{content: "", truncated: false}} =
-               ReadFile.run(%{"path" => "sample.txt", "offset" => offset}, context)
+               Alto.Tool.run(ReadFile, %{"path" => "sample.txt", "offset" => offset}, context)
     end
 
     assert File.read!(Path.join(root, "sample.txt")) == "abcdef"
 
     assert {:error, {:path_outside_workspace, "../outside.txt"}} =
-             prepared_run(WriteFile, %{"path" => "../outside.txt", "content" => "no"}, context)
+             Alto.Tool.run(WriteFile, %{"path" => "../outside.txt", "content" => "no"}, context)
   end
 
   test "host-configured write limits apply during preparation and stay frozen", %{
     context: context
   } do
-    assert {:error, {:content_too_large, 3}} =
-             prepared_run(WriteFile, %{"path" => "too.txt", "content" => "1234"}, context,
+    assert {:error, %NimbleOptions.ValidationError{key: :content}} =
+             Alto.Tool.run(WriteFile, %{"path" => "too.txt", "content" => "1234"}, context,
                max_bytes: 3
              )
 
     assert {:ok, prepared, _details} =
-             WriteFile.prepare(%{"path" => "ok.txt", "content" => "1234"}, context, max_bytes: 4)
+             Alto.Tool.prepare(WriteFile, %{"path" => "ok.txt", "content" => "1234"}, context,
+               max_bytes: 4
+             )
 
     assert {:ok, %{bytes_after: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
 
-    assert {:error, {:invalid_write_options, _}} =
-             prepared_run(WriteFile, %{}, context, max_bytes: 0)
+    assert {:error, %NimbleOptions.ValidationError{key: :max_bytes}} =
+             Alto.Tool.run(WriteFile, %{}, context, max_bytes: 0)
   end
 
   test "host-configured edit limits bound files, replacements, and edit counts", %{
@@ -82,23 +83,23 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "edit.txt"), "abcdef")
 
     assert {:error, {:file_too_large, 3}} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "b"}]},
                context,
                max_file_bytes: 3
              )
 
-    assert {:error, {:replacement_too_large, 1}} =
-             prepared_run(
+    assert {:error, %NimbleOptions.ValidationError{key: :edits}} =
+             Alto.Tool.run(
                EditFile,
                %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "long"}]},
                context,
                max_replacement_bytes: 1
              )
 
-    assert {:error, {:too_many_edits, 1}} =
-             prepared_run(
+    assert {:error, %NimbleOptions.ValidationError{key: :edits}} =
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "edit.txt",
@@ -111,8 +112,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                max_edits: 1
              )
 
-    assert {:error, {:invalid_edit_options, _}} =
-             prepared_run(EditFile, %{}, context, max_input_bytes: 0)
+    assert {:error, %NimbleOptions.ValidationError{key: :max_input_bytes}} =
+             Alto.Tool.run(EditFile, %{}, context, max_input_bytes: 0)
   end
 
   test "edit schema and runtime require the canonical edits list", %{context: context} do
@@ -120,8 +121,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert parameters.required == ["path", "edits"]
     assert Map.keys(parameters.properties) |> Enum.sort() == [:edits, :path]
 
-    assert {:error, :edits_must_be_nonempty_list} =
-             prepared_run(
+    assert {:error, :unknown_tool_argument} =
+             Alto.Tool.run(
                EditFile,
                %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
                context
@@ -135,10 +136,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "large.txt"), "needle\n" <> String.duplicate("x", 20))
 
     assert {:ok, %{matches: [], scanned_files: 0}} =
-             SearchFiles.run(%{"query" => "needle"}, context, max_file_bytes: 3)
+             Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, max_file_bytes: 3)
 
     assert {:ok, %{matches: [%{text: text}]}} =
-             SearchFiles.run(%{"query" => "needle"}, context, max_line_graphemes: 3)
+             Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, max_line_graphemes: 3)
 
     assert text == "nee…"
   end
@@ -151,18 +152,18 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "b.txt"), "needle\n")
 
     assert {:ok, %{scanned_files: 1, truncated: true}} =
-             SearchFiles.run(%{"query" => "needle"}, context, max_files: 1)
+             Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, max_files: 1)
 
     assert {:ok, %{scanned_files: 0, truncated: true}} =
-             SearchFiles.run(%{"query" => "needle"}, context, max_entries: 1)
+             Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, max_entries: 1)
 
     assert {:ok, %{matches: matches, truncated: true}} =
-             SearchFiles.run(%{"query" => "needle"}, context, max_matches: 1)
+             Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, max_matches: 1)
 
     assert length(matches) == 1
 
-    assert {:error, {:query_too_large, 2}} =
-             SearchFiles.run(%{"query" => "long"}, context, max_query_bytes: 2)
+    assert {:error, %NimbleOptions.ValidationError{key: :query}} =
+             Alto.Tool.run(SearchFiles, %{"query" => "long"}, context, max_query_bytes: 2)
   end
 
   test "read_file's maximum result stays within the runner's native bound", %{
@@ -172,13 +173,13 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "binary.dat"), :binary.copy(<<255>>, 47_000))
 
     assert {:ok, result} =
-             ReadFile.run(%{"path" => "binary.dat", "limit" => 47_000}, context)
+             Alto.Tool.run(ReadFile, %{"path" => "binary.dat", "limit" => 47_000}, context)
 
     assert result.encoding == "base64"
     assert :erlang.external_size(result) <= 64_000
 
-    assert {:error, {:invalid_range, 0, 47_001}} =
-             ReadFile.run(%{"path" => "binary.dat", "limit" => 47_001}, context)
+    assert {:error, %NimbleOptions.ValidationError{key: :limit}} =
+             Alto.Tool.run(ReadFile, %{"path" => "binary.dat", "limit" => 47_001}, context)
   end
 
   test "rejects symlinks that escape the workspace through any path component", %{
@@ -188,7 +189,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.ln_s!("/etc/passwd", Path.join(root, "escape"))
 
     assert {:error, {:path_outside_workspace, "escape"}} =
-             ReadFile.run(%{"path" => "escape"}, context)
+             Alto.Tool.run(ReadFile, %{"path" => "escape"}, context)
 
     # A symlinked parent directory is equally refused, including chains.
     outside = Path.join(System.tmp_dir!(), "alto-outside-#{System.unique_integer([:positive])}")
@@ -199,24 +200,24 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.ln_s!("linkdir", Path.join(root, "chainedir"))
 
     assert {:error, {:path_outside_workspace, "linkdir/passwd"}} =
-             ReadFile.run(%{"path" => "linkdir/passwd"}, context)
+             Alto.Tool.run(ReadFile, %{"path" => "linkdir/passwd"}, context)
 
     assert {:error, {:path_outside_workspace, "chainedir/passwd"}} =
-             prepared_run(WriteFile, %{"path" => "chainedir/passwd", "content" => "no"}, context)
+             Alto.Tool.run(WriteFile, %{"path" => "chainedir/passwd", "content" => "no"}, context)
   end
 
   test "resolves an internal symlink to its confined target", %{root: root, context: context} do
     File.write!(Path.join(root, "real.txt"), "x")
     File.ln_s!("real.txt", Path.join(root, "internal"))
 
-    assert {:ok, %{content: "x"}} = ReadFile.run(%{"path" => "internal"}, context)
+    assert {:ok, %{content: "x"}} = Alto.Tool.run(ReadFile, %{"path" => "internal"}, context)
   end
 
   test "lists one directory with entry types", %{root: root, context: context} do
     File.write!(Path.join(root, "a.txt"), "a")
     File.mkdir!(Path.join(root, "dir"))
 
-    assert {:ok, %{entries: entries, truncated: false}} = ListFiles.run(%{}, context)
+    assert {:ok, %{entries: entries, truncated: false}} = Alto.Tool.run(ListFiles, %{}, context)
     assert entries == [%{name: "a.txt", type: :regular}, %{name: "dir", type: :directory}]
   end
 
@@ -238,7 +239,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     on_exit(fn -> File.rm(outside) end)
 
     assert {:ok, result} =
-             SearchFiles.run(
+             Alto.Tool.run(
+               SearchFiles,
                %{"query" => "needle", "case_sensitive" => false},
                context
              )
@@ -260,7 +262,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "sample.txt"), lines)
 
     assert {:ok, result} =
-             SearchFiles.run(%{"path" => "sample.txt", "query" => ".*"}, context)
+             Alto.Tool.run(SearchFiles, %{"path" => "sample.txt", "query" => ".*"}, context)
 
     assert length(result.matches) == 100
     assert result.truncated
@@ -275,22 +277,24 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "unicode.txt"), line)
 
     assert {:ok, %{matches: [%{text: text}]}} =
-             SearchFiles.run(%{"path" => "unicode.txt", "query" => "needle"}, context)
+             Alto.Tool.run(SearchFiles, %{"path" => "unicode.txt", "query" => "needle"}, context)
 
     assert String.length(text) == 301
     assert String.ends_with?(text, "…")
   end
 
   test "search validates query and case options", %{context: context} do
-    assert {:error, :query_must_be_nonempty} = SearchFiles.run(%{"query" => ""}, context)
+    assert {:error, %NimbleOptions.ValidationError{key: :query}} =
+             Alto.Tool.run(SearchFiles, %{"query" => ""}, context)
 
-    assert {:error, :case_sensitive_must_be_boolean} =
-             SearchFiles.run(%{"query" => "x", "case_sensitive" => "no"}, context)
+    assert {:error, %NimbleOptions.ValidationError{key: :case_sensitive}} =
+             Alto.Tool.run(SearchFiles, %{"query" => "x", "case_sensitive" => "no"}, context)
   end
 
   test "search backend is selected by configured tool options", %{context: context} do
     assert {:ok, result} =
-             SearchFiles.run(
+             Alto.Tool.run(
+               SearchFiles,
                %{"query" => "needle"},
                context,
                backend: {SearchBackend, label: "ripgrep"}
@@ -310,8 +314,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:ok, _tools, [definition]} = Alto.Tool.Registry.build([{SearchFiles, options}])
     assert definition["function"]["parameters"][:properties][:query][:maxLength] == 6
 
-    assert {:error, {:query_too_large, 6}} =
-             SearchFiles.run(%{"query" => "too long"}, context, options)
+    assert {:error, %NimbleOptions.ValidationError{key: :query}} =
+             Alto.Tool.run(SearchFiles, %{"query" => "too long"}, context, options)
 
     assert {:ok, run} =
              Alto.run(%{"query" => "needle"},
@@ -324,8 +328,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   end
 
   test "search rejects invalid backends before invocation", %{context: context} do
-    assert {:error, {:invalid_capability, Alto.Search.Backend, {String, []}}} =
-             SearchFiles.run(%{"query" => "needle"}, context, backend: String)
+    assert_raise ArgumentError, fn ->
+      Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, backend: String)
+    end
   end
 
   test "edits one unique match atomically and preserves file mode", %{
@@ -337,7 +342,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.chmod!(path, 0o640)
 
     assert {:error, {:ambiguous_match, 2}} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -349,7 +354,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "one two one\n"
 
     assert {:ok, %{replacements: 2}} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -373,7 +378,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "before\n")
 
     assert {:ok, prepared, details} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "before", "new_text" => "after"}]
@@ -410,7 +416,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     ]
 
     for {tool, arguments} <- changes do
-      assert {:ok, prepared, _details} = tool.prepare(arguments, context)
+      assert {:ok, prepared, _details} = Alto.Tool.prepare(tool, arguments, context)
       File.chmod!(first, 0o600)
       assert {:error, {:stale_file, _path}} = tool.run(prepared, context)
       File.chmod!(first, 0o640)
@@ -437,7 +443,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "a b a\n")
 
     assert {:ok, %{replacements: 3, bytes_before: 6, bytes_after: 6}} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -469,12 +475,12 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     }
 
     assert {:error, {:file_too_large, 5}} =
-             EditFile.prepare(arguments, context, max_file_bytes: 5)
+             Alto.Tool.prepare(EditFile, arguments, context, max_file_bytes: 5)
 
     assert File.read!(path) == "aXYZ"
 
     assert {:ok, %{bytes_after: 6, replacements: 2}} =
-             prepared_run(EditFile, arguments, context, max_file_bytes: 6)
+             Alto.Tool.run(EditFile, arguments, context, max_file_bytes: 6)
 
     assert File.read!(path) == "123456"
   end
@@ -487,7 +493,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "abcdef\n")
 
     assert {:error, :overlapping_edits} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -500,7 +506,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert {:error, :text_not_found} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -521,7 +527,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, original)
 
     assert {:ok, %{replacements: 1}} =
-             prepared_run(
+             Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
@@ -542,7 +548,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     replacement = :binary.copy("é", 20_000)
 
     assert {:ok, _prepared, details} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "before", "new_text" => replacement}]
@@ -576,7 +583,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
       end)
 
     assert {:error, {:edit_input_too_large, 1_256_000}} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" =>
@@ -586,8 +594,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                context
              )
 
-    assert {:error, {:replacement_too_large, 256_000}} =
-             EditFile.prepare(
+    assert {:error, %NimbleOptions.ValidationError{key: :edits}} =
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [
@@ -598,7 +607,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert {:error, {:file_too_large, 1_000_000}} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [
@@ -611,7 +621,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "before\n")
 
     assert {:ok, prepared, _details} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "before", "new_text" => "after"}]
@@ -627,7 +638,11 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
   test "prepared writes refuse a target created after approval", %{root: root, context: context} do
     assert {:ok, prepared, details} =
-             WriteFile.prepare(%{"path" => "new.txt", "content" => "approved\n"}, context)
+             Alto.Tool.prepare(
+               WriteFile,
+               %{"path" => "new.txt", "content" => "approved\n"},
+               context
+             )
 
     assert details.preview == %{content: "approved\n", truncated: false}
     File.write!(Path.join(root, "new.txt"), "created by another writer\n")
@@ -646,7 +661,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, original)
 
     assert {:ok, prepared, details} =
-             WriteFile.prepare(%{"path" => "large.txt", "content" => "small"}, context,
+             Alto.Tool.prepare(WriteFile, %{"path" => "large.txt", "content" => "small"}, context,
                max_bytes: 8
              )
 
@@ -669,14 +684,18 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "before")
 
     assert {:ok, write, %{patch: nil}} =
-             WriteFile.prepare(%{"path" => "sample.txt", "content" => "after"}, context,
+             Alto.Tool.prepare(
+               WriteFile,
+               %{"path" => "sample.txt", "content" => "after"},
+               context,
                diff_bytes: 0
              )
 
     assert {:ok, %{patch: nil}} = WriteFile.run(write, context)
 
     assert {:ok, edit, %{patch: nil}} =
-             EditFile.prepare(
+             Alto.Tool.prepare(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "after", "new_text" => "done"}]
@@ -694,7 +713,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     context: context
   } do
     assert {:ok, %{bytes_after: 3}} =
-             prepared_run(WriteFile, %{"path" => "a.txt", "content" => "abc"}, context)
+             Alto.Tool.run(WriteFile, %{"path" => "a.txt", "content" => "abc"}, context)
 
     assert {:ok, ["a.txt"]} = File.ls(root)
   end
@@ -705,7 +724,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.chmod!(path, 0o640)
 
     assert {:ok, %{bytes_after: 3}} =
-             prepared_run(WriteFile, %{"path" => "existing.txt", "content" => "new"}, context)
+             Alto.Tool.run(WriteFile, %{"path" => "existing.txt", "content" => "new"}, context)
 
     assert File.read!(path) == "new"
     assert {:ok, %{mode: mode}} = File.stat(path)
@@ -713,7 +732,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   end
 
   test "write_file rejects content that is not valid UTF-8", %{context: context} do
-    assert {:error, :content_is_not_utf8} =
-             prepared_run(WriteFile, %{"path" => "x.bin", "content" => <<0xFF, 0xFE>>}, context)
+    assert {:error, %NimbleOptions.ValidationError{key: :content}} =
+             Alto.Tool.run(WriteFile, %{"path" => "x.bin", "content" => <<0xFF, 0xFE>>}, context)
   end
 end

@@ -14,7 +14,7 @@ defmodule Alto.Runner.Execution.Tool do
 
   @doc "Prepare one invocation and return the opaque value and display-safe details."
   def prepare(%{module: module, opts: opts}, arguments, caps) do
-    if function_exported?(module, :prepare, 3) do
+    if function_exported?(module, :prepare, 3) or function_exported?(module, :arguments, 1) do
       outcome =
         Call.run(
           fn -> Alto.Tool.prepare(module, arguments, Alto.Tool.Context.from_run(caps), opts) end,

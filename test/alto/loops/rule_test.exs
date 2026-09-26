@@ -167,12 +167,12 @@ defmodule Alto.Loops.RuleTest do
       context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
 
       assert {:ok, %{id: id, revision: 1}} =
-               Alto.Tools.QueuePut.run(%{"key" => "k", "payload" => %{v: 1}}, context,
+               Alto.Tool.run(Alto.Tools.QueuePut, %{"key" => "k", "payload" => %{v: 1}}, context,
                  queue: queue
                )
 
       assert {:ok, %{id: ^id, revision: 2}} =
-               Alto.Tools.QueuePut.run(%{"key" => "k", "payload" => %{v: 2}}, context,
+               Alto.Tool.run(Alto.Tools.QueuePut, %{"key" => "k", "payload" => %{v: 2}}, context,
                  queue: queue
                )
 
@@ -183,7 +183,7 @@ defmodule Alto.Loops.RuleTest do
       context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
 
       assert {:ok, %{cancelled: false}} =
-               Alto.Tools.QueueCancel.run(%{"key" => "ghost"}, context, queue: queue)
+               Alto.Tool.run(Alto.Tools.QueueCancel, %{"key" => "ghost"}, context, queue: queue)
     end
   end
 end

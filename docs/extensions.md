@@ -66,6 +66,24 @@ run-only tool receives the transformed argument map through the wrapper's
 preparation boundary. Keep transforms deterministic and local; authorization
 should describe the value that will be executed.
 
+Built-in argument contracts use `use Alto.Tool, arguments: true` and an
+`arguments(opts)` callback returning `{description, nimble_options_schema}`.
+That declaration supplies both the model-visible schema and validation before
+domain preparation. Required fields, defaults, types and configured bounds have
+one definition; unknown keys are rejected without creating atoms from input.
+The small `Alto.Tool.Arguments` projection supports the types used by these
+tools. Custom and remote tools can continue supplying their own `schema/1`.
+Text contracts enforce UTF-8 byte limits; the schema's character ceiling is a
+conservative projection, so multibyte strings can reach the byte limit sooner.
+
+Direct hosts must call `Alto.Tool.prepare(module, arguments, context, opts)`
+before invoking `module.run(prepared, context, opts)`. Module `prepare/3` and
+`run/3` are callbacks inside that boundary. A transform crosses the same boundary
+after changing input. File snapshots and other opaque prepared values pass
+unchanged to execution; they are not interpreted as argument maps again.
+`Alto.Tool.run/4` combines preparation and execution for direct hosts. It runs
+callbacks in the caller; runner execution supplies approval and supervision.
+
 ## Context estimates
 
 `Alto.Context.Window` accepts a unary estimator. `Alto.Context.Estimator` adapts

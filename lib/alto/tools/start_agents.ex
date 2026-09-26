@@ -12,6 +12,9 @@ defmodule Alto.Tools.StartAgents do
   end
 
   @impl true
+  defdelegate arguments(opts), to: Alto.Tools.SpawnAgents
+
+  @impl true
   defdelegate prepare(arguments, context, opts), to: Alto.Tools.SpawnAgents
   @impl true
   def run(_, _, _), do: {:error, :delegation_requires_execution_host}

@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,728 lines**, a **17.0% reduction**, with **5,270 lines remaining**.
+Current: **33,622 lines**, a **17.3% reduction**, with **5,164 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -47,17 +47,20 @@ changes and historical test counts. Contracts belong in the component guides.
 - File writes and edits share preparation and commit. File/diff previews share
   bounded iodata traversal. Command output retains one bounded first/last buffer.
   Context policies and tokenizer adapters use existing tuple/function contracts.
+  Seventeen tools share argument contracts for schema projection, defaults and
+  validation; domain callbacks retain file freezing, Git confinement and authority.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-The latest cleanup removes **26 net production lines** by using native input
-requests and one reader-ownership value across memory and file transports.
-The preceding ledger change removed **77 lines** through shared field validation
-and primitive transition composition; CAS fencing and public recovery views
-remain intact. The separately requested local-worktree feature adds **426
-production lines**, reusing Git bounds, patch integration and workspace recovery.
-It is included in the current total without resetting the baseline.
+The latest cleanup removes **106 net production lines** by declaring tool inputs
+once and validating them at the shared preparation boundary. This replaces
+separate scalar/nested validators, defaults and schemas, including EditFile's
+per-edit validation workflow. The new shared implementation is included in that
+net count; this pass does not remove source documentation blocks. Input ownership
+and ledger transition composition removed 26 and 77 lines in preceding passes.
+The separately requested worktree feature added 426 production lines, included
+in the current total without resetting the baseline.
 No dependency or migration was introduced. Earlier cleanup introduced one SSE
 library to replace two parsers; subsequent passes have added no dependencies.
 
@@ -84,8 +87,11 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The combined cleanup and local-worktree integration pass **1,082 core tests**
-and **144 TUI tests** with application modules preloaded.
+The current code passes **1,086 core tests** and **144 TUI tests** with application
+modules preloaded. The tool-contract change also passes 131 focused tests for
+validation, file/Git behavior, delegation and messaging. New boundary tests verify
+that invalid nested input never reaches domain callbacks and transformed values
+remain frozen through execution.
 Ordinary full-suite runs hit tool-start timing assertions on both the refactor
 and unchanged HEAD; captured workers were waiting in BEAM's code loader. No
 assertion timeout or production startup behavior was changed. Reproduce the

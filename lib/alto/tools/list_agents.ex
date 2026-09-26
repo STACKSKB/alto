@@ -1,19 +1,14 @@
 defmodule Alto.Tools.ListAgents do
   @moduledoc "Discover agent addresses, parent relationships and status in this tree."
-  use Alto.Tool, name: :list_agents, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :list_agents, execution_mode: :parallel, approval: :never, arguments: true
   @impl true
-  def schema(_),
-    do:
-      Alto.Tool.object_schema(
-        "List agents in this execution tree, including your own address and parent. Use agent_id for messaging; labels can repeat.",
-        %{},
-        []
-      )
-
-  @impl true
-  def run(args, context, _) when is_map(args) and map_size(args) == 0 do
-    with {:ok, agents} <- Alto.Messaging.list(context.messaging), do: {:ok, %{agents: agents}}
+  def arguments(_opts) do
+    {"List agents in this execution tree, including your own address and parent. Use agent_id for messaging; labels can repeat.",
+     []}
   end
 
-  def run(_, _, _), do: {:error, :invalid_arguments}
+  @impl true
+  def run(_args, context, _) do
+    with {:ok, agents} <- Alto.Messaging.list(context.messaging), do: {:ok, %{agents: agents}}
+  end
 end

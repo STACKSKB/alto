@@ -31,15 +31,17 @@ defmodule Alto.Tool do
   A prepared tool returns an opaque value for `run` plus a map safe to
   show to the approval policy. Preparation may inspect local state to
   resolve names and policy, but must not produce the external effect being
-  authorized. Without this callback, `run` receives the original arguments.
+  authorized. Without this callback, `run` receives arguments with contract defaults.
   """
   @callback prepare(arguments :: map(), Context.t(), keyword()) ::
               {:ok, prepared :: term(), approval_details()} | {:error, term()}
 
-  @doc "Execute the prepared value, or original arguments when preparation is omitted. Return `{:unknown, reason}` when dispatch occurred but commit cannot be established."
+  @doc "Execute the prepared value, or validated arguments when preparation is omitted. Return `{:unknown, reason}` when dispatch occurred but commit cannot be established."
   @callback run(value :: term(), Context.t(), keyword()) :: result()
 
-  @optional_callbacks approval: 1, prepare: 3
+  @doc "Optional built-in argument contract. Tools opting in validate at `Alto.Tool.prepare/4`; their prepare/run functions are callbacks receiving validated or frozen input."
+  @callback arguments(keyword()) :: {String.t(), keyword()}
+  @optional_callbacks approval: 1, prepare: 3, arguments: 1
 
   @doc """
   Declare constant metadata while implementing schema and execution normally.
@@ -50,9 +52,18 @@ defmodule Alto.Tool do
   implement the behaviour callbacks directly instead.
   """
   defmacro __using__(opts) do
-    opts = Keyword.validate!(opts, [:name, :execution_mode, :approval])
+    opts = Keyword.validate!(opts, [:name, :execution_mode, :approval, :arguments])
+
+    schema =
+      if Keyword.get(opts, :arguments, false) do
+        quote do
+          @impl true
+          def schema(opts \\ []), do: Alto.Tool.Arguments.schema(arguments(opts))
+        end
+      end
 
     quote do
+      unquote(schema)
       @behaviour Alto.Tool
       @impl true
       def name(_opts \\ []), do: unquote(Keyword.fetch!(opts, :name))
@@ -78,10 +89,11 @@ defmodule Alto.Tool do
   end
 
   @doc "Prepare a tool input and validate its return contract without executing it."
-  def prepare(module, arguments, context, opts) do
+  def prepare(module, arguments, context, opts \\ []) do
     Code.ensure_loaded!(module)
 
-    with true <- function_exported?(module, :run, 3) or {:error, {:invalid_tool, module}} do
+    with true <- function_exported?(module, :run, 3) or {:error, {:invalid_tool, module}},
+         {:ok, arguments} <- validate_arguments(module, arguments, opts) do
       result =
         if function_exported?(module, :prepare, 3),
           do: module.prepare(arguments, context, opts),
@@ -94,5 +106,19 @@ defmodule Alto.Tool do
         other -> {:error, {:invalid_tool_prepare_return, other}}
       end
     end
+  end
+
+  @doc "Prepare and execute in the caller. Runner hosts separately supply approval, supervision, and cancellation."
+  def run(module, arguments, context, opts \\ []) do
+    with {:ok, prepared, _details} <- prepare(module, arguments, context, opts),
+         do: module.run(prepared, context, opts)
+  end
+
+  defp validate_arguments(module, arguments, opts) do
+    if function_exported?(module, :arguments, 1),
+      do: Alto.Tool.Arguments.validate(arguments, elem(module.arguments(opts), 1)),
+      else: {:ok, arguments}
+  rescue
+    error in NimbleOptions.ValidationError -> {:error, error}
   end
 end

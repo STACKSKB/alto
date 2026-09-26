@@ -1,7 +1,13 @@
 defmodule Alto.Tools.WriteFile do
   @moduledoc "Opt-in, bounded, workspace-confined whole-file writes."
 
-  use Alto.Tool, name: :write_file, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :write_file,
+    execution_mode: :exclusive,
+    approval: :required,
+    arguments: true
+
+  alias Alto.Tool.Arguments
 
   alias Alto.Tool.Context
   alias Alto.Tools.FileChange
@@ -14,33 +20,21 @@ defmodule Alto.Tools.WriteFile do
   ]
 
   @impl true
-  def schema(opts \\ []) when is_list(opts) do
+  def arguments(opts) do
     limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
-    Alto.Tool.object_schema(
-      "Create or replace a UTF-8 file inside the workspace. Parent directories must exist.",
-      %{
-        path: %{
-          type: "string",
-          description: "Workspace-relative or in-workspace absolute path."
-        },
-        content: %{type: "string", description: "Complete new file content."}
-      },
-      ["path", "content"]
-    )
-    |> put_in([:parameters, :properties, :content, :maxLength], limits.max_bytes)
+    {"Create or replace a UTF-8 file inside the workspace. Parent directories must exist.",
+     [
+       path: [type: :string, required: true],
+       content: [type: Arguments.text(0, limits.max_bytes), required: true]
+     ]}
   end
 
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) when is_list(opts) do
     with {:ok, limits} <-
            Alto.Tool.Options.validate(opts, @options_schema, :invalid_write_options),
-         content = Map.get(arguments, "content"),
-         true <- is_binary(content) or {:error, :content_must_be_string},
-         true <- String.valid?(content) or {:error, :content_is_not_utf8},
-         true <-
-           byte_size(content) <= limits.max_bytes or
-             {:error, {:content_too_large, limits.max_bytes}} do
+         content = arguments["content"] do
       FileChange.prepare(
         :write_file,
         Map.get(arguments, "path"),

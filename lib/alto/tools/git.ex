@@ -88,7 +88,7 @@ end
 defmodule Alto.Tools.GitInspect do
   @moduledoc "Bounded, read-only access to the installed Git CLI."
 
-  use Alto.Tool, name: :git_inspect, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :git_inspect, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Tool.Context
   alias Alto.Tools.Git
@@ -96,20 +96,17 @@ defmodule Alto.Tools.GitInspect do
   @actions ~w(status diff log show branches blame)
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Inspect repository status, diffs, history, refs, or blame through Git.",
-      %{
-        action: %{type: "string", enum: @actions},
-        ref: %{type: "string", description: "Revision for show, or starting revision for log."},
-        path: %{type: "string", description: "Optional repository-relative literal path."},
-        staged: %{type: "boolean", description: "For diff, inspect the staged changes."},
-        limit: %{type: "integer", minimum: 1, maximum: 100},
-        line_start: %{type: "integer", minimum: 1},
-        line_end: %{type: "integer", minimum: 1}
-      },
-      ["action"]
-    )
+  def arguments(_opts) do
+    {"Inspect repository status, diffs, history, refs, or blame through Git.",
+     [
+       action: [type: {:in, @actions}, required: true],
+       ref: [type: :string, doc: "Revision for show, or starting revision for log."],
+       path: [type: :string, doc: "Optional repository-relative literal path."],
+       staged: [type: :boolean, default: false, doc: "For diff, inspect staged changes."],
+       limit: [type: {:in, 1..100}, default: 20],
+       line_start: [type: :pos_integer],
+       line_end: [type: :pos_integer]
+     ]}
   end
 
   @impl true
@@ -129,24 +126,17 @@ defmodule Alto.Tools.GitInspect do
   defp args(%{"action" => "branches"}), do: {:ok, ["branch", "--all", "--verbose", "--no-abbrev"]}
 
   defp args(%{"action" => "diff"} = input) do
-    base = ["diff"] ++ if(Map.get(input, "staged", false), do: ["--staged"], else: [])
+    base = ["diff"] ++ if(input["staged"], do: ["--staged"], else: [])
     append_path(base, Map.get(input, "path"))
   end
 
   defp args(%{"action" => "log"} = input) do
-    limit = Map.get(input, "limit", 20)
-
-    if is_integer(limit) and limit in 1..100 do
-      with {:ok, base} <-
-             optional_ref(
-               ["log", "--decorate", "--oneline", "-n", Integer.to_string(limit)],
-               input
-             ) do
-        append_path(base, Map.get(input, "path"))
-      end
-    else
-      {:error, {:invalid_git_limit, limit}}
-    end
+    with {:ok, base} <-
+           optional_ref(
+             ["log", "--decorate", "--oneline", "-n", Integer.to_string(input["limit"])],
+             input
+           ),
+         do: append_path(base, input["path"])
   end
 
   defp args(%{"action" => "show", "ref" => ref} = input) do
@@ -161,11 +151,8 @@ defmodule Alto.Tools.GitInspect do
     end
   end
 
-  defp args(%{"action" => action}) when action in @actions,
+  defp args(%{"action" => action}),
     do: {:error, {:missing_git_argument, action}}
-
-  defp args(%{"action" => action}), do: {:error, {:unknown_git_action, action}}
-  defp args(_input), do: {:error, :git_action_required}
 
   defp optional_ref(args, %{"ref" => ref}) do
     with {:ok, ref} <- Git.ref(ref), do: {:ok, args ++ [ref]}
@@ -179,24 +166,24 @@ defmodule Alto.Tools.GitInspect do
     with {:ok, path} <- Git.pathspec(path), do: {:ok, args ++ ["--", path]}
   end
 
-  defp blame_lines(%{"line_start" => first, "line_end" => last})
-       when is_integer(first) and is_integer(last) and first > 0 and last >= first,
-       do: {:ok, ["-L", "#{first},#{last}"]}
+  defp blame_lines(%{"line_start" => first, "line_end" => last}) when last >= first,
+    do: {:ok, ["-L", "#{first},#{last}"]}
 
-  defp blame_lines(input) do
-    if Map.has_key?(input, "line_start") or Map.has_key?(input, "line_end") do
-      {:error, :invalid_blame_range}
-    else
-      {:ok, []}
-    end
-  end
+  defp blame_lines(%{"line_start" => _}), do: {:error, :invalid_blame_range}
+  defp blame_lines(%{"line_end" => _}), do: {:error, :invalid_blame_range}
+  defp blame_lines(_), do: {:ok, []}
 end
 
 defmodule Alto.Tools.GitMutate do
   @moduledoc "Narrow, approval-required mutations through the installed Git CLI."
 
-  use Alto.Tool, name: :git_mutate, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :git_mutate,
+    execution_mode: :exclusive,
+    approval: :required,
+    arguments: true
 
+  alias Alto.Tool.Arguments
   alias Alto.Command
   alias Alto.Tool.Context
   alias Alto.Tools.Git
@@ -204,17 +191,14 @@ defmodule Alto.Tools.GitMutate do
   @actions ~w(stage unstage commit create_branch switch_branch)
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
-      %{
-        action: %{type: "string", enum: @actions},
-        paths: %{type: "array", items: %{type: "string"}, minItems: 1, maxItems: 200},
-        message: %{type: "string", minLength: 1, maxLength: 10_000},
-        branch: %{type: "string", minLength: 1, maxLength: 256}
-      },
-      ["action"]
-    )
+  def arguments(_opts) do
+    {"Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
+     [
+       action: [type: {:in, @actions}, required: true],
+       paths: [type: Arguments.list(:string, 1, 200)],
+       message: [type: Arguments.text(1, 10_000)],
+       branch: [type: Arguments.text(1, 256)]
+     ]}
   end
 
   @impl true
@@ -256,9 +240,8 @@ defmodule Alto.Tools.GitMutate do
   defp args(%{"action" => "unstage", "paths" => paths}),
     do: path_args(["restore", "--staged"], paths)
 
-  defp args(%{"action" => "commit", "message" => message})
-       when is_binary(message) and message != "" and byte_size(message) <= 10_000,
-       do: {:ok, ["commit", "-m", message]}
+  defp args(%{"action" => "commit", "message" => message}),
+    do: {:ok, ["commit", "-m", message]}
 
   defp args(%{"action" => "create_branch", "branch" => branch}) do
     with {:ok, branch} <- Git.ref(branch), do: {:ok, ["switch", "-c", branch]}
@@ -268,17 +251,12 @@ defmodule Alto.Tools.GitMutate do
     with {:ok, branch} <- Git.ref(branch), do: {:ok, ["switch", branch]}
   end
 
-  defp args(%{"action" => action}) when action in @actions,
+  defp args(%{"action" => action}),
     do: {:error, {:missing_git_argument, action}}
 
-  defp args(%{"action" => action}), do: {:error, {:unknown_git_action, action}}
-  defp args(_input), do: {:error, :git_action_required}
-
-  defp path_args(prefix, paths) when is_list(paths) and paths != [] and length(paths) <= 200 do
+  defp path_args(prefix, paths) do
     with {:ok, safe} <- Alto.Result.traverse(paths, &Git.pathspec/1) do
       {:ok, prefix ++ ["--" | safe]}
     end
   end
-
-  defp path_args(_prefix, paths), do: {:error, {:invalid_git_paths, paths}}
 end

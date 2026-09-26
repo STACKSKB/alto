@@ -59,7 +59,7 @@ defmodule Alto.ToolDisplayTest do
   end
 
   defp run_tool(tool, arguments, context) do
-    with {:ok, prepared, _details} <- tool.prepare(arguments, context, []),
+    with {:ok, prepared, _details} <- Alto.Tool.prepare(tool, arguments, context, []),
          do: tool.run(prepared, context, [])
   end
 

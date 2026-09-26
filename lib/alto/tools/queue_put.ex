@@ -10,32 +10,20 @@ defmodule Alto.Tools.QueuePut do
   that talks to an external system.
   """
 
-  use Alto.Tool, name: :queue_put, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :queue_put, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Queue
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Idempotently add or update a record in a durable queue, keyed by a dedup key.",
-      %{
-        key: %{type: "string", description: "Dedup key, e.g. the record id."},
-        payload: %{type: "object", description: "The record payload."}
-      },
-      ["key"]
-    )
+  def arguments(_opts) do
+    {"Idempotently add or update a record in a durable queue, keyed by a dedup key.",
+     [key: [type: :string, required: true], payload: [type: {:map, :any, :any}, default: %{}]]}
   end
 
   @impl true
   def run(arguments, _context, opts \\ []) do
     queue = Keyword.get(opts, :queue, Alto.Queue)
 
-    case Map.get(arguments, "key") do
-      key when is_binary(key) ->
-        Queue.request(queue, {:put, key, Map.get(arguments, "payload", %{}), []})
-
-      _other ->
-        {:error, :invalid_key}
-    end
+    Queue.request(queue, {:put, arguments["key"], arguments["payload"], []})
   end
 end

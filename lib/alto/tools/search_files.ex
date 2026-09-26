@@ -1,7 +1,8 @@
 defmodule Alto.Tools.SearchFiles do
   @moduledoc "Bounded, workspace-confined recursive literal text search."
 
-  use Alto.Tool, name: :search_files, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :search_files, execution_mode: :parallel, approval: :never, arguments: true
+  alias Alto.Tool.Arguments
   @behaviour Alto.Search.Backend
 
   alias Alto.Tool.Context
@@ -22,41 +23,25 @@ defmodule Alto.Tools.SearchFiles do
   ]
 
   @impl true
-  def schema(opts \\ []) when is_list(opts) do
+  def arguments(opts) do
     limits = validate_options!(opts)
 
-    Alto.Tool.object_schema(
-      "Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
-      %{
-        query: %{
-          type: "string",
-          minLength: 1,
-          maxLength: limits.max_query_bytes,
-          description: "Literal text to find; this is not a regular expression."
-        },
-        path: %{
-          type: "string",
-          description: "File or directory to search; defaults to the workspace root."
-        },
-        case_sensitive: %{
-          type: "boolean",
-          description: "Whether letter case must match; defaults to true."
-        }
-      },
-      ["query"]
-    )
+    {"Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
+     [
+       query: [type: Arguments.text(1, limits.max_query_bytes), required: true],
+       path: [type: :string, default: "."],
+       case_sensitive: [type: :boolean, default: true]
+     ]}
   end
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do
     query = Map.get(arguments, "query")
-    path = Map.get(arguments, "path", ".")
-    case_sensitive? = Map.get(arguments, "case_sensitive", true)
+    path = arguments["path"]
+    case_sensitive? = arguments["case_sensitive"]
 
-    with :ok <- validate_case_sensitive(case_sensitive?),
-         {:ok, limits} <- validate_options(opts),
+    with {:ok, limits} <- validate_options(opts),
          {backend, backend_opts} <- limits.backend,
-         :ok <- validate_query(query, limits),
          result <-
            backend.search(
              %{query: query, path: path, case_sensitive: case_sensitive?},
@@ -98,25 +83,6 @@ defmodule Alto.Tools.SearchFiles do
 
   defp normalize_backend_result(other, backend),
     do: {:error, {:invalid_search_backend_return, backend, other}}
-
-  defp validate_query(query, limits) do
-    cond do
-      not is_binary(query) or query == "" ->
-        {:error, :query_must_be_nonempty}
-
-      byte_size(query) > limits.max_query_bytes ->
-        {:error, {:query_too_large, limits.max_query_bytes}}
-
-      not String.valid?(query) ->
-        {:error, :query_must_be_utf8}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_case_sensitive(value) when value in [true, false], do: :ok
-  defp validate_case_sensitive(_value), do: {:error, :case_sensitive_must_be_boolean}
 
   defp search(path, type, query, case_sensitive?, cwd, limits)
        when type in [:regular, :directory] do

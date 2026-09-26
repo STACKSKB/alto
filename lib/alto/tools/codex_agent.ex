@@ -7,37 +7,32 @@ defmodule Alto.Tools.CodexAgent do
   model-request budget. Register this capability explicitly and keep it hidden
   from the parent model when using it through a rule-loop child.
   """
-  use Alto.Tool, name: :codex_agent, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :codex_agent,
+    execution_mode: :exclusive,
+    approval: :required,
+    arguments: true
+
+  alias Alto.Tool.Arguments
   alias Alto.Codex.{AppServer.Client, Backend}
 
   @impl true
-  def schema(_opts) do
-    Alto.Tool.object_schema(
-      "Run a read-only Codex agent task with an optional model selection.",
-      %{task: %{type: "string"}, model: %{type: "string"}},
-      ["task"]
-    )
+  def arguments(opts) do
+    {"Run a read-only Codex agent task with an optional model selection.",
+     [
+       task: [type: Arguments.text(1, 64_000), required: true],
+       model: [
+         type: {:or, [Arguments.text(1, 256), {:in, [nil]}]},
+         default: Keyword.get(opts, :model)
+       ]
+     ]}
   end
 
   @impl true
-  def prepare(%{"task" => task} = arguments, _context, opts)
-      when is_binary(task) and byte_size(task) in 1..64_000 do
-    model = Map.get(arguments, "model", Keyword.get(opts, :model))
-
-    if Map.keys(arguments) -- ["task", "model"] == [] and
-         (is_nil(model) or (is_binary(model) and byte_size(model) in 1..256)),
-       do:
-         {:ok, %{task: task, model: model},
-          %{
-            backend: "codex",
-            model: model,
-            sandbox: "read-only",
-            internal_model_budget: "external"
-          }},
-       else: {:error, :invalid_agent_task}
+  def prepare(%{"task" => task, "model" => model}, _context, _opts) do
+    {:ok, %{task: task, model: model},
+     %{backend: "codex", model: model, sandbox: "read-only", internal_model_budget: "external"}}
   end
-
-  def prepare(_, _, _), do: {:error, :invalid_agent_task}
 
   @impl true
   def run(%{task: task, model: model}, context, opts) do
@@ -212,7 +207,9 @@ defmodule Alto.Tools.CodexAgent do
         nil when map_size(turn.calls) < 256 ->
           outcome =
             with :ok <- Alto.Runner.Budget.take(turn.context.budget),
-                 do: messaging_module(name).run(args, turn.context, [])
+                 {:ok, prepared, _} <-
+                   Alto.Tool.prepare(messaging_module(name), args, turn.context, []),
+                 do: messaging_module(name).run(prepared, turn.context, [])
 
           {success, value} =
             case outcome do

@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ReadFile do
   @moduledoc "Bounded, workspace-confined file reads."
 
-  use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -13,38 +13,37 @@ defmodule Alto.Tools.ReadFile do
   @options_schema [max_bytes: [type: :pos_integer, default: 47_000]]
 
   @impl true
-  def schema(opts \\ []) when is_list(opts) do
+  def arguments(opts) do
     limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
-    Alto.Tool.object_schema(
-      "Read a bounded byte range from a file inside the workspace.",
-      %{
-        path: %{
-          type: "string",
-          description: "Workspace-relative or in-workspace absolute path."
-        },
-        offset: %{type: "integer", minimum: 0, description: "Byte offset; defaults to 0."},
-        limit: %{
-          type: "integer",
-          minimum: 1,
-          maximum: limits.max_bytes,
-          description: "Maximum bytes to read."
-        }
-      },
-      ["path"]
-    )
+    {"Read a bounded byte range from a file inside the workspace.",
+     [
+       path: [
+         type: :string,
+         required: true,
+         doc: "Workspace-relative or in-workspace absolute path."
+       ],
+       offset: [
+         type: :non_neg_integer,
+         default: 0,
+         doc: "Byte offset from the start of the file."
+       ],
+       limit: [
+         type: {:in, 1..limits.max_bytes},
+         default: limits.max_bytes,
+         doc: "Maximum bytes to read."
+       ]
+     ]}
   end
 
   @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
+  def run(arguments, %Context{} = context, _opts \\ []) do
     path = Map.get(arguments, "path")
-    offset = Map.get(arguments, "offset", 0)
+    offset = arguments["offset"]
 
-    with {:ok, limits} <-
-           Alto.Tool.Options.validate(opts, @options_schema, :invalid_read_file_options),
-         limit <- Map.get(arguments, "limit", limits.max_bytes),
-         :ok <- valid_range(offset, limit, limits.max_bytes),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+    limit = arguments["limit"]
+
+    with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, content} <- Alto.BoundedFile.range(resolved, offset, limit + 1) do
       {:ok, encode_content(path, offset, content, limit)}
     end
@@ -68,11 +67,4 @@ defmodule Alto.Tools.ReadFile do
       }
     end
   end
-
-  defp valid_range(offset, limit, max_bytes)
-       when is_integer(offset) and offset >= 0 and is_integer(limit) and limit > 0 and
-              limit <= max_bytes,
-       do: :ok
-
-  defp valid_range(offset, limit, _max_bytes), do: {:error, {:invalid_range, offset, limit}}
 end

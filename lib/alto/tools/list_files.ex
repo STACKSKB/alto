@@ -1,7 +1,7 @@
 defmodule Alto.Tools.ListFiles do
   @moduledoc "Bounded, workspace-confined directory listings."
 
-  use Alto.Tool, name: :list_files, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :list_files, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -9,24 +9,16 @@ defmodule Alto.Tools.ListFiles do
   @options_schema [max_entries: [type: :pos_integer, default: 500]]
 
   @impl true
-  def schema(opts \\ []) when is_list(opts) do
-    limits = Alto.Tool.Options.validate!(opts, @options_schema)
+  def arguments(opts) do
+    _ = Alto.Tool.Options.validate!(opts, @options_schema)
 
-    Alto.Tool.object_schema(
-      "List one directory inside the workspace (non-recursive and bounded).",
-      %{
-        path: %{
-          type: "string",
-          description:
-            "Directory path; defaults to the workspace root (up to #{limits.max_entries} entries)."
-        }
-      }
-    )
+    {"List one directory inside the workspace (non-recursive and bounded).",
+     [path: [type: :string, default: ".", doc: "Directory path; defaults to the workspace root."]]}
   end
 
   @impl true
   def run(arguments, %Context{} = context, opts \\ []) do
-    path = Map.get(arguments, "path", ".")
+    path = arguments["path"]
 
     with {:ok, limits} <-
            Alto.Tool.Options.validate(opts, @options_schema, :invalid_list_files_options),

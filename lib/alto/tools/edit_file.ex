@@ -1,7 +1,13 @@
 defmodule Alto.Tools.EditFile do
   @moduledoc "Opt-in, atomic, workspace-confined exact-text edits."
 
-  use Alto.Tool, name: :edit_file, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :edit_file,
+    execution_mode: :exclusive,
+    approval: :required,
+    arguments: true
+
+  alias Alto.Tool.Arguments
 
   alias Alto.Tool.Context
   alias Alto.Tools.FileChange
@@ -21,40 +27,26 @@ defmodule Alto.Tools.EditFile do
   ]
 
   @impl true
-  def schema(opts \\ []) when is_list(opts) do
+  def arguments(opts) do
     limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
-    edit = %{
-      type: "object",
-      properties: %{
-        old_text: %{type: "string", minLength: 1, description: "Exact text to replace."},
-        new_text: %{type: "string", description: "Replacement text."},
-        replace_all: %{
-          type: "boolean",
-          description: "Replace every exact match; defaults to false."
-        }
-      },
-      required: ["old_text", "new_text"],
-      additionalProperties: false
-    }
-
-    Alto.Tool.object_schema(
-      "Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
-      %{
-        path: %{
-          type: "string",
-          description: "Workspace-relative or in-workspace absolute file path."
-        },
-        edits: %{
-          type: "array",
-          minItems: 1,
-          maxItems: limits.max_edits,
-          items: put_in(edit, [:properties, :new_text, :maxLength], limits.max_replacement_bytes),
-          description: "Exact replacements, all matched against the original file snapshot."
-        }
-      },
-      ["path", "edits"]
-    )
+    {"Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
+     [
+       path: [type: :string, required: true],
+       edits: [
+         type:
+           Arguments.list(
+             Arguments.object(
+               old_text: [type: Arguments.text(1, :infinity), required: true],
+               new_text: [type: Arguments.text(0, limits.max_replacement_bytes), required: true],
+               replace_all: [type: :boolean, default: false]
+             ),
+             1,
+             limits.max_edits
+           ),
+         required: true
+       ]
+     ]}
   end
 
   @impl true
@@ -64,8 +56,11 @@ defmodule Alto.Tools.EditFile do
       when is_map(arguments) and is_list(opts) do
     with {:ok, limits} <-
            Alto.Tool.Options.validate(opts, @options_schema, :invalid_edit_options),
-         {:ok, edits} <- edits(arguments),
-         :ok <- validate_edits(edits, limits) do
+         edits = arguments["edits"],
+         true <-
+           Enum.sum(Enum.map(edits, &(byte_size(&1["old_text"]) + byte_size(&1["new_text"])))) <=
+             limits.max_input_bytes or
+             {:error, {:edit_input_too_large, limits.max_input_bytes}} do
       FileChange.prepare(
         :edit_file,
         Map.get(arguments, "path"),
@@ -85,66 +80,6 @@ defmodule Alto.Tools.EditFile do
   @impl true
   def run(prepared, %Context{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
-
-  defp edits(%{"edits" => edits}) when is_list(edits) and edits != [], do: {:ok, edits}
-  defp edits(_arguments), do: {:error, :edits_must_be_nonempty_list}
-
-  defp validate_edits(edits, limits) when length(edits) > limits.max_edits,
-    do: {:error, {:too_many_edits, limits.max_edits}}
-
-  defp validate_edits(edits, limits) do
-    with {:ok, input_bytes} <- validate_each_edit(edits, limits),
-         true <-
-           input_bytes <= limits.max_input_bytes or
-             {:error, {:edit_input_too_large, limits.max_input_bytes}} do
-      :ok
-    end
-  end
-
-  defp validate_each_edit(edits, limits) do
-    edits
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, 0}, fn {edit, index}, {:ok, total} ->
-      case validate_edit(edit, limits) do
-        {:ok, bytes} -> {:cont, {:ok, total + bytes}}
-        {:error, reason} -> {:halt, {:error, edit_error(index, reason, length(edits))}}
-      end
-    end)
-  end
-
-  defp validate_edit(edit, limits) when is_map(edit) do
-    old_text = Map.get(edit, "old_text")
-    new_text = Map.get(edit, "new_text")
-    replace_all? = Map.get(edit, "replace_all", false)
-
-    cond do
-      not is_binary(old_text) or old_text == "" ->
-        {:error, :old_text_must_be_nonempty}
-
-      not String.valid?(old_text) ->
-        {:error, :old_text_must_be_utf8}
-
-      not is_binary(new_text) ->
-        {:error, :new_text_must_be_string}
-
-      not String.valid?(new_text) ->
-        {:error, :new_text_must_be_utf8}
-
-      byte_size(new_text) > limits.max_replacement_bytes ->
-        {:error, {:replacement_too_large, limits.max_replacement_bytes}}
-
-      replace_all? not in [true, false] ->
-        {:error, :replace_all_must_be_boolean}
-
-      true ->
-        {:ok, byte_size(old_text) + byte_size(new_text)}
-    end
-  end
-
-  defp validate_edit(_edit, _limits), do: {:error, :edit_must_be_object}
-
-  defp edit_error(_index, reason, 1), do: reason
-  defp edit_error(index, reason, _count), do: {:invalid_edit, index, reason}
 
   defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok
   defp validate_size(_size, max_file_bytes), do: {:error, {:file_too_large, max_file_bytes}}
