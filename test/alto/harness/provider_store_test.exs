@@ -13,7 +13,7 @@ defmodule Alto.Harness.ProviderStoreTest do
   end
 
   test "saved profiles expose metadata but resolve the API key only at runtime", %{path: path} do
-    assert {:ok, saved} =
+    assert {:ok, [saved]} =
              ProviderStore.save(
                %{
                  id: "acme",
@@ -22,6 +22,7 @@ defmodule Alto.Harness.ProviderStoreTest do
                  api_key: "secret",
                  model: "acme/coder"
                },
+               [],
                credentials_path: path
              )
 
@@ -46,14 +47,15 @@ defmodule Alto.Harness.ProviderStoreTest do
                  api_key: "secret",
                  model: "vendor/model"
                },
+               [],
                credentials_path: path
              )
 
     configured = %ProviderProfile{
-      id: "openrouter",
+      id: "configured",
       label: "OpenRouter",
-      provider: {Alto.Providers.OpenAICompatible, [timeout: 1_000]},
-      models: :discover,
+      provider: {__MODULE__, [timeout: 1_000, custom: :preserved]},
+      models: [%{id: "original", name: "Original", context_length: 123}],
       credential_id: "openrouter"
     }
 
@@ -61,5 +63,33 @@ defmodule Alto.Harness.ProviderStoreTest do
     assert profile.label == "My OpenRouter"
     assert profile.default_model == "vendor/model"
     refute Keyword.has_key?(elem(profile.provider, 1), :api_key)
+
+    assert {:ok, [updated]} =
+             ProviderStore.save(
+               %{
+                 id: "configured",
+                 label: "Updated",
+                 base_url: "https://new.test/v1",
+                 model: "new/model",
+                 api_key: "replacement-secret"
+               },
+               [configured],
+               credentials_path: path
+             )
+
+    assert updated.models == configured.models
+    assert updated.credential_id == "openrouter"
+    assert {__MODULE__, options} = updated.provider
+    assert options[:timeout] == 1_000
+    assert options[:custom] == :preserved
+    assert options[:base_url] == "https://new.test/v1"
+    refute inspect(updated) =~ "replacement-secret"
+
+    assert elem(ProviderStore.resolve(updated, credentials_path: path), 1)[:api_key] ==
+             "replacement-secret"
+
+    assert {:ok, [^updated]} = ProviderStore.profiles([configured], credentials_path: path)
+    assert {:ok, credentials} = Alto.Credentials.load(path)
+    refute Map.has_key?(credentials.providers, "configured")
   end
 end

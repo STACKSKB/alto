@@ -1665,17 +1665,12 @@ defmodule Alto.TUI.App do
 
     api_key_field = Enum.find(state.overlay.fields, &(&1.key == :api_key))
 
-    case ProviderStore.save(attrs, credentials_opts(state)) do
-      {:ok, profile} ->
+    case ProviderStore.save(attrs, state.profiles, credentials_opts(state)) do
+      {:ok, profiles} ->
         # Clear the opaque native input before releasing the form reference.
         ExRatatui.text_input_set_value(api_key_field.input, "")
 
-        prior = Enum.find(state.profiles, &(&1.id == profile.id))
-        profile = merge_saved_profile(prior, profile)
-
-        profiles =
-          [profile | Enum.reject(state.profiles, &(&1.id == profile.id))]
-          |> Enum.sort_by(&String.downcase(&1.label))
+        profile = Enum.find(profiles, &(&1.id == String.trim(attrs.id)))
 
         next = %{
           state
@@ -1746,21 +1741,6 @@ defmodule Alto.TUI.App do
   end
 
   defp credentials_opts(state), do: [credentials_path: state.credentials_path]
-
-  defp merge_saved_profile(nil, saved), do: saved
-
-  defp merge_saved_profile(
-         %{provider: {module, options}} = prior,
-         %{provider: {_, saved_options}} = saved
-       ) do
-    %{
-      prior
-      | label: saved.label,
-        default_model: saved.default_model,
-        provider:
-          {module, Keyword.put(options, :base_url, Keyword.fetch!(saved_options, :base_url))}
-    }
-  end
 
   defp human_provider_error(:provider_id_must_be_lowercase_slug),
     do: "ID must use lowercase letters, numbers, dots, dashes, or underscores"

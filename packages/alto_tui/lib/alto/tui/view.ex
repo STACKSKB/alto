@@ -635,47 +635,37 @@ defmodule Alto.TUI.View do
       with :pass <- Alto.TUI.Backend.ui(state, :provider_label),
            do: (profile && profile.label) || "none"
 
-    segments =
-      cond do
-        settings_width < 48 ->
-          [
-            {:backend, " B:#{String.first(backend_label(state))} "},
-            {:approval, " A:#{mini_approval_label(state)} "},
-            {:entry_mode, " E:#{mini_entry_label(state)} "},
-            {:details, " D:#{mini_context_label(state)} "},
-            {:provider, " P:… "},
-            {:model, " M:… "}
-          ]
+    label_width = settings_width |> Kernel.-(39) |> div(2) |> max(1) |> min(20)
 
-        settings_width < 112 ->
-          label_width = settings_width |> Kernel.-(39) |> div(2) |> max(1) |> min(13)
+    approval =
+      Map.fetch!(
+        %{ask: {"ASK", "?"}, read_only: {"READ", "R"}, full_access: {"AUTO", "!"}},
+        state.approval_level
+      )
 
-          [
-            {:backend, " B:#{backend_label(state)} "},
-            {:approval, " A:#{approval_label(state.approval_level)} "},
-            {:entry_mode, " E:#{entry_mode_label(state)} "},
-            {:details, " D:#{context_label(state)} "},
-            {:provider, " P:#{short(provider, label_width)} "},
-            {:model, " M:#{short(state.selected_model || "choose…", label_width)} "}
-          ]
+    entry = if state.composer_mode == :code, do: {"CODE", "C"}, else: {"PROSE", "P"}
+    backend = state.selected_backend |> Atom.to_string() |> String.upcase()
 
-        true ->
-          [
-            {:backend, " backend #{backend_label(state)} "},
-            {:approval, " approval #{approval_label(state.approval_level)} "},
-            {:details, " context #{context_label(state)} "},
-            {:provider, " provider #{short(provider, 16)} "},
-            {:model, " model #{short(state.selected_model || "choose…", 20)} "},
-            {:entry_mode, " entry #{entry_mode_label(state)} "}
-          ]
-      end
+    segments = [
+      {:backend, "B", {backend, String.first(backend)}},
+      {:approval, "A", approval},
+      {:entry_mode, "E", entry},
+      {:details, "D", context_labels(state)},
+      {:provider, "P", {short(provider, label_width), "…"}},
+      {:model, "M", {short(state.selected_model || "choose…", label_width), "…"}}
+    ]
+
+    effort = State.selected_effort(state) || "auto"
 
     segments =
       if State.effort_choices(state) == [],
         do: segments,
-        else: [{:effort, " R:#{State.selected_effort(state) || "auto"} "} | segments]
+        else: [{:effort, "R", {effort, effort}} | segments]
 
-    Enum.map(segments, fn {key, text} -> %{target: {:setting, key}, text: text} end)
+    Enum.map(segments, fn {key, shortcut, {normal, compact}} ->
+      value = if settings_width < 48, do: compact, else: normal
+      %{target: {:setting, key}, text: " #{shortcut}:#{value} "}
+    end)
   end
 
   defp settings_target(state, rect, x) do
@@ -823,36 +813,16 @@ defmodule Alto.TUI.View do
   defp context_fullscreen?(state, width),
     do: width < state.narrow_context_fullscreen_below
 
-  defp backend_label(state), do: state.selected_backend |> Atom.to_string() |> String.upcase()
-  defp entry_mode_label(%{composer_mode: :code}), do: "CODE"
-  defp entry_mode_label(_state), do: "PROSE"
-
-  defp context_label(%{pending_approvals: [_ | _]}), do: "REQ"
-  defp context_label(%{details_return_focus: focus}) when not is_nil(focus), do: "OPEN"
-  defp context_label(%{details_visible?: true}), do: "CTX"
-  defp context_label(_state), do: "OFF"
-
-  defp mini_approval_label(%{approval_level: :ask}), do: "?"
-  defp mini_approval_label(%{approval_level: :read_only}), do: "R"
-  defp mini_approval_label(_state), do: "!"
-
-  defp mini_entry_label(%{composer_mode: :code}), do: "C"
-  defp mini_entry_label(_state), do: "P"
-
-  defp mini_context_label(%{pending_approvals: [_ | _]}), do: "!"
-  defp mini_context_label(%{details_return_focus: focus}) when not is_nil(focus), do: "O"
-  defp mini_context_label(%{details_visible?: true}), do: "C"
-  defp mini_context_label(_state), do: "X"
+  defp context_labels(%{pending_approvals: [_ | _]}), do: {"REQ", "!"}
+  defp context_labels(%{details_return_focus: focus}) when not is_nil(focus), do: {"OPEN", "O"}
+  defp context_labels(%{details_visible?: true}), do: {"CTX", "C"}
+  defp context_labels(_state), do: {"OFF", "X"}
 
   defp overlay_message_prefix(%{kind: :model_error}),
     do: "Could not load this provider's model catalog:\n"
 
   defp overlay_message_prefix(%{kind: :codex_error}), do: "Codex App Server reported:\n"
   defp overlay_message_prefix(_overlay), do: ""
-
-  defp approval_label(:ask), do: "ASK"
-  defp approval_label(:read_only), do: "READ"
-  defp approval_label(:full_access), do: "AUTO"
 
   defp short(nil, _max), do: "—"
 

@@ -256,6 +256,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
                  base_url: "https://provider.test/v1",
                  api_key: "test-private-key"
                },
+               [],
                credentials_path: path
              )
 

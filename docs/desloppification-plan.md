@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,938 lines**, a **19.0% reduction**, with **4,480 lines remaining**.
+Current: **32,890 lines**, a **19.1% reduction**, with **4,432 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,14 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Provider saves and startup now share effective-profile construction, preserving
+configured provider options, catalog metadata and credential aliases without a
+separate TUI merge path. Referenced credential aliases no longer appear as extra
+profiles. The settings bar uses one ordered control list and consistent shortcut
+labels at every width, with compact values on narrow terminals. These changes
+remove **48 physical production lines**: 40 code/typespec and eight blank lines;
+no source documentation was removed. Both full suites pass (1,093 core, 143 TUI).
 
 JSON-RPC now owns the entire pending-request lifecycle for MCP and Codex:
 initialization settlement, response routing, timeout cancellation, caller-monitor

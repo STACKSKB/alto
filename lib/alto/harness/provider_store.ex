@@ -17,23 +17,34 @@ defmodule Alto.Harness.ProviderStore do
   @spec profiles([ProviderProfile.t()], keyword()) ::
           {:ok, [ProviderProfile.t()]} | {:error, term()}
   def profiles(configured, opts \\ []) when is_list(configured) do
-    with {:ok, credentials} <- Credentials.load(path(opts)) do
-      records = credentials.providers
-      decorated = Enum.map(configured, &decorate(&1, Map.get(records, &1.credential_id)))
-      configured_ids = MapSet.new(decorated, & &1.id)
-
-      added =
-        for {id, %{"type" => @kind} = record} <- records,
-            not MapSet.member?(configured_ids, id),
-            do: profile(id, record)
-
-      {:ok, decorated ++ Enum.sort_by(added, &String.downcase(&1.label))}
-    end
+    with {:ok, credentials} <- Credentials.load(path(opts)),
+         do: {:ok, effective_profiles(configured, credentials.providers)}
   end
 
-  @doc "Save an OpenAI-compatible provider without returning its API key."
-  @spec save(map(), keyword()) :: {:ok, ProviderProfile.t()} | {:error, term()}
-  def save(attrs, opts \\ []) when is_map(attrs) do
+  defp effective_profiles(configured, records) do
+    configured_ids = MapSet.new(Enum.flat_map(configured, &[&1.id, &1.credential_id]))
+
+    added =
+      for {id, %{"type" => @kind}} <- records,
+          not MapSet.member?(configured_ids, id),
+          do: %ProviderProfile{
+            id: id,
+            label: id,
+            credential_id: id,
+            provider:
+              {Alto.Providers.OpenAICompatible, [base_url: @openrouter_url, timeout: 120_000]}
+          }
+
+    Enum.map(
+      configured ++ Enum.sort_by(added, &String.downcase(records[&1.id]["label"] || &1.label)),
+      &decorate(&1, Map.get(records, &1.credential_id, %{}))
+    )
+  end
+
+  @doc "Save provider metadata and return the same effective profiles used at startup."
+  @spec save(map(), [ProviderProfile.t()], keyword()) ::
+          {:ok, [ProviderProfile.t()]} | {:error, term()}
+  def save(attrs, configured, opts \\ []) when is_map(attrs) and is_list(configured) do
     id = value(attrs, :id)
     label = value(attrs, :label)
     base_url = value(attrs, :base_url)
@@ -52,8 +63,14 @@ defmodule Alto.Harness.ProviderStore do
              "api_key" => api_key,
              "model" => model
            }),
-         {:ok, credentials} <- Credentials.put(credentials, id, values) do
-      {:ok, profile(id, Map.fetch!(credentials.providers, id))}
+         existing = Enum.find(configured, &(&1.id == id)),
+         {:ok, credentials} <-
+           Credentials.put(
+             credentials,
+             if(existing, do: existing.credential_id, else: id),
+             values
+           ) do
+      {:ok, effective_profiles(configured, credentials.providers)}
     end
   end
 
@@ -86,20 +103,7 @@ defmodule Alto.Harness.ProviderStore do
     {module, options}
   end
 
-  defp profile(id, record) do
-    %ProviderProfile{
-      id: id,
-      label: Map.get(record, "label", id),
-      provider:
-        {Alto.Providers.OpenAICompatible,
-         [base_url: Map.get(record, "base_url", @openrouter_url), timeout: 120_000]},
-      models: :discover,
-      default_model: Map.get(record, "model"),
-      credential_id: id
-    }
-  end
-
-  defp decorate(%{provider: {module, options}} = profile, record) when is_map(record) do
+  defp decorate(%{provider: {module, options}} = profile, record) do
     %{
       profile
       | label: Map.get(record, "label", profile.label),
@@ -107,8 +111,6 @@ defmodule Alto.Harness.ProviderStore do
         default_model: Map.get(record, "model", profile.default_model)
     }
   end
-
-  defp decorate(profile, _record), do: profile
 
   defp environment_key(%ProviderProfile{id: "openrouter"}),
     do: System.get_env("OPENROUTER_API_KEY")
