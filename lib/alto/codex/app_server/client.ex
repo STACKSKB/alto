@@ -115,14 +115,12 @@ defmodule Alto.Codex.AppServer.Client do
       "capabilities" => %{"experimentalApi" => Keyword.get(state.opts, :experimental_api, false)}
     }
 
-    case JSONRPC.open(
-           state,
-           &open_port/1,
-           &send_request(&1, "initialize", params, :initialize, false)
-         ) do
-      {:ok, state} -> {:noreply, state}
-      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
-    end
+    JSONRPC.open(
+      state,
+      &open_port/1,
+      &JSONRPC.initialize(&1, params, :codex_app_server_pending_request_limit),
+      &fail_all/2
+    )
   end
 
   @impl true
@@ -146,26 +144,15 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_call({:request, method, params, deadline}, from, %{phase: :ready} = state) do
-    case send_request(
-           state,
-           method,
-           params,
-           {:request, from, method},
-           true,
-           JSONRPC.remaining(deadline)
-         ) do
-      {:ok, state} ->
-        {:noreply, state}
-
-      {:error, :request_expired} ->
-        {:reply, {:error, :request_expired}, state}
-
-      {:error, {:codex_app_server_pending_request_limit, _} = reason} ->
-        {:reply, {:error, reason}, state}
-
-      {:error, reason} ->
-        {:stop, reason, {:error, reason}, fail_all(state, reason)}
-    end
+    JSONRPC.handle_request(
+      state,
+      method,
+      params,
+      {:request, from, method},
+      deadline,
+      :codex_app_server_pending_request_limit,
+      &fail_all/2
+    )
   end
 
   def handle_call({:respond, id, result}, _from, %{phase: :ready} = state) do
@@ -238,20 +225,6 @@ defmodule Alto.Codex.AppServer.Client do
   rescue
     error in ArgumentError ->
       {:error, {:codex_app_server_port_open_failed, Exception.message(error)}}
-  end
-
-  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil) do
-    owner = if monitor_owner, do: elem(elem(reply, 1), 0), else: nil
-
-    JSONRPC.request(
-      state,
-      method,
-      params,
-      reply,
-      owner,
-      timeout,
-      :codex_app_server_pending_request_limit
-    )
   end
 
   defp send_notification(state, method, params \\ %{}) do

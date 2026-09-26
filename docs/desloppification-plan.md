@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,105 lines (16.1% below the original)**. **5,647 lines
+The current count is **34,087 lines (16.2% below the original)**. **5,629 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -100,7 +100,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   supervision and cleanup, replacing custom process loops. Webhook listeners retain only delivery IDs; routing owns validated
   endpoint maps without a second internal struct or duplicate endpoint state.
   MCP and Codex ports also use native framing, with per-message payload limits;
-  startup success and failure share waiter cleanup.
+  startup success and failure share waiter cleanup. MCP and Codex also share
+  request admission, caller monitoring, and startup/error return handling through
+  JSONRPC callbacks; their protocol-specific replies and cancellation remain local.
   CLI rendering uses GenServer calls for stop replies and timeouts instead of
   a custom monitored request protocol. Batch polling uses `Process.sleep/1`.
 - User and agent input share one messaging ingress and receipt representation.
@@ -171,3 +173,6 @@ checks, UTF-8 bounds, redaction, and observer exceptions/throws/exits. Terminal
 selection benchmarks remain about 1 ms at 200×60. Prose wrapping was also
 compared against the previous implementation in 40,080 whitespace/Unicode cases
 and 2,400 complete multiline/cursor projections; all outputs matched.
+
+The shared JSON-RPC request/startup workflow passes 46 focused external-client,
+Codex-agent, and external-tool tests, plus the TUI backend integration suite.

@@ -74,18 +74,18 @@ defmodule Alto.External.JSONRPC do
   def call_timeout(:infinity), do: :infinity
   def call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
 
-  def open(state, opener, initialize) do
+  def open(state, opener, initialize, fail_all) do
     case opener.(state.opts) do
       {:ok, process} ->
         state = %{state | process: process}
 
         case initialize.(state) do
-          {:ok, state} -> {:ok, arm_startup_timeout(state)}
-          {:error, reason} -> {:error, reason, state}
+          {:ok, state} -> {:noreply, arm_startup_timeout(state)}
+          {:error, reason} -> {:stop, reason, fail_all.(state, reason)}
         end
 
       {:error, reason} ->
-        {:error, reason, state}
+        {:stop, reason, fail_all.(state, reason)}
     end
   end
 
@@ -169,7 +169,20 @@ defmodule Alto.External.JSONRPC do
 
   def close(%{process: process}), do: ExternalProcess.close(process)
 
-  def request(state, method, params, reply, owner, timeout, limit_error) do
+  def initialize(state, params, limit_error),
+    do: request(state, "initialize", params, :initialize, nil, limit_error)
+
+  def handle_request(state, method, params, reply, deadline, limit_error, fail_all) do
+    case request(state, method, params, reply, remaining(deadline), limit_error) do
+      {:ok, state} -> {:noreply, state}
+      {:error, :request_expired} -> {:reply, {:error, :request_expired}, state}
+      {:error, {^limit_error, _} = reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> {:stop, reason, {:error, reason}, fail_all.(state, reason)}
+    end
+  end
+
+  defp request(state, method, params, reply, timeout, limit_error) do
+    owner = if is_tuple(reply), do: elem(elem(reply, 1), 0)
     limit = Keyword.fetch!(state.opts, :max_pending_requests)
 
     cond do

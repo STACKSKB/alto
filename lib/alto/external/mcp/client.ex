@@ -79,14 +79,12 @@ defmodule Alto.External.MCP.Client do
       "clientInfo" => %{"name" => "alto", "version" => "0.1.0"}
     }
 
-    case JSONRPC.open(
-           state,
-           &open_port/1,
-           &send_request(&1, "initialize", request, :initialize, false)
-         ) do
-      {:ok, state} -> {:noreply, state}
-      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
-    end
+    JSONRPC.open(
+      state,
+      &open_port/1,
+      &JSONRPC.initialize(&1, request, :mcp_pending_request_limit),
+      &fail_all/2
+    )
   end
 
   @impl true
@@ -101,12 +99,15 @@ defmodule Alto.External.MCP.Client do
       when kind in [:list_tools, :call_tool] do
     method = if kind == :list_tools, do: "tools/list", else: "tools/call"
 
-    case send_request(state, method, params, {kind, from}, true, JSONRPC.remaining(deadline)) do
-      {:ok, state} -> {:noreply, state}
-      {:error, :request_expired} -> {:reply, {:error, :request_expired}, state}
-      {:error, {:mcp_pending_request_limit, _} = reason} -> {:reply, {:error, reason}, state}
-      {:error, reason} -> {:stop, reason, {:error, reason}, fail_all(state, reason)}
-    end
+    JSONRPC.handle_request(
+      state,
+      method,
+      params,
+      {kind, from},
+      deadline,
+      :mcp_pending_request_limit,
+      &fail_all/2
+    )
   end
 
   def handle_call(_request, _from, state),
@@ -173,11 +174,6 @@ defmodule Alto.External.MCP.Client do
     end
   rescue
     error in ArgumentError -> {:error, {:mcp_port_open_failed, Exception.message(error)}}
-  end
-
-  defp send_request(state, method, params, reply, monitor_owner, timeout \\ nil) do
-    owner = if monitor_owner, do: elem(elem(reply, 1), 0), else: nil
-    JSONRPC.request(state, method, params, reply, owner, timeout, :mcp_pending_request_limit)
   end
 
   defp send_notification(state, method) do
