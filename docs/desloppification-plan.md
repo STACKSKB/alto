@@ -1,7 +1,7 @@
 # Desloppification
 
 Alto is at `0.0.1`: internal APIs and formats may change without migrations.
-Preserve useful capabilities and extension contracts. Prefer existing Elixir,
+Preserve all current capabilities and extension contracts. Prefer existing Elixir,
 OTP, and installed-library APIs; add no dependencies for this cleanup. Moving
 code or compressing formatting does not count as simplification.
 
@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,215 lines (15.8% below the original)**. **5,757 lines
+The current count is **34,176 lines (15.9% below the original)**. **5,718 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -64,6 +64,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   reuse its async-message helper and default-model selection has one implementation.
   Event ingestion fetches each run once and routes approval resolution through
   the existing event handlers.
+  The details drawer's saved return focus also records whether it is open;
+  a redundant boolean and its parallel updates are removed.
 - Codex UI and delegated agents share bounded model pagination. Provider discovery
   and streaming share Req response handling. Validated Anthropic tool-input maps
   bypass JSON round trips. Provider observers use the existing notification helper.
@@ -72,6 +74,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   Redaction, protocol encoding, and header parsing each have one implementation.
 - File tools and examples reuse bounded reads and option validation. Project
   instructions use `BoundedFile.range/3`; read/sync cleanup uses `File.open/3`.
+  File writes and edits share preparation as well as commit: resolve, snapshot,
+  transform, render, and freeze. Each tool supplies its content transformation;
+  results share `bytes_before` and `bytes_after` instead of a separate write field.
   Workspace creation reuses source/root checks. Atomic writes retain close-error
   reporting and post-rename uncertainty with simpler control flow. Fresh and
   resumed workspace runs share completion handling; an unused resume wrapper is gone.
@@ -123,8 +128,9 @@ before dispatch under limit 4.
 
 ## Remaining work and constraints
 
-The 30% target is not met. Continue reviewing whole representations and repeated
-flows, particularly retained continuations, queue/ledger replay, and TUI state.
+The 30% target is not met. Prioritize shared workflow sequences and higher-order
+composition over isolated branch or wrapper reductions. Keep protocol-specific
+validation and failure handling at the appropriate workflow boundaries.
 Keep append-before-dispatch durability, single-use grants, explicit unknown
 outcomes, bounded retention, and frozen approval values.
 
@@ -140,7 +146,7 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,072 core tests and
+The combined cleanup and messaging worktree passes **1,071 core tests and
 141 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an

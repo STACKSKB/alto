@@ -41,7 +41,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   end
 
   test "reads and writes only bounded workspace paths", %{root: root, context: context} do
-    assert {:ok, %{bytes_written: 6}} =
+    assert {:ok, %{bytes_before: 0, bytes_after: 6}} =
              prepared_run(WriteFile, %{"path" => "sample.txt", "content" => "abcdef"}, context)
 
     assert {:ok, %{content: "bcd", truncated: true}} =
@@ -69,7 +69,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:ok, prepared, _details} =
              WriteFile.prepare(%{"path" => "ok.txt", "content" => "1234"}, context, max_bytes: 4)
 
-    assert {:ok, %{bytes_written: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
+    assert {:ok, %{bytes_after: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
 
     assert {:error, {:invalid_write_options, _}} =
              prepared_run(WriteFile, %{}, context, max_bytes: 0)
@@ -657,7 +657,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "0123456789abcdeg")
     assert {:error, {:stale_file, ^path}} = WriteFile.run(prepared, context)
     File.write!(path, original)
-    assert {:ok, %{bytes_written: 5, patch: nil}} = WriteFile.run(prepared, context)
+
+    assert {:ok, %{bytes_before: 16, bytes_after: 5, patch: nil}} =
+             WriteFile.run(prepared, context)
+
     assert File.read!(path) == "small"
   end
 
@@ -690,7 +693,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     root: root,
     context: context
   } do
-    assert {:ok, %{bytes_written: 3}} =
+    assert {:ok, %{bytes_after: 3}} =
              prepared_run(WriteFile, %{"path" => "a.txt", "content" => "abc"}, context)
 
     assert {:ok, ["a.txt"]} = File.ls(root)
@@ -701,7 +704,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "old")
     File.chmod!(path, 0o640)
 
-    assert {:ok, %{bytes_written: 3}} =
+    assert {:ok, %{bytes_after: 3}} =
              prepared_run(WriteFile, %{"path" => "existing.txt", "content" => "new"}, context)
 
     assert File.read!(path) == "new"

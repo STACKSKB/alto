@@ -5,8 +5,6 @@ defmodule Alto.Tools.EditFile do
 
   alias Alto.Tool.Context
   alias Alto.Tools.FileChange
-  alias Alto.Tools.Path, as: SafePath
-  alias Alto.Tools.UnifiedDiff
 
   @max_file_bytes 1_000_000
   @max_replacement_bytes 256_000
@@ -66,7 +64,20 @@ defmodule Alto.Tools.EditFile do
       when is_map(arguments) and is_list(opts) do
     with {:ok, limits} <-
            Alto.Tool.Options.validate(opts, @options_schema, :invalid_edit_options),
-         do: prepare_edit(arguments, context, limits)
+         {:ok, edits} <- edits(arguments),
+         :ok <- validate_edits(edits, limits) do
+      FileChange.prepare(
+        :edit_file,
+        Map.get(arguments, "path"),
+        context,
+        {limits.max_file_bytes, limits.patch_bytes, limits.preview_bytes},
+        fn content ->
+          with :ok <- validate_utf8(content),
+               {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes),
+               do: {:ok, updated, %{replacements: replacements}}
+        end
+      )
+    end
   end
 
   def prepare(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
@@ -74,41 +85,6 @@ defmodule Alto.Tools.EditFile do
   @impl true
   def run(prepared, %Context{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
-
-  defp prepare_edit(arguments, %Context{} = context, limits) when is_map(arguments) do
-    path = Map.get(arguments, "path")
-
-    with {:ok, edits} <- edits(arguments),
-         :ok <- validate_edits(edits, limits),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, original} <- FileChange.original(resolved, limits.max_file_bytes, :edit),
-         content = original.content,
-         :ok <- validate_utf8(content),
-         {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes) do
-      patch = UnifiedDiff.render(path, content, updated, limits.patch_bytes)
-
-      result = %{
-        path: path,
-        replacements: replacements,
-        bytes_before: original.bytes,
-        bytes_after: byte_size(updated),
-        patch: patch
-      }
-
-      prepared = %{
-        operation: :edit_file,
-        path: path,
-        resolved: resolved,
-        content: updated,
-        original: Map.delete(original, :content),
-        result: result,
-        max_bytes: limits.max_file_bytes
-      }
-
-      {:ok, prepared,
-       Map.put(result, :preview, FileChange.preview(updated, limits.preview_bytes))}
-    end
-  end
 
   defp edits(%{"edits" => edits}) when is_list(edits) and edits != [], do: {:ok, edits}
   defp edits(_arguments), do: {:error, :edits_must_be_nonempty_list}
