@@ -4,7 +4,6 @@ defmodule Alto.Runner.Execution.Setup do
   alias Alto.Tool.Context
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
-  require Logger
 
   @limits_options [
     max_steps: [type: :pos_integer, default: 32],
@@ -331,34 +330,29 @@ defmodule Alto.Runner.Execution.Setup do
   defp validate_session_dir(other), do: {:error, {:invalid_session_dir, other}}
 
   defp persist_start(run, opts, task) do
-    if run.session do
-      {provider_module, model} = provider_identity(run.provider)
+    errors =
+      Alto.Runner.Execution.Session.append(
+        run,
+        "not opened",
+        fn ->
+          {provider_module, model} = provider_identity(run.provider)
 
-      record =
-        Session.started_record(%{
-          run_id: run.tool_context.session_id,
-          parent_run_id: Keyword.get(opts, :parent_run_id),
-          parent_session_id: Keyword.get(opts, :parent_session_id),
-          agent_identity: run.agent_identity,
-          subagent: run.agent_depth > 0,
-          session_owner: run.agent_depth == 0 or run.resume_snapshot,
-          task: task,
-          provider: provider_module,
-          model: model,
-          cwd: run.tool_context.cwd
-        })
+          Session.started_record(%{
+            run_id: run.tool_context.session_id,
+            parent_run_id: Keyword.get(opts, :parent_run_id),
+            parent_session_id: Keyword.get(opts, :parent_session_id),
+            agent_identity: run.agent_identity,
+            subagent: run.agent_depth > 0,
+            session_owner: run.agent_depth == 0 or run.resume_snapshot,
+            task: task,
+            provider: provider_module,
+            model: model,
+            cwd: run.tool_context.cwd
+          })
+        end
+      )
 
-      case Session.append(run.session, record, session_dir: run.session_dir) do
-        :ok ->
-          {:ok, run}
-
-        {:error, reason} ->
-          Logger.warning("alto: session not opened: #{inspect(reason, limit: 5)}")
-          {:ok, %{run | persistence_errors: [reason | run.persistence_errors]}}
-      end
-    else
-      {:ok, run}
-    end
+    {:ok, %{run | persistence_errors: errors ++ run.persistence_errors}}
   end
 
   defp generate_run_id,

@@ -9,29 +9,16 @@ defmodule Alto.Runner.Execution.Events do
   alias Alto.{Event, Session}
 
   def record(run, %Event{domain: :durable} = event) do
-    run =
-      case persist_event(run, event) do
-        :ok -> run
-        {:error, reason} -> add_persistence_error(run, reason)
-      end
+    errors =
+      Alto.Runner.Execution.Session.append(run, nil, fn ->
+        Session.event_record(run.tool_context.session_id, event)
+      end)
 
+    run = Enum.reduce(errors, run, &add_persistence_error(&2, &1))
     do_record(run, event)
   end
 
   def record(run, event), do: do_record(run, event)
-
-  # Live signals stay in flight only; the durable log is what sessions keep.
-  # Event persistence is best-effort and silent on the hot path — rare paths
-  # (started/transcript/completed) warn instead.
-  defp persist_event(%{session: nil}, _event), do: :ok
-
-  defp persist_event(run, event) do
-    Session.append(
-      run.session,
-      Session.event_record(run.tool_context.session_id, event),
-      session_dir_opt(run)
-    )
-  end
 
   defp do_record(run, %Event{} = event) do
     Alto.Events.notify(run.event_sink, event)
@@ -77,6 +64,4 @@ defmodule Alto.Runner.Execution.Events do
 
     if Map.get(severity, right, 0) > Map.get(severity, left, 0), do: right, else: left
   end
-
-  defp session_dir_opt(run), do: [session_dir: run.session_dir]
 end

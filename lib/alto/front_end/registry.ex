@@ -379,11 +379,10 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   def handle_call({:run_result, run_id}, _from, state) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, %{result: :running}} -> {:reply, :running, state}
-      {:ok, %{result: result}} -> {:reply, {:ok, result}, state}
-      :error -> {:reply, {:error, :unknown_run}, state}
-    end
+    reply_with_run(state, run_id, fn
+      %{result: :running} -> :running
+      %{result: result} -> {:ok, result}
+    end)
   end
 
   def handle_call({:command_callback, name}, _from, state) do
@@ -489,61 +488,32 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   def handle_call({:send_message, run_id, opts}, _from, state) do
-    reply =
-      case state.runs[run_id] do
-        nil ->
-          {:error, :unknown_run}
+    reply_with_run(state, run_id, fn run ->
+      {to, opts} = Keyword.pop(opts, :to)
 
-        %{result: :running} = run ->
-          {to, opts} = Keyword.pop(opts, :to)
-
-          if to,
-            do: Alto.Messaging.send(run.messaging, to, opts),
-            else: Alto.Messaging.send(run.input, opts)
-
-        run ->
-          {to, opts} = Keyword.pop(opts, :to)
-
-          if to,
-            do: Alto.Messaging.send(run.messaging, to, opts),
-            else: Alto.Messaging.duplicate(run.input, opts)
+      cond do
+        to -> Alto.Messaging.send(run.messaging, to, opts)
+        run.result == :running -> Alto.Messaging.send(run.input, opts)
+        true -> Alto.Messaging.duplicate(run.input, opts)
       end
-
-    {:reply, reply, state}
+    end)
   end
 
   def handle_call({:list_agents, run_id}, _from, state) do
-    reply =
-      case state.runs[run_id] do
-        nil ->
-          {:error, :unknown_run}
-
-        run ->
-          with {:ok, agents} <- Alto.Messaging.list(run.messaging), do: {:ok, %{agents: agents}}
-      end
-
-    {:reply, reply, state}
+    reply_with_run(state, run_id, fn run ->
+      with {:ok, agents} <- Alto.Messaging.list(run.messaging), do: {:ok, %{agents: agents}}
+    end)
   end
 
   def handle_call({:input_status, run_id}, _from, state) do
-    reply =
-      case state.runs[run_id] do
-        nil -> {:error, :unknown_run}
-        run -> {:ok, Alto.Input.list(run.input)}
-      end
-
-    {:reply, reply, state}
+    reply_with_run(state, run_id, &{:ok, Alto.Input.list(&1.input)})
   end
 
   def handle_call({:cancel, run_id, reason}, _from, state) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} ->
-        Runner.cancel(run.handle, reason)
-        {:reply, :ok, state}
-
-      :error ->
-        {:reply, {:error, :unknown_run}, state}
-    end
+    reply_with_run(state, run_id, fn run ->
+      Runner.cancel(run.handle, reason)
+      :ok
+    end)
   end
 
   # Approval handles are globally unique operation ids: no scoping
@@ -601,6 +571,16 @@ defmodule Alto.FrontEnd.Registry do
 
   def handle_call({:ops_list, opts}, _from, state) do
     {:reply, ops_list_op(state, opts), state}
+  end
+
+  defp reply_with_run(state, run_id, fun) do
+    reply =
+      case state.runs[run_id] do
+        nil -> {:error, :unknown_run}
+        run -> fun.(run)
+      end
+
+    {:reply, reply, state}
   end
 
   # A dead or crashing queue must not take the registry — and every

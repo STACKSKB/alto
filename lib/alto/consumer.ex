@@ -117,36 +117,31 @@ defmodule Alto.Consumer do
     op = record.operation_key
     claim_id = record.claim_id
 
-    with {:ok, recovery} <- recover_record(record, op, state) do
-      case recovery.status do
-        {:intended} ->
-          dispatch(op, claim_id, record.payload, recovery, state)
+    result =
+      with {:ok, recovery} <- recover_record(record, op, state) do
+        case recovery.status do
+          {:intended} ->
+            dispatch(op, claim_id, record.payload, recovery, state)
 
-        {:checkpointed, _checkpoint, _attempt} ->
-          ack_quietly(state, claim_id)
-          :acked_checkpoint
+          {:checkpointed, _checkpoint, _attempt} ->
+            {:ack, :acked_checkpoint}
 
-        {:dispatched, attempt} ->
-          park(op, claim_id, :previous_attempt_unknown, %{prior: :dispatched}, state, attempt)
+          {:dispatched, attempt} ->
+            park(op, claim_id, :previous_attempt_unknown, %{prior: :dispatched}, state, attempt)
 
-        {:decided, class, _evidence}
-        when record.admission == :recovery and class in [:unknown, :requires_operator] ->
-          release_quietly(state, claim_id)
-          :awaiting_reconciliation
+          {:decided, class, _evidence}
+          when record.admission == :recovery and class in [:unknown, :requires_operator] ->
+            {:release, :awaiting_reconciliation}
 
-        {:decided, :unknown, _evidence} ->
-          ack_quietly(state, claim_id)
-          :parked_unknown
+          {:decided, :unknown, _evidence} ->
+            {:ack, :parked_unknown}
 
-        {:decided, _class, _evidence} ->
-          ack_quietly(state, claim_id)
-          :acked_decided
+          {:decided, _class, _evidence} ->
+            {:ack, :acked_decided}
+        end
       end
-    else
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+
+    settle_claim(result, claim_id, state)
   end
 
   # Fresh intent or a released retry: count attempts, then run.
@@ -156,14 +151,9 @@ defmodule Alto.Consumer do
     if attempt_n >= state.max_attempts do
       park(op, claim_id, :attempts_exhausted, %{}, state)
     else
-      case ledger_call(fn -> Alto.OperationLog.record_attempt(state.ledger, op, claim_id) end) do
-        :ok ->
-          run_handler(op, claim_id, attempt_n + 1, payload, state)
-
-        {:error, reason} ->
-          release_quietly(state, claim_id)
-          {:error, reason}
-      end
+      with :ok <-
+             ledger_call(fn -> Alto.OperationLog.record_attempt(state.ledger, op, claim_id) end),
+           do: run_handler(op, claim_id, attempt_n + 1, payload, state)
     end
   end
 
@@ -264,7 +254,7 @@ defmodule Alto.Consumer do
     do: {:park, :invalid_verdict, %{verdict: inspect(other, limit: 3)}}
 
   defp checkpoint(op, claim_id, data, state) do
-    settle_ledger(claim_id, :checkpointed, state, fn ->
+    settle_ledger(:checkpointed, fn ->
       Alto.OperationLog.record_checkpoint(state.ledger, op, claim_id, data)
     end)
   end
@@ -272,7 +262,7 @@ defmodule Alto.Consumer do
   # Terminal: outcome first, ack second. Ack failures only strand work the
   # ledger already describes, so they log and move on.
   defp decide(op, claim_id, class, evidence, state) do
-    settle_ledger(claim_id, {:decided, class}, state, fn ->
+    settle_ledger({:decided, class}, fn ->
       Alto.OperationLog.record_outcome(state.ledger, op, claim_id, class, evidence)
     end)
   end
@@ -282,7 +272,7 @@ defmodule Alto.Consumer do
   defp park(op, claim_id, reason, evidence, state, original_attempt \\ nil) do
     attempt = original_attempt || claim_id
 
-    settle_ledger(claim_id, :parked, state, fn ->
+    settle_ledger(:parked, fn ->
       with :ok <-
              if(original_attempt,
                do: :ok,
@@ -300,19 +290,11 @@ defmodule Alto.Consumer do
   end
 
   defp retry(op, claim_id, state) do
-    with :ok <-
-           ledger_call(fn ->
-             Alto.OperationLog.record_release(state.ledger, op, claim_id)
-           end),
-         :ok <- queue_call(fn -> Alto.Queue.release(state.queue, claim_id) end) do
-      :released
-    else
-      {:error, reason} -> {:error, reason}
+    case ledger_call(fn -> Alto.OperationLog.record_release(state.ledger, op, claim_id) end) do
+      :ok -> {:release, :released}
+      error -> {:retain, error}
     end
   end
-
-  defp ack_quietly(state, claim_id), do: queue_quietly(state, claim_id, :ack)
-  defp release_quietly(state, claim_id), do: queue_quietly(state, claim_id, :release)
 
   defp queue_quietly(state, claim_id, action) do
     case queue_call(fn -> apply(Alto.Queue, action, [state.queue, claim_id]) end) do
@@ -326,19 +308,24 @@ defmodule Alto.Consumer do
     :ok
   end
 
-  defp settle_ledger(claim_id, success, state, fun),
-    do: settle_claim(ledger_call(fun), success, claim_id, state)
+  defp settle_ledger(success, fun) do
+    with :ok <- ledger_call(fun), do: {:ack, success}
+  end
 
-  defp settle_claim(result, success, claim_id, state) do
-    case result do
-      :ok ->
-        ack_quietly(state, claim_id)
-        success
+  defp settle_claim({:retain, result}, _claim_id, _state), do: result
 
-      {:error, reason} ->
-        release_quietly(state, claim_id)
-        {:error, reason}
-    end
+  defp settle_claim({:release, :released}, claim_id, state) do
+    with :ok <- queue_call(fn -> Alto.Queue.release(state.queue, claim_id) end), do: :released
+  end
+
+  defp settle_claim({action, success}, claim_id, state) when action in [:ack, :release] do
+    queue_quietly(state, claim_id, action)
+    success
+  end
+
+  defp settle_claim({:error, _} = error, claim_id, state) do
+    queue_quietly(state, claim_id, :release)
+    error
   end
 
   defp ledger_call(fun) do

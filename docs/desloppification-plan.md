@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,176 lines (15.9% below the original)**. **5,718 lines
+The current count is **34,129 lines (16.1% below the original)**. **5,671 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -50,6 +50,15 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   Context and child policies now require that tuple representation; bare-struct
   dispatch and fingerprint handling are removed. Tools and approvals use the
   shared capability resolver, rejecting missing callbacks before dispatch.
+- Consumer dispatch, recovery, retry, checkpoint, and parked outcomes now return
+  a settlement decision; one boundary acknowledges or releases the queue claim
+  after ledger work. Failed retry ledger writes still retain the claim, while
+  retry queue failures remain observable.
+- Registry run queries and commands share run lookup and reply handling. Message
+  routing selects the destination once and keeps completed-root duplicate handling.
+- Session startup, durable events, and completion share a lazy record append
+  workflow, including disabled-session handling and persistence error reporting.
+  Events remain silent on log failures; startup and completion retain warnings.
 - Registry approvals use globally unique handles in one map; subscriber scope is
   one run ID or nil. Native TUI approvals inherit the owning UI run ID, avoiding
   retained approval sets and reverse lookups while preserving child identities.

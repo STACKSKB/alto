@@ -16,6 +16,21 @@ defmodule Alto.Runner.Execution.Session do
           {:ok, Result.t()}
           | {:error, term(), Result.t()}
 
+  @doc "Append a lifecycle record, returning any persistence errors. Build only when logging is enabled."
+  def append(run, warning, build)
+  def append(%{session: nil}, _warning, _build), do: []
+
+  def append(run, warning, build) do
+    case DurableSession.append(run.session, build.(), session_dir: run.session_dir) do
+      :ok ->
+        []
+
+      {:error, reason} ->
+        if warning, do: Logger.warning("alto: session #{warning}: #{inspect(reason, limit: 5)}")
+        [reason]
+    end
+  end
+
   @doc "Persist the terminal or suspended outcome using the required run fields."
   @spec persist_outcome(map(), outcome()) :: outcome()
   def persist_outcome(%{session: nil}, outcome) do
@@ -98,7 +113,7 @@ defmodule Alto.Runner.Execution.Session do
   end
 
   defp persist_completed(state, outcome, reason, result) do
-    record =
+    append(state, "completion not persisted", fn ->
       DurableSession.completed_record(%{
         run_id: state.tool_context.session_id,
         subagent: state.agent_depth > 0,
@@ -108,15 +123,7 @@ defmodule Alto.Runner.Execution.Session do
         output: result.output,
         model_requests: result.model_requests
       })
-
-    case DurableSession.append(state.session, record, session_dir: state.session_dir) do
-      :ok ->
-        []
-
-      {:error, reason} ->
-        Logger.warning("alto: session completion not persisted: #{inspect(reason, limit: 5)}")
-        [reason]
-    end
+    end)
   end
 
   defp put_persistence(outcome, result, status),
