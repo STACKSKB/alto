@@ -170,6 +170,7 @@ defmodule Alto.Codex.AppServer.Client do
     env: [type: {:map, :any, :any}, default: %{}],
     experimental_api: [type: :boolean, default: false],
     instance: [type: :any, default: :shared],
+    owner: [type: :pid],
     startup_timeout: [type: :pos_integer, default: 30_000],
     request_timeout: [type: :pos_integer, default: @default_turn_timeout],
     max_message_bytes: [type: :pos_integer, default: 8_000_000],

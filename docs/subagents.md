@@ -264,10 +264,12 @@ are equivalent. A child can narrow model exposure, but cannot add a tool or
 replace a parent tool with another module under the same name. Approval and
 tool bounds continue to be enforced by the host.
 
-The parent owns each child handle, and a guardian monitors the parent process.
+The shared `Agents` scheduler owns child starts, subscriptions and shutdown.
+Synchronous batches use an isolated scheduler; asynchronous starts reuse the
+run's scheduler. Each child handle also monitors its execution owner.
 Explicit cancellation cancels all active children and allows one five-second
 grace period for the whole batch before forced cleanup. Parent process death
-also triggers cooperative cancellation through the guardians. Queued batch
+also triggers cancellation and cleans up unfinished starts. Queued batch
 entries are never started during cancellation. Child provider, tool, and loop failures become child
 result data rather than crashing the parent. An uncertain child effect keeps
 the parent result verdict at `:unknown`, even if the loop chooses an otherwise

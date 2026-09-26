@@ -4,6 +4,37 @@ defmodule Alto.Runner.Agents do
   alias Alto.Runner
   alias Alto.Runner.Execution.Children
 
+  def batch(specs, concurrency, start, check, opts \\ []) do
+    runner = Keyword.get(opts, :runner, Runner)
+    {:ok, pid} = GenServer.start(__MODULE__, {self(), specs, concurrency, start, runner})
+
+    try do
+      await_batch(pid, check)
+    after
+      if Process.alive?(pid) do
+        GenServer.call(pid, {:close, :parent_finished}, :infinity)
+        GenServer.stop(pid)
+      end
+    end
+  end
+
+  defp await_batch(pid, check) do
+    case check.() do
+      :continue ->
+        case GenServer.call(pid, :batch_results, :infinity) do
+          :pending ->
+            Process.sleep(20)
+            await_batch(pid, check)
+
+          outcomes ->
+            {:ok, outcomes}
+        end
+
+      status ->
+        {status, GenServer.call(pid, {:close, status}, :infinity)}
+    end
+  end
+
   def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
   def submit(pid, specs, run), do: GenServer.call(pid, {:submit, specs, run}, :infinity)
   def snapshot(pid, ids), do: GenServer.call(pid, {:snapshot, ids}, :infinity)
@@ -41,8 +72,31 @@ defmodule Alto.Runner.Agents do
   def resume({pid, id}), do: GenServer.call(pid, {:resume, id}, :infinity)
 
   @impl true
+  def init({owner, specs, concurrency, start, runner}) do
+    {:ok, state} = init(owner)
+
+    {:ok,
+     %{
+       state
+       | entries: Enum.map(specs, &new_entry(&1, nil)),
+         limit: concurrency,
+         frozen: true,
+         start: start,
+         runner: runner
+     }}
+  end
+
   def init(owner),
-    do: {:ok, %{owner: Process.monitor(owner), entries: [], limit: 1, frozen: false}}
+    do:
+      {:ok,
+       %{
+         owner: Process.monitor(owner),
+         entries: [],
+         limit: 1,
+         frozen: false,
+         start: nil,
+         runner: Runner
+       }}
 
   @impl true
   def handle_call({:submit, specs, run}, _from, state) do
@@ -54,6 +108,20 @@ defmodule Alto.Runner.Agents do
       next = %{state | entries: state.entries ++ entries, limit: run.child_limits.max_concurrency}
       {:reply, {:ok, Enum.map(entries, &public/1)}, next}
     end
+  end
+
+  def handle_call(:batch_results, _, state) do
+    if Enum.all?(state.entries, &(&1.status == :completed)) do
+      {:reply, batch_outcomes(state), state}
+    else
+      next = dispatch(%{state | frozen: false})
+      {:reply, :pending, %{next | frozen: true}}
+    end
+  end
+
+  def handle_call({:close, reason}, _, state) do
+    state = stop_children(state, reason)
+    {:reply, batch_outcomes(state), %{state | frozen: true}}
   end
 
   def handle_call(:freeze, _, state) do
@@ -156,7 +224,7 @@ defmodule Alto.Runner.Agents do
     next =
       update_entries(state, &(&1.starter && &1.starter.ref == ref), fn entry ->
         Process.demonitor(ref, [:flush])
-        started(entry, outcome)
+        started(entry, outcome, state.runner)
       end)
 
     {:noreply, dispatch(next)}
@@ -175,8 +243,8 @@ defmodule Alto.Runner.Agents do
 
   def handle_info(_, state), do: {:noreply, state}
 
-  defp started(entry, {:ok, handle}) do
-    case Runner.subscribe(handle) do
+  defp started(entry, {:ok, handle}, runner) do
+    case runner.subscribe(handle, self()) do
       {:ok, ref} ->
         %{
           entry
@@ -188,11 +256,11 @@ defmodule Alto.Runner.Agents do
         }
 
       {:error, reason} ->
-        finish(entry, Runner.terminate(handle, {:subscription_failed, reason}))
+        finish(entry, runner.terminate(handle, {:subscription_failed, reason}))
     end
   end
 
-  defp started(entry, {:error, _} = outcome), do: finish(entry, outcome)
+  defp started(entry, {:error, _} = outcome, _runner), do: finish(entry, outcome)
 
   defp dispatch(%{frozen: true} = state), do: state
 
@@ -207,7 +275,11 @@ defmodule Alto.Runner.Agents do
           spec = Map.put(entry.spec, :agent_scheduler, {self(), entry.id})
 
           starter =
-            Alto.Runner.Execution.Call.start(fn -> Children.start_subagent(spec, entry.run) end)
+            Alto.Runner.Execution.Call.start(fn ->
+              if state.start,
+                do: state.start.(entry.spec),
+                else: Children.start_subagent(spec, entry.run)
+            end)
 
           %{entry | starter: starter, status: :starting}
         end
@@ -219,11 +291,14 @@ defmodule Alto.Runner.Agents do
   end
 
   defp finish(entry, outcome, retain_checkpoint? \\ false) do
-    Alto.Messaging.close(entry.spec.messaging)
+    if entry.spec[:messaging], do: Alto.Messaging.close(entry.spec.messaging)
     entry = %{entry | starter: nil, handle: nil, ref: nil, run: nil}
 
-    case outcome do
-      {:error, :execution_suspended, %{checkpoint: packet}} when retain_checkpoint? ->
+    case {entry.batch?, outcome} do
+      {true, _} ->
+        %{entry | status: :completed, outcome: outcome}
+
+      {false, {:error, :execution_suspended, %{checkpoint: packet}}} when retain_checkpoint? ->
         %{
           entry
           | status: :suspended,
@@ -238,17 +313,22 @@ defmodule Alto.Runner.Agents do
 
   defp new_entry(spec, run) do
     %{
-      id: spec.messaging.id,
+      id: if(run, do: spec.messaging.id, else: spec.id),
       spec: spec,
       run:
-        run
-        |> Map.drop([:messages_rev, :events_rev, :loop_state])
-        |> Map.put(:execution_owner, self()),
+        if(run,
+          do:
+            run
+            |> Map.drop([:messages_rev, :events_rev, :loop_state])
+            |> Map.put(:execution_owner, self())
+        ),
       starter: nil,
       handle: nil,
       ref: nil,
       status: :pending,
       summary: nil,
+      outcome: nil,
+      batch?: is_nil(run),
       collected: false
     }
   end
@@ -296,41 +376,50 @@ defmodule Alto.Runner.Agents do
     {summaries, %{state | entries: entries}}
   end
 
-  defp stop_children(state) do
-    Enum.each(state.entries, fn entry ->
-      if entry.handle && live?(entry), do: Runner.cancel(entry.handle, :parent_finished)
+  defp batch_outcomes(state), do: Enum.map(state.entries, &{&1.spec.id, &1.outcome})
+
+  defp stop_children(state, reason \\ :parent_finished) do
+    deadline = System.monotonic_time(:millisecond) + if(state.start, do: 5_000, else: 1_000)
+
+    entries =
+      Enum.map(state.entries, fn
+        %{starter: %Task{} = starter} = entry ->
+          case Task.shutdown(starter, :brutal_kill) do
+            {:ok, outcome} -> started(entry, outcome, state.runner)
+            _ -> finish(entry, {:error, {:run_process_failed, :child_start_interrupted}})
+          end
+
+        %{status: :pending} = entry ->
+          finish(entry, {:error, {:not_started, reason}})
+
+        entry ->
+          entry
+      end)
+
+    Enum.each(entries, fn entry ->
+      if entry.handle && live?(entry), do: state.runner.cancel(entry.handle, reason)
     end)
 
-    deadline = System.monotonic_time(:millisecond) + 1_000
-    %{state | entries: Enum.map(state.entries, &stop_child(&1, deadline))}
+    drain(%{state | entries: entries, frozen: true}, deadline, reason)
   end
 
-  defp stop_child(%{status: status} = entry, _) when status in [:completed, :suspended], do: entry
+  defp drain(state, deadline, reason) do
+    refs = for entry <- state.entries, entry.ref, into: %{}, do: {entry.ref, true}
 
-  defp stop_child(%{starter: %Task{} = starter} = entry, _) do
-    outcome =
-      case Task.shutdown(starter, :brutal_kill) do
-        {:ok, {:ok, handle}} ->
-          Runner.cancel(handle, :parent_finished)
-          Runner.terminate(handle, :parent_finished)
-
-        _ ->
-          {:error, {:run_process_failed, :child_start_interrupted}}
+    if map_size(refs) == 0 do
+      state
+    else
+      receive do
+        {:alto_runner_result, ref, outcome} when is_map_key(refs, ref) ->
+          state
+          |> update_entries(&(&1.ref == ref), &finish(&1, outcome))
+          |> drain(deadline, reason)
+      after
+        max(deadline - System.monotonic_time(:millisecond), 0) ->
+          update_entries(state, &(&1.ref != nil), fn entry ->
+            finish(entry, state.runner.terminate(entry.handle, reason))
+          end)
       end
-
-    finish(entry, outcome)
-  end
-
-  defp stop_child(%{handle: nil} = entry, _),
-    do: finish(entry, {:error, {:not_started, :parent_finished}})
-
-  defp stop_child(entry, deadline) do
-    outcome =
-      case Runner.await(entry.handle, max(deadline - System.monotonic_time(:millisecond), 0)) do
-        {:error, :await_timeout} -> Runner.terminate(entry.handle, :parent_finished)
-        outcome -> outcome
-      end
-
-    finish(entry, outcome)
+    end
   end
 end

@@ -41,7 +41,7 @@ defmodule Alto.Tools.CodexAgent do
 
   @impl true
   def run(%{task: task, model: model}, context, opts) do
-    with_client(context, opts, fn client, guardian ->
+    with_client(context, opts, fn client ->
       with :ok <- Client.subscribe(client),
            {:ok, turn} <-
              Backend.start_turn(client, nil, task,
@@ -51,8 +51,6 @@ defmodule Alto.Tools.CodexAgent do
                approval: :read_only,
                dynamic_tools: dynamic_tools(context)
              ) do
-        send(guardian, {:turn, turn})
-
         await(
           Map.merge(turn, %{
             client: client,
@@ -62,7 +60,6 @@ defmodule Alto.Tools.CodexAgent do
             output_limit: Keyword.get(opts, :max_output_bytes, 48_000),
             context: context,
             opts: Keyword.merge(opts, model: model, cwd: context.cwd, approval: :read_only),
-            guardian: guardian,
             deliveries: [],
             calls: %{}
           })
@@ -75,68 +72,30 @@ defmodule Alto.Tools.CodexAgent do
 
   @doc false
   def models(context, opts),
-    do: with_client(context, opts, fn client, _ -> Backend.models(client) end)
+    do: with_client(context, opts, &Backend.models/1)
 
   defp with_client(context, opts, fun) do
     client_opts =
       opts |> Keyword.take([:command, :args, :env, :startup_timeout, :request_timeout])
 
     client_opts =
-      Keyword.merge(client_opts, cwd: context.cwd, instance: make_ref(), experimental_api: true)
-
-    # Own startup as well as the turn so cancellation during the handshake
-    # cannot leave a private App Server behind.
-    owner = self()
-    guardian = spawn(fn -> connect(owner, client_opts) end)
-    monitor = Process.monitor(guardian)
-
-    receive do
-      {:codex_client, ^guardian, {:ok, client}} ->
-        try do
-          fun.(client, guardian)
-        after
-          send(guardian, :close)
-          receive do: ({:DOWN, ^monitor, :process, _, _} -> :ok)
-        end
-
-      {:codex_client, ^guardian, {:error, reason}} ->
-        Process.demonitor(monitor, [:flush])
-        {:error, reason}
-
-      {:DOWN, ^monitor, :process, _, reason} ->
-        {:error, {:codex_start_failed, reason}}
-    end
-  end
-
-  defp connect(owner, opts) do
-    monitor = Process.monitor(owner)
-    result = Client.ensure_started(opts)
-    send(owner, {:codex_client, self(), result})
-
-    case result do
-      {:ok, client} -> guard(client, monitor, nil)
-      {:error, _} -> :ok
-    end
-  end
-
-  defp guard(client, monitor, turn) do
-    receive do
-      {:turn, turn} -> guard(client, monitor, turn)
-      :close -> close(client, turn)
-      {:DOWN, ^monitor, :process, _, _} -> close(client, turn)
-    end
-  end
-
-  defp close(client, turn) do
-    if turn do
-      Client.request(
-        client,
-        "turn/interrupt",
-        %{"threadId" => turn.thread_id, "turnId" => turn.turn_id},
-        1_000
+      Keyword.merge(client_opts,
+        cwd: context.cwd,
+        owner: self(),
+        instance: make_ref(),
+        experimental_api: true
       )
-    end
 
+    with {:ok, client} <- Client.ensure_started(client_opts) do
+      try do
+        fun.(client)
+      after
+        close(client)
+      end
+    end
+  end
+
+  defp close(client) do
     GenServer.stop(client, :normal, 1_000)
   catch
     :exit, _ -> Process.exit(client, :kill)
@@ -306,7 +265,6 @@ defmodule Alto.Tools.CodexAgent do
                ),
              {:ok, response} <- send_input(turn, entry, kind),
              {:ok, next} <- delivered_turn(turn, response, kind),
-             _ <- send(turn.guardian, {:turn, next}),
              :ok <- Alto.Input.settle(context.input, context.input_reader, entry.message_id) do
           {:ok,
            %{

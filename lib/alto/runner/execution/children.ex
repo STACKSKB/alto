@@ -501,7 +501,7 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   defp run_batch(specs, concurrency, start, run) do
-    Alto.Runner.SubagentBatch.run(specs, concurrency, start, fn ->
+    Alto.Runner.Agents.batch(specs, concurrency, start, fn ->
       case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
         {{:cancelled, _} = cancelled, _} -> cancelled
         {_, {:error, _} = error} -> error

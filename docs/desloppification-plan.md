@@ -1,24 +1,20 @@
 # Desloppification
 
-Alto is at `0.0.1`: internal APIs and formats may change without migrations.
-Preserve all current capabilities. Internal sequencing, representations, APIs,
-and error details may change when functionality remains intact. Prefer existing Elixir,
-OTP, and installed-library APIs; add no dependencies for this cleanup. Moving
-code or compressing formatting does not count as simplification.
+Alto is at `0.0.1`. Preserve capabilities; internal APIs, formats, sequencing
+and error details may change without migrations. Prefer Elixir, OTP and existing
+libraries. Add no dependencies for this cleanup. Moving code or compressing
+formatting does not count as simplification.
 
 ## Measurement
 
-The original baseline is 40,655 physical production `.ex` lines in `lib/` and
-`packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
-documentation, generated output, and dependencies are counted separately.
+The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
+and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-The current count is **33,450 lines (17.7% below the original)**. **4,992 lines
-remain** to reach the unchanged target. Added model-selection and messaging
-features are included in this count; their growth does not reset the baseline.
-The reduction includes removed duplicate source documentation. Examples
-separately lose 39 implementation lines.
-
-Reproduce the production count with:
+Current: **33,405 lines**, a **17.8% reduction**, with **4,947 lines remaining**.
+Added functionality does not reset the baseline. Source-documentation reductions
+are included in the physical count; tests, Markdown, examples, dependencies and
+generated output are excluded. Report implementation and documentation savings
+separately rather than treating removed prose as simplified behavior.
 
 ```sh
 git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
@@ -26,276 +22,79 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   awk '{sum += $1} END {print sum}'
 ```
 
-## Changes in the worktree
+## Current architecture
 
-- File-content and unified-diff previews use one bounded iodata preview. Erlang's
-  iovec conversion replaces the diff's recursive chunk walker without flattening
-  omitted content. This removes 10 implementation lines. Another 58 source lines
-  are duplicated guide prose removed from runner, queue, ledger, session and
-  continuation modules; concise contracts and non-obvious invariants remain.
-  Those documentation reductions are included in the physical-line count and
-  are not claimed as implementation simplification.
-- Catalog and credentials share bounded JSON snapshot reads and the locked
-  reread/update/atomic-replacement workflow in Storage. Their domain validators
-  and credential permission checks remain separate. Storage errors now use
-  `snapshot_*` tags, including in TUI catalog recovery; formats are unchanged.
-  Write limits include the trailing newline so a successful snapshot fits the
-  reader's bound. Command capture retains one bounded first/last buffer instead
-  of parallel head and tail state, retaining UTF-8 repairs and binary output.
-  Together these remove 37 formatted production lines.
-- Tool result bounding also classifies participant results. Serial, parallel and
-  agent tools share one outcome commit path for transcript, history and events;
-  the nested worker-result adapters and summary postprocessor are removed.
-  Prepared summaries now accompany uncertain failures and approval rejections.
-  Workspace actions update one canonical retained resource with revision fences,
-  replacing the repeated grant/attempt/checkpoint cycle and status translation.
-  Interrupted actions remain visible to operators; discard retires the resource.
-  These two changes remove 52 formatted production lines, not the larger
-  reduction sought. No new dependencies or migrations are introduced.
-- Approval, parent, child and cooperative execution checkpoints share one capture
-  and restore pipeline. The encoded state owns the frame, budget and authority
-  binding; child capture no longer pretends to be a root approval. Routing and
-  the displayable approval request remain in JSON. Restores validate and narrow
-  authority before restoring messaging and children, while async children keep
-  their live shared budget. The continuation format is version 4, without a
-  migration. Pass-through loop checkpoint tests and literal shape checks are
-  removed; behavioral, corruption and concurrency coverage remains.
-- Owned children use one ordered collection throughout admission, dispatch,
-  checkpoint restoration, shutdown and collection. Completion shares one path
-  for failed starts and finished runs; finished entries release process handles.
-  The separate order index and repeated map reconstruction are removed.
-- Queue and operation-ledger clients use their native request tuples directly.
-  Retained records apply deadlines to that same ledger contract, removing a
-  second set of forwarding operations. Queue claims share count/byte bounds and
-  selector validation; initialization keeps its separate deadline checks.
-  Existing compaction calls retain infinite timeouts, and storage formats and
-  append-before-publication behavior are unchanged.
-- Registry clients use one typed atom/tuple request contract through to the
-  GenServer, replacing twenty forwarding APIs and their duplicated documentation.
-  Transports retain their fixed wire-command allowlist and normalization;
-  trusted application callbacks still execute outside the registry process.
-  Configuration-literal tests and a duplicate model-exposure case are removed;
-  runtime delegation, exposure, observer privacy, and validation tests remain.
-- Execution keeps budget, identity, input, and messaging authority once. Tools
-  and approvals receive the existing Context struct projected at invocation;
-  checkpoint restoration no longer synchronizes a second copy of those fields.
-- Spawn, Start, and Wait agent tools share dispatch fencing, result bounding,
-  completion, and cancellation handling through an operation callback. Spawn's
-  uncertain errors remain distinct from Start/Wait's known failures.
-- Conversation heads and revision files share validation of decoded entries;
-  heads no longer decode an entry a second time after canonical byte accounting.
-- Execution limits have one definition in Config, supplying Setup's schema,
-  Config's accepted keys, checkpoint authority fields, and child inheritance.
-  Child-specific narrowing and checkpoint validation remain explicit.
-- CLI listener assembly applies defaults and overrides in one mapping pass,
-  then appends requested listeners missing from the configured list.
-- Decoded protocol commands share `{kind, id, args}` and a fixed allowlist
-  forwards direct registry calls. Runs/sessions share response assembly.
-- Subscriber delivery uses one `Enum.map_reduce` for notifications, released
-  buffer bytes, and durable replay cursors, removing intermediate lists.
-- Approval and cooperative child suspension share history persistence, bounded
-  checkpoint capture, and result assembly through a capture callback. Capture
-  and failure results use the latest persisted run revision.
-- Tool batches carry explicit admission outcomes and consume worker results in
-  source order, removing the operation-ID index and reconstructed outcome list.
-  Rejected calls keep their event/transcript positions and never consume results.
-- Delegated Codex execution carries one turn state through notifications, dynamic
-  calls, steering, and follow-ups instead of repeatedly threading seven arguments.
-- Queue records have one map representation across storage, replay, and reads.
-  Atomic snapshots replace the multi-record snapshot/checksum protocol; the
-  snapshot format is version 8, with no migration. Ledger checkpoint operations
-  share validation and no longer persist unused command envelopes.
-  Budget packets omit immutable headers already stored in recovery metadata;
-  the account format is version 2, with no migration.
-  Continuation recovery omits the type already held by its ledger entry;
-  its format is version 4, with no migration. Child membership validation
-  checks the canonical IDs directly instead of constructing temporary sets.
-  Stores share directory and ID validation; queue schedules accept one explicit
-  non-negative delay or timestamp, with no options meaning immediate eligibility.
-- Tools have one execution callback, `run/3`. Optional `prepare/3` returns the
-  exact value passed through approval to execution. The second callback,
-  preparation-mode state, and raw-argument wrappers are removed. Model discovery
-  uses the same supervised batch, dispatch fence, and result bound as other tools.
-- Context windows and bounded subagent policies use the existing `{module, state}`
-  contract. Tokenizer adapters return a unary function. Redundant config structs,
-  defaults, direct resolution APIs, and their helper-only tests are removed.
-  Tokenizer adapters accept the callback's exact message/tool input and resolve
-  fixed framing overhead once when constructed.
-  Context and child policies now require that tuple representation; bare-struct
-  dispatch and fingerprint handling are removed. Tools and approvals use the
-  shared capability resolver, rejecting missing callbacks before dispatch.
-- Consumer dispatch, recovery, retry, checkpoint, and parked outcomes now return
-  a settlement decision; one boundary acknowledges or releases the queue claim
-  after ledger work. Failed retry ledger writes still retain the claim, while
-  retry queue failures remain observable.
-- Registry run queries and commands share run lookup and reply handling. Message
-  routing selects the destination once and keeps completed-root duplicate handling.
-- Session startup, durable events, and completion share a lazy record append
-  workflow, including disabled-session handling and persistence error reporting.
-  Events remain silent on log failures; startup and completion retain warnings.
-- Registry approvals use globally unique handles in one map; subscriber scope is
-  one run ID or nil. Native TUI approvals inherit the owning UI run ID, avoiding
-  retained approval sets and reverse lookups while preserving child identities.
-- TUI rows and transcript text are computed once per frame. Rail actions carry the
-  selected row directly. Forms, cancellation, completion, and queued-input paths
-  share their existing state updates. Discovered model catalogs override profiles,
-  including when discovery returns an empty catalog. Codex context limits live in
-  per-task usage, removing the global value that leaked across task selection.
-  Navigation reads one catalog snapshot for projects and grouped tasks instead
-  of rereading the document for each project; ordering and filtering are preserved.
-  Backend fallbacks use native `with` expressions. Codex startup/history replies
-  reuse its async-message helper and default-model selection has one implementation.
-  Event ingestion fetches each run once and routes approval resolution through
-  the existing event handlers.
-  The details drawer's saved return focus also records whether it is open;
-  a redundant boolean and its parallel updates are removed.
-  Prose projection uses a map-reduce pass to track row offsets and builds wrapped
-  rows directly; repeated accumulated-list copies and prefix scans are removed.
-  Automatic and interactive Codex approvals use the same response callback.
-- Codex UI and delegated agents share bounded model pagination. Provider discovery
-  and streaming share Req response handling. Validated Anthropic tool-input maps
-  bypass JSON round trips. Provider observers use the existing notification helper.
-- Session reads return canonical conversation snapshots. Execution setup owns run
-  IDs; child summaries project result fields and share persistence-error handling.
-  Redaction, protocol encoding, and header parsing each have one implementation.
-- File tools and examples reuse bounded reads and option validation. Project
-  instructions use `BoundedFile.range/3`; read/sync cleanup uses `File.open/3`.
-  File writes and edits share preparation as well as commit: resolve, snapshot,
-  transform, render, and freeze. Each tool supplies its content transformation;
-  results share `bytes_before` and `bytes_after` instead of a separate write field.
-  Workspace creation reuses source/root checks. Atomic writes retain close-error
-  reporting and post-rename uncertainty with simpler control flow. Fresh and
-  resumed workspace runs share completion handling; an unused resume wrapper is gone.
-- Structured handoffs retain their four fields in one immutable JSON artifact,
-  using shared atomic-write and lock helpers. Consumers use `artifact_path`;
-  the multi-file directory publisher and legacy file map are removed.
-- Unix sockets use bounded OTP line framing instead of a second line buffer and
-  splitter. The existing ThousandIsland dependency owns acceptance, connection
-  supervision and cleanup, replacing custom process loops. Webhook listeners retain only delivery IDs; routing owns validated
-  endpoint maps without a second internal struct or duplicate endpoint state.
-  MCP and Codex ports also use native framing, with per-message payload limits;
-  startup success and failure share waiter cleanup. One JSONRPC GenServer now
-  hosts both MCP and Codex, owning startup, readiness, transport, status redaction
-  and termination. Protocol clients retain their handshake, replies and cancellation.
-  MCP and Codex also share
-  request admission, caller monitoring, and startup/error return handling through
-  JSONRPC callbacks; their protocol-specific replies and cancellation remain local.
-  CLI rendering uses GenServer calls for stop replies and timeouts instead of
-  a custom monitored request protocol. Batch polling uses `Process.sleep/1`.
-- User and agent input share one messaging ingress and receipt representation.
-  Acknowledgements use `message_id`; the legacy enqueue API, numeric sequence,
-  duplicate validation, and unreachable channel-free execution branches are gone.
-  Native and Codex input share message rendering; live ingress and restored
-  snapshots share message validation. Transport configuration uses the existing
-  capability resolver, and mailbox reads use the existing bounded-file helper.
-  Fresh and restored async children share entry construction. Codex initial and
-  follow-up turns share request fields. The obsolete unsupported-agent flag,
-  rejection branch and test-only setup are removed; registered agents have channels.
-  Execution setup copies optional fields through one explicit projection, with
-  derived state and defaults kept separate.
-  Input claims return their reader token directly. Native and delegated readers
-  use the same read/acknowledgement operations; the second PID-based API and
-  forwarding dispatcher are gone. Restored agents reuse normal registration.
-  Snapshot collection reuses the fallible fold; mailbox validation uses boolean
-  predicates directly instead of a second success/failure control-flow layer.
+The substantive consolidations are grouped here; Git history holds individual
+changes and historical test counts. Contracts belong in the component guides.
 
-The “Analyze code duplication” findings were checked against actual callers.
-Extractions that added adapters without removing behavior were rejected.
-No dependencies were added. The earlier SSE dependency replaced two parsers.
+- Execution owns authority, budgets and input once, projecting tool contexts at
+  invocation. Tool and agent operations share dispatch fencing, bounded outcomes
+  and completion. Checkpoint variants share capture and restore; workspace
+  actions update one retained resource under revision fencing.
+- `Agents` owns synchronous and asynchronous child startup, subscriptions,
+  completion and shutdown. Synchronous batches use scoped schedulers and raw
+  source-ordered outcomes; parent checks authorize queue refills. Shutdown drains
+  subscriptions before forced termination. See [runners](runners.md) and
+  [subagents](subagents.md).
+- MCP and Codex share the JSON-RPC process host, framing, request admission and
+  startup handling. Private Codex clients monitor their tool owner and close the
+  entire process group on tool exit, including during initialization. They no
+  longer need a guardian or a `turn/interrupt` handshake before shutdown.
+- Registry, queue and ledger callers use one request contract each. Consumer
+  settlement happens at one boundary after durable work. Snapshot persistence
+  shares bounded reads, locked updates and atomic replacement. Queue records
+  have one representation across storage, replay and reads.
+- File writes and edits share preparation and commit. File/diff previews share
+  bounded iodata traversal. Command output retains one bounded first/last buffer.
+  Context policies and tokenizer adapters use existing tuple/function contracts.
+- TUI state uses canonical catalog, task and run data. Rendering shares per-frame
+  projections; backend event and approval flows reuse existing handlers. User
+  and agent messages share input channels, receipts and validation.
 
-## Harness fixes
+The latest lifecycle changes remove **45 net production lines**: 8 from deleting
+`SubagentBatch` after including its shared-scheduler adapter, and 37 from removing
+the private Codex guardian. This remains below the intended scale of reductions.
+No dependency or migration was introduced. Earlier cleanup introduced one SSE
+library to replace two parsers; subsequent passes have added no dependencies.
 
-Tool JSON fallback normalizes unsupported terms while preserving the result
-shape, so a tuple error cannot hide successful sibling output, run IDs, or usage.
-Native values and custom JSON encoders keep their existing fast path.
+## Remaining work
 
-Codex follow-up turns retain the selected model and effort. Cancellation tracks
-the accepted turn before settling its delivery receipt. Restored mailboxes reject
-duplicate message IDs, malformed messages and missing queued receipts.
+The target is not met. Prioritize deleting duplicate workflows through functional
+composition and canonical state. The “Analyze code duplication” findings have
+been checked against callers; reject extractions that add adapters without
+removing implementation. Recent CLI/menu/selection reviews found no substantial
+remaining duplication; merely wrapping their distinct flows is not progress.
 
-The spawn and async-start schemas reflect the resolved child limit. Regression tests cover
-schema limits 1, 4, and 12; five children run under limit 5 and are rejected
-before dispatch under limit 4.
+Preserve append-before-dispatch durability, single-use grants, bounded retention,
+frozen approval values, and the distinction between rejection and uncertain
+mutation. Exact session payloads and portable wire projections serve different
+purposes. Terminal selection retains raw text capture because exporting cell
+maps slowed mouse-down handling. Remove constructor-echo tests, while retaining
+failure, concurrency, recovery, authority and user-interaction coverage.
 
-## Remaining work and constraints
+## Harness fixes and verification
 
-The 30% target is not met. Prioritize shared workflow sequences and higher-order
-composition over isolated branch or wrapper reductions. Keep protocol-specific
-validation and failure handling at the appropriate workflow boundaries.
-Keep append-before-dispatch durability, single-use grants, explicit unknown
-outcomes, bounded retention, and frozen approval values.
+Tuple errors now retain the surrounding JSON result shape, including successful
+siblings' output, run IDs and usage. Spawn/start schemas use the resolved child
+limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five children.
+Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
+IDs, malformed messages and missing queued receipts.
 
-Distinct trust boundaries and failure modes are not interchangeable merely
-because their code looks alike. In particular, retain exact session payloads
-alongside their portable wire projection, and preserve different handling for
-known rejection versus uncertain mutation. Terminal selection keeps raw text
-capture because exporting cell maps materially slowed mouse-down handling.
+The final core suite passes **1,074 tests**. The TUI suite passes **142 tests**
+on this pass before the final subscription-drain correction; that correction is
+covered by the final core run and 42 focused scheduler/continuation tests.
+New regressions cover owner death during unfinished startup, custom-runner
+cancellation without calling `await` again, and Codex cancellation during its
+initialization handshake. Cleanup tests check actual process exit. Formatting
+and diff checks pass. Run test VMs sequentially with `--max-cases 8`; concurrent
+VMs caused timing failures.
 
-Remove tests that only echo constructors or unused scaffolding. Retain tests
-that distinguish malformed input, concurrent writes, interrupted execution,
-recovery, and actual user interactions.
+Earlier differential checks matched 12,962 valid UTF-8 diff previews, 42,480 prose
+projections, 8,721 protocol decodes and 100,000 subscriber transitions. Converted
+registry and ledger calls were compared against their prior arguments before
+running the suites. Terminal selection remains approximately 1 ms at 200×60.
 
-## Verification
-
-Shared previews match the previous diff renderer in 12,962 Unicode/clipping
-cases and pass 35 file-tool and approval-wrapper tests. The 11 documentation
-edits have identical non-documentation ASTs before and after; no prompts, specs,
-types or executable behavior changed in those files.
-
-The shared snapshot workflow passes 45 credential/catalog/provider/onboarding
-tests and all 142 TUI tests. Command capture passes 30 command and sandbox
-tests, including repeated clipping before the final diagnostic tail. The
-snapshot boundary regression checks exact-size rereading and rejects a changed
-document one byte over the limit without replacing the prior file.
-
-The preceding tool/workspace simplification passed **1,070 core tests and
-142 TUI tests**.
-The canonical tool outcomes and workspace resource lifecycle pass both full
-suites. Existing tests cover bounds, cancellation, sibling outcome retention,
-approval, workspace revision fencing and crash recovery. The crashed-workspace
-test also verifies operator visibility before and after ledger restart.
-The shared checkpoint pipeline passes those full suites. Its final envelope-bound
-correction is checked by the 72-test continuation suite, including large-state
-round trips and malformed budget/transcript rejection. Raw state remains bounded
-at 1 MB; the envelope allows Base64 expansion without allocating another encoded
-copy merely to check its size. The formatted production reduction is 37 lines;
-the larger draft estimate did not survive formatting and complete validation.
-The child scheduler consolidation passes that full core suite and the updated
-11-test messaging suite, including a new regression for refused/crashed starts,
-slot release, requested result order, and collecting child usage only once.
-It removes 61 production lines after formatting; the regression adds one test.
-Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
-failures. Tests allow fixture startup time and establish prepared work or an
-active turn before checking ordering and timeout interruption. Formatting and
-diff checks pass.
-
-Focused coverage includes mixed-error batches, child limits and authority,
-continuation recovery, storage failures, frozen tool preparation, workspace path
-checks, UTF-8 bounds, redaction, and observer exceptions/throws/exits. Terminal
-selection benchmarks remain about 1 ms at 200×60. Prose wrapping was also
-compared against the previous implementation in 40,080 whitespace/Unicode cases
-and 2,400 complete multiline/cursor projections; all outputs matched.
-
-The shared JSON-RPC request/startup workflow passes 46 focused external-client,
-Codex-agent, and external-tool tests, plus the TUI backend integration suite.
-The sole-process-host consolidation removes another 39 production lines and
-passes both full suites. Live MCP and Codex clients also verify that process
-status omits configured secrets. A duplicate constructor comparison is removed
-from restored-tool-history coverage; explicit rendered-content assertions remain.
-
-Protocol normalization matched the previous decoder across 8,721 input cases.
-Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including
-buffer limits, overflow, replay cursors, and disconnect decisions.
-All 144 converted registry calls were compared against their prior message
-arguments, including explicit defaults, before running the complete suites.
-The queue/ledger pass removes 172 production lines after formatting and caller
-expansion, including duplicate API documentation. Its 803 converted calls were
-checked against the original wrapper ASTs, including default arguments, timeouts,
-and retained-record deadlines. Consumer settlement uses the same request path;
-an invalid settlement cannot kill the queue or consume a live claim.
-
-Terminal exit coverage sends real Ctrl+G/Q and Ctrl+C through a PTY and checks
-mode-reset output before logging returns to the console. The documented
-`mix alto.tui --config ../../alto.agentic.exs` entry point also emits the resets
-on normal exit. The reported mouse leakage under GNU Screen/GNOME Terminal is
-not reproduced; no speculative production reset workaround was retained.
+Real-key PTY tests cover Ctrl+G/Q and Ctrl+C. The documented
+`mix alto.tui --config ../../alto.agentic.exs` emits terminal mode resets on
+normal exit. GNU Screen/GNOME Terminal mouse leakage was not reproduced;
+no speculative workaround was retained.

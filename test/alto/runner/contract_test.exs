@@ -17,6 +17,22 @@ defmodule Alto.Runner.ContractTest do
     end
   end
 
+  defmodule SubscribedRunner do
+    def subscribe(test, subscriber) do
+      ref = make_ref()
+      send(test, {:subscribed, subscriber, ref})
+      {:ok, ref}
+    end
+
+    def cancel(test, reason), do: send(test, {:cancel_requested, reason})
+    def await(_, _), do: raise("batch must drain its subscription")
+
+    def terminate(test, reason) do
+      send(test, :forced_termination)
+      {:error, reason}
+    end
+  end
+
   test "public lifecycle dispatches opaque non-process handles to the selected runner" do
     opts = Alto.Config.new(runner: ExternalRunner) |> Alto.Config.run_options()
     assert {:ok, %Handle{} = handle} = Alto.start("external result", opts)
@@ -62,11 +78,57 @@ defmodule Alto.Runner.ContractTest do
               {"one", {:ok, %Result{output: "one"}}},
               {"two", {:ok, %Result{output: "two"}}}
             ]} =
-             Alto.Runner.SubagentBatch.run(specs, 2, start, fn -> :continue end,
+             Alto.Runner.Agents.batch(specs, 2, start, fn -> :continue end,
                runner: ExternalRunner
              )
 
     assert_receive {:alto_runner_result, ^unrelated, :other_batch}
+  end
+
+  test "batch cancellation drains subscribed results without awaiting the handle again" do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        check = fn ->
+          receive do
+            :cancel -> {:cancelled, :operator}
+          after
+            0 -> :continue
+          end
+        end
+
+        Alto.Runner.Agents.batch([%{id: "child"}], 1, fn _ -> {:ok, parent} end, check,
+          runner: SubscribedRunner
+        )
+      end)
+
+    assert_receive {:subscribed, scheduler, ref}, 2_000
+    send(task.pid, :cancel)
+    assert_receive {:cancel_requested, {:cancelled, :operator}}, 2_000
+    send(scheduler, {:alto_runner_result, ref, {:ok, :settled}})
+    assert {{:cancelled, :operator}, [{"child", {:ok, :settled}}]} = Task.await(task)
+    refute_receive :forced_termination
+  end
+
+  test "batch owner death kills an unfinished start without dispatching queued children" do
+    parent = self()
+
+    start = fn spec ->
+      send(parent, {:starting, spec.id, self()})
+      receive do: (:never -> {:error, :unused})
+    end
+
+    owner =
+      spawn(fn ->
+        Alto.Runner.Agents.batch([%{id: "active"}, %{id: "queued"}], 1, start, fn -> :continue end)
+      end)
+
+    assert_receive {:starting, "active", starter}, 2_000
+    monitor = Process.monitor(starter)
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^starter, _}, 2_000
+    refute_receive {:starting, "queued", _}
   end
 
   test "invalid runner modules fail before starting work" do

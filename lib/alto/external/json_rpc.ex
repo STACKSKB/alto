@@ -26,6 +26,7 @@ defmodule Alto.External.JSONRPC do
     state =
       Map.merge(
         %{
+          owner: if(opts[:owner], do: Process.monitor(opts[:owner])),
           protocol: protocol,
           opts: opts,
           process: nil,
@@ -154,6 +155,9 @@ defmodule Alto.External.JSONRPC do
   @impl true
   def handle_info({:request_timeout, _} = message, state),
     do: state.protocol.handle_info(message, state)
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{owner: ref} = state),
+    do: {:stop, :normal, state}
 
   def handle_info({:DOWN, _, :process, _, _} = message, state),
     do: state.protocol.handle_info(message, state)

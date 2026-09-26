@@ -8,7 +8,9 @@ defmodule Alto.Tools.CodexAgentTest do
     log = Path.join(root, "requests.jsonl")
 
     File.write!(server, ~S"""
-    import json, sys
+    import json, os, sys, time
+    with open(sys.argv[1] + ".pid", "w") as pid_file:
+        pid_file.write(str(os.getpid()))
     turn_count = 0
     def emit(value):
         print(json.dumps(value), flush=True)
@@ -19,6 +21,8 @@ defmodule Alto.Tools.CodexAgentTest do
         method = msg.get('method')
         ident = msg.get('id')
         if method == 'initialize':
+            if os.environ.get('ALTO_TEST_PAUSE_INIT'):
+                time.sleep(30)
             emit({'id': ident, 'result': {'serverInfo': {'name': 'fake'}}})
         elif method == 'model/list':
             if msg['params'].get('cursor'):
@@ -55,8 +59,6 @@ defmodule Alto.Tools.CodexAgentTest do
             emit({'id': ident, 'result': {'turnId': 'turn-1'}})
             emit({'id': 'dynamic', 'method': 'item/tool/call', 'params': {'threadId': 'thread-1', 'turnId': 'turn-1', 'callId': 'call-one', 'tool': 'list_agents', 'arguments': {}}})
             emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
-        elif method == 'turn/interrupt':
-            emit({'id': ident, 'result': {}})
     """)
 
     on_exit(fn -> File.rm_rf!(root) end)
@@ -97,6 +99,33 @@ defmodule Alto.Tools.CodexAgentTest do
       Process.sleep(10)
       wait_for(log, method, attempts - 1)
     end
+  end
+
+  defp assert_stopped(log, attempts \\ 200)
+  defp assert_stopped(_, 0), do: flunk("owned App Server survived tool exit")
+
+  defp assert_stopped(log, attempts) do
+    pid = File.read!(log <> ".pid")
+
+    case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+      {_, 0} ->
+        Process.sleep(10)
+        assert_stopped(log, attempts - 1)
+
+      _ ->
+        :ok
+    end
+  end
+
+  test "cancellation during initialization closes the private App Server", context do
+    {module, settings} = context.tool
+    tool = {module, Keyword.put(settings, :env, %{"ALTO_TEST_PAUSE_INIT" => "1"})}
+    {:ok, handle} = Alto.start(%{"task" => "review"}, opts(context, tools: [tool]))
+    wait_for(context.log, "initialize")
+    assert :ok = Alto.cancel(handle)
+    assert {:error, {:cancelled, _}, _} = Alto.await(handle, 2_000)
+    assert_stopped(context.log)
+    refute Enum.any?(requests(context.log), &(&1["method"] == "turn/start"))
   end
 
   test "live steering uses the current turn and exposes only authorized messaging tools",
@@ -231,7 +260,7 @@ defmodule Alto.Tools.CodexAgentTest do
     turn = Enum.find(sent, &(&1["method"] == "turn/start"))["params"]
     assert turn["sandboxPolicy"] == %{"type" => "readOnly", "networkAccess" => false}
     assert Enum.any?(sent, &(&1["id"] == "permission" and Map.has_key?(&1, "error")))
-    assert Enum.any?(sent, &(&1["method"] == "turn/interrupt"))
+    assert_stopped(context.log)
   end
 
   test "failed turns and disconnects remain uncertain", context do
@@ -246,23 +275,23 @@ defmodule Alto.Tools.CodexAgentTest do
     context = %{context | tool: {module, Keyword.put(config, :max_output_bytes, 64)}}
     assert {:error, _, result} = Alto.run(%{"task" => "large"}, opts(context))
     assert result.verdict == :unknown
-    wait_for(context.log, "turn/interrupt")
+    assert_stopped(context.log)
   end
 
-  test "cancellation interrupts the owned App Server even when the tool is killed", context do
+  test "cancellation closes the owned App Server even when the tool is killed", context do
     assert {:ok, handle} = Alto.start(%{"task" => "hang"}, opts(context))
     wait_for(context.log, "turn/start")
     assert :ok = Alto.cancel(handle)
     assert {:error, {:cancelled, _}, _} = Alto.await(handle, 2_000)
-    wait_for(context.log, "turn/interrupt")
+    assert_stopped(context.log)
   end
 
-  test "tool timeout interrupts the owned App Server", context do
+  test "tool timeout closes the owned App Server", context do
     assert {:ok, handle} = Alto.start(%{"task" => "hang"}, opts(context, tool_timeout: 3_000))
     wait_for(context.log, "turn/start")
     assert {:error, _, result} = Alto.await(handle, 5_000)
     assert result.verdict == :unknown
-    wait_for(context.log, "turn/interrupt")
+    assert_stopped(context.log)
   end
 
   test "discovers Codex models across pages without starting a turn", context do

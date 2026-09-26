@@ -76,7 +76,7 @@ The lower-level components can also be used independently:
 | `Execution.Transcript` | Bounded history and optional compaction |
 | `Execution.Events` | Event retention, persistence, and outcome accounting |
 | `Execution.Session` | Transcript revision checks and final session records |
-| `Execution.Children` / `SubagentBatch` | Inherited authority, retained child continuations, bounded concurrency, joining |
+| `Execution.Children` / `Agents` | Inherited authority, retained child continuations, bounded concurrency, joining |
 | `Execution.Workspace` | Optional resource setup/capture around a worker callback |
 | `Execution.Call` | Supervised invocation with deadline and cancellation |
 | `Runner.Budget` | Shared execution-tree accounting |
