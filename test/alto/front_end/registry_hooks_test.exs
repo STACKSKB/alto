@@ -37,7 +37,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
            {:ok, Map.put(payload, "handled", true)}
          end,
          "reenter" => fn _payload ->
-           {:ok, run_id} = Registry.start_run(name, "fast", "from callback")
+           {:ok, run_id} = Registry.request(name, {:start_run, "fast", "from callback", []})
            {:ok, %{"run_id" => run_id}}
          end,
          "explode" => fn _payload -> raise "boom" end
@@ -78,7 +78,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     assert {:error, {:command_outcome_unknown, :timeout}} = Registry.command(name, "stall", %{})
     assert_receive {:command_worker, worker}
     refute Process.alive?(worker)
-    assert {:ok, []} = Registry.runs(name)
+    assert {:ok, []} = Registry.request(name, :runs)
   end
 
   test "a callback can reenter the registry without deadlocking", %{name: name} do
@@ -97,7 +97,10 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
 
     owner =
       spawn(fn ->
-        send(parent, {:started, Registry.start_run(name, "blocking", "owned", owner: self())})
+        send(
+          parent,
+          {:started, Registry.request(name, {:start_run, "blocking", "owned", [owner: self()]})}
+        )
 
         receive do
           :stop -> :ok
@@ -108,7 +111,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     # Initial module loading can exceed the global receive timeout in a full
     # suite. Establish readiness before exercising owner cancellation.
     assert_receive :provider_started, 2_000
-    assert Registry.run_result(name, run_id) == :running
+    assert Registry.request(name, {:run_result, run_id}) == :running
     send(owner, :stop)
     ref = Process.monitor(owner)
     assert_receive {:DOWN, ^ref, :process, ^owner, _}
@@ -120,7 +123,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
 
   test "invalid owners and callback exceptions fail closed", %{name: name} do
     assert {:error, {:invalid_owner, :bad}} =
-             Registry.start_run(name, "fast", "bad owner", owner: :bad)
+             Registry.request(name, {:start_run, "fast", "bad owner", [owner: :bad]})
 
     assert {:error, {:command_exception, "boom"}} = Registry.command(name, "explode", %{})
   end
@@ -129,7 +132,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
   defp eventually_result(_name, _run_id, 0), do: :timeout
 
   defp eventually_result(name, run_id, attempts) do
-    case Registry.run_result(name, run_id) do
+    case Registry.request(name, {:run_result, run_id}) do
       :running ->
         Process.sleep(10)
         eventually_result(name, run_id, attempts - 1)

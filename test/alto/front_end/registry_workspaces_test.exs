@@ -31,9 +31,9 @@ defmodule Alto.FrontEnd.RegistryWorkspacesTest do
         {Registry, name: nil, cwd: root, config_resolver: fn "test" -> {:ok, options} end}
       )
 
-    assert {:ok, run} = Registry.start_run(registry, "test", "{}", cwd: other)
+    assert {:ok, run} = Registry.request(registry, {:start_run, "test", "{}", [cwd: other]})
     assert_folder(registry, run, other)
-    assert {:ok, run} = Registry.start_run(registry, "test", "{}")
+    assert {:ok, run} = Registry.request(registry, {:start_run, "test", "{}", []})
     assert_folder(registry, run, root)
   end
 
@@ -41,7 +41,10 @@ defmodule Alto.FrontEnd.RegistryWorkspacesTest do
     receive do
       {:folder, ^expected} -> :ok
     after
-      5_000 -> flunk("Folder tool did not run: #{inspect(Registry.run_result(registry, run))}")
+      5_000 ->
+        flunk(
+          "Folder tool did not run: #{inspect(Registry.request(registry, {:run_result, run}))}"
+        )
     end
   end
 end

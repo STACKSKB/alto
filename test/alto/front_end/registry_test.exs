@@ -125,9 +125,13 @@ defmodule Alto.FrontEnd.RegistryTest do
   } do
     start_registry(registry, root)
 
-    assert {:error, {:unknown_config, "nope"}} = Registry.start_run(registry, "nope", "task")
-    assert {:error, :invalid_task} = Registry.start_run(registry, "tool-loop", "")
-    assert {:error, :invalid_task} = Registry.start_run(registry, "tool-loop", :not_a_task)
+    assert {:error, {:unknown_config, "nope"}} =
+             Registry.request(registry, {:start_run, "nope", "task", []})
+
+    assert {:error, :invalid_task} = Registry.request(registry, {:start_run, "tool-loop", "", []})
+
+    assert {:error, :invalid_task} =
+             Registry.request(registry, {:start_run, "tool-loop", :not_a_task, []})
   end
 
   test "runs returns reconnect summaries for running and completed runs", %{
@@ -136,8 +140,10 @@ defmodule Alto.FrontEnd.RegistryTest do
   } do
     start_registry(registry, root)
 
-    assert {:ok, running_id} = Registry.start_run(registry, "blocking-loop", "keep working")
-    assert {:ok, running} = Registry.runs(registry)
+    assert {:ok, running_id} =
+             Registry.request(registry, {:start_run, "blocking-loop", "keep working", []})
+
+    assert {:ok, running} = Registry.request(registry, :runs)
 
     assert [
              %{
@@ -154,19 +160,23 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     assert is_integer(started_at_ms)
 
-    Registry.cancel(registry, running_id, :test)
-    assert wait_for(fn -> match?({:ok, [%{status: "cancelled"}]}, Registry.runs(registry)) end)
+    Registry.request(registry, {:cancel, running_id, :test})
 
-    assert {:ok, completed_id} = Registry.start_run(registry, "tool-loop", "complete this")
+    assert wait_for(fn ->
+             match?({:ok, [%{status: "cancelled"}]}, Registry.request(registry, :runs))
+           end)
+
+    assert {:ok, completed_id} =
+             Registry.request(registry, {:start_run, "tool-loop", "complete this", []})
 
     assert wait_for(fn ->
              match?(
                {:ok, [%{id: ^completed_id, status: "completed"} | _]},
-               Registry.runs(registry)
+               Registry.request(registry, :runs)
              )
            end)
 
-    assert {:ok, summaries} = Registry.runs(registry)
+    assert {:ok, summaries} = Registry.request(registry, :runs)
 
     assert %{id: ^completed_id, usage: %{input_tokens: input, output_tokens: output}} =
              Enum.find(summaries, &(&1.id == completed_id))
@@ -213,7 +223,7 @@ defmodule Alto.FrontEnd.RegistryTest do
               truncated: false,
               revision: 1
             }} =
-             Registry.session_transcript(registry, session_id)
+             Registry.request(registry, {:session_transcript, session_id})
   end
 
   test "session_transcript keeps only the latest 100 messages", %{registry: registry, root: root} do
@@ -223,7 +233,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     {:ok, _snapshot} = Session.persist_settled(session_id, messages, 0, session_dir: root)
 
     assert {:ok, %{messages: page, truncated: true}} =
-             Registry.session_transcript(registry, session_id)
+             Registry.request(registry, {:session_transcript, session_id})
 
     assert length(page) == 100
     assert hd(page)["content"] == "2"
@@ -237,7 +247,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root)
     attach(registry)
 
-    assert {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
+    assert {:ok, run_id} =
+             Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
     notifications = collect_until_result(run_id)
@@ -272,7 +284,7 @@ defmodule Alto.FrontEnd.RegistryTest do
            end)
 
     assert Enum.any?(events, fn {_seq, event} -> event.type == :model_started end)
-    assert Registry.run_ids(registry) == []
+    assert Registry.request(registry, :run_ids) == []
   end
 
   test "domain filters keep live events away from durable-only subscribers", %{
@@ -282,7 +294,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root)
     attach(registry, nil, [:durable])
 
-    {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
     notifications = collect_until_result(run_id)
@@ -300,7 +314,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, approval_timeout: 5_000)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "guarded-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
     request = wait_for_approval(run_id)
@@ -314,7 +330,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert request.arguments == %{"value" => "hello"}
     assert request.execution_mode == :parallel
 
-    assert :ok = Registry.approval_response(registry, request.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, request.id, :approve})
 
     assert_receive {:alto_notification, {:approval_resolved, ^run_id, ^request, :approved}},
                    @receive_timeout
@@ -329,11 +345,15 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, approval_timeout: 5_000)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "guarded-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
     request = wait_for_approval(run_id)
-    assert :ok = Registry.approval_response(registry, request.id, {:deny, "not today"})
+
+    assert :ok =
+             Registry.request(registry, {:approval_response, request.id, {:deny, "not today"}})
 
     assert_receive {:alto_notification,
                     {:approval_resolved, ^run_id, ^request, {:denied, "not today"}}},
@@ -355,8 +375,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, approval_timeout: 5_000)
     attach(registry)
 
-    {:ok, first_run} = Registry.start_run(registry, "guarded-loop", "first")
-    {:ok, second_run} = Registry.start_run(registry, "guarded-loop", "second")
+    {:ok, first_run} = Registry.request(registry, {:start_run, "guarded-loop", "first", []})
+    {:ok, second_run} = Registry.request(registry, {:start_run, "guarded-loop", "second", []})
     Registry.pull(registry, self(), 200)
 
     approvals =
@@ -377,7 +397,7 @@ defmodule Alto.FrontEnd.RegistryTest do
       assert request.run_id == run_id
       assert String.starts_with?(request.id, run_id <> ":op-")
       decision = if run_id == first_run, do: :approve, else: {:deny, :second_run}
-      assert :ok = Registry.approval_response(registry, request.id, decision)
+      assert :ok = Registry.request(registry, {:approval_response, request.id, decision})
     end
 
     assert_receive {:alto_notification, {:result, ^first_run, :ok, "finished", _}},
@@ -394,7 +414,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "guarded-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
     request = wait_for_approval(run_id)
@@ -416,7 +438,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
 
     # A decision arriving after resolution is rejected.
-    assert {:error, :not_found} = Registry.approval_response(registry, request.id, :approve)
+    assert {:error, :not_found} =
+             Registry.request(registry, {:approval_response, request.id, :approve})
   end
 
   test "a run can be cancelled while another run blocks in a provider", %{
@@ -426,11 +449,15 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, blocking_id} = Registry.start_run(registry, "blocking-loop", "block forever")
-    {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
+    {:ok, blocking_id} =
+      Registry.request(registry, {:start_run, "blocking-loop", "block forever", []})
+
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
+
     Registry.pull(registry, self(), 200)
 
-    assert :ok = Registry.cancel(registry, run_id, :operator_stop)
+    assert :ok = Registry.request(registry, {:cancel, run_id, :operator_stop})
 
     assert_receive {:alto_notification,
                     {:event, ^run_id, _seq,
@@ -440,17 +467,17 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, {:result, ^run_id, {:cancelled, :operator_stop}, nil, 0}},
                    @receive_timeout
 
-    assert Registry.run_ids(registry) == [blocking_id]
+    assert Registry.request(registry, :run_ids) == [blocking_id]
 
-    assert :ok = Registry.cancel(registry, blocking_id, :cleanup)
+    assert :ok = Registry.request(registry, {:cancel, blocking_id, :cleanup})
 
-    wait_until(fn -> Registry.run_ids(registry) == [] end)
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
   end
 
   test "registry crash cancels its owned provider run", %{registry: registry, root: root} do
     start_registry(registry, root, sessions: [session_dir: root])
-    {:ok, run_id} = Registry.start_run(registry, "blocking-loop", "block forever")
-    session_id = Registry.run_session(registry, run_id)
+    {:ok, run_id} = Registry.request(registry, {:start_run, "blocking-loop", "block forever", []})
+    session_id = Registry.request(registry, {:run_session, run_id})
     assert_receive {:registry_provider_started, provider_pid}, @receive_timeout
     provider_monitor = Process.monitor(provider_pid)
     old_registry = Process.whereis(registry)
@@ -482,9 +509,10 @@ defmodule Alto.FrontEnd.RegistryTest do
   } do
     start_registry(registry, root)
 
-    {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
 
-    wait_until(fn -> Registry.run_ids(registry) == [] end)
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
 
     attach(registry, run_id)
     Registry.pull(registry, self(), 200)
@@ -511,11 +539,12 @@ defmodule Alto.FrontEnd.RegistryTest do
     start_registry(registry, root, max_buffer_messages: 2)
     # This scenario must not use the background-pulling helper: the buffer
     # needs to remain full until the explicit pull below.
-    :ok = Registry.attach(registry, self(), nil, 1, [:durable, :live])
+    :ok = Registry.request(registry, {:attach, self(), nil, 1, [:durable, :live]})
 
-    {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
+    {:ok, run_id} =
+      Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
 
-    wait_until(fn -> Registry.run_ids(registry) == [] end)
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
 
     Registry.pull(registry, self(), 2)
 
@@ -533,7 +562,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, {:overflow, ^run_id, :durable, nil}}, @receive_timeout
 
     # Overflow reporting leaves the resident responsive.
-    assert Registry.run_ids(registry) == []
+    assert Registry.request(registry, :run_ids) == []
   end
 
   test "finished runs are evicted past the bounded window", %{registry: registry, root: root} do
@@ -541,16 +570,20 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     ids =
       for _ <- 1..3 do
-        {:ok, run_id} = Registry.start_run(registry, "tool-loop", "use the tool then answer")
-        wait_until(fn -> Registry.run_ids(registry) == [] end)
+        {:ok, run_id} =
+          Registry.request(registry, {:start_run, "tool-loop", "use the tool then answer", []})
+
+        wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
         run_id
       end
 
     [first, _second, third] = ids
 
-    assert {:error, :unknown_run} = Registry.attach(registry, self(), first, 1, [:durable])
-    assert :ok = Registry.attach(registry, self(), third, 1, [:durable])
-    Registry.detach(registry, self())
+    assert {:error, :unknown_run} =
+             Registry.request(registry, {:attach, self(), first, 1, [:durable]})
+
+    assert :ok = Registry.request(registry, {:attach, self(), third, 1, [:durable]})
+    Registry.request(registry, {:detach, self()})
   end
 
   test "the socket approval policy denies when no registry answers", %{root: root} do
@@ -586,8 +619,8 @@ defmodule Alto.FrontEnd.RegistryTest do
     root: root
   } do
     start_registry(registry, root, max_buffer_messages: 2, max_buffer_bytes: 512)
-    :ok = Registry.attach(registry, self(), nil, 1, [:durable, :live])
-    {:ok, id} = Registry.start_run(registry, "blocking-loop", "wait")
+    :ok = Registry.request(registry, {:attach, self(), nil, 1, [:durable, :live]})
+    {:ok, id} = Registry.request(registry, {:start_run, "blocking-loop", "wait", []})
 
     for n <- 1..1_000 do
       :ok =
@@ -602,7 +635,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert sub.buffered_count <= 2
     assert sub.buffered_bytes <= 512
     assert length(sub.overflow) <= 2
-    assert :ok = Registry.cancel(registry, id, :cleanup)
+    assert :ok = Registry.request(registry, {:cancel, id, :cleanup})
   end
 
   test "retained replay returns the suffix and marks the missing prefix", %{
@@ -610,9 +643,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     root: root
   } do
     start_registry(registry, root, max_retained_events: 2)
-    {:ok, id} = Registry.start_run(registry, "tool-loop", "finish")
-    wait_until(fn -> Registry.run_ids(registry) == [] end)
-    :ok = Registry.attach(registry, self(), id, 1, [:durable])
+    {:ok, id} = Registry.request(registry, {:start_run, "tool-loop", "finish", []})
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
+    :ok = Registry.request(registry, {:attach, self(), id, 1, [:durable]})
     Registry.pull(registry, self(), 10)
     assert_receive {:alto_notification, {:attached, ^id, true, 5, replay}}, @receive_timeout
     assert Enum.map(replay, &elem(&1, 0)) == [4, 5]
@@ -620,10 +653,16 @@ defmodule Alto.FrontEnd.RegistryTest do
 
   test "active runs and subscribers have admission limits", %{registry: registry, root: root} do
     start_registry(registry, root, max_active_runs: 1, max_subscribers: 0)
-    assert {:error, :subscriber_capacity} = Registry.attach(registry, self(), nil, 1, [:durable])
-    {:ok, id} = Registry.start_run(registry, "blocking-loop", "wait")
-    assert {:error, :run_capacity} = Registry.start_run(registry, "blocking-loop", "wait")
-    assert :ok = Registry.cancel(registry, id, :cleanup)
+
+    assert {:error, :subscriber_capacity} =
+             Registry.request(registry, {:attach, self(), nil, 1, [:durable]})
+
+    {:ok, id} = Registry.request(registry, {:start_run, "blocking-loop", "wait", []})
+
+    assert {:error, :run_capacity} =
+             Registry.request(registry, {:start_run, "blocking-loop", "wait", []})
+
+    assert :ok = Registry.request(registry, {:cancel, id, :cleanup})
   end
 
   # Notifications are pull-based, so a background puller keeps the test
@@ -631,7 +670,7 @@ defmodule Alto.FrontEnd.RegistryTest do
   defp attach(registry, run_id \\ nil, domains \\ [:durable, :live])
 
   defp attach(registry, run_id, domains) do
-    :ok = Registry.attach(registry, self(), run_id, 1, domains)
+    :ok = Registry.request(registry, {:attach, self(), run_id, 1, domains})
     client = self()
     deadline = System.monotonic_time(:millisecond) + 120_000
 
@@ -703,16 +742,16 @@ defmodule Alto.FrontEnd.RegistryTest do
       assert {:ok, %{id: id}} = Alto.Queue.put(queue, "job-1", %{lines: 3})
 
       # The claim_id is only known through the facade's reply.
-      assert {:ok, [claimed]} = Registry.queue_claim(registry, 1, "station-1")
+      assert {:ok, [claimed]} = Registry.request(registry, {:queue_claim, 1, "station-1", nil})
       assert %{id: ^id, key: "job-1", status: :claimed, claimed_by: "station-1"} = claimed
 
-      assert :ok = Registry.queue_release(registry, claimed.claim_id)
+      assert :ok = Registry.request(registry, {:queue_release, claimed.claim_id})
 
       assert {:ok, %{records: [%{id: ^id, status: :pending}], next_cursor: nil}} =
                Alto.Queue.snapshot_page(queue, 0)
 
-      {:ok, [reclaimed]} = Registry.queue_claim(registry, 1, "station-1")
-      assert :ok = Registry.queue_ack(registry, reclaimed.claim_id)
+      {:ok, [reclaimed]} = Registry.request(registry, {:queue_claim, 1, "station-1", nil})
+      assert :ok = Registry.request(registry, {:queue_ack, reclaimed.claim_id})
       assert %{pending: 0, claimed: 0} = Alto.Queue.count(queue)
     end
 
@@ -722,16 +761,16 @@ defmodule Alto.FrontEnd.RegistryTest do
       queue: queue
     } do
       start_registry(registry, root, queue: queue)
-      assert {:error, :not_found} = Registry.queue_ack(registry, "clm-ghost")
-      assert {:error, :not_found} = Registry.queue_release(registry, "clm-ghost")
+      assert {:error, :not_found} = Registry.request(registry, {:queue_ack, "clm-ghost"})
+      assert {:error, :not_found} = Registry.request(registry, {:queue_release, "clm-ghost"})
     end
 
     test "a registry without a queue answers :no_queue", %{registry: registry, root: root} do
       start_registry(registry, root)
 
-      assert {:error, :no_queue} = Registry.queue_claim(registry, 1, nil)
-      assert {:error, :no_queue} = Registry.queue_ack(registry, "clm-1")
-      assert {:error, :no_queue} = Registry.queue_release(registry, "clm-1")
+      assert {:error, :no_queue} = Registry.request(registry, {:queue_claim, 1, nil, nil})
+      assert {:error, :no_queue} = Registry.request(registry, {:queue_ack, "clm-1"})
+      assert {:error, :no_queue} = Registry.request(registry, {:queue_release, "clm-1"})
     end
   end
 end

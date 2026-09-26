@@ -148,7 +148,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
   end
 
   defp wait_empty(registry) do
-    wait_until(fn -> Registry.run_ids(registry) == [] end)
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
   end
 
   defp wait_until(fun, attempts \\ 400) do
@@ -166,12 +166,12 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
   end
 
   defp attach_collect(registry, run_id) do
-    :ok = Registry.attach(registry, self(), run_id, 1, [:durable, :live])
+    :ok = Registry.request(registry, {:attach, self(), run_id, 1, [:durable, :live]})
     client = self()
     puller = spawn(fn -> pull_loop(registry, client) end)
     result = collect_until_result(run_id)
     Process.exit(puller, :kill)
-    Registry.detach(registry, self())
+    Registry.request(registry, {:detach, self()})
     result
   end
 
@@ -207,11 +207,11 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
-      {:ok, run_id} = Registry.start_run(registry, "tool-loop", "first task")
+      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "first task", []})
       assert {:ok, "finished"} = attach_collect(registry, run_id)
       assert_received {:tool_ran, "hello"}
 
-      session_id = Registry.run_session(registry, run_id)
+      session_id = Registry.request(registry, {:run_session, run_id})
       assert is_binary(session_id)
 
       # Transcript continuity: the snapshot holds the full first run.
@@ -219,7 +219,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert Enum.any?(messages, &(&1["role"] == "tool"))
 
       # Root summary over the audit log.
-      assert {:ok, [summary]} = Registry.sessions(registry)
+      assert {:ok, [summary]} = Registry.request(registry, :sessions)
       assert summary.id == session_id
       assert summary.completed_runs == 1
       assert summary.last_outcome == "ok"
@@ -229,11 +229,13 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       registry2 = :"sess-reg-#{System.unique_integer([:positive])}"
       start_registry(registry2, [sessions: [session_dir: dir]], resolver)
 
-      assert {:ok, [summary2]} = Registry.sessions(registry2)
+      assert {:ok, [summary2]} = Registry.request(registry2, :sessions)
       assert summary2.id == session_id
 
       # Resume continues the transcript without rerunning the tool.
-      {:ok, run_id2} = Registry.start_run(registry2, "tool-loop", "thanks", resume: session_id)
+      {:ok, run_id2} =
+        Registry.request(registry2, {:start_run, "tool-loop", "thanks", [resume: session_id]})
+
       assert {:ok, "finished"} = attach_collect(registry2, run_id2)
 
       tool_runs = drain(:tool_ran)
@@ -243,7 +245,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert length(messages2) > length(messages)
       assert List.last(messages2)["role"] in ["assistant", "user"]
 
-      assert {:ok, [summary3]} = Registry.sessions(registry2)
+      assert {:ok, [summary3]} = Registry.request(registry2, :sessions)
       assert summary3.runs == 2
       assert summary3.completed_runs == 2
       assert summary3.last_outcome == "ok"
@@ -259,7 +261,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
-      {:ok, run_id} = Registry.start_run(registry, "tool-loop", "doomed task")
+      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "doomed task", []})
       assert_receive {:tool_ran, "hello"}, @receive_timeout
 
       # Crash the run mid-flight: no snapshot, no completed record.
@@ -272,7 +274,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       _ = drain(:tool_ran)
       _ = drain(:provider_request)
 
-      session_id = Registry.run_session(registry, run_id)
+      session_id = Registry.request(registry, {:run_session, run_id})
       assert is_binary(session_id)
 
       # The actual recoverable state: audit facts exist, nothing resumable.
@@ -284,13 +286,16 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
                Alto.Session.transcript(session_id, session_dir: dir)
 
       assert {:error, :no_resumable_transcript} =
-               Registry.start_run(registry, "tool-loop", "retry", resume: session_id)
+               Registry.request(
+                 registry,
+                 {:start_run, "tool-loop", "retry", [resume: session_id]}
+               )
 
       # Nothing reran after the failed resume.
       assert drain(:tool_ran) == []
       assert drain(:provider_request) == []
 
-      assert {:ok, [summary]} = Registry.sessions(registry)
+      assert {:ok, [summary]} = Registry.request(registry, :sessions)
       assert summary.completed_runs == 0
       assert summary.last_outcome == nil
     end
@@ -325,13 +330,15 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
-      {:ok, run_id} = Registry.start_run(registry, "spawn-loop", "delegate and block")
+      {:ok, run_id} =
+        Registry.request(registry, {:start_run, "spawn-loop", "delegate and block", []})
+
       assert_receive :child_entered, @receive_timeout
 
-      assert :ok = Registry.cancel(registry, run_id, :operator_stop)
+      assert :ok = Registry.request(registry, {:cancel, run_id, :operator_stop})
       wait_empty(registry)
 
-      session_id = Registry.run_session(registry, run_id)
+      session_id = Registry.request(registry, {:run_session, run_id})
 
       assert {:ok, records} = Alto.Session.read(session_id, session_dir: dir)
 
@@ -368,22 +375,26 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
         max_finished_runs: 1
       )
 
-      {:ok, first} = Registry.start_run(registry, "tool-loop", "first")
+      {:ok, first} = Registry.request(registry, {:start_run, "tool-loop", "first", []})
       assert {:ok, "finished"} = attach_collect(registry, first)
-      first_session = Registry.run_session(registry, first)
+      first_session = Registry.request(registry, {:run_session, first})
 
-      {:ok, _second} = Registry.start_run(registry, "tool-loop", "second")
+      {:ok, _second} = Registry.request(registry, {:start_run, "tool-loop", "second", []})
       wait_empty(registry)
 
       # Evicted from the replay window...
-      assert {:error, :unknown_run} = Registry.attach(registry, self(), first, 1, [:durable])
+      assert {:error, :unknown_run} =
+               Registry.request(registry, {:attach, self(), first, 1, [:durable]})
 
       # ...yet resumable with its transcript intact.
       {:ok, resumed} =
-        Registry.start_run(registry, "tool-loop", "follow-up", resume: first_session)
+        Registry.request(
+          registry,
+          {:start_run, "tool-loop", "follow-up", [resume: first_session]}
+        )
 
       assert {:ok, "finished"} = attach_collect(registry, resumed)
-      assert Registry.run_session(registry, resumed) == first_session
+      assert Registry.request(registry, {:run_session, resumed}) == first_session
     end
 
     test "unavailable storage never fails the run", %{root: root} do
@@ -394,7 +405,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       start_registry(registry, [sessions: [session_dir: blocker]], tool_resolver(parent))
 
-      {:ok, run_id} = Registry.start_run(registry, "tool-loop", "task")
+      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
       assert {:ok, "finished"} = attach_collect(registry, run_id)
     end
 
@@ -416,7 +427,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
-      {:ok, run_id} = Registry.start_run(registry, "secret-loop", "harmless task")
+      {:ok, run_id} = Registry.request(registry, {:start_run, "secret-loop", "harmless task", []})
       assert {:ok, "done"} = attach_collect(registry, run_id)
 
       files = Path.wildcard(Path.join(dir, "**/*")) |> Enum.filter(&File.regular?/1)
@@ -441,11 +452,13 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       {:ok, _} = Alto.Queue.admit(queue, "src:del-1", %{"body" => "x"})
       assert %{pending: 1} = Alto.Queue.count(queue)
 
-      {:ok, run_id} = Registry.start_run(registry, "tool-loop", "task")
+      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
       assert {:ok, "finished"} = attach_collect(registry, run_id)
-      session_id = Registry.run_session(registry, run_id)
+      session_id = Registry.request(registry, {:run_session, run_id})
 
-      {:ok, resumed} = Registry.start_run(registry, "tool-loop", "again", resume: session_id)
+      {:ok, resumed} =
+        Registry.request(registry, {:start_run, "tool-loop", "again", [resume: session_id]})
+
       assert {:ok, "finished"} = attach_collect(registry, resumed)
 
       # Resume is transcript continuity, not workflow replay: the inbox is
@@ -513,8 +526,8 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert %{"type" => "ok", "run_id" => run_id} = reply
       refute Map.has_key?(reply, "session_id")
       wait_empty(registry)
-      assert Registry.run_session(registry, run_id) == nil
-      assert {:ok, []} = Registry.sessions(registry)
+      assert Registry.request(registry, {:run_session, run_id}) == nil
+      assert {:ok, []} = Registry.request(registry, :sessions)
       assert File.ls(dir) == {:error, :enoent}
 
       missing =

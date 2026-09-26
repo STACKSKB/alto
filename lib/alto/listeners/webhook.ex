@@ -142,7 +142,7 @@ defmodule Alto.Listeners.Webhook do
         respond(conn, 200, "duplicate")
 
       :new ->
-        case Registry.start_run(registry, config, body) do
+        case Registry.request(registry, {:start_run, config, body, []}) do
           {:ok, _run_id} ->
             respond(conn, 200, "accepted")
 

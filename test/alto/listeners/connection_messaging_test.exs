@@ -63,11 +63,14 @@ defmodule Alto.Listeners.ConnectionMessagingTest do
     assert_receive {:request, request, worker}, 5_000
     assert List.last(request.messages)["content"] == "follow up"
     send(worker, :answer)
-    eventually(fn -> assert {:ok, _} = Registry.run_result(registry, id) end)
+    eventually(fn -> assert {:ok, _} = Registry.request(registry, {:run_result, id}) end)
     assert command(registry, "send_message", fields)["status"] == "consumed"
-    assert {:error, :recipient_closed} = Registry.send_message(registry, id, text: "late")
-    assert {:ok, []} = Registry.input_status(registry, id)
-    {:ok, result} = Registry.run_result(registry, id)
+
+    assert {:error, :recipient_closed} =
+             Registry.request(registry, {:send_message, id, [text: "late"]})
+
+    assert {:ok, []} = Registry.request(registry, {:input_status, id})
+    {:ok, result} = Registry.request(registry, {:run_result, id})
     assert {:ok, result} = result
 
     assert Enum.any?(result.events, fn event ->

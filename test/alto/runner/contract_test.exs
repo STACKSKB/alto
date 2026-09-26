@@ -37,12 +37,13 @@ defmodule Alto.Runner.ContractTest do
        name: name, config_resolver: fn _ -> {:ok, [runner: ExternalRunner]} end}
     )
 
-    assert {:ok, id} = Alto.FrontEnd.Registry.start_run(name, "external", "registry result")
+    assert {:ok, id} =
+             Alto.FrontEnd.Registry.request(name, {:start_run, "external", "registry result", []})
 
     assert {:ok, {:ok, %Result{output: "registry result"}}} =
-             Alto.FrontEnd.Registry.run_result(name, id)
+             Alto.FrontEnd.Registry.request(name, {:run_result, id})
 
-    assert Alto.FrontEnd.Registry.run_ids(name) == []
+    assert Alto.FrontEnd.Registry.request(name, :run_ids) == []
   end
 
   test "child batches handle failed starts and opaque handles without consuming unrelated results" do

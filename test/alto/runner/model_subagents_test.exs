@@ -265,17 +265,6 @@ defmodule Alto.Runner.ModelSubagentsTest do
     refute inspect(result.messages) =~ "test-private-key"
   end
 
-  test "explicit tool selection exposes spawning without discovery" do
-    calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
-
-    assert {:ok, _} =
-             Alto.run("delegate", options(calls, tools: Alto.Tools.agents(only: [:spawn_agents])))
-
-    assert_receive {:request, request}
-    assert Enum.map(request.tools, & &1["function"]["name"]) == ["spawn_agents"]
-    assert_receive {:selected_model, "model-a"}
-  end
-
   test "oversized discovery and child results never report a successful tool result" do
     profiles = [
       %{

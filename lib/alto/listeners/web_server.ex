@@ -202,7 +202,7 @@ defmodule Alto.Listeners.WebServer do
     @impl true
     def terminate(_reason, state) do
       try do
-        Registry.detach(state.registry, self())
+        Registry.request(state.registry, {:detach, self()})
       catch
         :exit, _reason -> :ok
       end

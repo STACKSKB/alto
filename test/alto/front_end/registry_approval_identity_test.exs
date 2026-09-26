@@ -140,7 +140,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
   end
 
   defp attach(registry, run_id \\ nil) do
-    :ok = Registry.attach(registry, self(), run_id, 1, [:durable, :live])
+    :ok = Registry.request(registry, {:attach, self(), run_id, 1, [:durable, :live]})
     client = self()
     deadline = System.monotonic_time(:millisecond) + 120_000
 
@@ -172,8 +172,8 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     attach(registry)
 
     task = ~s({"value":"hello"})
-    {:ok, first} = Registry.start_run(registry, "rule-guarded", task)
-    {:ok, second} = Registry.start_run(registry, "rule-guarded", task)
+    {:ok, first} = Registry.request(registry, {:start_run, "rule-guarded", task, []})
+    {:ok, second} = Registry.request(registry, {:start_run, "rule-guarded", task, []})
     Registry.pull(registry, self(), 200)
 
     first_req = wait_for_approval(first)
@@ -188,14 +188,14 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert String.starts_with?(first_req.id, first <> ":op-")
 
     assert {:error, :already_pending} =
-             Registry.request_approval(registry, second, first_req, self())
+             Registry.request(registry, {:request_approval, second, first_req, self()})
 
-    assert :ok = Registry.approval_response(registry, first_req.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, first_req.id, :approve})
 
     assert {:error, :not_found} =
-             Registry.approval_response(registry, first_req.id, {:deny, :late})
+             Registry.request(registry, {:approval_response, first_req.id, {:deny, :late}})
 
-    assert :ok = Registry.approval_response(registry, second_req.id, {:deny, :second})
+    assert :ok = Registry.request(registry, {:approval_response, second_req.id, {:deny, :second}})
 
     assert_receive {:alto_notification, {:result, ^first, :ok, _, _}}, @receive_timeout
 
@@ -206,8 +206,11 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
                    @receive_timeout
 
     # Late replies are rejected.
-    assert {:error, :not_found} = Registry.approval_response(registry, first_req.id, :approve)
-    assert {:error, :not_found} = Registry.approval_response(registry, second_req.id, :approve)
+    assert {:error, :not_found} =
+             Registry.request(registry, {:approval_response, first_req.id, :approve})
+
+    assert {:error, :not_found} =
+             Registry.request(registry, {:approval_response, second_req.id, :approve})
   end
 
   test "repeated provider call ids get distinct operations and both must be answered", %{
@@ -217,7 +220,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-dup-loop", "dup")
+    {:ok, run_id} = Registry.request(registry, {:start_run, "guarded-dup-loop", "dup", []})
     Registry.pull(registry, self(), 200)
 
     # Serial execution: the second operation is requested only after the
@@ -225,12 +228,12 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     first = wait_for_approval(run_id)
     assert first.call_id == "dup"
     assert first.run_id == run_id
-    assert :ok = Registry.approval_response(registry, first.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, first.id, :approve})
 
     second = wait_for_approval(run_id)
     assert second.call_id == "dup"
     assert second.id != first.id
-    assert :ok = Registry.approval_response(registry, second.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, second.id, :approve})
 
     assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
   end
@@ -242,11 +245,11 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "t")
+    {:ok, run_id} = Registry.request(registry, {:start_run, "guarded-loop", "t", []})
     Registry.pull(registry, self(), 200)
     request = wait_for_approval(run_id)
 
-    assert :ok = Registry.cancel(registry, run_id, :operator_stop)
+    assert :ok = Registry.request(registry, {:cancel, run_id, :operator_stop})
 
     assert_receive {:alto_notification, {:event, ^run_id, _seq, %Event{type: :run_cancelled}}},
                    @receive_timeout
@@ -255,28 +258,29 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
                    @receive_timeout
 
     # The pending handle was released; a late decision cannot resurrect it.
-    assert {:error, :not_found} = Registry.approval_response(registry, request.id, :approve)
+    assert {:error, :not_found} =
+             Registry.request(registry, {:approval_response, request.id, :approve})
   end
 
   test "reconnect replays pending approvals", %{registry: registry, root: root} do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, run_id} = Registry.start_run(registry, "guarded-loop", "t")
+    {:ok, run_id} = Registry.request(registry, {:start_run, "guarded-loop", "t", []})
     Registry.pull(registry, self(), 200)
     request = wait_for_approval(run_id)
 
     # Simulate reconnect: drop subscription, re-attach to the same run.
-    :ok = Registry.detach(registry, self())
+    :ok = Registry.request(registry, {:detach, self()})
     Process.sleep(50)
-    :ok = Registry.attach(registry, self(), run_id, 1, [:durable, :live])
+    :ok = Registry.request(registry, {:attach, self(), run_id, 1, [:durable, :live]})
     Registry.pull(registry, self(), 200)
 
     assert_receive {:alto_notification, {:attached, ^run_id, false, _, _}}, @receive_timeout
     assert_receive {:alto_notification, {:approval_request, ^run_id, replayed}}, @receive_timeout
     assert replayed.id == request.id
 
-    assert :ok = Registry.approval_response(registry, request.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, request.id, :approve})
     assert_receive {:alto_notification, {:result, ^run_id, :ok, _, _}}, @receive_timeout
   end
 
@@ -287,8 +291,12 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     start_registry(registry, root)
     attach(registry)
 
-    {:ok, first} = Registry.start_run(registry, "rule-stamp", ~s({"value":"first"}))
-    {:ok, second} = Registry.start_run(registry, "rule-stamp", ~s({"value":"second"}))
+    {:ok, first} =
+      Registry.request(registry, {:start_run, "rule-stamp", ~s({"value":"first"}), []})
+
+    {:ok, second} =
+      Registry.request(registry, {:start_run, "rule-stamp", ~s({"value":"second"}), []})
+
     Registry.pull(registry, self(), 200)
 
     first_req = wait_for_approval(first)
@@ -300,8 +308,8 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert second_req.details[:stamped_with] == "second"
     assert first_req.details[:token] != second_req.details[:token]
 
-    assert :ok = Registry.approval_response(registry, first_req.id, :approve)
-    assert :ok = Registry.approval_response(registry, second_req.id, :approve)
+    assert :ok = Registry.request(registry, {:approval_response, first_req.id, :approve})
+    assert :ok = Registry.request(registry, {:approval_response, second_req.id, :approve})
 
     # Each run's result carries its own frozen token, proving no cross-talk.
     first_out = wait_result(first)

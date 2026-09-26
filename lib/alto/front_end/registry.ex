@@ -66,24 +66,47 @@ defmodule Alto.FrontEnd.Registry do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc """
-  Start a run from a trusted configuration name. `:resume` requires a completed
-  transcript snapshot; a crashed run cannot be replayed as new work. Trusted
-  callers may set `:owner`, `:cwd`, or validated `:reasoning_effort`; wire
-  clients cannot override the provider, tools, approval, or workspace.
-  """
-  @spec start_run(GenServer.server(), String.t(), String.t(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def start_run(server \\ __MODULE__, config_name, task, opts \\ []) do
-    GenServer.call(server, {:start_run, config_name, task, opts})
-  end
+  @type request ::
+          {:start_run, String.t(), String.t(), keyword()}
+          | {:run_result, String.t()}
+          | {:run_session, String.t()}
+          | :sessions
+          | {:session_events, String.t(), pos_integer(), non_neg_integer(), String.t() | nil}
+          | {:session_transcript, String.t()}
+          | :runs
+          | :run_ids
+          | {:attach, pid(), String.t() | nil, pos_integer(), [atom()]}
+          | {:detach, pid()}
+          | {:send_message, String.t(), keyword()}
+          | {:list_agents, String.t()}
+          | {:input_status, String.t()}
+          | {:cancel, String.t(), term()}
+          | {:request_approval, String.t(), ApprovalRequest.t(), pid()}
+          | {:approval_response, String.t(), :approve | {:deny, term()}}
+          | {:queue_claim, pos_integer(), term(), non_neg_integer() | nil}
+          | {:queue_ack, String.t()}
+          | {:queue_release, String.t()}
+          | {:ops_list, keyword()}
 
-  @doc "Return the authoritative stored runner return for a run."
-  @spec run_result(GenServer.server(), String.t()) ::
-          :running | {:ok, Runner.outcome()} | {:error, :unknown_run}
-  def run_result(server \\ __MODULE__, run_id) do
-    GenServer.call(server, {:run_result, run_id})
-  end
+  @doc """
+  Send a typed request to the resident registry using its native message contract.
+
+  Start options are trusted host input: `:resume` requires a resumable transcript;
+  `:owner`, `:cwd`, and `:reasoning_effort` configure execution. Wire callers are
+  separately validated by `Alto.Protocol` and cannot supply arbitrary requests.
+
+  Run queries use the bounded resident window; session queries read durable
+  storage. `:session_transcript` returns the latest 100 messages. Attach replays
+  from an inclusive sequence; a nil run id subscribes to all runs without event
+  replay. Approval decisions are first-wins and cancellation accepts finished runs.
+
+  Queue claims obey count and encoded-byte bounds (`nil` uses `:max_claim_bytes`).
+  Queue requests require a configured queue; `:ops_list` also requires a ledger
+  and never authorizes recovery or replay. Trusted application callbacks use
+  `command/3` so they execute outside the registry and can call it themselves.
+  """
+  @spec request(GenServer.server(), request()) :: term()
+  def request(server \\ __MODULE__, operation), do: GenServer.call(server, operation)
 
   @doc "Invoke a trusted, configured application command callback."
   @spec command(GenServer.server(), binary(), map()) :: {:ok, map()} | {:error, term()}
@@ -115,144 +138,6 @@ defmodule Alto.FrontEnd.Registry do
     exception -> {:error, {:command_exception, Exception.message(exception)}}
   catch
     kind, reason -> {:error, {:command_throw, kind, reason}}
-  end
-
-  @doc "The session id owning a run, or `nil` when the run is unpersisted."
-  @spec run_session(GenServer.server(), String.t()) :: String.t() | nil
-  def run_session(server \\ __MODULE__, run_id) do
-    GenServer.call(server, {:run_session, run_id})
-  end
-
-  @doc """
-  Resumable-session summaries (discovery), newest first, from the
-  registry's session directory — independent of the live-run replay window,
-  so evicted and restarted-away runs stay discoverable.
-  """
-  @spec sessions(GenServer.server()) :: {:ok, [map()]} | {:error, term()}
-  def sessions(server \\ __MODULE__) do
-    GenServer.call(server, :sessions)
-  end
-
-  @doc "Read a bounded page of durable session events, independent of live runs."
-  @spec session_events(
-          GenServer.server(),
-          String.t(),
-          pos_integer(),
-          non_neg_integer(),
-          String.t() | nil
-        ) ::
-          {:ok, map()} | {:error, term()}
-  def session_events(server \\ __MODULE__, session_id, limit, cursor, run_id \\ nil) do
-    GenServer.call(server, {:session_events, session_id, limit, cursor, run_id})
-  end
-
-  @doc "Read the latest 100 messages from a persisted session transcript."
-  @spec session_transcript(GenServer.server(), String.t()) ::
-          {:ok, map()} | {:error, term()}
-  def session_transcript(server \\ __MODULE__, session_id) do
-    GenServer.call(server, {:session_transcript, session_id})
-  end
-
-  @doc "Bounded resident run summaries for reconnecting front ends."
-  def runs(server \\ __MODULE__), do: GenServer.call(server, :runs)
-
-  @doc "Live run ids, for the `hello` message."
-  @spec run_ids(GenServer.server()) :: [String.t()]
-  def run_ids(server \\ __MODULE__) do
-    GenServer.call(server, :run_ids)
-  end
-
-  @doc """
-  Subscribe a client process. A `nil` `run_id` subscribes to all present and
-  future runs without replay; a named run replays its durable log from
-  `from_seq` (inclusive) in an `attached` notification, followed by its
-  `result` if the run has finished — once per connection.
-  """
-  @spec attach(GenServer.server(), pid(), String.t() | nil, pos_integer(), [atom()]) ::
-          :ok | {:error, :unknown_run}
-  def attach(server \\ __MODULE__, client_pid, run_id, from_seq, domains) do
-    GenServer.call(server, {:attach, client_pid, run_id, from_seq, domains})
-  end
-
-  @doc "Drop a client's subscriptions and buffered notifications."
-  @spec detach(GenServer.server(), pid()) :: :ok
-  def detach(server \\ __MODULE__, client_pid) do
-    GenServer.call(server, {:detach, client_pid})
-  end
-
-  @doc "Queue user input for a resident run or one of its agents."
-  def send_message(server, run_id, opts),
-    do: GenServer.call(server, {:send_message, run_id, opts})
-
-  def list_agents(server, run_id), do: GenServer.call(server, {:list_agents, run_id})
-
-  @doc "Inspect pending root messages, including after completion."
-  def input_status(server, run_id), do: GenServer.call(server, {:input_status, run_id})
-
-  @doc "Cooperatively cancel a run; any known run replies ok."
-  @spec cancel(GenServer.server(), String.t(), term()) :: :ok | {:error, :unknown_run}
-  def cancel(server \\ __MODULE__, run_id, reason) do
-    GenServer.call(server, {:cancel, run_id, reason})
-  end
-
-  @doc "Register a run's policy process as the waiter for one approval request."
-  @spec request_approval(GenServer.server(), String.t(), ApprovalRequest.t(), pid()) ::
-          :ok | {:error, term()}
-  def request_approval(server \\ __MODULE__, session_id, %ApprovalRequest{} = request, waiter) do
-    GenServer.call(server, {:request_approval, session_id, request, waiter})
-  end
-
-  @doc """
-  Deliver a front-end approval decision. The first decision for a request
-  wins; later ones return `{:error, :not_found}`. The run's `approval_resolved`
-  notification is emitted by the host's own live event, which keeps every
-  deny/timeout/cancel path on one publication route.
-  """
-  @spec approval_response(GenServer.server(), String.t(), :approve | {:deny, term()}) ::
-          :ok | {:error, :not_found}
-  def approval_response(server \\ __MODULE__, request_id, decision) do
-    GenServer.call(server, {:approval_response, request_id, decision})
-  end
-
-  @doc """
-  Claim pending records from the registry's configured durable queue
-  (`:queue` start option). `{:error, :no_queue}` when none is configured —
-  the pull/ack half of the job flow.
-
-  Claims are bounded by count *and* encoded bytes: at most `count` records
-  whose wire form fits in `max_bytes` (default: the registry's
-  `:max_claim_bytes`). A lone oversized head answers
-  `{:error, {:record_too_large, %{id:, key:, size:}}}` with nothing leased.
-  """
-  @spec queue_claim(GenServer.server(), pos_integer(), term(), non_neg_integer() | nil) ::
-          {:ok, [map()]} | {:error, :no_queue | term()}
-  def queue_claim(server \\ __MODULE__, count, by, max_bytes \\ nil) do
-    GenServer.call(server, {:queue_claim, count, by, max_bytes})
-  end
-
-  @doc "Blank a claimed queue record (it was handled — 'these records are processed')."
-  @spec queue_ack(GenServer.server(), String.t()) :: :ok | {:error, :no_queue | term()}
-  def queue_ack(server \\ __MODULE__, claim_id) do
-    GenServer.call(server, {:queue_ack, claim_id})
-  end
-
-  @doc "Return a claim to pending (the client failed before finishing)."
-  @spec queue_release(GenServer.server(), String.t()) :: :ok | {:error, :no_queue | term()}
-  def queue_release(server \\ __MODULE__, claim_id) do
-    GenServer.call(server, {:queue_release, claim_id})
-  end
-
-  @doc """
-  Bounded read-only operator inspection (`Alto.Ops.list/3`) over the
-  registry's configured queue and ledger. `{:error, :no_ops}` when either
-  is unconfigured — inspection reads the pair together and never writes.
-  Unknown work is never marked safely retryable; recovery stays with the
-  existing queue/ledger calls under their own identities.
-  """
-  @spec ops_list(GenServer.server(), keyword()) ::
-          {:ok, %{items: [map()], next_cursor: integer() | nil}} | {:error, :no_ops | term()}
-  def ops_list(server \\ __MODULE__, opts \\ []) do
-    GenServer.call(server, {:ops_list, opts})
   end
 
   @doc """
@@ -520,8 +405,12 @@ defmodule Alto.FrontEnd.Registry do
   # or random-suffix patch. The handle in `request.id` is the
   # key; `call_id` is correlation only. A duplicate handle is a caller bug
   # and is rejected instead of silently replacing the waiter.
-  def handle_call({:request_approval, session_id, request, waiter}, _from, state)
-      when is_binary(request.id) do
+  def handle_call(
+        {:request_approval, session_id, %ApprovalRequest{id: id} = request, waiter},
+        _from,
+        state
+      )
+      when is_binary(id) do
     case Map.fetch(state.runs, session_id) do
       :error ->
         {:reply, {:error, :unknown_run}, state}

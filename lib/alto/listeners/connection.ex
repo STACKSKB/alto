@@ -13,7 +13,7 @@ defmodule Alto.Listeners.Connection do
   @claim_envelope_reserve 2_048
   @pull_batch 100
   @wakeup_ms 25
-  @direct_commands ~w(session_transcript list_agents approval_response queue_ack queue_release command)a
+  @direct_commands ~w(session_transcript list_agents approval_response queue_ack queue_release)a
   @filters Map.new(~w(all accepted claimed parked unknown completed)a, &{Atom.to_string(&1), &1})
 
   def default_max_line_bytes, do: @default_max_line_bytes
@@ -25,7 +25,7 @@ defmodule Alto.Listeners.Connection do
     case Protocol.envelope(
            "hello",
            server_message_id(),
-           %{runs: Registry.run_ids(registry), max_line_bytes: max_line_bytes},
+           %{runs: Registry.request(registry, :run_ids), max_line_bytes: max_line_bytes},
            max_line_bytes
          ) do
       {:ok, line} -> [line]
@@ -56,7 +56,7 @@ defmodule Alto.Listeners.Connection do
   end
 
   defp execute(:attach, [run_id, from_seq, domains], registry) do
-    result = Registry.attach(registry, self(), run_id, from_seq, domains)
+    result = Registry.request(registry, {:attach, self(), run_id, from_seq, domains})
     Registry.pull(registry, self(), @pull_batch)
     result
   end
@@ -64,20 +64,23 @@ defmodule Alto.Listeners.Connection do
   defp execute(:start_run, [config, task, resume], registry) do
     opts = if resume, do: [resume: resume], else: []
 
-    with {:ok, run_id} <- Registry.start_run(registry, config, task, opts) do
+    with {:ok, run_id} <- Registry.request(registry, {:start_run, config, task, opts}) do
       payload = %{"run_id" => run_id}
-      session_id = Registry.run_session(registry, run_id)
+      session_id = Registry.request(registry, {:run_session, run_id})
       {:ok, if(session_id, do: Map.put(payload, "session_id", session_id), else: payload)}
     end
   end
 
   defp execute(kind, [], registry) when kind in [:runs, :sessions] do
-    with {:ok, items} <- apply(Registry, kind, [registry]), do: {:ok, %{kind => items}}
+    with {:ok, items} <- Registry.request(registry, kind), do: {:ok, %{kind => items}}
   end
 
   defp execute(:session_events, [session_id, limit, cursor, run_id], registry) do
     with {:ok, page} <-
-           Registry.session_events(registry, session_id, min(limit, 100), cursor, run_id),
+           Registry.request(
+             registry,
+             {:session_events, session_id, min(limit, 100), cursor, run_id}
+           ),
          {:ok, events} <- session_events_payload(page.events) do
       {:ok, page |> Map.put(:session_id, session_id) |> Map.put(:events, events)}
     end
@@ -85,26 +88,27 @@ defmodule Alto.Listeners.Connection do
 
   defp execute(:send_message, [run_id, text, to, delivery, key, reply_to], registry),
     do:
-      Registry.send_message(registry, run_id,
-        text: text,
-        to: to,
-        delivery: delivery,
-        idempotency_key: key,
-        in_reply_to: reply_to
+      Registry.request(
+        registry,
+        {:send_message, run_id,
+         [text: text, to: to, delivery: delivery, idempotency_key: key, in_reply_to: reply_to]}
       )
 
   defp execute(:cancel, [run_id, reason], registry),
-    do: Registry.cancel(registry, run_id, reason || :user)
+    do: Registry.request(registry, {:cancel, run_id, reason || :user})
 
   defp execute(:ops_list, [limit, cursor, filter], registry) do
     # Protocol validates against a fixed set; no atoms are minted from wire input.
     opts = [limit: min(limit, 100), cursor: cursor]
     opts = if filter, do: Keyword.put(opts, :filter, Map.fetch!(@filters, filter)), else: opts
-    Registry.ops_list(registry, opts)
+    Registry.request(registry, {:ops_list, opts})
   end
 
   defp execute(kind, args, registry) when kind in @direct_commands,
-    do: apply(Registry, kind, [registry | args])
+    do: Registry.request(registry, List.to_tuple([kind | args]))
+
+  defp execute(:command, [name, payload], registry),
+    do: Registry.command(registry, name, payload)
 
   defp execute(kind, _args, _registry) when kind in [:auth, :input, :reload],
     do: {:error, :unsupported}
@@ -133,14 +137,14 @@ defmodule Alto.Listeners.Connection do
   defp queue_claim(registry, id, count, by, max_line_bytes) do
     budget = max(max_line_bytes - @claim_envelope_reserve, 0)
 
-    case Registry.queue_claim(registry, count, by, budget) do
+    case Registry.request(registry, {:queue_claim, count, by, budget}) do
       {:ok, records} ->
         case Protocol.envelope("ok", id, %{records: records}, max_line_bytes) do
           {:ok, line} ->
             [line]
 
           {:error, :overflow} ->
-            Enum.each(records, &Registry.queue_release(registry, &1.claim_id))
+            Enum.each(records, &Registry.request(registry, {:queue_release, &1.claim_id}))
 
             error_lines(
               id,

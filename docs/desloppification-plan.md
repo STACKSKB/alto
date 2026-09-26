@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,020 lines (16.3% below the original)**. **5,562 lines
+The current count is **33,916 lines (16.6% below the original)**. **5,458 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,12 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Registry clients use one typed atom/tuple request contract through to the
+  GenServer, replacing twenty forwarding APIs and their duplicated documentation.
+  Transports retain their fixed wire-command allowlist and normalization;
+  trusted application callbacks still execute outside the registry process.
+  Configuration-literal tests and a duplicate model-exposure case are removed;
+  runtime delegation, exposure, observer privacy, and validation tests remain.
 - Execution keeps budget, identity, input, and messaging authority once. Tools
   and approvals receive the existing Context struct projected at invocation;
   checkpoint restoration no longer synchronizes a second copy of those fields.
@@ -185,7 +191,7 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,071 core tests and
+The combined cleanup and messaging worktree passes **1,068 core tests and
 142 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
@@ -205,6 +211,8 @@ Codex-agent, and external-tool tests, plus the TUI backend integration suite.
 Protocol normalization matched the previous decoder across 8,721 input cases.
 Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including
 buffer limits, overflow, replay cursors, and disconnect decisions.
+All 144 converted registry calls were compared against their prior message
+arguments, including explicit defaults, before running the complete suites.
 
 Terminal exit coverage sends real Ctrl+G/Q and Ctrl+C through a PTY and checks
 mode-reset output before logging returns to the console. The documented

@@ -24,7 +24,10 @@ defmodule Alto.Approvals.Socket do
     registry =
       Map.get(Map.get(context, :metadata, %{}), :front_end_registry, Alto.FrontEnd.Registry)
 
-    case Alto.FrontEnd.Registry.request_approval(registry, context.session_id, request, self()) do
+    case Alto.FrontEnd.Registry.request(
+           registry,
+           {:request_approval, context.session_id, request, self()}
+         ) do
       :ok ->
         receive do
           {:alto_approval_decision, ^id, decision} -> decision
