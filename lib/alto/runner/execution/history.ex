@@ -87,7 +87,7 @@ defmodule Alto.Runner.Execution.History do
              Session.mark_dispatched(run.session, operations,
                session_dir: run.session_dir,
                expected_revision: run.transcript_revision,
-               run_id: run.tool_context.session_id
+               run_id: run.session_id
              )
            end),
          do: {:ok, run}

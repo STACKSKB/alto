@@ -11,7 +11,7 @@ defmodule Alto.Runner.Execution.Events do
   def record(run, %Event{domain: :durable} = event) do
     errors =
       Alto.Runner.Execution.Session.append(run, nil, fn ->
-        Session.event_record(run.tool_context.session_id, event)
+        Session.event_record(run.session_id, event)
       end)
 
     run = Enum.reduce(errors, run, &add_persistence_error(&2, &1))

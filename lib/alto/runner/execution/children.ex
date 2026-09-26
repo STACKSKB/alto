@@ -182,7 +182,7 @@ defmodule Alto.Runner.Execution.Children do
 
   def open_reserved_continuation(specs, run, parent, key) do
     metadata = %{
-      "parent_run_id" => run.tool_context.session_id,
+      "parent_run_id" => run.session_id,
       "parent_session_id" => run.session,
       "agent_identity" => Alto.Protocol.encode_term(run.agent_identity)
     }
@@ -287,14 +287,14 @@ defmodule Alto.Runner.Execution.Children do
   def prepare_resources(specs, run) do
     with {:ok, snapshot} <-
            Alto.Runner.Execution.Workspace.call(
-             fn -> Alto.Workspaces.prepare(run.workspaces, run.tool_context.cwd) end,
+             fn -> Alto.Workspaces.prepare(run.workspaces, run.cwd) end,
              run.budget,
              run.tool_timeout,
              run.cancel_ref
            ) do
       {:ok,
        Enum.map(specs, fn spec ->
-         identity = child_agent_identity(run.tool_context.agent_identity, spec.id)
+         identity = child_agent_identity(run.agent_identity, spec.id)
          Map.put(spec, :workspace_assignment, {run.workspaces, snapshot, identity})
        end)}
     end
@@ -393,11 +393,11 @@ defmodule Alto.Runner.Execution.Children do
         ] ++
         child_prompt(spec, run.prompt_config) ++
         [
-          cwd: run.tool_context.cwd,
+          cwd: run.cwd,
           workspace_assignment: Map.get(spec, :workspace_assignment),
           parent_workspaces: run.workspaces,
           subagent_ticket: Map.get(spec, :subagent_ticket),
-          tool_context_metadata: run.tool_context.metadata,
+          tool_context_metadata: run.metadata,
           budget: run.budget,
           budget_account: run.budget.account,
           max_effects: run.budget.max_effects,
@@ -413,8 +413,8 @@ defmodule Alto.Runner.Execution.Children do
           tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
           approval_timeout: Budget.timeout(run.budget, run.approval_timeout),
           event_sink: subagent_sink(run, spec.id),
-          parent_run_id: run.tool_context.session_id,
-          agent_identity: child_agent_identity(run.tool_context.agent_identity, spec.id),
+          parent_run_id: run.session_id,
+          agent_identity: child_agent_identity(run.agent_identity, spec.id),
           parent_model_tools: run.model_tools,
           agent_depth: run.agent_depth + 1
         ] ++ child_session_options(run)

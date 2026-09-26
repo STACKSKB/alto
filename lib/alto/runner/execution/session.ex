@@ -115,7 +115,7 @@ defmodule Alto.Runner.Execution.Session do
   defp persist_completed(state, outcome, reason, result) do
     append(state, "completion not persisted", fn ->
       DurableSession.completed_record(%{
-        run_id: state.tool_context.session_id,
+        run_id: state.session_id,
         subagent: state.agent_depth > 0,
         session_owner: state.agent_depth == 0 or state.resume_snapshot,
         outcome: outcome,

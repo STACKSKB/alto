@@ -40,7 +40,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
       continuation_store: ledger,
       agent_depth: 0,
       agent_identity: %{root_run_id: "root", path: []},
-      tool_context: %{cwd: dir, agent_identity: %{root_run_id: "root", path: []}},
+      cwd: dir,
       loop_state: %{phase: :children},
       messages_rev: messages,
       transcript_bytes: Alto.Context.Transcript.bytes(messages),

@@ -73,7 +73,8 @@ defmodule Alto.Runner.ToolBatchFaultTest do
     %{
       tools: %{},
       approval: {Alto.Approvals.DenyAll, []},
-      tool_context: nil,
+      session_id: "batch-fault",
+      cwd: "/tmp",
       budget: budget,
       cancel_ref: cancel_ref,
       tool_timeout: 5_000,

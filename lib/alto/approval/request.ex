@@ -4,7 +4,7 @@ defmodule Alto.Approval.Request do
 
   Operation identities:
 
-    * `run_id` — the host run that owns the operation (`tool_context.session_id`,
+    * `run_id` — the host run that owns the operation (`run.session_id`,
       globally unique per run).
     * `call_id` — provider/native tool-call correlation token. It may repeat
       (a provider may reuse ids) or be `nil` (native `invoke_tool` without an

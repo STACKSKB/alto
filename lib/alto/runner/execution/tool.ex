@@ -2,7 +2,7 @@ defmodule Alto.Runner.Execution.Tool do
   @moduledoc """
   Bounded tool preparation, approval, and invocation over a capability map.
 
-  Operations consume `tool_context`, `budget`, cancellation, timeout, approval,
+  Operations consume context fields, budget, cancellation, timeout, approval,
   and event-sink fields using the same names as the execution run. Tool and
   policy callbacks receive only their explicit context and arguments.
   """
@@ -17,7 +17,7 @@ defmodule Alto.Runner.Execution.Tool do
     if function_exported?(module, :prepare, 3) do
       outcome =
         Call.run(
-          fn -> Alto.Tool.prepare(module, arguments, caps.tool_context, opts) end,
+          fn -> Alto.Tool.prepare(module, arguments, Alto.Tool.Context.from_run(caps), opts) end,
           Budget.timeout(caps.budget, caps.tool_timeout),
           caps.cancel_ref
         )
@@ -46,7 +46,7 @@ defmodule Alto.Runner.Execution.Tool do
 
   def authorize(job, details, caps) do
     {policy, policy_opts} = caps.approval
-    context = caps.tool_context
+    context = Alto.Tool.Context.from_run(caps)
 
     request = %Request{
       id: job.op_id,
@@ -114,7 +114,7 @@ defmodule Alto.Runner.Execution.Tool do
     do: Alto.Subagents.Models.list(prepared, caps, opts)
 
   def invoke_tool(%{module: module, opts: opts}, arguments, caps),
-    do: module.run(arguments, caps.tool_context, opts)
+    do: module.run(arguments, Alto.Tool.Context.from_run(caps), opts)
 
   defp bound_details(prepared, details, limit) do
     if :erlang.external_size(details) <= limit,

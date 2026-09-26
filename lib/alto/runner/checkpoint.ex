@@ -207,7 +207,7 @@ defmodule Alto.Runner.Checkpoint do
            authority: authority,
            expires_at_ms: expiry,
            agent_depth: run.agent_depth,
-           cwd: run.tool_context.cwd,
+           cwd: run.cwd,
            resume_snapshot: run.resume_snapshot,
            budget: packet["budget"],
            session_id: run.session
@@ -241,7 +241,7 @@ defmodule Alto.Runner.Checkpoint do
          true <- binding.session_id == run.session and packet["session_id"] == run.session,
          true <-
            binding.budget == packet["budget"] and is_struct(run.budget.account, Budget.Account),
-         true <- binding.profile == run.child_profile and binding.cwd == run.tool_context.cwd,
+         true <- binding.profile == run.child_profile and binding.cwd == run.cwd,
          true <- binding.resume_snapshot == run.resume_snapshot,
          true <- valid_authority?(binding.authority),
          :ok <- parent_budget_binding(run, binding.budget),
@@ -358,10 +358,6 @@ defmodule Alto.Runner.Checkpoint do
       |> Map.merge(saved)
       |> Map.put(:loop_state, loop_state)
       |> Map.put(:budget, budget)
-      |> Map.update!(
-        :tool_context,
-        &Map.merge(&1, %{agent_identity: saved.agent_identity, budget: budget})
-      )
 
     with :ok <- restore_messaging(run, saved.communication),
          :ok <- restore_agents(run, saved.async_children, restored) do
@@ -560,7 +556,7 @@ defmodule Alto.Runner.Checkpoint do
     data =
       {@continuation_format, run.spec.driver, run.spec.driver.module_info(:md5),
        run.spec.driver_options, run.spec.middleware, stable_subagents(run.spec.subagents), tools,
-       run.model_tools, run.tool_context.cwd, Map.get(run, :session_history, :completed),
+       run.model_tools, run.cwd, Map.get(run, :session_history, :completed),
        Map.get(run, :max_conversation_bytes, 128_000_000)}
 
     {:ok, fingerprint_data(data)}

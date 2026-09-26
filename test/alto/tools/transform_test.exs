@@ -55,7 +55,9 @@ defmodule Alto.Tools.TransformTest do
     %{
       tools: %{},
       approval: Keyword.get(opts, :approval, {Alto.Approvals.DenyAll, []}),
-      tool_context: context(),
+      session_id: "transform-run",
+      cwd: "/tmp",
+      metadata: %{},
       budget: budget,
       cancel_ref: nil,
       tool_timeout: 125_000,

@@ -239,7 +239,7 @@ defmodule Alto.Runner.Execution do
       end
 
     if modes != [] and map_size(Map.get(run, :pending_provider_calls, %{})) == 0 do
-      reader = run.tool_context.input_reader
+      reader = run.input_reader
 
       case Alto.Input.read(input, reader, modes, max(Budget.remaining(run.budget), 1)) do
         nil ->
@@ -426,7 +426,7 @@ defmodule Alto.Runner.Execution do
           id,
           revision,
           fn workspace ->
-            with true <- workspace["cwd"] == run.tool_context.cwd,
+            with true <- workspace["cwd"] == run.cwd,
                  :ok <- claim_child_checkpoint(run, decision) do
               {:ok, nil}
             else
@@ -722,7 +722,7 @@ defmodule Alto.Runner.Execution do
         {:ok,
          %{
            messages: Enum.reverse(run.messages_rev),
-           session_id: run.session || run.tool_context.session_id,
+           session_id: run.session || run.session_id,
            context_observation: Map.get(run, :context_observation),
            resume_context_observation: Map.get(run, :resume_context_observation),
            tools: tools,
@@ -1057,7 +1057,7 @@ defmodule Alto.Runner.Execution do
       Event.live(:tool_started, %{
         call_id: job.id,
         operation_id: job.op_id,
-        run_id: run.tool_context.session_id,
+        run_id: run.session_id,
         name: job.name,
         summary: job.summary
       })
@@ -1281,7 +1281,7 @@ defmodule Alto.Runner.Execution do
         common = %{
           call_id: job.id,
           operation_id: job.op_id,
-          run_id: run.tool_context.session_id,
+          run_id: run.session_id,
           name: job.name
         }
 
@@ -1468,12 +1468,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp runtime_context(run),
-    do: %{
-      session_id: run.tool_context.session_id,
-      cwd: run.tool_context.cwd,
-      agent_identity: run.tool_context.agent_identity
-    }
+  defp runtime_context(run), do: Map.take(run, [:session_id, :cwd, :agent_identity])
 
   defp result(run, output, disposition) do
     run = merge_async(run, if(disposition == :checkpoint, do: :collect, else: :close))
@@ -1489,8 +1484,8 @@ defmodule Alto.Runner.Execution do
       model_requests: run.model_requests,
       transcript_bytes: run.transcript_bytes,
       session_id: run.session,
-      run_id: run.tool_context.session_id,
-      agent_identity: run.tool_context.agent_identity,
+      run_id: run.session_id,
+      agent_identity: run.agent_identity,
       transcript_revision: run.transcript_revision,
       context_observation:
         Alto.Context.Observation.dump(Map.get(run, :context_observation), messages),

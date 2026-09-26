@@ -1,7 +1,6 @@
 defmodule Alto.Runner.Execution.Setup do
   @moduledoc "Build validated execution capabilities from trusted run options."
   alias Alto.{Session, Usage}
-  alias Alto.Tool.Context
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
 
@@ -110,18 +109,12 @@ defmodule Alto.Runner.Execution.Setup do
         Map.get(Keyword.get(opts, :resume) || %{}, :context_observation),
       checkpoint_resume:
         not is_nil(Keyword.get(opts, :checkpoint)) or not is_nil(Keyword.get(opts, :continuation)),
-      tool_context: %Context{
-        session_id: session_id,
-        cwd: cwd,
-        metadata: Keyword.get(opts, :tool_context_metadata, %{}),
-        agent_identity: agent_identity,
-        messaging: Keyword.get(opts, :messaging),
-        input: Keyword.get(opts, :input),
-        input_reader: Keyword.get(opts, :input_reader),
-        messaging_tools:
-          Keyword.get(opts, :messaging_tools, Alto.Messaging.allowed_tools(settings)),
-        budget: settings.budget
-      },
+      session_id: session_id,
+      cwd: cwd,
+      metadata: Keyword.get(opts, :tool_context_metadata, %{}),
+      input_reader: Keyword.get(opts, :input_reader),
+      messaging_tools:
+        Keyword.get(opts, :messaging_tools, Alto.Messaging.allowed_tools(settings)),
       model_requests: 0,
       usage: Usage.new(),
       events_rev: [],
@@ -324,7 +317,7 @@ defmodule Alto.Runner.Execution.Setup do
           {provider_module, model} = provider_identity(run.provider)
 
           Session.started_record(%{
-            run_id: run.tool_context.session_id,
+            run_id: run.session_id,
             parent_run_id: Keyword.get(opts, :parent_run_id),
             parent_session_id: Keyword.get(opts, :parent_session_id),
             agent_identity: run.agent_identity,
@@ -333,7 +326,7 @@ defmodule Alto.Runner.Execution.Setup do
             task: task,
             provider: provider_module,
             model: model,
-            cwd: run.tool_context.cwd
+            cwd: run.cwd
           })
         end
       )

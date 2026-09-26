@@ -2,7 +2,7 @@ defmodule Alto.Tool.Context do
   @moduledoc "Immutable execution context passed to a supervised tool task."
 
   @enforce_keys [:session_id, :cwd]
-  defstruct [
+  @fields [
     :session_id,
     :cwd,
     :metadata,
@@ -13,6 +13,10 @@ defmodule Alto.Tool.Context do
     :messaging_tools,
     :budget
   ]
+  defstruct @fields
+
+  @doc false
+  def from_run(run), do: struct!(__MODULE__, Map.take(run, @fields))
 
   @type t :: %__MODULE__{
           session_id: String.t(),

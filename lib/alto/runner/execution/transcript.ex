@@ -111,7 +111,7 @@ defmodule Alto.Runner.Execution.Transcript do
 
   defp reduction_input(run, pinned, middle, recent, text, reason) do
     count = run.compaction_count + 1
-    run_id = run.tool_context.session_id
+    run_id = run.session_id
 
     %{
       pinned: pinned,

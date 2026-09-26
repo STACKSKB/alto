@@ -16,7 +16,7 @@ defmodule Alto.Runner.Execution.SessionTest do
   defp state(dir, id, opts \\ []) do
     %{
       session: id,
-      tool_context: %{session_id: "run-1"},
+      session_id: "run-1",
       session_dir: dir,
       resume_snapshot: Keyword.get(opts, :resume_snapshot, true),
       checkpoint_resume: Keyword.get(opts, :checkpoint_resume, false),
