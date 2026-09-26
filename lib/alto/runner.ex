@@ -2,9 +2,7 @@ defmodule Alto.Runner do
   @moduledoc """
   Execution-host contract and runner selection.
 
-  Set `runner: MyRunner` in run options or an `Alto.Config`. Serial is the
-  default. Hosts own their private handles; callers use this module to await,
-  cancel, terminate, or subscribe without assuming a process or Task layout.
+  See `docs/runners.md` for runner selection and lifecycle examples.
 
   `subscribe/2` returns a reference. Exactly one
   `{:alto_runner_result, reference, outcome}` message follows, including when

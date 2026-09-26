@@ -1,13 +1,9 @@
 defmodule Alto.OperationLog do
   @moduledoc """
-  A bounded, durable operation ledger.
-
-  One native command representation serves live execution and replay. Accepted
-  commands are appended before their state is published, so failed writes
-  cannot expose invented progress. Open work is never evicted. Commands use
-  bounded portable-term encoding as JSONL strings; evidence
-  and checkpoints retain their exact keys and values across restarts. As with
-  other portable stores, atoms must already be loaded when decoding.
+  A bounded, durable operation ledger sharing commands between live execution
+  and replay. Commands append before state publication; open work is never evicted.
+  Evidence and checkpoints retain exact portable terms, whose atoms must already
+  be loaded when decoding.
   """
 
   use GenServer
@@ -393,8 +389,7 @@ defmodule Alto.OperationLog do
     end
   end
 
-  ## Storage (append-only, file-synced JSONL with atomic tail repair — same
-  ## contract as Alto.Queue; broader device guarantees are deployment-specific)
+  ## Durable storage and replay
 
   defp load(state) do
     with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)

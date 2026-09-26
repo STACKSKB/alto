@@ -22,8 +22,7 @@ defmodule Alto.Tools.UnifiedDiff do
           [hunk_header(hunk) | Enum.map(hunk, &format_record/1)]
         end)
 
-    {content, truncated?} = take_chunks(chunks, limit, [])
-    %{content: content, truncated: truncated?}
+    Alto.Text.preview(chunks, limit)
   end
 
   defp split_lines(content), do: Regex.scan(~r/[^\n]*\n|[^\n]+$/, content) |> List.flatten()
@@ -84,25 +83,5 @@ defmodule Alto.Tools.UnifiedDiff do
     if String.ends_with?(line, "\n"),
       do: [prefix, line],
       else: [prefix, line, "\n\\ No newline at end of file\n"]
-  end
-
-  defp take_chunks([], _remaining, acc),
-    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), false}
-
-  defp take_chunks(_chunks, 0, acc),
-    do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), true}
-
-  defp take_chunks([chunk | rest], remaining, acc) when is_list(chunk),
-    do: take_chunks(chunk ++ rest, remaining, acc)
-
-  defp take_chunks([chunk | rest], remaining, acc) do
-    size = byte_size(chunk)
-
-    if size <= remaining do
-      take_chunks(rest, remaining - size, [chunk | acc])
-    else
-      prefix = Alto.Text.prefix(chunk, remaining)
-      {Enum.reverse([prefix | acc]) |> IO.iodata_to_binary(), true}
-    end
   end
 end

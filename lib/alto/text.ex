@@ -18,4 +18,21 @@ defmodule Alto.Text do
       prefix(text, limit - byte_size(marker)) <> marker
     end
   end
+
+  @doc "A byte-bounded preview of iodata, without flattening omitted content."
+  def preview(data, limit) do
+    {chunks, _} =
+      data
+      |> :erlang.iolist_to_iovec()
+      |> Enum.reduce_while({[], limit}, fn chunk, {chunks, remaining} ->
+        if byte_size(chunk) <= remaining,
+          do: {:cont, {[chunk | chunks], remaining - byte_size(chunk)}},
+          else: {:halt, {[prefix(chunk, remaining) | chunks], 0}}
+      end)
+
+    %{
+      content: chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+      truncated: IO.iodata_length(data) > limit
+    }
+  end
 end

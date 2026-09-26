@@ -3,11 +3,7 @@ defmodule Alto.Runner.Checkpoint do
   Exact, bounded continuations at an approval boundary. The caller persists the
   packet and must fence its use with a durable dispatch/decision ledger.
 
-  Only declared loop checkpoint callbacks are used. Live capabilities (pids,
-  ports, references and functions) cannot be persisted. Configuration and tool
-  code fingerprints must match on restore. Provider configuration is excluded;
-  exact messages and tool values can still contain sensitive information and
-  require private storage. Prepared values restore exactly, without preparation.
+  See `docs/checkpoints.md#portability-and-bounds` for restoration and storage constraints.
   """
   alias Alto.Runner.Budget
   alias Alto.Persistence.Codec

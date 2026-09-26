@@ -28,7 +28,7 @@ defmodule Alto.Tools.FileChange do
         max_bytes: max_bytes
       }
 
-      {:ok, prepared, Map.put(result, :preview, preview(content, preview_bytes))}
+      {:ok, prepared, Map.put(result, :preview, Alto.Text.preview(content, preview_bytes))}
     end
   end
 
@@ -73,12 +73,6 @@ defmodule Alto.Tools.FileChange do
   end
 
   def commit(_prepared, _context), do: {:error, :invalid_prepared_file_change}
-
-  defp preview(content, limit) do
-    if byte_size(content) <= limit,
-      do: %{content: content, truncated: false},
-      else: %{content: Alto.Text.prefix(content, limit), truncated: true}
-  end
 
   defp revalidate_original(expected, path, max_bytes, kind, display_path) do
     stale_path = if kind == :write_file, do: path, else: display_path

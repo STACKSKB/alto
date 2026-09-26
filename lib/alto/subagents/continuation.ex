@@ -1,9 +1,7 @@
 defmodule Alto.Subagents.Continuation do
   @moduledoc """
-  Durable child dispatch and retained join results on an `Alto.OperationLog`.
-
-  Dispatch and parent grants are single-use: uncertainty never grants permission
-  to repeat work. The host still owns execution, authority, budgets and recovery.
+  Durable child dispatch and retained joins on `Alto.OperationLog`. Dispatch and
+  parent grants are single-use; uncertain work never receives repeat permission.
   """
   alias Alto.Persistence.Codec
   alias Alto.Persistence.Retained
@@ -23,11 +21,7 @@ defmodule Alto.Subagents.Continuation do
   @max_result_bytes 64_000
   @max_checkpoint_bytes 2_000_000
 
-  @doc """
-  Create or reconnect an ordered batch with immutable portable metadata.
-  Pass `parent: checkpoint` to bind a pending parent; an empty child list
-  then retains a parent frame without child dependencies.
-  """
+  @doc "Create or reconnect an ordered batch with immutable portable metadata; `parent:` binds a frame even with no children."
   def open(ledger, key, ids, metadata \\ %{}, opts \\ []) do
     parent = Keyword.get(opts, :parent)
 

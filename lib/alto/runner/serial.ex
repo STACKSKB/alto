@@ -2,11 +2,7 @@ defmodule Alto.Runner.Serial do
   @moduledoc """
   Sequential effect execution with optional caller-controlled admission.
 
-  Automatic mode executes effects immediately. With
-  `runner_options: [mode: :manual, controller: pid]`, the controller receives
-  `{:alto_step_ready, ticket, summary}` before each effect and calls `advance/1`.
-  Tickets admit exactly one frame and cannot be reused. Waiting consumes the
-  run deadline, remains cancellable, and does not bypass tool approval.
+  See `docs/runners.md#manual-execution` for the admission protocol.
   """
   @behaviour Alto.Runner
   alias Alto.Runner.{Execution, Result, TaskHost}

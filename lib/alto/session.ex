@@ -1,33 +1,14 @@
 defmodule Alto.Session do
   @moduledoc """
-  Append-only JSONL session records for the execution host, plus a revisioned
-  transcript head for fast resume and immutable conversation revisions for
-  settled-turn recovery and branching.
+  Exact-term JSONL session logs with immutable conversation revisions and an
+  atomic transcript head. Dispatch fences block ordinary resume of uncertain effects.
 
-  One directory per state home, one `<id>.jsonl` log per session. Records are
-  small JSON envelopes; arbitrary Elixir terms (event data, outcomes, outputs)
-  travel as base64 `term_to_binary` payloads so the durable log is exact —
-  exactness is recovered from here, never from the lossy front-end wire. The
-  `<id>.transcript.json` atomically holds the latest conversation revision;
-  older revisions are archived separately so listing sessions stays cheap.
+  Session IDs cannot escape the storage directory. Started records exclude
+  credentials; private records may contain sensitive prompts and tool output.
+  Resume resolves credentials from current caller-owned configuration.
 
-  Session identity is random (`sess-…`) and validated on every entry point,
-  so a hostile or mistyped id cannot escape the sessions directory. Credential
-  values never enter the `started` record: it keeps the provider module and
-  model name only. Prompts, tool output, and event data may contain sensitive
-  content and are protected by private state files; resume re-resolves
-  credentials through the normal caller-owned path.
-
-  Crash boundary: settled transcript revisions are resumable before a run
-  completes. A revision-bound dispatch fence blocks ordinary resume while any
-  dispatched tool outcome is unknown, so effects are never replayed from an
-  older safe snapshot. Logging itself is best-effort from the host's
-  perspective: append failures must never change the run outcome, and the
-  serial result reports them as degraded persistence.
-
-  Bounds: record payloads inherit the host's bounds (tool results,
-  transcripts, summaries). `list/1` returns at most 100 sessions,
-  newest first.
+  Host audit logging is best-effort: append failures do not change the run outcome
+  and results report degraded persistence. Listings return at most 100 sessions.
   """
 
   @version 1

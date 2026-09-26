@@ -1,14 +1,10 @@
 defmodule Alto.Queue do
   @moduledoc """
-  A durable, bounded claim/ack queue. Each queue id owns a GenServer and a
-  JSONL log at `queues/<id>.jsonl`. Portable term payloads survive restarts;
-  acknowledgements and cancellations append tombstones.
+  Durable, bounded claim/ack queues backed by portable-term JSONL logs.
 
-  Record count, completed keys, payloads, keys, and log bytes are bounded.
-  Mutations are appended and file-synced before acknowledgement; creation
-  and repair sync the directory. A failed append leaves memory unchanged.
-  Optional compaction replaces historical entries with retained state.
-  Replay discards only a torn trailing write; other corruption fails start.
+  Mutations are file-synced before acknowledgement; failed appends leave memory
+  unchanged. Creation, repair and compaction sync the directory. Only torn
+  trailing writes are repaired; other corruption fails start.
   """
 
   use GenServer
@@ -369,8 +365,7 @@ defmodule Alto.Queue do
     commit(state, state, Enum.map(victims, &{:drop, &1.id}), :ok, true)
   end
 
-  # Completed-delivery window: newest-first, unique, bounded. Expiry is
-  # honest re-admission — a redelivery past eviction legitimately re-queues.
+  # Completed keys are newest-first and unique; eviction permits re-admission.
   defp track_completed(state, key) do
     completed =
       [key | List.delete(state.completed, key)]
@@ -697,9 +692,8 @@ defmodule Alto.Queue do
     end
   end
 
-  # Replacement contains only already-held state. The requested mutation is
-  # appended afterwards through the existing sync path; a replacement failure
-  # cannot commit an operation that its caller was told had failed.
+  # Replace only held state, then append the requested mutation: a failed
+  # replacement cannot commit an operation reported as failed.
   defp compact_log(state, reserved_bytes) do
     snapshot = {state.next_id, state.completed, ordered_records(state)}
 
@@ -732,8 +726,7 @@ defmodule Alto.Queue do
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}
   end
 
-  # A snapshot is one complete record, so an interrupted snapshot can never be
-  # mistaken for a valid prefix followed by a torn append.
+  # An interrupted snapshot must not look like valid state plus a torn append.
   defp restore_snapshot(state, line) do
     with {:ok, %{"v" => @version, "queue" => queue, "state" => encoded}} <- JSON.decode(line),
          true <- queue == state.id,

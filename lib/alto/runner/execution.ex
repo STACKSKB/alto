@@ -2,11 +2,7 @@ defmodule Alto.Runner.Execution do
   @moduledoc """
   Shared effect execution and run assembly for Alto hosts.
 
-  `run/3` opens configured capabilities and persistence, then hands an opaque
-  execution context and a frame to the supplied scheduler. `step/2` executes
-  at most one effect. Schedulers choose when to advance; pure loop transitions
-  decide which effects are requested. Tool, model, transcript, child and
-  persistence components are independently usable below this assembly layer.
+  See `docs/runners.md#composition` for scheduler and component contracts.
   """
   defmodule Frame do
     @moduledoc "Pending ordered effects and the disposition after they drain."

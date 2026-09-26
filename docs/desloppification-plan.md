@@ -12,7 +12,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,518 lines (17.6% below the original)**. **5,060 lines
+The current count is **33,450 lines (17.7% below the original)**. **4,992 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -28,6 +28,13 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- File-content and unified-diff previews use one bounded iodata preview. Erlang's
+  iovec conversion replaces the diff's recursive chunk walker without flattening
+  omitted content. This removes 10 implementation lines. Another 58 source lines
+  are duplicated guide prose removed from runner, queue, ledger, session and
+  continuation modules; concise contracts and non-obvious invariants remain.
+  Those documentation reductions are included in the physical-line count and
+  are not claimed as implementation simplification.
 - Catalog and credentials share bounded JSON snapshot reads and the locked
   reread/update/atomic-replacement workflow in Storage. Their domain validators
   and credential permission checks remain separate. Storage errors now use
@@ -229,6 +236,11 @@ that distinguish malformed input, concurrent writes, interrupted execution,
 recovery, and actual user interactions.
 
 ## Verification
+
+Shared previews match the previous diff renderer in 12,962 Unicode/clipping
+cases and pass 35 file-tool and approval-wrapper tests. The 11 documentation
+edits have identical non-documentation ASTs before and after; no prompts, specs,
+types or executable behavior changed in those files.
 
 The shared snapshot workflow passes 45 credential/catalog/provider/onboarding
 tests and all 142 TUI tests. Command capture passes 30 command and sandbox

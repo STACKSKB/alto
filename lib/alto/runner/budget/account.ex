@@ -2,11 +2,8 @@ defmodule Alto.Runner.Budget.Account do
   @moduledoc """
   Durable shared effect/model counters in an `Alto.OperationLog` checkpoint.
 
-  Reservations are persisted before returning permission to dispatch. A failed
-  or uncertain call never grants permission, and consumed reservations are not
-  refunded. This is an admission budget, not a billing or execution ledger.
-  Counters persist independently of runner snapshots. The caller owns the
-  ledger lifetime and chooses a unique key for each execution tree.
+  Reservations persist before dispatch permission; failed calls grant nothing.
+  See `docs/subagents.md` for account lifetime, restoration, and accounting.
   """
   alias Alto.Persistence.Retained
 

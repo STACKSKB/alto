@@ -2,9 +2,8 @@ defmodule Alto.Runner.ToolBatch do
   @moduledoc """
   Bounded concurrent invocation without shared transcript or loop mutation.
 
-  The caller admits at most 32 jobs and retains ownership of accounting.
-  Results are bounded before they leave workers and returned in source order.
-  Worker guardians terminate work if the coordinator dies, including hard kills.
+  Jobs return bounded results in source order. See `docs/tool-batches.md` for
+  admission, cancellation, and ownership guarantees.
   """
   alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
 

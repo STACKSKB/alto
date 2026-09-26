@@ -1,10 +1,7 @@
 defmodule Alto.Session.Conversation do
   @moduledoc """
-  Immutable conversation revisions behind `Alto.Session` transcript snapshots.
-
-  The atomic head contains the latest bounded transcript and its dispatch fence.
-  Superseded transcripts are archived as immutable revisions. A committed fence
-  prevents resume from replaying effects whose outcome is unknown.
+  Immutable conversation revisions behind the atomic `Alto.Session` transcript
+  head. Its dispatch fence prevents replay of effects whose outcome is unknown.
   """
 
   alias Alto.Context.Transcript
