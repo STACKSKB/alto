@@ -1,36 +1,29 @@
 defmodule Alto.CLI.Renderer do
   @moduledoc "Owns ordered stdio event rendering and final-output suppression after streaming."
+  use GenServer
   alias Alto.Event
 
-  def start(status?), do: spawn(fn -> render_loop(false, status?) end)
-
-  defp render_loop(streamed?, status?) do
-    receive do
-      {:event, event} ->
-        render_loop(render_event(event, status?) or streamed?, status?)
-
-      {:stop, caller, reference} ->
-        send(caller, {:renderer_stopped, reference, streamed?})
-    end
+  def start(status?) do
+    {:ok, pid} = GenServer.start(__MODULE__, status?)
+    pid
   end
 
   def stop(renderer) do
-    reference = make_ref()
-    monitor = Process.monitor(renderer)
-    send(renderer, {:stop, self(), reference})
+    GenServer.call(renderer, :stop, 1_000)
+  catch
+    :exit, _ -> false
+  end
 
-    receive do
-      {:renderer_stopped, ^reference, streamed?} ->
-        Process.demonitor(monitor, [:flush])
-        streamed?
+  @impl true
+  def init(status?), do: {:ok, {false, status?}}
 
-      {:DOWN, ^monitor, :process, ^renderer, _reason} ->
-        false
-    after
-      1_000 ->
-        Process.demonitor(monitor, [:flush])
-        false
-    end
+  @impl true
+  def handle_info({:event, event}, {streamed?, status?}),
+    do: {:noreply, {render_event(event, status?) or streamed?, status?}}
+
+  @impl true
+  def handle_call(:stop, _from, {streamed?, _} = state) do
+    {:stop, :normal, streamed?, state}
   end
 
   defp render_event(%Event{domain: :live, type: :model_delta, data: %{text: text}}, _status?) do

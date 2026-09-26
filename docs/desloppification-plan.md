@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,237 lines (15.8% below the original)**. **5,779 lines
+The current count is **34,226 lines (15.8% below the original)**. **5,768 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -82,6 +82,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   endpoint maps without a second internal struct or duplicate endpoint state.
   MCP and Codex ports also use native framing, with per-message payload limits;
   startup success and failure share waiter cleanup.
+  CLI rendering uses GenServer calls for stop replies and timeouts instead of
+  a custom monitored request protocol. Batch polling uses `Process.sleep/1`.
 - User and agent input share one messaging ingress and receipt representation.
   Acknowledgements use `message_id`; the legacy enqueue API, numeric sequence,
   duplicate validation, and unreachable channel-free execution branches are gone.

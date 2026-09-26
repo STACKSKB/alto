@@ -58,11 +58,7 @@ defmodule Alto.Runner.ToolBatch do
         if map_size(results) == length(tasks) do
           {:ok, ordered(tasks, results, nil)}
         else
-          receive do
-          after
-            5 -> :ok
-          end
-
+          Process.sleep(5)
           collect(tasks, caps, results)
         end
     end
