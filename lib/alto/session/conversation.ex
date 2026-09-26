@@ -267,7 +267,7 @@ defmodule Alto.Session.Conversation do
          {:ok, fence} <- decode_dispatch_fence(dispatch, revision),
          entry <- Map.delete(record, "dispatch"),
          {:ok, encoded} <- encode_bounded(entry),
-         {:ok, snapshot} <- decode_entry(encoded, id, revision) do
+         {:ok, snapshot} <- entry_snapshot({:ok, entry}, byte_size(encoded), id, revision) do
       snapshot = if fence, do: Map.put(snapshot, :unsettled, fence), else: snapshot
       {:ok, {snapshot, entry}}
     else
@@ -280,14 +280,14 @@ defmodule Alto.Session.Conversation do
 
   defp select_revision(id, revision, _head, opts) do
     case Alto.BoundedFile.read(entry_path(opts, id, revision), @max_entry_bytes) do
-      {:ok, contents} -> decode_entry(contents, id, revision)
+      {:ok, contents} -> entry_snapshot(JSON.decode(contents), byte_size(contents), id, revision)
       {:error, :enoent} -> {:error, {:conversation_revision_not_found, id, revision}}
       {:error, reason} -> {:error, {:conversation_read_failed, reason}}
     end
   end
 
-  defp decode_entry(contents, id, revision) do
-    with {:ok, entry} when is_map(entry) <- JSON.decode(contents),
+  defp entry_snapshot(decoded, entry_bytes, id, revision) do
+    with {:ok, entry} when is_map(entry) <- decoded,
          true <- entry["v"] == @version,
          true <- entry["session_id"] == id and entry["revision"] == revision,
          true <- is_list(entry["messages"]),
@@ -297,7 +297,7 @@ defmodule Alto.Session.Conversation do
          retained when is_integer(retained) and retained >= 0 <- entry["retained_bytes_before"],
          {:ok, _parent} <- optional_parent(entry["parent"]),
          {:ok, _summary} <- optional_summary(entry["summary"]) do
-      {:ok, snapshot(entry, byte_size(contents))}
+      {:ok, snapshot(entry, entry_bytes)}
     else
       _ -> {:error, {:conversation_corrupt, id, revision}}
     end

@@ -1065,23 +1065,11 @@ defmodule Alto.Runner.Execution do
   end
 
   defp dispatch_tool_job(%{tool: %{module: Alto.Tools.SpawnAgents}} = job, run) do
-    with {:ok, specs, concurrency} <- Children.validate_batch(job.prepared, run),
-         {:ok, run} <- begin_tool_jobs([job], run) do
-      case spawn_agents(specs, concurrency, run) do
-        {:ok, results, journal, next} ->
-          value = Children.with_journal(%{results: results}, journal)
-
-          outcome =
-            Alto.Runner.Execution.Tool.bound_result({:ok, value}, next.max_tool_result_bytes)
-
-          finish_tool_job(job, {:ok, outcome}, next)
-
-        {:error, reason, next} ->
-          finish_tool_job(job, {:error, reason}, next)
-
-        {:cancelled, reason, next} ->
-          {:cancelled, reason, next}
-      end
+    with {:ok, specs, concurrency} <- Children.validate_batch(job.prepared, run) do
+      dispatch_agent_job(job, run, :unknown, fn run ->
+        with {:ok, results, journal, next} <- spawn_agents(specs, concurrency, run),
+             do: {:ok, Children.with_journal(%{results: results}, journal), next}
+      end)
     else
       {:error, reason} -> finish_tool_job(job, {:rejected, reason}, run)
       other -> other
@@ -1090,8 +1078,14 @@ defmodule Alto.Runner.Execution do
 
   defp dispatch_tool_job(%{tool: %{module: module}} = job, run)
        when module in [Alto.Tools.StartAgents, Alto.Tools.WaitAgents] do
+    dispatch_agent_job(job, run, :known, &agent_operation(module, job.prepared, &1))
+  end
+
+  defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([{job, :ready}], run)
+
+  defp dispatch_agent_job(job, run, error_class, operation) do
     with {:ok, run} <- begin_tool_jobs([job], run) do
-      case agent_operation(module, job.prepared, run) do
+      case operation.(run) do
         {:ok, value, next} ->
           outcome =
             Alto.Runner.Execution.Tool.bound_result({:ok, value}, next.max_tool_result_bytes)
@@ -1099,15 +1093,16 @@ defmodule Alto.Runner.Execution do
           finish_tool_job(job, {:ok, outcome}, next)
 
         {:error, reason, next} ->
-          finish_tool_job(job, {:ok, {:error, reason}}, next)
+          outcome =
+            if error_class == :known, do: {:ok, {:error, reason}}, else: {:error, reason}
+
+          finish_tool_job(job, outcome, next)
 
         {:cancelled, reason, next} ->
           {:cancelled, reason, next}
       end
     end
   end
-
-  defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([{job, :ready}], run)
 
   defp agent_operation(Alto.Tools.StartAgents, prepared, run) do
     # Async checkpoints use cooperative effect boundaries. Durable child-approval

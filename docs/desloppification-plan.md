@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,037 lines (16.3% below the original)**. **5,579 lines
+The current count is **34,032 lines (16.3% below the original)**. **5,574 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,11 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Spawn, Start, and Wait agent tools share dispatch fencing, result bounding,
+  completion, and cancellation handling through an operation callback. Spawn's
+  uncertain errors remain distinct from Start/Wait's known failures.
+- Conversation heads and revision files share validation of decoded entries;
+  heads no longer decode an entry a second time after canonical byte accounting.
 - Execution limits have one definition in Config, supplying Setup's schema,
   Config's accepted keys, checkpoint authority fields, and child inheritance.
   Child-specific narrowing and checkpoint validation remain explicit.
