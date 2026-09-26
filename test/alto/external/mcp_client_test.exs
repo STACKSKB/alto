@@ -54,7 +54,11 @@ defmodule Alto.External.MCP.ClientTest do
               IO.puts(JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => "server/ping", "params" => %{}}))
               %{"jsonrpc" => "2.0", "id" => id, "result" => %{"tools" => [%{"name" => "echo", "description" => "Echo", "inputSchema" => %{"type" => "object"}}]}}
             "tools/call" ->
-              %{"jsonrpc" => "2.0", "id" => id, "result" => %{"content" => [%{"type" => "text", "text" => JSON.encode!(message["params"]["arguments"])}]}}
+              case message["params"]["name"] do
+                "rpc_error" -> %{"id" => id, "error" => %{"code" => -32602, "message" => "bad arguments"}}
+                "tool_error" -> %{"id" => id, "result" => %{"isError" => true, "content" => []}}
+                _ -> %{"jsonrpc" => "2.0", "id" => id, "result" => %{"content" => [%{"type" => "text", "text" => JSON.encode!(message["params"]["arguments"])}]}}
+              end
             _ -> nil
           end
         if response do
@@ -215,12 +219,40 @@ defmodule Alto.External.MCP.ClientTest do
     root: root,
     server: server
   } do
-    opts = [command: server, cwd: root, env: %{"SLOW" => "1"}, startup_timeout: 5_000]
+    cancellation = Path.join(root, "cancelled")
+
+    opts = [
+      command: server,
+      cwd: root,
+      env: %{"SLOW" => "1", "CANCEL_FILE" => cancellation},
+      startup_timeout: 5_000
+    ]
+
     assert {:ok, client} = Client.ensure_started(opts)
     on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
 
-    assert {:unknown, {:mcp_request_timeout, _id}} =
+    assert {:unknown, {:json_rpc_request_timeout, _id}} =
              Client.call_tool(client, "echo", %{"hello" => "world"}, 50)
+
+    assert eventually(fn -> File.exists?(cancellation) end)
+    assert {:ok, _} = Client.call_tool(client, "echo", %{"after_timeout" => true}, 5_000)
+  end
+
+  test "received failures settle independently from successful sibling requests", %{
+    root: root,
+    server: server
+  } do
+    assert {:ok, client} = Client.ensure_started(command: server, cwd: root)
+    on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
+
+    tasks =
+      for name <- ["rpc_error", "tool_error", "echo"],
+          do: Task.async(fn -> Client.call_tool(client, name, %{}, 5_000) end)
+
+    assert [{:error, _}, {:error, {:mcp_tool_error, %{"isError" => true}}}, {:ok, _}] =
+             Enum.map(tasks, &Task.await(&1, 5_000))
+
+    assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client)
   end
 
   test "an MCP caller death removes pending work and sends cancellation", %{

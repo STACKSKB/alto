@@ -57,16 +57,12 @@ defmodule Alto.External.MCP.Client do
   def initial_state(_opts), do: %{tools: nil}
 
   def initialize(state) do
-    request = %{
+    %{
       "protocolVersion" => Keyword.fetch!(state.opts, :protocol_version),
       "capabilities" => %{},
       "clientInfo" => %{"name" => "alto", "version" => "0.1.0"}
     }
-
-    JSONRPC.initialize(state, request, :mcp_pending_request_limit)
   end
-
-  def ready_waiter_limit, do: :mcp_ready_waiter_limit
 
   def handle_call({:list_tools, _params, _timeout}, _from, %{phase: :ready, tools: tools} = state)
       when is_list(tools),
@@ -80,27 +76,14 @@ defmodule Alto.External.MCP.Client do
       state,
       method,
       params,
-      {kind, from},
+      from,
       deadline,
-      :mcp_pending_request_limit,
-      &fail_all/2
+      if(kind == :call_tool, do: :unknown, else: :error)
     )
   end
 
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:mcp_not_ready, state.phase}}, state}
-
-  def handle_info({:request_timeout, id}, state) do
-    JSONRPC.expire(state, id, fn reply ->
-      cancel_request(state, id, "timeout")
-      reply_error(reply, {:mcp_request_timeout, id}, :unknown)
-    end)
-  end
-
-  def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
-    {:noreply,
-     JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1, "owner_disconnected"))}
-  end
 
   @options_schema [
     command: [type: :string, required: true],
@@ -146,69 +129,28 @@ defmodule Alto.External.MCP.Client do
     error in ArgumentError -> {:error, {:mcp_port_open_failed, Exception.message(error)}}
   end
 
-  defp send_notification(state, method) do
-    with :ok <- JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "method" => method}),
-         do: {:ok, state}
-  end
-
-  # A server request has both `method` and `id`; inspect that shape before
-  # looking up pending responses so it cannot consume an outgoing id.
-  def handle_message(%{"method" => _method, "id" => _id} = message, state) do
-    maybe_refuse_server_request(message, state)
-  end
-
-  def handle_message(%{"id" => id} = message, state),
-    do: JSONRPC.settle(state, id, message, &settle_response/3)
-
-  def handle_message(_notification, state), do: {:ok, state}
-
-  defp settle_response(:initialize, %{"result" => result}, state) when is_map(result) do
+  def initialized(result, state) do
     expected = Keyword.fetch!(state.opts, :protocol_version)
 
     if result["protocolVersion"] == expected do
-      case send_notification(state, "notifications/initialized") do
-        {:ok, state} ->
-          {:ok, JSONRPC.ready(state)}
-
-        {:error, reason} ->
-          {:error, reason, state}
-      end
+      with :ok <- JSONRPC.notify(state, "notifications/initialized"), do: {:ok, state}
     else
-      reason = {:mcp_initialize_protocol_mismatch, expected, result["protocolVersion"]}
-      {:error, {:mcp_initialize_failed, reason}, state}
+      {:error, {:mcp_initialize_protocol_mismatch, expected, result["protocolVersion"]}}
     end
   end
 
-  defp settle_response(:initialize, message, state) do
-    reason = response_error(message)
-    {:error, {:mcp_initialize_failed, reason}, state}
-  end
+  def result("tools/list", %{"tools" => tools}, state) when is_list(tools),
+    do: {{:ok, tools}, %{state | tools: tools}}
 
-  defp settle_response({:list_tools, from}, %{"result" => %{"tools" => tools}}, state)
-       when is_list(tools) do
-    GenServer.reply(from, {:ok, tools})
-    {:ok, %{state | tools: tools}}
-  end
-
-  defp settle_response({:call_tool, from}, %{"result" => result}, state) do
-    GenServer.reply(from, normalize_tool_result(result))
-    {:ok, state}
-  end
-
-  defp settle_response({_kind, from}, message, state) do
-    GenServer.reply(from, {:error, {:mcp_error, response_error(message)}})
-    {:ok, state}
-  end
+  def result("tools/list", result, state), do: {{:error, {:invalid_mcp_tools, result}}, state}
+  def result("tools/call", result, state), do: {normalize_tool_result(result), state}
 
   defp normalize_tool_result(%{"isError" => true} = result),
     do: {:error, {:mcp_tool_error, result}}
 
   defp normalize_tool_result(result), do: {:ok, result}
 
-  defp response_error(%{"error" => error}), do: error
-  defp response_error(message), do: {:invalid_mcp_response, message}
-
-  defp maybe_refuse_server_request(%{"method" => _method, "id" => id}, state) do
+  def handle_message(%{"method" => _method, "id" => id}, state) do
     response = %{
       "jsonrpc" => "2.0",
       "id" => id,
@@ -219,32 +161,9 @@ defmodule Alto.External.MCP.Client do
     {:ok, state}
   end
 
-  defp maybe_refuse_server_request(_message, state), do: {:ok, state}
+  def handle_message(_notification, state), do: {:ok, state}
 
-  def fail_all(state, reason),
-    do:
-      JSONRPC.fail_all(state, reason, fn reply, reason ->
-        reply_error(reply, reason, classify_failure(reply))
-      end)
-
-  defp cancel_request(state, id, reason) do
-    _ =
-      JSONRPC.send_payload(state, %{
-        "jsonrpc" => "2.0",
-        "method" => "notifications/cancelled",
-        "params" => %{"requestId" => id, "reason" => reason}
-      })
-
-    :ok
+  def cancel_request(state, id, reason) do
+    JSONRPC.notify(state, "notifications/cancelled", %{"requestId" => id, "reason" => reason})
   end
-
-  defp classify_failure({:call_tool, _from}), do: :unknown
-  defp classify_failure(_reply), do: :error
-
-  defp reply_error(:initialize, _reason, _class), do: :ok
-
-  defp reply_error({:call_tool, from}, reason, :unknown),
-    do: GenServer.reply(from, {:unknown, reason})
-
-  defp reply_error({_kind, from}, reason, _class), do: GenServer.reply(from, {:error, reason})
 end

@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,043 lines**, an **18.7% reduction**, with **4,585 lines remaining**.
+Current: **32,938 lines**, a **19.0% reduction**, with **4,480 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,17 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+JSON-RPC now owns the entire pending-request lifecycle for MCP and Codex:
+initialization settlement, response routing, timeout cancellation, caller-monitor
+cleanup and failure replies. Protocol modules retain handshake validation,
+notifications, tool caching and result interpretation. One canonical pending record
+replaces protocol-specific reply tuples, and shared notifications use one encoder.
+Transport errors use `json_rpc` tags; dispatched MCP calls remain uncertain on
+transport loss, while received errors settle only their request. This removes
+**105 physical production lines**: 82 code/typespec lines, 22 blank lines and one
+net documentation/comment line. Integration coverage checks cancellation on the
+wire, client reuse after timeout, and independent failed/successful requests.
 
 Folder entry now uses the existing text form, and folder suggestions use the
 existing searchable menu. The standalone folder picker and its separate rendering,
@@ -142,7 +153,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,091 core tests** and **143 TUI tests** with application
+The current code passes **1,093 core tests** and **143 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

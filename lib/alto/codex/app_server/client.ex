@@ -94,15 +94,11 @@ defmodule Alto.Codex.AppServer.Client do
   def initial_state(_opts), do: %{subscribers: %{}}
 
   def initialize(state) do
-    params = %{
+    %{
       "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
       "capabilities" => %{"experimentalApi" => Keyword.get(state.opts, :experimental_api, false)}
     }
-
-    JSONRPC.initialize(state, params, :codex_app_server_pending_request_limit)
   end
-
-  def ready_waiter_limit, do: :codex_app_server_ready_waiter_limit
 
   def handle_call({:subscribe, subscriber}, _from, state) do
     if Map.has_key?(state.subscribers, subscriber) do
@@ -121,15 +117,7 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_call({:request, method, params, deadline}, from, %{phase: :ready} = state) do
-    JSONRPC.handle_request(
-      state,
-      method,
-      params,
-      {:request, from, method},
-      deadline,
-      :codex_app_server_pending_request_limit,
-      &fail_all/2
-    )
+    JSONRPC.handle_request(state, method, params, from, deadline)
   end
 
   def handle_call({:respond, id, result}, _from, %{phase: :ready} = state) do
@@ -150,18 +138,11 @@ defmodule Alto.Codex.AppServer.Client do
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:codex_app_server_not_ready, state.phase}}, state}
 
-  def handle_info({:request_timeout, id}, state) do
-    JSONRPC.expire(state, id, fn reply ->
-      cancel_request(state, id)
-      reply_error(reply, {:codex_app_server_request_timeout, id})
-    end)
-  end
-
-  def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
-    state = JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1))
-    subscribers = Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
-    {:noreply, %{state | subscribers: subscribers}}
-  end
+  def owner_down(state, monitor),
+    do: %{
+      state
+      | subscribers: Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
+    }
 
   @options_schema [
     command: [type: :string, default: "codex"],
@@ -198,10 +179,6 @@ defmodule Alto.Codex.AppServer.Client do
       {:error, {:codex_app_server_port_open_failed, Exception.message(error)}}
   end
 
-  defp send_notification(state, method, params \\ %{}) do
-    JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
-  end
-
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.
   def handle_message(%{"method" => method, "id" => id} = message, state)
@@ -209,9 +186,6 @@ defmodule Alto.Codex.AppServer.Client do
     broadcast(state, {:codex_request, self(), id, method, message["params"] || %{}})
     {:ok, state}
   end
-
-  def handle_message(%{"id" => id} = message, state),
-    do: JSONRPC.settle(state, id, message, &settle_response/3)
 
   def handle_message(%{"method" => method} = notification, state) do
     broadcast(
@@ -224,55 +198,16 @@ defmodule Alto.Codex.AppServer.Client do
 
   def handle_message(_message, state), do: {:ok, state}
 
-  defp settle_response(:initialize, %{"result" => result}, state) when is_map(result) do
-    case send_notification(state, "initialized") do
-      :ok ->
-        {:ok, JSONRPC.ready(state)}
-
-      {:error, reason} ->
-        {:error, reason, state}
-    end
+  def initialized(_result, state) do
+    with :ok <- JSONRPC.notify(state, "initialized"), do: {:ok, state}
   end
 
-  defp settle_response(:initialize, %{"result" => result}, state) do
-    reason = {:invalid_codex_app_server_initialize_result, result}
-    {:error, {:codex_app_server_initialize_failed, reason}, state}
-  end
-
-  defp settle_response(:initialize, message, state) do
-    reason = response_error(message)
-    {:error, {:codex_app_server_initialize_failed, reason}, state}
-  end
-
-  defp settle_response({:request, from, _method}, %{"result" => result}, state) do
-    GenServer.reply(from, {:ok, result})
-    {:ok, state}
-  end
-
-  defp settle_response({:request, from, method}, message, state) do
-    GenServer.reply(from, {:error, {:codex_app_server_error, method, response_error(message)}})
-    {:ok, state}
-  end
-
-  defp response_error(%{"error" => error}), do: error
-  defp response_error(message), do: {:invalid_codex_app_server_response, message}
+  def result(_method, result, state), do: {{:ok, result}, state}
 
   defp broadcast(state, message),
     do: Enum.each(state.subscribers, fn {pid, _ref} -> send(pid, message) end)
 
-  defp cancel_request(state, id) do
-    _ =
-      JSONRPC.send_payload(state, %{
-        "jsonrpc" => "2.0",
-        "method" => "$/cancelRequest",
-        "params" => %{"id" => id}
-      })
-
-    :ok
+  def cancel_request(state, id, _reason) do
+    JSONRPC.notify(state, "$/cancelRequest", %{"id" => id})
   end
-
-  def fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
-
-  defp reply_error(:initialize, _reason), do: :ok
-  defp reply_error({:request, from, _method}, reason), do: GenServer.reply(from, {:error, reason})
 end

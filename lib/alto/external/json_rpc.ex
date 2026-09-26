@@ -89,13 +89,13 @@ defmodule Alto.External.JSONRPC do
       {:ok, process} ->
         state = %{state | process: process}
 
-        case protocol.initialize(state) do
+        case request(state, "initialize", protocol.initialize(state), nil, nil, :error) do
           {:ok, state} -> {:noreply, arm_startup_timeout(state)}
-          {:error, reason} -> {:stop, reason, protocol.fail_all(state, reason)}
+          {:error, reason} -> {:stop, reason, fail_all(state, reason)}
         end
 
       {:error, reason} ->
-        {:stop, reason, protocol.fail_all(state, reason)}
+        {:stop, reason, fail_all(state, reason)}
     end
   end
 
@@ -115,11 +115,10 @@ defmodule Alto.External.JSONRPC do
     do: {:reply, {:error, reason}, state}
 
   def handle_call(:await_ready, from, state) do
-    limit_error = state.protocol.ready_waiter_limit()
     limit = Keyword.fetch!(state.opts, :max_ready_waiters)
 
     if length(state.ready_waiters) >= limit do
-      {:reply, {:error, {limit_error, limit}}, state}
+      {:reply, {:error, {:json_rpc_ready_waiter_limit, limit}}, state}
     else
       monitor = Process.monitor(elem(from, 0))
       {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
@@ -153,19 +152,35 @@ defmodule Alto.External.JSONRPC do
   end
 
   @impl true
-  def handle_info({:request_timeout, _} = message, state),
-    do: state.protocol.handle_info(message, state)
+  def handle_info({:request_timeout, id}, state) do
+    {entry, state} = take_pending(state, id)
+
+    if entry do
+      state.protocol.cancel_request(state, id, "timeout")
+      reply_failure(entry, {:json_rpc_request_timeout, id})
+    end
+
+    {:noreply, state}
+  end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner: ref} = state),
     do: {:stop, :normal, state}
 
-  def handle_info({:DOWN, _, :process, _, _} = message, state),
-    do: state.protocol.handle_info(message, state)
+  def handle_info({:DOWN, ref, :process, owner, _}, state) do
+    state = drop_owner(state, ref, owner)
 
-  def handle_info(message, %{protocol: protocol} = state) do
-    case transport_event(message, state, &protocol.handle_message/2) do
+    state =
+      if function_exported?(state.protocol, :owner_down, 2),
+        do: state.protocol.owner_down(state, ref),
+        else: state
+
+    {:noreply, state}
+  end
+
+  def handle_info(message, state) do
+    case transport_event(message, state, &handle_message/2) do
       {:ok, state} -> {:noreply, state}
-      {:error, reason, state} -> {:stop, reason, protocol.fail_all(state, reason)}
+      {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
@@ -194,20 +209,17 @@ defmodule Alto.External.JSONRPC do
   def terminate(_reason, %{process: nil}), do: :ok
   def terminate(_reason, %{process: process}), do: ExternalProcess.close(process)
 
-  def initialize(state, params, limit_error),
-    do: request(state, "initialize", params, :initialize, nil, limit_error)
-
-  def handle_request(state, method, params, reply, deadline, limit_error, fail_all) do
-    case request(state, method, params, reply, remaining(deadline), limit_error) do
+  def handle_request(state, method, params, from, deadline, failure_class \\ :error) do
+    case request(state, method, params, from, remaining(deadline), failure_class) do
       {:ok, state} -> {:noreply, state}
       {:error, :request_expired} -> {:reply, {:error, :request_expired}, state}
-      {:error, {^limit_error, _} = reason} -> {:reply, {:error, reason}, state}
-      {:error, reason} -> {:stop, reason, {:error, reason}, fail_all.(state, reason)}
+      {:error, {:json_rpc_pending_request_limit, _} = reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> {:stop, reason, {:error, reason}, fail_all(state, reason)}
     end
   end
 
-  defp request(state, method, params, reply, timeout, limit_error) do
-    owner = if is_tuple(reply), do: elem(elem(reply, 1), 0)
+  defp request(state, method, params, from, timeout, failure_class) do
+    owner = if from, do: elem(from, 0)
     limit = Keyword.fetch!(state.opts, :max_pending_requests)
 
     cond do
@@ -215,7 +227,7 @@ defmodule Alto.External.JSONRPC do
         {:error, :request_expired}
 
       map_size(state.pending) >= limit ->
-        {:error, {limit_error, limit}}
+        {:error, {:json_rpc_pending_request_limit, limit}}
 
       true ->
         id = state.next_id
@@ -224,7 +236,9 @@ defmodule Alto.External.JSONRPC do
         with :ok <-
                send_payload(state, payload) do
           pending = %{
-            reply: reply,
+            from: from,
+            method: method,
+            failure_class: failure_class,
             owner: owner,
             monitor: if(owner, do: Process.monitor(owner)),
             timer: start_timer(id, timeout || Keyword.fetch!(state.opts, :request_timeout))
@@ -245,35 +259,54 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  def settle(state, id, message, callback) do
-    case Map.pop(state.pending, id) do
-      {nil, _} ->
+  # Server requests may share an outgoing id; only method-free messages settle requests.
+  defp handle_message(%{"method" => _} = message, state),
+    do: state.protocol.handle_message(message, state)
+
+  defp handle_message(%{"id" => id} = message, state) do
+    case take_pending(state, id) do
+      {nil, state} ->
         {:ok, state}
 
-      {entry, pending} ->
-        release(entry)
-        callback.(entry.reply, message, %{state | pending: pending})
+      {%{from: nil}, state} ->
+        with %{"result" => result} when is_map(result) <- message,
+             {:ok, state} <- state.protocol.initialized(result, state) do
+          {:ok, ready(state)}
+        else
+          {:error, reason} -> {:error, reason, state}
+          other -> {:error, {:json_rpc_initialize_failed, response_error(other)}, state}
+        end
+
+      {%{from: from, method: method}, state} ->
+        {reply, state} =
+          case message do
+            %{"result" => result} -> state.protocol.result(method, result, state)
+            _ -> {{:error, {:json_rpc_error, method, response_error(message)}}, state}
+          end
+
+        GenServer.reply(from, reply)
+        {:ok, state}
     end
   end
 
-  def expire(state, id, reply_timeout) do
-    {:ok, state} =
-      settle(state, id, nil, fn reply, _, state ->
-        reply_timeout.(reply)
-        {:ok, state}
-      end)
+  defp handle_message(_message, state), do: {:ok, state}
+  defp response_error(%{"error" => error}), do: error
+  defp response_error(message), do: {:invalid_json_rpc_response, message}
 
-    {:noreply, state}
+  defp take_pending(state, id) do
+    {entry, pending} = Map.pop(state.pending, id)
+    if entry, do: release(entry)
+    {entry, %{state | pending: pending}}
   end
 
-  def drop_owner(state, monitor, owner, cancel) do
+  defp drop_owner(state, monitor, owner) do
     {owned, pending} =
       Enum.split_with(state.pending, fn {_id, entry} ->
         entry.monitor == monitor and entry.owner == owner
       end)
 
     Enum.each(owned, fn {id, entry} ->
-      cancel.(id)
+      state.protocol.cancel_request(state, id, "owner_disconnected")
       release(entry)
     end)
 
@@ -296,16 +329,21 @@ defmodule Alto.External.JSONRPC do
   def cancel_timer(nil), do: :ok
   def cancel_timer(timer), do: Process.cancel_timer(timer)
 
-  def fail_all(state, reason, reply_error) do
+  defp fail_all(state, reason) do
     state = finish_startup(state, {:failed, reason}, {:error, reason})
 
     Enum.each(state.pending, fn {_id, entry} ->
       release(entry)
-      reply_error.(entry.reply, reason)
+      reply_failure(entry, reason)
     end)
 
     %{state | pending: %{}}
   end
+
+  defp reply_failure(%{from: nil}, _reason), do: :ok
+
+  defp reply_failure(%{from: from, failure_class: class}, reason),
+    do: GenServer.reply(from, {class, reason})
 
   def deadline(:infinity), do: :infinity
 
@@ -314,6 +352,9 @@ defmodule Alto.External.JSONRPC do
 
   def remaining(:infinity), do: :infinity
   def remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  def notify(state, method, params \\ %{}),
+    do: send_payload(state, %{"jsonrpc" => "2.0", "method" => method, "params" => params})
 
   def send_payload(state, payload) do
     max_bytes = Keyword.fetch!(state.opts, :max_message_bytes)

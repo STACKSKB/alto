@@ -26,6 +26,11 @@ defmodule Alto.Codex.AppServer.ClientTest do
               {%{"jsonrpc" => "2.0", "id" => id, "result" => %{"serverInfo" => %{"name" => "fake"}}}, state}
             "initialized" ->
               {nil, state}
+            "test/pending" ->
+              {nil, state}
+            "$/cancelRequest" ->
+              IO.puts(JSON.encode!(%{"method" => "test/cancelled", "params" => message["params"]}))
+              {nil, state}
             "account/read" ->
               IO.puts(JSON.encode!(%{"id" => id, "method" => "server/needsReply", "params" => %{}}))
               {%{"id" => id, "result" => %{"account" => %{"type" => "chatgpt", "email" => "pro@example.test", "planType" => "pro"}, "requiresOpenaiAuth" => true}}, state}
@@ -126,6 +131,21 @@ defmodule Alto.Codex.AppServer.ClientTest do
     assert {:ok, client} = Client.ensure_started(command: server, args: [], cwd: root)
     assert {:ok, %{"data" => [_]}} = Client.request(client, "model/list", %{}, :infinity)
     assert Process.alive?(client)
+  end
+
+  test "request timeout cancels only its request and leaves the subscribed client usable", %{
+    root: root,
+    server: server
+  } do
+    assert {:ok, client} = Client.ensure_started(command: server, args: [], cwd: root)
+    on_exit(fn -> if Process.alive?(client), do: GenServer.stop(client) end)
+    assert :ok = Client.subscribe(client)
+
+    assert {:error, {:json_rpc_request_timeout, id}} =
+             Client.request(client, "test/pending", %{}, 50)
+
+    assert_receive {:codex_notification, ^client, "test/cancelled", %{"id" => ^id}}, 1_000
+    assert {:ok, %{"data" => [_]}} = Client.models(client)
   end
 
   test "restored Codex tool history uses readable result fields", %{root: root, server: server} do
