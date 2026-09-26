@@ -311,7 +311,8 @@ defmodule Alto.CLI do
     paths =
       opts
       |> Keyword.fetch!(:endpoints)
-      |> Enum.map(&"#{&1[:path]}")
+      |> Map.keys()
+      |> Enum.sort()
       |> Enum.join(", ")
 
     "serving webhook endpoints at http://127.0.0.1:#{Webhook.bound_port(listener)} (#{paths})"

@@ -10,12 +10,13 @@ defmodule AltoObanExample.InboxDatabaseTest do
     Repo.delete_all(Oban.Job)
 
     opts = [repo: Repo, oban: Oban, worker: Worker, run: "event_flow"]
+    admit = &Inbox.admit(&1, &2, opts)
     payload = %{"delivery_id" => "database-1", "body" => ~s({"value": 42})}
     conflicting = %{"delivery_id" => "database-1", "body" => ~s({"value": 99})}
 
-    assert {:ok, %Oban.Job{}} = Inbox.admit("/hooks/events:database-1", payload, opts)
-    assert {:error, :duplicate} = Inbox.admit("/hooks/events:database-1", payload, opts)
-    assert {:error, :duplicate} = Inbox.admit("/hooks/events:database-1", conflicting, opts)
+    assert {:ok, %Oban.Job{}} = admit.("/hooks/events:database-1", payload)
+    assert {:error, :duplicate} = admit.("/hooks/events:database-1", payload)
+    assert {:error, :duplicate} = admit.("/hooks/events:database-1", conflicting)
 
     assert Repo.aggregate(InboxDelivery, :count) == 1
     assert Repo.aggregate(Oban.Job, :count) == 1

@@ -1,13 +1,10 @@
 defmodule AltoObanExample.Inbox do
-  @moduledoc "An Oban-backed durable implementation of `Alto.Inbox`."
-
-  @behaviour Alto.Inbox
+  @moduledoc "Transactional delivery and Oban job admission for a host callback."
 
   alias AltoObanExample.InboxDelivery
 
   @required_options [:repo, :oban, :worker, :run]
 
-  @impl true
   def validate_options(opts) do
     missing = Enum.reject(@required_options, &Keyword.has_key?(opts, &1))
 
@@ -21,7 +18,6 @@ defmodule AltoObanExample.Inbox do
     end
   end
 
-  @impl true
   def admit(delivery_key, payload, opts) do
     repo = Keyword.fetch!(opts, :repo)
     oban = Keyword.fetch!(opts, :oban)

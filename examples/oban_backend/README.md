@@ -2,7 +2,7 @@
 
 This is a separate host application, not an Alto dependency. It owns Ecto,
 PostgreSQL, Oban, their supervision, and their migrations. Alto only calls the
-configured `Alto.Inbox` adapter.
+configured admission function, which captures the host's Repo, Oban, worker, and run settings.
 
 ## Run it
 
@@ -37,7 +37,7 @@ curl --fail-with-body http://127.0.0.1:4748/hooks/events \
 ## Test it
 
 The default checks don't need a database and verify compilation, adapter option
-validation, `alto.exs` selection, and worker execution:
+validation, `alto.exs` callback wiring and signature checks, and worker execution:
 
 ```sh
 mix test --no-start

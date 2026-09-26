@@ -3,7 +3,7 @@ defmodule Alto.Listeners.Webhook do
   Verified, bounded HTTP ingress for external webhooks.
 
   `alto.exs` chooses whether an accepted delivery starts a shallow Alto run or
-  is handed to a configured durable inbox. Bandit and Plug own HTTP parsing and
+  is handed to a configured durable admission function. Bandit and Plug own HTTP parsing and
   connection lifecycle; Alto owns verification, delivery identity, admission,
   and run dispatch.
   """
@@ -156,7 +156,7 @@ defmodule Alto.Listeners.Webhook do
 
   defp dispatch(
          conn,
-         %{on_event: {:enqueue, {backend, backend_opts}}} = endpoint,
+         endpoint,
          delivery_id,
          body,
          _opts
@@ -164,7 +164,7 @@ defmodule Alto.Listeners.Webhook do
     key = endpoint.source <> ":" <> delivery_id
     payload = %{"delivery_id" => delivery_id, "body" => body}
 
-    case Alto.Inbox.admit(backend, key, payload, backend_opts) do
+    case admit(fn -> endpoint.on_event.(key, payload) end) do
       {:ok, _record} -> respond(conn, 200, "accepted")
       {:error, reason} -> enqueue_error(conn, endpoint, reason)
     end
@@ -229,16 +229,11 @@ defmodule Alto.Listeners.Webhook do
   end
 
   defp verify(%{verify: verifier}, conn, body) do
-    normalize_verifier_result(invoke_callback(verifier, :verify, [body, conn.req_headers]))
+    normalize_verifier_result(verifier.(body, conn.req_headers))
   end
 
   defp identity(%{identity: extractor}, conn),
-    do: normalize_identity_result(invoke_callback(extractor, :extract, [conn.req_headers]))
-
-  defp invoke_callback({module, opts}, callback, args) when is_atom(module),
-    do: apply(module, callback, args ++ [opts])
-
-  defp invoke_callback({fun, opts}, _callback, args), do: apply(fun, args ++ [opts])
+    do: normalize_identity_result(extractor.(conn.req_headers))
 
   defp normalize_verifier_result(:ok), do: :ok
   defp normalize_verifier_result({:error, reason}), do: {:error, reason}
@@ -259,94 +254,34 @@ defmodule Alto.Listeners.Webhook do
     |> Plug.Conn.send_resp(status, body)
   end
 
-  defp build_endpoints(specs) when is_list(specs) and specs != [] do
-    with {:ok, endpoints} <- Alto.Result.traverse(specs, &build_endpoint/1) do
-      case endpoints |> Enum.map(& &1.path) |> duplicate_value() do
-        nil -> {:ok, Map.new(endpoints, &{&1.path, &1})}
-        path -> {:error, {:duplicate_endpoint_path, path}}
-      end
+  defp build_endpoints(specs) do
+    with {:ok, entries} <-
+           Alto.Result.traverse(Map.to_list(specs), fn {path, spec} ->
+             endpoint =
+               %{source: path, max_body_bytes: @default_max_body_bytes}
+               |> Map.merge(spec)
+               |> Map.put(:path, path)
+
+             if is_integer(endpoint.max_body_bytes) and endpoint.max_body_bytes >= 0,
+               do: {:ok, {path, endpoint}},
+               else: {:error, :invalid_max_body_bytes}
+           end),
+         do: {:ok, Map.new(entries)}
+  end
+
+  # Admission success acknowledges external work, so failures and malformed
+  # replies must remain HTTP failures rather than cross the acceptance boundary.
+  defp admit(fun) do
+    case fun.() do
+      {:ok, _} = ok -> ok
+      {:error, _} = error -> error
+      other -> {:error, {:invalid_admission_result, other}}
     end
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
-
-  defp build_endpoints(_specs), do: {:error, :invalid_endpoints}
-
-  defp build_endpoint(spec) when is_map(spec) do
-    with {:ok, path} <- endpoint_path(spec),
-         {:ok, verify} <- endpoint_verify(Map.get(spec, :verify)),
-         {:ok, identity} <- endpoint_identity(Map.get(spec, :identity)),
-         {:ok, on_event} <- endpoint_on_event(Map.get(spec, :on_event)),
-         {:ok, max_body_bytes} <-
-           max_body_bytes(Map.get(spec, :max_body_bytes, @default_max_body_bytes)),
-         {:ok, source} <- endpoint_source(Map.get(spec, :source, path)) do
-      {:ok,
-       %{
-         path: path,
-         verify: verify,
-         identity: identity,
-         on_event: on_event,
-         source: source,
-         max_body_bytes: max_body_bytes
-       }}
-    end
-  end
-
-  defp build_endpoint(_spec), do: {:error, :invalid_endpoints}
-
-  defp endpoint_path(%{path: path}) when is_binary(path) and byte_size(path) > 1 do
-    if String.starts_with?(path, "/") and not String.contains?(path, [<<0>>, "\n", "\r"]),
-      do: {:ok, path},
-      else: {:error, {:invalid_path, path}}
-  end
-
-  defp endpoint_path(_spec), do: {:error, :invalid_path}
-
-  defp endpoint_verify(value), do: endpoint_callback(value, :verify, 3, :invalid_verify)
-  defp endpoint_identity(value), do: endpoint_callback(value, :extract, 2, :invalid_identity)
-
-  defp endpoint_callback({module, opts} = value, callback, arity, error)
-       when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and function_exported?(module, callback, arity),
-      do: {:ok, value},
-      else: {:error, error}
-  end
-
-  defp endpoint_callback({fun, opts} = value, _callback, arity, _error)
-       when is_function(fun, arity) and is_list(opts),
-       do: {:ok, value}
-
-  defp endpoint_callback(_value, _callback, _arity, error), do: {:error, error}
-
-  defp endpoint_source(source)
-       when is_binary(source) and source != "" and byte_size(source) <= 256,
-       do:
-         if(String.contains?(source, [<<0>>, "\n", "\r"]),
-           do: {:error, {:invalid_source, source}},
-           else: {:ok, source}
-         )
-
-  defp endpoint_source(_source), do: {:error, :invalid_source}
-
-  defp duplicate_value(values) do
-    values
-    |> Enum.frequencies()
-    |> Enum.find_value(fn {value, count} -> if count > 1, do: value end)
-  end
-
-  defp endpoint_on_event({:start_run, config}) when is_binary(config) and config != "",
-    do: {:ok, {:start_run, config}}
-
-  defp endpoint_on_event({:enqueue, {backend, opts}})
-       when is_atom(backend) and is_list(opts) do
-    case Alto.Inbox.validate_backend(backend, opts) do
-      :ok -> {:ok, {:enqueue, {backend, opts}}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp endpoint_on_event(_other), do: {:error, :invalid_on_event}
-
-  defp max_body_bytes(value) when is_integer(value) and value >= 0, do: {:ok, value}
-  defp max_body_bytes(_value), do: {:error, :invalid_max_body_bytes}
 
   defp log_rejected(%{path: path}, detail) do
     IO.puts(:stderr, "alto webhook: #{path} rejected — #{detail}")

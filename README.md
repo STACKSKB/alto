@@ -82,10 +82,10 @@ For model-driven work, pass a provider module or a compiled `Alto.Config`.
 Configuration files are trusted Elixir: `Config.new/1` accepts a keyword list,
 and components own their defaults and domain checks. Malformed host configuration
 may raise. Duplicate keys follow ordinary keyword-list semantics; there is no
-second registry of run options. Provider, tool, loop, command-executor,
-search-backend, and inbox behaviours are extension contracts; middleware and
-hooks compose functions. `Alto.Capabilities` can describe the effective configured
-tools, providers, and limits without exposing secrets.
+second registry of run options. Provider, tool, loop, command-executor, and
+search-backend behaviours are extension contracts; webhook admission, middleware,
+and hooks compose functions. `Alto.Capabilities` can describe the effective
+configured tools, providers, and limits without exposing secrets.
 
 ## Workspace permissions and limits
 

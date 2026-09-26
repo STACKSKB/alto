@@ -27,35 +27,6 @@ defmodule Alto.Listeners.WebhookTest do
     end
   end
 
-  defmodule RecordingInbox do
-    @behaviour Alto.Inbox
-
-    @impl true
-    def admit(delivery_key, payload, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:inbox_admitted, delivery_key, payload})
-      Keyword.get(opts, :result, {:ok, :stored})
-    end
-  end
-
-  defmodule InvalidResultInbox do
-    @behaviour Alto.Inbox
-
-    @impl true
-    def admit(_delivery_key, _payload, _opts), do: :accepted
-  end
-
-  defmodule ValidatingInbox do
-    @behaviour Alto.Inbox
-
-    @impl true
-    def validate_options(opts) do
-      if Keyword.has_key?(opts, :required), do: :ok, else: {:error, :missing_required_option}
-    end
-
-    @impl true
-    def admit(_delivery_key, _payload, _opts), do: {:ok, :stored}
-  end
-
   setup do
     root = Path.join(System.tmp_dir!(), "alto-webhook-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
@@ -96,9 +67,8 @@ defmodule Alto.Listeners.WebhookTest do
 
   defp endpoint(config_name) do
     %{
-      path: "/hooks/events",
-      verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-      identity: {IdentityHeader, header: "x-delivery-id"},
+      verify: &HMAC.verify(&1, &2, secret: @secret, header: "x-signature", encoding: :base64),
+      identity: &IdentityHeader.extract(&1, header: "x-delivery-id"),
       on_event: {:start_run, config_name}
     }
   end
@@ -141,44 +111,27 @@ defmodule Alto.Listeners.WebhookTest do
     assert {:ok, "gh-1"} = IdentityHeader.extract(headers, header: "x-github-delivery")
   end
 
-  test "function verifier and identity callbacks dispatch a delivery", %{
-    listener: listener,
-    registry: registry
-  } do
-    verify = fn body, headers, opts -> HMAC.verify(body, headers, opts) end
-    identity = fn headers, opts -> IdentityHeader.extract(headers, opts) end
-
-    endpoint = %{
-      path: "/hooks/events",
-      verify: {verify, secret: @secret, header: "x-signature", encoding: :base64},
-      identity: {identity, header: "x-delivery-id"},
-      on_event: {:start_run, "job"}
-    }
-
-    port = start_listener(listener, registry, [endpoint])
-    assert post_event(port, delivery_id: "function-callbacks") =~ "200 OK"
-    assert_receive {:rule_ran, _}, 2_000
-  end
-
   test "unexpected callback errors return a bounded server error", %{
     listener: listener,
     registry: registry
   } do
     verify_error = %{
-      path: "/hooks/verify",
-      verify: {fn _body, _headers, _opts -> {:error, :unexpected_verify} end, []},
-      identity: {fn _headers, _opts -> {:ok, "delivery"} end, []},
+      verify: fn _body, _headers -> {:error, :unexpected_verify} end,
+      identity: fn _headers -> {:ok, "delivery"} end,
       on_event: {:start_run, "job"}
     }
 
     identity_error = %{
       verify_error
-      | path: "/hooks/identity",
-        verify: {fn _body, _headers, _opts -> :ok end, []},
-        identity: {fn _headers, _opts -> {:error, {:unexpected_identity, "detail"}} end, []}
+      | verify: fn _body, _headers -> :ok end,
+        identity: fn _headers -> {:error, {:unexpected_identity, "detail"}} end
     }
 
-    port = start_listener(listener, registry, [verify_error, identity_error])
+    port =
+      start_listener(listener, registry, %{
+        "/hooks/verify" => verify_error,
+        "/hooks/identity" => identity_error
+      })
 
     for path <- ["/hooks/verify", "/hooks/identity"] do
       response = post(port, path, "event", [])
@@ -258,7 +211,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
 
     response = post_event(port, delivery_id: "del-ok")
     assert response =~ "200 OK"
@@ -270,7 +223,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
 
     assert post_event(port, delivery_id: "del-bad-sig", signature: signature("other body")) =~
              "401"
@@ -293,7 +246,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
 
     assert post_event(port, delivery_id: "del-dup") =~ "200 OK"
     assert_receive {:rule_ran, _}, 2_000
@@ -307,7 +260,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("broken")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("broken")})
 
     assert post_event(port, delivery_id: "del-fail") =~ "500"
     # The id was released, so the sender's retry is not swallowed as duplicate.
@@ -319,7 +272,9 @@ defmodule Alto.Listeners.WebhookTest do
     registry: registry
   } do
     port =
-      start_listener(listener, registry, [Map.put(endpoint("job"), :max_body_bytes, 16)])
+      start_listener(listener, registry, %{
+        "/hooks/events" => Map.put(endpoint("job"), :max_body_bytes, 16)
+      })
 
     assert post_event(port, body: String.duplicate("x", 64)) =~ "413"
     refute_received {:rule_ran, _}
@@ -329,7 +284,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
     body = ~s({"id": 9})
 
     headers = [
@@ -345,7 +300,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
 
     assert post_event(port, extra_headers: [{"X-Delivery-ID", ""}]) =~ "400"
     assert post_event(port, delivery_id: String.duplicate("d", 201)) =~ "400"
@@ -367,7 +322,7 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, [endpoint("job")])
+    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
 
     body = ~s({"id": 1})
     headers = [{"X-Signature", signature(body)}, {"X-Delivery-ID", "d"}]
@@ -400,97 +355,6 @@ defmodule Alto.Listeners.WebhookTest do
     assert response =~ "405"
   end
 
-  test "invalid endpoint configuration fails the listener closed" do
-    registry = :"webhook-registry-#{System.unique_integer([:positive])}"
-
-    for bad <- [
-          [%{path: "/x", on_event: {:start_run, "job"}}],
-          [%{path: "/x", verify: :none, on_event: {:start_run, "job"}}],
-          [
-            %{
-              path: "/x",
-              verify: {fn _body, _headers -> :ok end, []},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: {:start_run, "job"}
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {fn _headers, _opts, _extra -> {:ok, "id"} end, []},
-              on_event: {:start_run, "job"}
-            }
-          ],
-          [
-            %{
-              path: "no-slash",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              on_event: {:start_run, "job"}
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: :reboot
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: {:enqueue, nil}
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: {:enqueue, 42}
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: {:enqueue, {String, []}}
-            }
-          ],
-          [
-            %{
-              path: "/x",
-              verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-              identity: {IdentityHeader, header: "x-delivery-id"},
-              on_event: {:enqueue, {ValidatingInbox, []}}
-            }
-          ]
-        ] do
-      name = :"bad-webhook-#{System.unique_integer([:positive])}"
-
-      assert {:error, {{:webhook_listener_failed, _reason}, _spec}} =
-               start_supervised(
-                 {Webhook, registry: registry, port: 0, endpoints: bad, name: name}
-               )
-    end
-  end
-
-  test "duplicate endpoint paths fail closed" do
-    registry = :"webhook-registry-#{System.unique_integer([:positive])}"
-    endpoint = endpoint("job")
-    name = :"duplicate-webhook-#{System.unique_integer([:positive])}"
-
-    assert {:error,
-            {{:webhook_listener_failed, {:duplicate_endpoint_path, "/hooks/events"}}, _spec}} =
-             start_supervised(
-               {Webhook, registry: registry, port: 0, endpoints: [endpoint, endpoint], name: name}
-             )
-  end
-
   describe "enqueue mode (durable inbox, alto.exs decides)" do
     defp start_inbox!(opts \\ []) do
       dir =
@@ -505,10 +369,9 @@ defmodule Alto.Listeners.WebhookTest do
 
     defp enqueue_endpoint(queue) do
       %{
-        path: "/hooks/events",
-        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-        identity: {IdentityHeader, header: "x-delivery-id"},
-        on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
+        verify: &HMAC.verify(&1, &2, secret: @secret, header: "x-signature", encoding: :base64),
+        identity: &IdentityHeader.extract(&1, header: "x-delivery-id"),
+        on_event: fn key, payload -> Alto.Queue.request(queue, {:admit, key, payload, []}) end
       }
     end
 
@@ -516,14 +379,18 @@ defmodule Alto.Listeners.WebhookTest do
       listener: listener,
       registry: registry
     } do
+      owner = self()
+
       endpoint = %{
-        path: "/hooks/events",
-        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-        identity: {IdentityHeader, header: "x-delivery-id"},
-        on_event: {:enqueue, {RecordingInbox, test_pid: self()}}
+        verify: &HMAC.verify(&1, &2, secret: @secret, header: "x-signature", encoding: :base64),
+        identity: &IdentityHeader.extract(&1, header: "x-delivery-id"),
+        on_event: fn key, payload ->
+          send(owner, {:inbox_admitted, key, payload})
+          {:ok, :stored}
+        end
       }
 
-      port = start_listener(listener, registry, [endpoint])
+      port = start_listener(listener, registry, %{"/hooks/events" => endpoint})
       body = ~s({"id": 8})
 
       assert post_event(port, body: body, delivery_id: "external-1") =~ "200 OK"
@@ -532,19 +399,30 @@ defmodule Alto.Listeners.WebhookTest do
                       %{"delivery_id" => "external-1", "body" => ^body}}
     end
 
-    test "an invalid backend reply fails as a retryable server error", %{
+    test "malformed replies, exceptions, throws, and exits never acknowledge admission", %{
       listener: listener,
       registry: registry
     } do
-      endpoint = %{
-        path: "/hooks/events",
-        verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-        identity: {IdentityHeader, header: "x-delivery-id"},
-        on_event: {:enqueue, {InvalidResultInbox, []}}
+      failures = %{
+        "/reply" => fn _, _ -> :accepted end,
+        "/raise" => fn _, _ -> raise "unavailable" end,
+        "/throw" => fn _, _ -> throw(:unavailable) end,
+        "/exit" => fn _, _ -> exit(:unavailable) end
       }
 
-      port = start_listener(listener, registry, [endpoint])
-      assert post_event(port, delivery_id: "invalid-reply") =~ "500"
+      endpoints =
+        Map.new(failures, fn {path, admit} ->
+          {path, %{endpoint("job") | on_event: admit}}
+        end)
+
+      port = start_listener(listener, registry, endpoints)
+      body = ~s({"id": 8})
+
+      for path <- Map.keys(failures), _retry <- 1..2 do
+        assert post(port, path, body, signed_headers(body, "retry")) =~ "500"
+      end
+
+      refute_received {:rule_ran, _}
     end
 
     test "a verified delivery is persisted before 200; redelivery dedups", %{
@@ -552,7 +430,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!()
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       body = ~s({"id": 7, "total": "40.00"})
       assert post_event(port, body: body, delivery_id: "inbox-del-1") =~ "200 OK"
@@ -588,7 +466,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!()
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       assert post_event(port, delivery_id: "inbox-busy") =~ "200 OK"
 
@@ -607,7 +485,7 @@ defmodule Alto.Listeners.WebhookTest do
     } do
       queue = start_inbox!(max_records: 1)
       {:ok, _} = Alto.Queue.request(queue, {:put, "filler", %{n: 1}, []})
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       assert post_event(port, delivery_id: "inbox-overflow") =~ "503"
       assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
@@ -621,7 +499,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!(max_payload_bytes: 10)
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       assert post_event(port, delivery_id: "inbox-big") =~ "413"
       assert %{pending: 0} = Alto.Queue.request(queue, :count)
@@ -632,7 +510,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       dead = :"webhook-dead-queue-#{System.unique_integer([:positive])}"
-      port = start_listener(listener, registry, [enqueue_endpoint(dead)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(dead)})
 
       assert post_event(port, delivery_id: "inbox-dead", recv_timeout: 5_000) =~ "500"
     end
@@ -643,20 +521,7 @@ defmodule Alto.Listeners.WebhookTest do
     } do
       queue = start_inbox!()
 
-      endpoints = [
-        %{
-          path: "/hooks/a",
-          verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-          identity: {IdentityHeader, header: "x-delivery-id"},
-          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
-        },
-        %{
-          path: "/hooks/b",
-          verify: {HMAC, secret: @secret, header: "x-signature", encoding: :base64},
-          identity: {IdentityHeader, header: "x-delivery-id"},
-          on_event: {:enqueue, {Alto.Inboxes.Queue, queue: queue}}
-        }
-      ]
+      endpoints = Map.new(["/hooks/a", "/hooks/b"], &{&1, enqueue_endpoint(queue)})
 
       port = start_listener(listener, registry, endpoints)
       body = ~s({"id": 1})
@@ -678,7 +543,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!()
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
       body = ~s({"id": 2})
 
       responses =
@@ -705,7 +570,7 @@ defmodule Alto.Listeners.WebhookTest do
       {:ok, pid} = Alto.Queue.start_link(id: id, dir: dir, name: name)
       on_exit(fn -> File.rm_rf!(dir) end)
 
-      port = start_listener(listener, registry, [enqueue_endpoint(name)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(name)})
       body = ~s({"id": 3})
 
       assert post(port, "/hooks/events", body, signed_headers(body, "survive")) =~ "200 OK"
@@ -728,7 +593,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!()
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       first = ~s({"id": 4, "total": "10.00"})
       second = ~s({"id": 4, "total": "99.99"})
@@ -745,7 +610,7 @@ defmodule Alto.Listeners.WebhookTest do
       registry: registry
     } do
       queue = start_inbox!()
-      port = start_listener(listener, registry, [enqueue_endpoint(queue)])
+      port = start_listener(listener, registry, %{"/hooks/events" => enqueue_endpoint(queue)})
 
       assert post_event(port, delivery_id: String.duplicate("d", 201)) =~ "400"
       assert %{pending: 0} = Alto.Queue.request(queue, :count)

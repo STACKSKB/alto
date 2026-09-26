@@ -10,4 +10,24 @@ ALTO_MODEL=your-model ALTO_API_KEY=... \
 mix run examples/repository_maintenance/run.exs /path/to/repo failure.json
 ```
 
-The provider settings are required for diagnosis, and the checkout must support the configured test command (the runner defaults to `mix test`; call `Workflow.process/3` with `tests: ["npm", "test"]` or another argv). Admission and validation remain deterministic and useful without credentials; the workflow stops with `:provider_required_for_maintenance` before pretending a repair succeeded. For signed HTTP reports, configure the root `Alto.Listeners.Webhook` with `Alto.Ingress.HMAC`, `Alto.Ingress.IdentityHeader`, and `on_event: {:enqueue, {RepositoryMaintenance.WebhookInbox, queue: queue, source: "github"}}`; this adapter decodes the body and uses the same `Workflow.admit/2` path as the CLI. Applying is a separate reviewed operation: inspect the manifest and patch, set `reviewed` to `true`, recompute the manifest SHA-256, then run `mix run examples/repository_maintenance/run.exs apply REPO MANIFEST MANIFEST_SHA256`; the base commit, clean tree, and patch hash are rechecked immediately before `git apply`.
+The provider settings are required for diagnosis, and the checkout must support the configured test command (the runner defaults to `mix test`; call `Workflow.process/3` with `tests: ["npm", "test"]` or another argv). Admission and validation remain deterministic and useful without credentials; the workflow stops with `:provider_required_for_maintenance` before pretending a repair succeeded. Applying is a separate reviewed operation: inspect the manifest and patch, set `reviewed` to `true`, recompute the manifest SHA-256, then run `mix run examples/repository_maintenance/run.exs apply REPO MANIFEST MANIFEST_SHA256`; the base commit, clean tree, and patch hash are rechecked immediately before `git apply`.
+
+
+For signed HTTP reports, configure a webhook endpoint with closures capturing
+verification and admission settings. The admission helper decodes the bounded
+JSON body and uses the same `Workflow.admit/2` path as the CLI:
+
+```elixir
+inbox_options = [queue: queue, source: "github"]
+:ok = RepositoryMaintenance.WebhookInbox.validate_options(inbox_options)
+
+{Alto.Listeners.Webhook,
+ endpoints: %{
+   "/hooks/ci" => %{
+     source: "github",
+     verify: &Alto.Ingress.HMAC.verify(&1, &2, secret: secret),
+     identity: &Alto.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
+     on_event: &RepositoryMaintenance.WebhookInbox.admit(&1, &2, inbox_options)
+   }
+ }}
+```

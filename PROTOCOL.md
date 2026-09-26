@@ -439,6 +439,13 @@ runtime-owned jobs": rule loops, queue consumers, timers, webhooks). v1
 servers reply `error` (`unsupported`). Reserving the type now keeps the later
 addition from being a protocol break.
 
+HTTP webhook ingress is a separate configured listener, not this reserved wire
+command. Its endpoints map paths to verification, identity, and admission
+functions, or `on_event: {:start_run, name}`. Durable queue admission can capture
+the queue in `fn key, payload -> Alto.Queue.request(queue, {:admit, key, payload, []}) end`.
+See [webhook admission](docs/extensions.md#webhook-admission) for callback results,
+body bounds, and host-owned durability.
+
 **`queue_claim`** — claim pending records from the server's durable queue
 (`Alto.Queue`). New message types are additive.
 

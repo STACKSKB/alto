@@ -5,7 +5,7 @@ defmodule AltoObanExampleTest do
 
   test "the adapter validates host wiring before the listener starts" do
     assert :ok =
-             Alto.Inbox.validate_backend(Inbox,
+             Inbox.validate_options(
                repo: Repo,
                oban: Oban,
                worker: Worker,
@@ -13,7 +13,7 @@ defmodule AltoObanExampleTest do
              )
 
     assert {:error, {:missing_inbox_options, [:run]}} =
-             Alto.Inbox.validate_backend(Inbox,
+             Inbox.validate_options(
                repo: Repo,
                oban: Oban,
                worker: Worker
@@ -51,7 +51,13 @@ defmodule AltoObanExampleTest do
     assert %{"event_flow" => _run_options} = options[:runs]
 
     assert [{Alto.Listeners.Webhook, listener_opts}] = options[:listeners]
-    assert [%{on_event: {:enqueue, {Inbox, inbox_opts}}}] = listener_opts[:endpoints]
-    assert :ok = Alto.Inbox.validate_backend(Inbox, inbox_opts)
+    assert %{"/hooks/events" => endpoint} = listener_opts[:endpoints]
+    assert is_function(endpoint.on_event, 2)
+    body = ~s({"value":42})
+    signature = :crypto.mac(:hmac, :sha256, "test-secret", body) |> Base.encode64()
+    headers = [{"x-signature", signature}, {"x-delivery-id", "delivery-42"}]
+    assert :ok = endpoint.verify.(body, headers)
+    assert {:error, :bad_signature} = endpoint.verify.(body <> " ", headers)
+    assert {:ok, "delivery-42"} = endpoint.identity.(headers)
   end
 end

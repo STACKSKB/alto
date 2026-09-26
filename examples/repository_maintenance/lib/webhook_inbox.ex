@@ -1,15 +1,12 @@
 defmodule RepositoryMaintenance.WebhookInbox do
   @moduledoc """
-  Adapter for `Alto.Listeners.Webhook` enqueue mode.
+  Host admission helper for `Alto.Listeners.Webhook` callbacks.
 
   Webhook verification and delivery identity happen before this callback. The
   callback only decodes the bounded JSON body and sends the same validated
   report through `RepositoryMaintenance.Workflow.admit/2` used by the CLI.
   """
 
-  @behaviour Alto.Inbox
-
-  @impl true
   def validate_options(opts) do
     with {:ok, queue} <- Keyword.fetch(opts, :queue),
          true <- is_atom(queue) or is_pid(queue) or is_tuple(queue),
@@ -21,7 +18,6 @@ defmodule RepositoryMaintenance.WebhookInbox do
     end
   end
 
-  @impl true
   def admit(_delivery_key, %{"delivery_id" => delivery_id, "body" => body}, opts)
       when is_binary(delivery_id) and is_binary(body) do
     with {:ok, report} <- JSON.decode(body),

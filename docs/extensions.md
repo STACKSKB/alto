@@ -325,3 +325,40 @@ prefix-continuity dependency.
 
 NimbleOptions now owns context-window, child-limit and compaction option schemas.
 Authority relationships and domain-specific validation remain explicit.
+
+## Webhook admission
+
+Webhook endpoints are a map from HTTP paths to trusted callback settings.
+Closures capture their configuration; admission helpers are ordinary functions.
+
+```elixir
+{Alto.Listeners.Webhook,
+ endpoints: %{
+   "/hooks/events" => %{
+     verify: &Alto.Ingress.HMAC.verify(&1, &2, secret: secret),
+     identity: &Alto.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
+     on_event: fn key, payload -> Alto.Queue.request(queue, {:admit, key, payload, []}) end,
+     max_body_bytes: 262_144
+   }
+ }}
+```
+
+`verify.(body, headers)` returns `:ok` or `{:error, reason}`; verification covers
+exact body bytes before admission. `identity.(headers)` returns
+`{:ok, delivery_id}` or `{:error, reason}`. Headers are a list of name/value pairs.
+The listener bounds body size and delivery identity. `source` defaults to the
+endpoint path; admission receives `source <> ":" <> delivery_id` and
+`%{"delivery_id" => delivery_id, "body" => body}`.
+
+An admission function returns `{:ok, record}` only after durably establishing
+identity and work, or `{:error, reason}`. A duplicate is acknowledged with HTTP
+200; full admission returns 503 and oversized payloads return 413. Exceptions,
+exits, and malformed admission replies remain failures rather than acceptance.
+The host owns I/O timeouts, supervision, retention, and worker retries. A database
+host may commit the identity row and execution job in one transaction, as the
+[Oban example](../examples/oban_backend/README.md) does. Successful admission is
+not a promise of successful execution or permission to retry uncertain effects.
+
+For shallow dispatch, use `on_event: {:start_run, "configured-name"}` instead.
+That path uses bounded resident delivery deduplication and starts the configured
+run with the body as its task; durable admission remains the callback's concern.
