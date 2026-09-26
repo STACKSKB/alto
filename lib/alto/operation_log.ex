@@ -122,18 +122,20 @@ defmodule Alto.OperationLog do
   @impl true
   def init(state), do: {:ok, state}
 
+  # Fields after the operation key. The same validation runs for live commands,
+  # replay and compound transitions; revision fields also fence the current record.
   @commands %{
-    intent: 5,
-    retain: 6,
-    retire_checkpoint: 6,
-    attempt: 3,
-    release: 3,
-    outcome: 5,
-    checkpoint: 4,
-    checkpoint_update: 4,
-    resume_checkpoint: 4,
-    reject_intended: 4,
-    reconcile: 5
+    intent: [:tool, :inbox, :recovery],
+    retain: [:tool, :recovery, :attempt, :checkpoint],
+    retire_checkpoint: [:revision, :checkpoint, :attempt, :evidence],
+    attempt: [:attempt],
+    release: [:attempt],
+    outcome: [:attempt, :outcome, :evidence],
+    checkpoint: [:attempt, :checkpoint],
+    checkpoint_update: [:revision, :checkpoint],
+    resume_checkpoint: [:revision, :checkpoint],
+    reject_intended: [:revision, :evidence],
+    reconcile: [:revision, :resolution, :evidence]
   }
 
   @impl true
@@ -142,7 +144,9 @@ defmodule Alto.OperationLog do
   end
 
   defp command?(request) when is_tuple(request) and tuple_size(request) > 0,
-    do: Map.get(@commands, elem(request, 0)) == tuple_size(request)
+    do:
+      length(Map.get(@commands, elem(request, 0), [])) + 2 == tuple_size(request) and
+        Map.has_key?(@commands, elem(request, 0))
 
   defp command?(_), do: false
 
@@ -219,12 +223,12 @@ defmodule Alto.OperationLog do
   end
 
   defp entry_status(%{phase: :checkpointed, checkpoint: checkpoint, attempts: attempts}),
-    do: {:checkpointed, checkpoint, List.last(attempts)}
+    do: {:checkpointed, checkpoint, List.first(attempts)}
 
   defp entry_status(%{phase: :intended}), do: {:intended}
 
   defp entry_status(%{phase: :dispatched, attempts: attempts}),
-    do: {:dispatched, List.last(attempts)}
+    do: {:dispatched, List.first(attempts)}
 
   defp entry_status(%{phase: {:decided, class, evidence, _attempt}}),
     do: {:decided, class, evidence}
@@ -243,15 +247,7 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp active_attempt?(%{phase: phase}) when phase in [:dispatched, :checkpointed], do: true
-
-  defp active_attempt?(_entry), do: false
-
-  defp current_attempt(%{attempts: attempts}), do: List.last(attempts)
-
-  defp same_intent?(entry, tool, inbox, recovery) do
-    entry.tool == tool and entry.inbox == inbox and entry.recovery === recovery
-  end
+  defp current_attempt(%{attempts: attempts}), do: List.first(attempts)
 
   defp recovery_view(op_key, entry) do
     %{
@@ -286,37 +282,15 @@ defmodule Alto.OperationLog do
   defp expect_revision(%{revision: revision}, revision), do: :ok
   defp expect_revision(_entry, _expected), do: {:error, :stale_revision}
 
-  defp ensure_reconcilable(%{phase: :checkpointed}), do: {:error, :checkpoint_active}
-
-  defp ensure_reconcilable(%{phase: phase, attempts: [_ | _]})
+  defp reconcilable?(%{phase: phase, attempts: [_ | _]})
        when phase in [:intended, :dispatched],
-       do: :ok
+       do: true
 
-  defp ensure_reconcilable(%{phase: {:decided, class, _evidence, _attempt}})
+  defp reconcilable?(%{phase: {:decided, class, _, _}})
        when class in [:unknown, :requires_operator],
-       do: :ok
+       do: true
 
-  defp ensure_reconcilable(_entry), do: {:error, :not_reconcilable}
-
-  defp ensure_retry_recoverable(%{recovery: recovery}, :retry_permitted) when is_map(recovery),
-    do: :ok
-
-  defp ensure_retry_recoverable(_entry, :retry_permitted), do: {:error, :recovery_unavailable}
-  defp ensure_retry_recoverable(_entry, _resolution), do: :ok
-
-  defp apply_reconciliation(entry, :retry_permitted, _evidence) do
-    %{entry | phase: :intended}
-  end
-
-  defp apply_reconciliation(entry, resolution, evidence) do
-    class = if resolution == :confirmed_committed, do: :completed, else: :failed_known
-    attempt = current_attempt(entry) || "operator"
-    audit = %{operator_resolution: resolution, evidence: evidence}
-    %{entry | phase: {:decided, class, audit, attempt}}
-  end
-
-  defp outcome_can_be_escalated?({:unknown, _evidence, _attempt}, :requires_operator), do: true
-  defp outcome_can_be_escalated?(_outcome, _class), do: false
+  defp reconcilable?(_), do: false
 
   defp evictable?(%{phase: {:decided, class, _evidence, _attempt}})
        when class in [:completed, :failed_known, :rejected_before_dispatch],
@@ -330,19 +304,46 @@ defmodule Alto.OperationLog do
 
   defp validate_key(key), do: {:error, {:invalid_op_key, key}}
 
-  defp validate_tool(tool, state),
-    do: validate_identifier(tool, :tool, state.max_identifier_bytes, :invalid_tool)
+  defp validate(:tool, value, state),
+    do: validate_identifier(value, :tool, state.max_identifier_bytes, :invalid_tool)
 
-  defp validate_inbox(nil, _state), do: :ok
+  defp validate(:inbox, nil, _), do: :ok
 
-  defp validate_inbox(key, state) do
-    with :ok <- validate_key(key) do
-      validate_identifier(key, :inbox, state.max_identifier_bytes, :invalid_op_key)
-    end
+  defp validate(:inbox, value, state) do
+    with :ok <- validate_key(value),
+         do: validate_identifier(value, :inbox, state.max_identifier_bytes, :invalid_op_key)
   end
 
-  defp validate_attempt(id, state),
-    do: validate_identifier(id, :attempt, state.max_identifier_bytes, :invalid_attempt)
+  defp validate(:attempt, value, state),
+    do: validate_identifier(value, :attempt, state.max_identifier_bytes, :invalid_attempt)
+
+  defp validate(:revision, value, _) when is_integer(value) and value >= 1, do: :ok
+  defp validate(:recovery, nil, _), do: :ok
+
+  defp validate(:outcome, value, _)
+       when value in [
+              :completed,
+              :rejected_before_dispatch,
+              :failed_known,
+              :unknown,
+              :requires_operator
+            ],
+       do: :ok
+
+  defp validate(:resolution, value, _)
+       when value in [:confirmed_committed, :confirmed_failed, :retry_permitted],
+       do: :ok
+
+  defp validate(field, value, state)
+       when field in [:evidence, :recovery, :checkpoint] and is_map(value) do
+    limit = if field == :evidence, do: state.max_evidence_bytes, else: state.max_recovery_bytes
+
+    if :erlang.external_size(value) <= limit,
+      do: :ok,
+      else: {:error, {:field_too_large, field, limit}}
+  end
+
+  defp validate(field, value, _), do: {:error, {:invalid_field, field, value}}
 
   defp validate_identifier(value, kind, max, invalid) do
     cond do
@@ -351,35 +352,6 @@ defmodule Alto.OperationLog do
       true -> :ok
     end
   end
-
-  defp validate_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
-  defp validate_revision(revision), do: {:error, {:invalid_revision, revision}}
-
-  defp validate_evidence(evidence, state) when is_map(evidence) do
-    if :erlang.external_size(scrub(evidence)) <= state.max_evidence_bytes,
-      do: :ok,
-      else: {:error, {:evidence_too_large, state.max_evidence_bytes}}
-  end
-
-  defp validate_evidence(evidence, _state), do: {:error, {:invalid_evidence, evidence}}
-
-  defp validate_recovery(nil, _state), do: :ok
-
-  defp validate_recovery(recovery, state) when is_map(recovery) do
-    if :erlang.external_size(recovery) <= state.max_recovery_bytes,
-      do: :ok,
-      else: {:error, {:recovery_too_large, state.max_recovery_bytes}}
-  end
-
-  defp validate_recovery(recovery, _state), do: {:error, {:invalid_recovery, recovery}}
-
-  defp validate_checkpoint(value, state) when is_map(value) do
-    if :erlang.external_size(value) <= state.max_recovery_bytes,
-      do: :ok,
-      else: {:error, :invalid_checkpoint}
-  end
-
-  defp validate_checkpoint(_value, _state), do: {:error, :invalid_checkpoint}
 
   defp validate_id!(id) do
     if Alto.Storage.valid_id?(id) do
@@ -458,223 +430,174 @@ defmodule Alto.OperationLog do
 
   defp transition_reply(_type), do: :ok
 
-  defp log_apply(nil, {:retain, op, tool, recovery, attempt, checkpoint}, state) do
-    with {:ok, record} <- log_apply(nil, {:intent, op, tool, nil, recovery}, state),
-         {:ok, record} <- log_apply(record, {:attempt, op, attempt}, state),
-         do: log_apply(record, {:checkpoint, op, attempt, checkpoint}, state)
-  end
+  defp log_apply(record, {:retain, _, _, _, _, _}, _) when not is_nil(record), do: :noop
 
-  defp log_apply(_record, {:retain, _, _, _, _, _}, _state), do: :noop
-
-  defp log_apply(nil, command, _state) when elem(command, 0) != :intent,
+  defp log_apply(nil, command, _) when elem(command, 0) not in [:intent, :retain],
     do: {:error, :no_intent}
 
-  defp log_apply(record, {:intent, _op, tool, inbox, recovery}, state) do
-    with :ok <- validate_tool(tool, state),
-         :ok <- validate_inbox(inbox, state),
-         :ok <- validate_recovery(recovery, state) do
-      if is_nil(record) do
-        {:ok,
-         %{
-           tool: tool,
-           inbox: inbox,
-           recovery: recovery,
-           attempts: [],
+  defp log_apply(record, command, state) do
+    [kind, _op | args] = Tuple.to_list(command)
+
+    validation =
+      Enum.zip(@commands[kind], args)
+      |> Enum.reduce_while(:ok, fn {field, value}, :ok ->
+        result =
+          with :ok <- validate(field, value, state),
+               do: if(field == :revision, do: expect_revision(record, value), else: :ok)
+
+        case result do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+
+    with :ok <- validation, do: apply_command(record, command, state)
+  end
+
+  defp apply_command(nil, {:intent, _op, tool, inbox, recovery}, _) do
+    {:ok,
+     %{
+       tool: tool,
+       inbox: inbox,
+       recovery: recovery,
+       attempts: [],
+       phase: :intended,
+       checkpoint: nil,
+       checkpoint_decision: nil,
+       checkpointed_attempts: [],
+       checkpoint_grant_revision: nil
+     }}
+  end
+
+  defp apply_command(record, {:intent, _op, tool, inbox, recovery}, _) do
+    if record.tool == tool and record.inbox == inbox and record.recovery === recovery,
+      do: :noop,
+      else: {:error, :intent_conflict}
+  end
+
+  defp apply_command(nil, {:retain, op, tool, recovery, attempt, checkpoint}, state),
+    do:
+      sequence(
+        nil,
+        [
+          {:intent, op, tool, nil, recovery},
+          {:attempt, op, attempt},
+          {:checkpoint, op, attempt, checkpoint}
+        ],
+        state
+      )
+
+  defp apply_command(%{phase: :dispatched, attempts: [attempt | _]}, {:attempt, _, attempt}, _),
+    do: :noop
+
+  defp apply_command(%{phase: :intended} = record, {:attempt, _, attempt}, state) do
+    cond do
+      attempt in record.attempts -> {:error, :invalid_operation_state}
+      length(record.attempts) >= state.max_attempts -> {:error, :attempt_history_full}
+      true -> {:ok, %{record | attempts: [attempt | record.attempts], phase: :dispatched}}
+    end
+  end
+
+  defp apply_command(%{phase: :intended, attempts: [attempt | _]}, {:release, _, attempt}, _),
+    do: :noop
+
+  defp apply_command(
+         %{phase: :dispatched, attempts: [attempt | _]} = record,
+         {:release, _, attempt},
+         _
+       ),
+       do: {:ok, %{record | phase: :intended}}
+
+  defp apply_command(
+         %{phase: :dispatched, attempts: [attempt | _]} = record,
+         {:outcome, _, attempt, class, evidence},
+         _
+       ),
+       do: {:ok, %{record | phase: {:decided, class, evidence, attempt}}}
+
+  defp apply_command(
+         %{phase: {:decided, :unknown, _, attempt}, attempts: [attempt | _]} = record,
+         {:outcome, _, attempt, :requires_operator, evidence},
+         _
+       ),
+       do: {:ok, %{record | phase: {:decided, :requires_operator, evidence, attempt}}}
+
+  defp apply_command(
+         %{phase: :dispatched, attempts: [attempt | _]} = record,
+         {:checkpoint, _, attempt, checkpoint},
+         _
+       ) do
+    {:ok,
+     %{
+       record
+       | checkpoint: checkpoint,
+         phase: :checkpointed,
+         checkpoint_decision: nil,
+         checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
+     }}
+  end
+
+  defp apply_command(%{phase: :checkpointed} = record, {:checkpoint_update, _, _, value}, _),
+    do: {:ok, %{record | checkpoint: value}}
+
+  defp apply_command(%{phase: :checkpointed} = record, {:resume_checkpoint, _, _, value}, _),
+    do:
+      {:ok,
+       %{
+         record
+         | checkpoint_decision: value,
            phase: :intended,
-           checkpoint: nil,
-           checkpoint_decision: nil,
-           checkpointed_attempts: [],
-           checkpoint_grant_revision: nil
-         }}
-      else
-        if same_intent?(record, tool, inbox, recovery),
-          do: :noop,
-          else: {:error, :intent_conflict}
-      end
+           checkpoint_grant_revision: record.revision + 1
+       }}
+
+  defp apply_command(record, {:reconcile, _, _, resolution, evidence}, _) do
+    cond do
+      not reconcilable?(record) ->
+        {:error, :invalid_operation_state}
+
+      resolution == :retry_permitted and not is_map(record.recovery) ->
+        {:error, :recovery_unavailable}
+
+      resolution == :retry_permitted ->
+        {:ok, %{record | phase: :intended}}
+
+      true ->
+        class = if resolution == :confirmed_committed, do: :completed, else: :failed_known
+        audit = %{operator_resolution: resolution, evidence: evidence}
+        {:ok, %{record | phase: {:decided, class, audit, current_attempt(record)}}}
     end
   end
 
-  defp log_apply(record, {:attempt, _op, attempt}, state) do
-    with :ok <- validate_attempt(attempt, state) do
-      cond do
-        match?({:decided, _, _, _}, record.phase) ->
-          {:error, :already_decided}
-
-        record.phase == :checkpointed ->
-          {:error, :checkpoint_active}
-
-        attempt in record.attempts ->
-          if attempt == current_attempt(record) and active_attempt?(record),
-            do: :noop,
-            else: {:error, :stale_attempt}
-
-        active_attempt?(record) ->
-          {:error, :attempt_in_flight}
-
-        length(record.attempts) >= state.max_attempts ->
-          {:error, :attempt_history_full}
-
-        true ->
-          {:ok, %{record | attempts: record.attempts ++ [attempt], phase: :dispatched}}
-      end
-    end
-  end
-
-  defp log_apply(record, {:release, _op, attempt}, state) do
-    with :ok <- validate_attempt(attempt, state) do
-      cond do
-        attempt not in record.attempts -> {:error, :no_attempt}
-        match?({:decided, _, _, _}, record.phase) -> {:error, :already_decided}
-        record.phase == :checkpointed -> {:error, :checkpoint_active}
-        attempt != current_attempt(record) -> {:error, :stale_attempt}
-        record.phase == :intended -> :noop
-        true -> {:ok, %{record | phase: :intended}}
-      end
-    end
-  end
-
-  defp log_apply(record, {:outcome, _op, attempt, class, evidence}, state) do
-    with :ok <- validate_attempt(attempt, state),
-         :ok <- validate_evidence(evidence, state),
-         {:ok, class} <- outcome_class(class) do
-      cond do
-        record.attempts == [] ->
-          {:error, :no_attempt}
-
-        match?({:decided, _, _, _}, record.phase) and
-            not outcome_can_be_escalated?(phase_outcome(record.phase), class) ->
-          {:error, :already_decided}
-
-        record.phase == :checkpointed ->
-          {:error, :checkpoint_active}
-
-        attempt != current_attempt(record) or
-            (record.phase != :dispatched and not match?({:decided, :unknown, _, _}, record.phase)) ->
-          {:error, :stale_attempt}
-
-        true ->
-          {:ok, %{record | phase: {:decided, class, evidence, attempt}}}
-      end
-    end
-  end
-
-  defp log_apply(record, {:checkpoint, _op, attempt, checkpoint}, state) do
-    with :ok <- validate_attempt(attempt, state),
-         :ok <- validate_checkpoint(checkpoint, state) do
-      cond do
-        match?({:decided, _, _, _}, record.phase) ->
-          {:error, :already_decided}
-
-        record.phase == :checkpointed ->
-          {:error, :checkpoint_active}
-
-        attempt != current_attempt(record) or record.phase != :dispatched ->
-          {:error, :stale_attempt}
-
-        true ->
-          {:ok,
-           %{
-             record
-             | checkpoint: checkpoint,
-               phase: :checkpointed,
-               checkpoint_decision: nil,
-               checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
-           }}
-      end
-    end
-  end
-
-  defp log_apply(record, {action, _op, expected_revision, value}, state)
-       when action in [:checkpoint_update, :resume_checkpoint] do
-    with :ok <- validate_revision(expected_revision),
-         :ok <- validate_checkpoint(value, state),
-         :ok <- expect_revision(record, expected_revision) do
-      case {record.phase, action} do
-        {:checkpointed, :checkpoint_update} ->
-          {:ok, %{record | checkpoint: value}}
-
-        {:checkpointed, :resume_checkpoint} ->
-          {:ok,
-           %{
-             record
-             | checkpoint_decision: value,
-               phase: :intended,
-               checkpoint_grant_revision: record.revision + 1
-           }}
-
-        _ ->
-          {:error, :not_checkpointed}
-      end
-    end
-  end
-
-  defp log_apply(record, {:reconcile, _op, expected_revision, resolution, evidence}, state) do
-    with :ok <- validate_revision(expected_revision),
-         {:ok, resolution} <- reconciliation_resolution(resolution),
-         :ok <- validate_evidence(evidence, state),
-         :ok <- expect_revision(record, expected_revision),
-         :ok <- ensure_reconcilable(record),
-         :ok <- ensure_retry_recoverable(record, resolution) do
-      {:ok, apply_reconciliation(record, resolution, evidence)}
-    end
-  end
-
-  defp log_apply(record, {:reject_intended, op, expected_revision, evidence}, state) do
+  defp apply_command(%{phase: :intended} = record, {:reject_intended, op, _, evidence}, state) do
     attempt = rejection_attempt(op)
 
-    with :ok <- validate_revision(expected_revision),
-         :ok <- validate_attempt(attempt, state),
-         :ok <- validate_evidence(evidence, state),
-         :ok <- expect_revision(record, expected_revision) do
-      cond do
-        match?({:decided, _, _, _}, record.phase) ->
-          {:error, :already_decided}
-
-        active_attempt?(record) ->
-          {:error, :attempt_in_flight}
-
-        length(record.attempts) >= state.max_attempts ->
-          {:error, :attempt_history_full}
-
-        attempt in record.attempts ->
-          {:error, :duplicate_attempt}
-
-        true ->
-          {:ok,
-           %{
-             record
-             | attempts: record.attempts ++ [attempt],
-               phase: {:decided, :rejected_before_dispatch, evidence, attempt}
-           }}
-      end
-    end
+    sequence(
+      record,
+      [{:attempt, op, attempt}, {:outcome, op, attempt, :rejected_before_dispatch, evidence}],
+      state
+    )
   end
 
-  defp log_apply(record, {:retire_checkpoint, op, revision, decision, attempt, evidence}, state) do
-    with {:ok, record} <- log_apply(record, {:resume_checkpoint, op, revision, decision}, state),
-         {:ok, record} <- log_apply(record, {:attempt, op, attempt}, state),
-         do: log_apply(record, {:outcome, op, attempt, :completed, evidence}, state)
-  end
+  defp apply_command(
+         record,
+         {:retire_checkpoint, op, revision, decision, attempt, evidence},
+         state
+       ),
+       do:
+         sequence(
+           record,
+           [
+             {:resume_checkpoint, op, revision, decision},
+             {:attempt, op, attempt},
+             {:outcome, op, attempt, :completed, evidence}
+           ],
+           state
+         )
 
-  defp log_apply(_record, _command, _state), do: {:error, :bad_entry}
+  defp apply_command(_, _, _), do: {:error, :invalid_operation_state}
 
-  defp outcome_class(class)
-       when class in [
-              :completed,
-              :rejected_before_dispatch,
-              :failed_known,
-              :unknown,
-              :requires_operator
-            ],
-       do: {:ok, class}
-
-  defp outcome_class(other), do: {:error, {:invalid_outcome_class, other}}
-
-  defp reconciliation_resolution(resolution)
-       when resolution in [:confirmed_committed, :confirmed_failed, :retry_permitted],
-       do: {:ok, resolution}
-
-  defp reconciliation_resolution(other), do: {:error, {:invalid_resolution, other}}
+  defp sequence(record, commands, state),
+    do: Alto.Result.reduce(commands, record, &log_apply(&2, &1, state))
 
   defp append(state, command) do
     with {:ok, payload} <- Codec.encode(command, max_bytes: :erlang.external_size(command)),

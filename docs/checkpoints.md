@@ -46,6 +46,12 @@ release until explicitly resumed. Their records are not evicted as completed
 work. Truncated trailing log records are repaired using Alto's existing durable
 log contract; malformed interior records fail closed.
 
+Ledger phase or attempt mismatches return `{:error, :invalid_operation_state}`;
+revision mismatches return `{:error, :stale_revision}`. Read `{:recovery, key}`
+to inspect the current status before making a new decision. Invalid command
+fields return `{:invalid_field, field, value}` or `{:field_too_large, field, limit}`
+inside the error tuple.
+
 ## Portability and bounds
 
 The shipped Default and Rule loops implement `dump_checkpoint/2` and

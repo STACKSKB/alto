@@ -174,7 +174,7 @@ defmodule Alto.OperationLogTest do
 
       assert 1 ==
                Enum.count(results, fn {_attempt, result} ->
-                 result == {:error, :attempt_in_flight}
+                 result == {:error, :invalid_operation_state}
                end)
 
       Enum.each(tasks, &Task.await/1)
@@ -188,7 +188,7 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.request(name, {:attempt, "op-1", "new"})
       :ok = OperationLog.request(name, {:outcome, "op-1", "new", :requires_operator, %{}})
 
-      assert {:error, :already_decided} =
+      assert {:error, :invalid_operation_state} =
                OperationLog.request(name, {:outcome, "op-1", "old", :completed, %{}})
     end
 
@@ -221,7 +221,7 @@ defmodule Alto.OperationLogTest do
 
       assert :ok = OperationLog.request(name, {:intent, "op-1", "print", nil, nil})
 
-      assert {:error, :no_attempt} =
+      assert {:error, :invalid_operation_state} =
                OperationLog.request(name, {:outcome, "op-1", "clm-a", :completed, %{}})
     end
 
@@ -241,7 +241,7 @@ defmodule Alto.OperationLogTest do
 
       assert :ok = OperationLog.request(name, {:outcome, "op-1", "clm-a", :unknown, %{}})
 
-      assert {:error, :already_decided} =
+      assert {:error, :invalid_operation_state} =
                OperationLog.request(name, {:outcome, "op-1", "clm-a", :completed, %{note: "op"}})
 
       assert {:decided, :unknown, %{}} = OperationLog.request(name, {:status, "op-1"})
@@ -276,10 +276,10 @@ defmodule Alto.OperationLogTest do
       %{name: name} = start_ledger!(id: id, dir: dir)
       :ok = OperationLog.request(name, {:intent, "op-1", "t", nil, nil})
 
-      assert {:error, {:invalid_outcome_class, :bogus}} =
+      assert {:error, {:invalid_field, :outcome, :bogus}} =
                OperationLog.request(name, {:outcome, "op-1", "clm-a", :bogus, %{}})
 
-      assert {:error, {:invalid_evidence, []}} =
+      assert {:error, {:invalid_field, :evidence, []}} =
                OperationLog.request(name, {:outcome, "op-1", "clm-a", :completed, []})
 
       assert {:error, {:invalid_op_key, ""}} =
@@ -329,7 +329,9 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.request(name, {:attempt, "op-1", "clm-a"})
       assert {:dispatched, "clm-a"} = OperationLog.request(name, {:status, "op-1"})
 
-      assert {:error, :no_attempt} = OperationLog.request(name, {:release, "op-1", "clm-ghost"})
+      assert {:error, :invalid_operation_state} =
+               OperationLog.request(name, {:release, "op-1", "clm-ghost"})
+
       assert :ok = OperationLog.request(name, {:release, "op-1", "clm-a"})
       assert {:intended} = OperationLog.request(name, {:status, "op-1"})
       assert 1 = OperationLog.request(name, {:attempts, "op-1"})
@@ -353,12 +355,19 @@ defmodule Alto.OperationLogTest do
       :ok = OperationLog.request(name, {:intent, "op-1", "t", nil, nil})
       :ok = OperationLog.request(name, {:attempt, "op-1", "old"})
       :ok = OperationLog.request(name, {:release, "op-1", "old"})
-      assert {:error, :stale_attempt} = OperationLog.request(name, {:attempt, "op-1", "old"})
+
+      assert {:error, :invalid_operation_state} =
+               OperationLog.request(name, {:attempt, "op-1", "old"})
 
       :ok = OperationLog.request(name, {:attempt, "op-1", "new"})
-      assert {:error, :stale_attempt} = OperationLog.request(name, {:release, "op-1", "old"})
+
+      assert {:error, :invalid_operation_state} =
+               OperationLog.request(name, {:release, "op-1", "old"})
+
       :ok = OperationLog.request(name, {:outcome, "op-1", "new", :completed, %{}})
-      assert {:error, :already_decided} = OperationLog.request(name, {:release, "op-1", "new"})
+
+      assert {:error, :invalid_operation_state} =
+               OperationLog.request(name, {:release, "op-1", "new"})
     end
   end
 
@@ -427,7 +436,7 @@ defmodule Alto.OperationLogTest do
       path = Path.join(dir, id <> ".jsonl")
       acknowledged_bytes = File.read!(path)
 
-      assert {:error, {:evidence_too_large, 64}} =
+      assert {:error, {:field_too_large, :evidence, 64}} =
                OperationLog.request(
                  name,
                  {:outcome, "op-1", "a", :completed,

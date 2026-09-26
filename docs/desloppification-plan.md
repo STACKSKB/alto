@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,405 lines**, a **17.8% reduction**, with **4,947 lines remaining**.
+Current: **33,328 lines**, a **18.0% reduction**, with **4,870 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -51,9 +51,13 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-The latest lifecycle changes remove **45 net production lines**: 8 from deleting
-`SubagentBatch` after including its shared-scheduler adapter, and 37 from removing
-the private Codex guardian. This remains below the intended scale of reductions.
+The latest ledger change removes **77 net production lines**. A field table
+validates live, replayed and compound commands; legal transitions use pattern
+matching instead of repeated rejection branches. Retain, reject and retire are
+compositions of the same primitive transitions. Current attempts live at the
+head of internal history; public views and durable command records are unchanged.
+Illegal phase/attempt combinations return `:invalid_operation_state`, field
+errors use `:invalid_field`/`:field_too_large`, and CAS keeps `:stale_revision`.
 No dependency or migration was introduced. Earlier cleanup introduced one SSE
 library to replace two parsers; subsequent passes have added no dependencies.
 
@@ -80,14 +84,20 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The final core suite passes **1,074 tests**. The TUI suite passes **142 tests**
-on this pass before the final subscription-drain correction; that correction is
-covered by the final core run and 42 focused scheduler/continuation tests.
-New regressions cover owner death during unfinished startup, custom-runner
-cancellation without calling `await` again, and Codex cancellation during its
-initialization handshake. Cleanup tests check actual process exit. Formatting
-and diff checks pass. Run test VMs sequentially with `--max-cases 8`; concurrent
-VMs caused timing failures.
+The ledger refactor passes **1,074 core tests** with application modules preloaded.
+Ordinary full-suite runs hit tool-start timing assertions on both the refactor
+and unchanged HEAD; captured workers were waiting in BEAM's code loader. No
+assertion timeout or production startup behavior was changed. Reproduce the
+verified run with:
+
+```sh
+MIX_ENV=test mix run -e 'Code.ensure_all_loaded!(Application.spec(:alto, :modules)); Mix.Task.run("test", ["--seed", "337473", "--max-cases", "8"])'
+```
+
+A differential check matched **90,000 ledger transitions** for acceptance,
+revision fencing and all public recovery fields. The latest TUI verification
+remains **142 passing tests** from the preceding cleanup. Formatting and diff
+checks pass. Run test VMs sequentially; concurrent VMs caused timing failures.
 
 Earlier differential checks matched 12,962 valid UTF-8 diff previews, 42,480 prose
 projections, 8,721 protocol decodes and 100,000 subscriber transitions. Converted

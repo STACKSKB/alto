@@ -39,7 +39,7 @@ defmodule Alto.OperationLogRejectTest do
 
     :ok = OperationLog.request(name, {:attempt, "op", "live"})
 
-    assert {:error, :attempt_in_flight} =
+    assert {:error, :invalid_operation_state} =
              OperationLog.request(name, {:reject_intended, "op", 2, %{}})
   end
 
@@ -74,10 +74,8 @@ defmodule Alto.OperationLogRejectTest do
     :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
     :ok = OperationLog.request(name, {:reject_intended, "op", 1, %{}})
 
-    assert OperationLog.request(name, {:reject_intended, "op", 1, %{}}) in [
-             {:error, :already_decided},
-             {:error, :stale_revision}
-           ]
+    assert {:error, :invalid_operation_state} =
+             OperationLog.request(name, {:reject_intended, "op", 2, %{}})
   end
 
   test "full attempt history is rejected without poisoning the log", %{dir: dir} do

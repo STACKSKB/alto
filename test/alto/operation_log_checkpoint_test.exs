@@ -40,14 +40,18 @@ defmodule Alto.OperationLogCheckpointTest do
     :ok = OperationLog.request(name, {:attempt, "op", "attempt"})
     packet = %{"state" => "x"}
 
-    assert {:error, :stale_attempt} =
+    assert {:error, :invalid_operation_state} =
              OperationLog.request(name, {:checkpoint, "op", "other", packet})
 
     assert :ok = OperationLog.request(name, {:checkpoint, "op", "attempt", packet})
-    assert {:error, :checkpoint_active} = OperationLog.request(name, {:attempt, "op", "attempt"})
-    assert {:error, :checkpoint_active} = OperationLog.request(name, {:release, "op", "attempt"})
 
-    assert {:error, :checkpoint_active} =
+    assert {:error, :invalid_operation_state} =
+             OperationLog.request(name, {:attempt, "op", "attempt"})
+
+    assert {:error, :invalid_operation_state} =
+             OperationLog.request(name, {:release, "op", "attempt"})
+
+    assert {:error, :invalid_operation_state} =
              OperationLog.request(name, {:outcome, "op", "attempt", :completed, %{}})
 
     assert {:error, :stale_revision} =
