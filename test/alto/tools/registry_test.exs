@@ -3,6 +3,13 @@ defmodule Alto.Tool.RegistryTest do
 
   alias Alto.Tool.Registry
 
+  test "registration rejects missing callbacks and non-keyword tool options" do
+    for spec <- [NonexistentTool, {Alto.Tools.MCP, [:invalid]}] do
+      normalized = if is_atom(spec), do: {spec, []}, else: spec
+      assert {:error, {:invalid_capability, Alto.Tool, ^normalized}} = Registry.build([spec])
+    end
+  end
+
   test "registration rejects invalid metadata and duplicate dynamic names before execution" do
     options = [name: :remote, schema: %{parameters: %{type: "object"}}]
 

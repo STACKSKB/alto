@@ -30,7 +30,12 @@ defmodule Alto.Runner.Execution.Setup do
 
     tools = Keyword.get(opts, :tools, [])
     cwd = opts |> Keyword.get(:cwd, File.cwd!()) |> Path.expand()
-    approval = normalize_approval(Keyword.get(opts, :approval, Alto.Approvals.DenyAll))
+
+    approval =
+      Alto.Capabilities.resolve(
+        Keyword.get(opts, :approval, Alto.Approvals.DenyAll),
+        Alto.Approval
+      )
 
     with {:ok, limits} <- limits(opts),
          :ok <- validate_spec(spec),
@@ -212,12 +217,6 @@ defmodule Alto.Runner.Execution.Setup do
         :any
     end
   end
-
-  defp normalize_approval({module, opts}) when is_atom(module) and is_list(opts),
-    do: {:ok, {module, opts}}
-
-  defp normalize_approval(module) when is_atom(module), do: {:ok, {module, []}}
-  defp normalize_approval(other), do: {:error, {:invalid_approval, other}}
 
   # Continuations restore their exact transcript after capabilities are opened.
   # Conversation resumes reuse history; only fresh runs build a system prompt.

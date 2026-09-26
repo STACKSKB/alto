@@ -222,8 +222,8 @@ its policy decision. Built-in implementations use the same callbacks as host cod
 | `retry_policy` | `Alto.Retry.decide/3` | `Alto.Retry.Transient` |
 | `tool_presenter` | `Alto.ToolPresentation.summary/3` | `Alto.ToolDisplay` |
 
-Context and child policies accept either an implementing struct or
-`{Module, options}`. A context check returns `{:ok, :unavailable}`, a budget map
+Context and child policies use `{Module, state}`, where state may be any term.
+A context check returns `{:ok, :unavailable}`, a budget map
 with a nonnegative `:reserve_output` and optional boolean `:pressure`, or an
 error. Invalid implementations and malformed results are rejected. Child limits
 are normalized with NimbleOptions before execution enforces them; admission

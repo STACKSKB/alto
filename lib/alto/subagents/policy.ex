@@ -3,7 +3,7 @@ defmodule Alto.Subagents.Policy do
   Replaceable child admission policy. Implementations supply deterministic
   limits and may reject a batch. Execution independently enforces these limits,
   inherited authority, identity, shared budgets and durable dispatch.
-  Policies are structs or `{module, options}` values composed by the host.
+  Policies are `{module, state}` values composed by the host.
   """
   @callback limits(term()) :: map()
   @callback admit(term(), [map()], map()) :: :ok | {:error, term()}
@@ -40,8 +40,7 @@ defmodule Alto.Subagents.Policy do
       workspaces: nil
     }
 
-  def limits!(policy) do
-    {module, state} = participant(policy)
+  def limits!({module, state}) do
     true = implementation?(module)
 
     limits =
@@ -53,9 +52,7 @@ defmodule Alto.Subagents.Policy do
 
   def admit(nil, _agents, _context), do: {:error, :invalid_subagent_policy}
 
-  def admit(policy, agents, context) do
-    {module, state} = participant(policy)
-
+  def admit({module, state}, agents, context) do
     case module.admit(state, agents, context) do
       :ok -> :ok
       {:error, _} = error -> error
@@ -64,10 +61,8 @@ defmodule Alto.Subagents.Policy do
   end
 
   @doc "Stable policy identity with host-normalized durable resource identities."
-  def fingerprint(policy, resource) do
-    {module, state} = participant(policy)
+  def fingerprint({module, state} = policy, resource) do
     limits = limits!(policy)
-    state = if is_struct(state), do: Map.from_struct(state), else: state
 
     state =
       cond do
@@ -86,7 +81,4 @@ defmodule Alto.Subagents.Policy do
     limits = Map.update!(limits, :workspaces, resource)
     %{module: module, code: module.module_info(:md5), state: state, limits: limits}
   end
-
-  defp participant(%module{} = state), do: {module, state}
-  defp participant({module, options}) when is_atom(module), do: {module, options}
 end

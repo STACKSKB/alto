@@ -14,8 +14,8 @@ documentation, generated output, and dependencies are counted separately.
 The earlier pass reached 32,747 lines; model-selected subagents then added 593,
 bringing the starting point for this follow-up to 33,340. Cleanup removed 879
 production lines, reaching 32,461. Shared agent messaging then added 1,073 net
-lines after integration. Input and retained-state cleanup removed another 59
-lines, leaving **33,475 (17.7% below the original)**. **5,017 lines remain** to
+lines after integration. Input, retained-state and capability cleanup removed
+another 86 lines, leaving **33,448 (17.7% below the original)**. **4,990 lines remain** to
 reach the target.
 The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
@@ -48,6 +48,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 - Context windows and bounded subagent policies use the existing `{module, state}`
   contract. Tokenizer adapters return a unary function. Redundant config structs,
   defaults, direct resolution APIs, and their helper-only tests are removed.
+  Context and child policies now require that tuple representation; bare-struct
+  dispatch and fingerprint handling are removed. Tools and approvals use the
+  shared capability resolver, rejecting missing callbacks before dispatch.
 - Registry approvals use globally unique handles in one map; subscriber scope is
   one run ID or nil. Native TUI approvals inherit the owning UI run ID, avoiding
   retained approval sets and reverse lookups while preserving child identities.
@@ -112,9 +115,8 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,056 core tests and
-141 TUI tests**. The latest core rerun covers the retained-state and queue
-cleanup; TUI sources and contracts are unchanged since its passing run.
+The combined cleanup and messaging worktree passes **1,058 core tests and
+141 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and

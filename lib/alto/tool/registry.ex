@@ -4,12 +4,11 @@ defmodule Alto.Tool.Registry do
   def build(modules, child_limits \\ nil)
 
   def build(modules, child_limits) when is_list(modules) do
-    Enum.reduce_while(modules, {:ok, %{}, []}, fn tool_spec, {:ok, tools, definitions} ->
-      with {:ok, module, tool_opts} <- normalize_tool(tool_spec),
+    Alto.Result.reduce(modules, {%{}, []}, fn tool_spec, {tools, definitions} ->
+      with {:ok, {module, tool_opts}} <- Alto.Capabilities.resolve(tool_spec, Alto.Tool),
            name when is_atom(name) <- module.name(tool_opts),
            schema when is_map(schema) <-
              module.schema(schema_opts(module, tool_opts, child_limits)),
-           true <- function_exported?(module, :run, 3),
            string_name = Atom.to_string(name),
            true <-
              not Map.has_key?(tools, string_name) or {:error, {:duplicate_tool, string_name}},
@@ -32,14 +31,14 @@ defmodule Alto.Tool.Registry do
           approval: approval
         }
 
-        {:cont, {:ok, Map.put(tools, string_name, tool), [definition | definitions]}}
+        {:ok, {Map.put(tools, string_name, tool), [definition | definitions]}}
       else
-        {:error, reason} -> {:halt, {:error, reason}}
-        _other -> {:halt, {:error, {:invalid_tool, tool_spec}}}
+        {:error, _} = error -> error
+        _other -> {:error, {:invalid_tool, tool_spec}}
       end
     end)
     |> case do
-      {:ok, tools, definitions} -> {:ok, tools, Enum.reverse(definitions)}
+      {:ok, {tools, definitions}} -> {:ok, tools, Enum.reverse(definitions)}
       error -> error
     end
   rescue
@@ -105,10 +104,4 @@ defmodule Alto.Tool.Registry do
 
   defp intersect_exposure(_requested, other),
     do: {:error, {:invalid_parent_model_tools, other}}
-
-  defp normalize_tool({module, opts}) when is_atom(module) and is_list(opts),
-    do: {:ok, module, opts}
-
-  defp normalize_tool(module) when is_atom(module), do: {:ok, module, []}
-  defp normalize_tool(other), do: {:error, {:invalid_tool, other}}
 end
