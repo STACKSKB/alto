@@ -184,12 +184,12 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          [
+          %Alto.Harness.ProviderProfile{
             id: "test",
             label: "Test Provider",
             provider: {Provider, model: "test/model"},
             models: [%{id: "test/model", name: "Test Model", context_length: 100_000}]
-          ]
+          }
         ],
         loop: Alto.chat_loop(),
         tools: [],
@@ -1810,7 +1810,12 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          [id: "broken", label: "Broken", provider: FailingProvider, models: :discover]
+          %Alto.Harness.ProviderProfile{
+            id: "broken",
+            label: "Broken",
+            provider: {FailingProvider, []},
+            models: :discover
+          }
         ],
         loop: Alto.chat_loop(),
         tools: []
@@ -1843,14 +1848,14 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          [
+          %Alto.Harness.ProviderProfile{
             id: "local",
             label: "Local",
             provider:
               {Alto.Providers.OpenAICompatible, base_url: "http://old.test/v1", timeout: 777},
-            models: ["original"],
+            models: [%{id: "original", name: "original"}],
             default_model: "original"
-          ]
+          }
         ]
       )
 
@@ -1885,14 +1890,14 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          [
+          %Alto.Harness.ProviderProfile{
             id: "openrouter",
             label: "OpenRouter",
             provider:
               {Alto.Providers.OpenAICompatible,
                base_url: "https://openrouter.ai/api/v1", model: "existing/model"},
-            models: ["existing/model"]
-          ]
+            models: [%{id: "existing/model", name: "existing/model"}]
+          }
         ],
         loop: Alto.chat_loop(),
         tools: []
@@ -1972,7 +1977,12 @@ defmodule Alto.TUI.AppTest do
              ]}
         ],
         provider_profiles: [
-          [id: "test", label: "Test Provider", provider: Provider, models: ["test/model"]]
+          %Alto.Harness.ProviderProfile{
+            id: "test",
+            label: "Test Provider",
+            provider: {Provider, []},
+            models: [%{id: "test/model", name: "test/model"}]
+          }
         ],
         loop: Alto.chat_loop(),
         tools: [],

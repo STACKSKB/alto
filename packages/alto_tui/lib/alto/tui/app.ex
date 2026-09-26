@@ -987,7 +987,7 @@ defmodule Alto.TUI.App do
       profile ->
         case State.known_models(state, profile) do
           models when is_list(models) ->
-            items = Enum.map(models, &%{label: model_label(&1), value: model_id(&1)})
+            items = Enum.map(models, &%{label: model_label(&1), value: &1.id})
             {:ok, "models · type to filter", items, state.selected_model}
 
           _ ->
@@ -1753,13 +1753,9 @@ defmodule Alto.TUI.App do
 
   defp human_provider_error(reason), do: "could not save provider: #{human_error(reason)}"
 
-  def model_id(%{id: id}), do: id
-  def model_id(%{"id" => id}), do: id
-
-  def model_label(model) do
-    id = model_id(model)
-    name = Map.get(model, :name) || Map.get(model, "name") || id
-    context = Map.get(model, :context_length) || Map.get(model, "context_length")
+  def model_label(%{id: id} = model) do
+    name = model[:name] || id
+    context = model[:context_length]
     if context, do: "#{name} · #{id} · #{context} ctx", else: "#{name} · #{id}"
   end
 

@@ -44,6 +44,24 @@ draft. If a popup or the compact details
 drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
 failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
+Host configuration uses `%Alto.Harness.ProviderProfile{}` entries in
+`provider_profiles`, with a `{module, options}` provider and either `:discover`
+or atom-keyed catalog maps:
+
+```elixir
+provider_profiles: [
+  %Alto.Harness.ProviderProfile{
+    id: "local",
+    provider: {Alto.Providers.OpenAICompatible, base_url: "http://localhost:1234/v1"},
+    models: [%{id: "coder", name: "Coder", context_length: 32_000}]
+  }
+]
+```
+
+Omitted labels and credential IDs use the profile ID; an omitted default model
+uses the provider's `:model` option. Explicit profiles do not accept map/keyword
+shorthands or string-only model catalogs.
+
 Provider and model forms show a cursor in the focused field. Type to edit, use
 Left/Right to move the cursor, and Tab to move between fields. API keys stay masked.
 

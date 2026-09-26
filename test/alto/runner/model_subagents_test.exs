@@ -77,7 +77,9 @@ defmodule Alto.Runner.ModelSubagentsTest do
       [
         provider: {Provider, owner: self(), calls: calls},
         tools: Alto.Tools.agents(),
-        provider_profiles: [%{id: "worker", provider: {Child, owner: self()}}],
+        provider_profiles: [
+          %Alto.Harness.ProviderProfile{id: "worker", provider: {Child, owner: self()}}
+        ],
         approval: Alto.Approvals.AllowAll,
         loop:
           Alto.default_loop(
@@ -151,7 +153,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
                  "delegate",
                  options(calls,
                    provider_profiles: [
-                     %{
+                     %Alto.Harness.ProviderProfile{
                        id: "worker",
                        provider:
                          {Child, owner: self(), fail_model: "model-b", fail_reason: reason}
@@ -274,7 +276,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
 
   test "oversized discovery and child results never report a successful tool result" do
     profiles = [
-      %{
+      %Alto.Harness.ProviderProfile{
         id: "worker",
         provider: {Child, owner: self(), answer: String.duplicate("x", 1_000)},
         models: [%{id: "model-a", name: String.duplicate("x", 1_000)}]
@@ -410,7 +412,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
   end
 
   test "cancelling the parent stops delegated workers" do
-    profiles = [%{id: "worker", provider: {Block, owner: self()}}]
+    profiles = [%Alto.Harness.ProviderProfile{id: "worker", provider: {Block, owner: self()}}]
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
     assert {:ok, handle} = Alto.start("delegate", options(calls, provider_profiles: profiles))
     assert_receive {:blocking, worker}, 2_000

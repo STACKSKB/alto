@@ -186,7 +186,7 @@ defmodule Alto.TUI.State do
       end
 
     if is_list(models),
-      do: Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
+      do: Enum.find(models, &(&1.id == state.selected_model))
   end
 
   @doc "Models already fetched or embedded in a provider profile."

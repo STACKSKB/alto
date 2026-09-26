@@ -21,7 +21,11 @@ defmodule Alto.TUI.ApprovalControlsTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          [id: "test", label: "Test", provider: {Provider, model: "test/model"}]
+          %Alto.Harness.ProviderProfile{
+            id: "test",
+            label: "Test",
+            provider: {Provider, model: "test/model"}
+          }
         ],
         loop: Alto.chat_loop(),
         tools: [],

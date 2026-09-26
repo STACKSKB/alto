@@ -344,12 +344,12 @@ defmodule Alto.TUI.RunLifecycleTest do
       options ||
         [
           provider_profiles: [
-            [
+            %Alto.Harness.ProviderProfile{
               id: "controlled",
               label: "Controlled",
               provider: {ControlledProvider, owner: self(), model: "test"},
               models: [%{id: "test"}]
-            ]
+            }
           ],
           loop: Alto.chat_loop(),
           tools: []

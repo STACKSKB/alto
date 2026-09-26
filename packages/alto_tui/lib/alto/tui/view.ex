@@ -791,7 +791,7 @@ defmodule Alto.TUI.View do
 
     context =
       with :pass <- Alto.TUI.Backend.ui(state, :context_window),
-           do: model[:context_length] || model["context_length"]
+           do: model[:context_length]
 
     context_percent(usage, usage.context_window || context)
   end

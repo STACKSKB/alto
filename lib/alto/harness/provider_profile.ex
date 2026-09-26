@@ -7,7 +7,7 @@ defmodule Alto.Harness.ProviderProfile do
   only `id`, `label`, and model names.
   """
 
-  @enforce_keys [:id, :label, :provider]
+  @enforce_keys [:id, :provider]
   defstruct [:id, :label, :provider, :default_model, :credential_id, models: :discover]
 
   @type t :: %__MODULE__{
@@ -20,8 +20,8 @@ defmodule Alto.Harness.ProviderProfile do
         }
 
   @doc """
-  Normalize atom-keyed profile maps or keywords, or derive one from the run provider.
-  `:provider` is a module or `{module, options}`; options belong to that spec.
+  Read trusted profile structs, or derive one from the run provider.
+  Profiles use a `{module, options}` provider and atom-keyed model catalog maps.
   """
   @spec from_run_options(keyword()) :: {:ok, [t()]} | {:error, term()}
   def from_run_options(run_options) when is_list(run_options) do
@@ -59,12 +59,11 @@ defmodule Alto.Harness.ProviderProfile do
 
   defp derive({module, options}) when is_atom(module) and is_list(options) do
     normalize_all([
-      [
+      %__MODULE__{
         id: module |> Module.split() |> List.last() |> Macro.underscore(),
         label: module |> Module.split() |> List.last(),
-        provider: {module, options},
-        models: :discover
-      ]
+        provider: {module, options}
+      }
     ])
   end
 
@@ -72,74 +71,20 @@ defmodule Alto.Harness.ProviderProfile do
   defp derive(other), do: {:error, {:invalid_provider, other}}
 
   defp normalize_all(profiles) do
-    with {:ok, normalized} <- Alto.Result.traverse(profiles, &normalize/1),
-         :ok <- unique_ids(normalized) do
-      {:ok, normalized}
-    end
-  end
+    profiles =
+      Enum.map(profiles, fn %__MODULE__{provider: {_module, options}} = profile ->
+        %{
+          profile
+          | label: profile.label || profile.id,
+            credential_id: profile.credential_id || profile.id,
+            default_model: profile.default_model || Keyword.get(options, :model)
+        }
+      end)
 
-  defp normalize(%__MODULE__{} = profile), do: normalize(Map.from_struct(profile))
-
-  defp normalize(profile) when is_list(profile) do
-    if Keyword.keyword?(profile),
-      do: normalize(Map.new(profile)),
-      else: {:error, :invalid_profile}
-  end
-
-  defp normalize(%{id: id, provider: provider} = values) do
-    provider = if is_atom(provider), do: {provider, []}, else: provider
-
-    with true <-
-           Map.keys(values) -- ~w(id label provider models default_model credential_id)a == [],
-         {module, options} <- provider,
-         true <- is_atom(module) and not is_nil(module) and Keyword.keyword?(options) do
-      profile = struct(__MODULE__, values)
-
-      profile = %{
-        profile
-        | provider: provider,
-          label: profile.label || id,
-          credential_id: profile.credential_id || id,
-          models: normalize_models(profile.models),
-          default_model: profile.default_model || Keyword.get(options, :model)
-      }
-
-      if Enum.all?([profile.id, profile.label, profile.credential_id], &valid_name?/1) and
-           profile.models != :invalid,
-         do: {:ok, profile},
-         else: {:error, :invalid_profile}
-    else
-      _ -> {:error, :invalid_profile}
-    end
-  end
-
-  defp normalize(_), do: {:error, :invalid_profile}
-
-  defp normalize_models(:discover), do: :discover
-
-  defp normalize_models(models) when is_list(models) do
-    Enum.flat_map(models, fn
-      id when is_binary(id) and id != "" ->
-        [%{id: id, name: id}]
-
-      %{id: id} = model when is_binary(id) and id != "" ->
-        [model]
-
-      %{"id" => id} = model when is_binary(id) and id != "" ->
-        [Map.merge(model, %{id: id, name: Map.get(model, "name", id)})]
-
-      _other ->
-        []
-    end)
-  end
-
-  defp normalize_models(_other), do: :invalid
-
-  defp unique_ids(profiles) do
     ids = Enum.map(profiles, & &1.id)
-    if length(ids) == MapSet.size(MapSet.new(ids)), do: :ok, else: {:error, :duplicate_profile_id}
-  end
 
-  defp valid_name?(value),
-    do: is_binary(value) and value != "" and byte_size(value) <= 200 and String.valid?(value)
+    if length(ids) == MapSet.size(MapSet.new(ids)),
+      do: {:ok, profiles},
+      else: {:error, :duplicate_profile_id}
+  end
 end

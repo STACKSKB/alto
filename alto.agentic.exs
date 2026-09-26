@@ -102,14 +102,14 @@ tools =
 
 Alto.Config.new(
   provider_profiles: [
-    [
+    %Alto.Harness.ProviderProfile{
       id: "openrouter",
       label: "OpenRouter",
       provider: openrouter_provider,
       models: :discover,
       default_model: openrouter_model,
       credential_id: "openrouter"
-    ]
+    }
   ],
   loop:
     Alto.default_loop(

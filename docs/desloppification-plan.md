@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,890 lines**, a **19.1% reduction**, with **4,432 lines remaining**.
+Current: **32,830 lines**, a **19.2% reduction**, with **4,372 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,16 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Trusted host configuration now uses one provider profile representation:
+`%Alto.Harness.ProviderProfile{}` with tuple provider specifications and atom-keyed
+catalog maps. The map/keyword profile coercion and string/string-key model aliases
+are removed, including TUI fallback projections. Defaults, duplicate-ID protection,
+cold discovery, catalog metadata and credential resolution remain. The launch
+profile and fixtures use this contract; no migration or compatibility layer was
+added. This removes **60 physical production lines**: 46 code/typespec and 14 blank
+lines. Obsolete shape-normalization assertions were pruned; all 1,092 core and
+143 TUI tests pass.
 
 Provider saves and startup now share effective-profile construction, preserving
 configured provider options, catalog metadata and credential aliases without a
@@ -161,7 +171,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,093 core tests** and **143 TUI tests** with application
+The current code passes **1,092 core tests** and **143 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

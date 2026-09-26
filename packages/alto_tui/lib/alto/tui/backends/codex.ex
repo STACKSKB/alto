@@ -85,8 +85,7 @@ defmodule Alto.TUI.Backends.Codex do
     case data(state) do
       %{status: :ready, models: [_ | _] = models} ->
         {:ok, "Codex models · type to filter",
-         Enum.map(models, &%{label: Host.model_label(&1), value: Host.model_id(&1)}),
-         state.selected_model}
+         Enum.map(models, &%{label: Host.model_label(&1), value: &1.id}), state.selected_model}
 
       _ ->
         {:state, ensure_codex(state, true)}
