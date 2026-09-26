@@ -1,7 +1,8 @@
 # Desloppification
 
 Alto is at `0.0.1`: internal APIs and formats may change without migrations.
-Preserve all current capabilities and extension contracts. Prefer existing Elixir,
+Preserve all current capabilities. Internal sequencing, representations, APIs,
+and error details may change when functionality remains intact. Prefer existing Elixir,
 OTP, and installed-library APIs; add no dependencies for this cleanup. Moving
 code or compressing formatting does not count as simplification.
 
@@ -11,7 +12,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,705 lines (17.1% below the original)**. **5,247 lines
+The current count is **33,644 lines (17.2% below the original)**. **5,186 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +28,10 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Owned children use one ordered collection throughout admission, dispatch,
+  checkpoint restoration, shutdown and collection. Completion shares one path
+  for failed starts and finished runs; finished entries release process handles.
+  The separate order index and repeated map reconstruction are removed.
 - Queue and operation-ledger clients use their native request tuples directly.
   Retained records apply deadlines to that same ledger contract, removing a
   second set of forwarding operations. Queue claims share count/byte bounds and
@@ -202,6 +207,10 @@ recovery, and actual user interactions.
 
 The combined cleanup and messaging worktree passes **1,069 core tests and
 142 TUI tests**.
+The child scheduler consolidation passes that full core suite and the updated
+11-test messaging suite, including a new regression for refused/crashed starts,
+slot release, requested result order, and collecting child usage only once.
+It removes 61 production lines after formatting; the regression adds one test.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and

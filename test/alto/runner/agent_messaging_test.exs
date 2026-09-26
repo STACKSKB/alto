@@ -47,6 +47,18 @@ defmodule Alto.Runner.AgentMessagingTest do
     defdelegate subscribe(handle, pid), to: Alto.Runner.Serial
   end
 
+  defmodule FailingStart do
+    @behaviour Alto.Runner
+    def start("refused", _), do: {:error, :refused}
+    def start("crashed", _), do: exit(:start_crashed)
+    def start(task, opts), do: Alto.Runner.Serial.start(task, opts)
+    defdelegate run(task, opts), to: Alto.Runner.Serial
+    defdelegate await(handle, timeout), to: Alto.Runner.Serial
+    defdelegate cancel(handle, reason), to: Alto.Runner.Serial
+    defdelegate terminate(handle, reason), to: Alto.Runner.Serial
+    defdelegate subscribe(handle, pid), to: Alto.Runner.Serial
+  end
+
   defp options(extra \\ []) do
     Keyword.merge(
       [
@@ -196,6 +208,41 @@ defmodule Alto.Runner.AgentMessagingTest do
     answer(root, "done")
     assert {:ok, result} = Alto.await(handle)
     assert :ok = Alto.Context.Transcript.validate(result.messages)
+  end
+
+  test "failed starts release the slot and retain each outcome without recounting joined children" do
+    {:ok, handle} = Alto.start("root", options(runner: FailingStart))
+    assert_receive {:request, "root", _, root}, @timeout
+
+    tool(root, "start_agents", %{
+      "agents" => Enum.map(["refused", "crashed", "successful"], &agent/1)
+    })
+
+    assert_receive {:request, "root", started, root}, @timeout
+    [refused, crashed, successful] = Enum.map(reply(started)["agents"], & &1["agent_id"])
+    assert_receive {:request, "successful", _, child}, @timeout
+    answer(child, "child done")
+    tool(root, "wait_agents", %{"agents" => [successful]})
+    assert_receive {:request, "root", _, root}, @timeout
+    tool(root, "wait_agents", %{"agents" => [crashed, successful, refused], "timeout_ms" => 0})
+    assert_receive {:request, "root", joined, root}, @timeout
+    results = reply(joined)["agents"]
+    assert Enum.map(results, & &1["agent_id"]) == [crashed, successful, refused]
+    assert Enum.all?(results, &(&1["status"] == "completed"))
+    [crashed, successful, refused] = Enum.map(results, & &1["result"])
+
+    assert crashed["error"]["$tuple"] == [
+             "run_process_failed",
+             %{"$tuple" => ["child_start_failed", "start_crashed"]}
+           ]
+
+    assert successful["output"] == "child done"
+    assert successful["usage"]["total_tokens"] == 2
+    assert refused["error"] == "refused"
+    answer(root, "done")
+    assert {:ok, result} = Alto.await(handle)
+    assert result.verdict == :unknown
+    assert result.usage.total_tokens == 10
   end
 
   test "user steering waits for dispatched tools to settle and preserves call correlation" do
