@@ -6,6 +6,20 @@ defmodule Alto.TUI.CatalogRecoveryTest do
   alias Alto.Harness.Catalog
   alias Alto.TUI.State
 
+  test "invalid TUI settings fail before registering a project" do
+    root = Path.join(System.tmp_dir!(), "alto-tui-config-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    path = Path.join(root, "harness.json")
+    config = Alto.Test.TUI.config(tui: [narrow_context_width: 101])
+
+    assert_raise NimbleOptions.ValidationError, fn ->
+      State.new(config, project: root, path: path)
+    end
+
+    refute File.exists?(path)
+  end
+
   test "an invalid catalog is replaced only after a warning and confirmation" do
     root = Path.join(System.tmp_dir!(), "alto-tui-recovery-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)

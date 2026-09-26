@@ -233,7 +233,7 @@ defmodule Alto.WorkspacesTest do
     assert {:ok, inspected} = Alto.Ops.get(queue, m.ledger, id)
     assert inspected.status == :unknown
     refute inspected.safe_to_retry
-    assert inspected.operation_revision == active.revision
+    assert inspected.ledger.revision == active.revision
     assert {:error, {:storage_lock_timeout, _, _}} = Workspaces.discard(m, id, 2, "busy")
     Task.shutdown(task, :brutal_kill)
     stop_supervised!(OperationLog)
@@ -244,7 +244,7 @@ defmodule Alto.WorkspacesTest do
     assert {:ok, inspected} = Alto.Ops.get(queue, m.ledger, id)
     assert inspected.status == :unknown
     refute inspected.safe_to_retry
-    assert inspected.operation_revision == recovered.revision
+    assert inspected.ledger.revision == recovered.revision
     assert File.read!(Path.join(path, "partial")) == "created"
     assert {:error, {:workspace_requires_review, ^id}} = Workspaces.create(m, s, owner("crash"))
     refute_receive {:creating, _}, 100

@@ -97,7 +97,7 @@ defmodule Alto.OpsProtocolTest do
              %{
                "key" => "/hooks/events:del-1",
                "status" => "accepted",
-               "source" => "/hooks/events"
+               "live" => %{"operation_key" => "/hooks/events:del-1", "status" => "pending"}
              }
            ] =
              reply["items"]

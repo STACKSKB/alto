@@ -1,40 +1,14 @@
 defmodule Alto.Ops do
   @moduledoc """
-  Bounded read-only operator inspection over the decided contracts.
+  Bounded read-only inspection joining native queue and ledger records.
 
-  Unifies the live inbox (`Alto.Queue`) with the operation ledger
-  (`Alto.OperationLog`) into five work states, exactly as the contracts
-  define them:
+  Ledger recovery overrides live work: dispatched or uncertain operations are
+  never safely retryable. Items retain queue order, followed by ledger-only work
+  ranked parked, open, then completed. Inspection never reclaims leases or writes.
 
-    * `:accepted` — live pending records (queued, unclaimed);
-    * `:claimed` — live claimed records under lease, with `stale?` computed
-      from `lease_until_ms` against now (a stale claim is an expired lease
-      awaiting lazy reclaim — still owned on paper, re-claimable in fact);
-    * `:parked` — ledger `:requires_operator` outcomes (left the live queue;
-      re-run by admitting a new delivery, never automatically);
-    * `:unknown` — ledger dispatched-without-outcome (an attempt exists, no
-      outcome): recovery must reconcile with the participant or park —
-      **never shown as safely retryable** (`safe_to_retry: false`);
-    * `:completed` — ledger decided terminal outcomes other than parked or
-      unknown (`:completed`, `:failed_known`, `:rejected_before_dispatch`).
-
-  Correlation per item: `source` (delivery namespace before `":"`, else
-  `"business"`), `operation` (the delivery/inbox key), and
-  `operation_key` (the semantic operation key when the queue record carries
-  one). Live items include `record_id` / `claim_id` / `claimed_by` /
-  `lease_until_ms`; ledger items include `attempts`, bounded `reason`
-  (scrubbed evidence, truncated), `generation_id`, `operation_revision`, and
-  `attempt_id`. Short flows correlate by external id (the integration contract run-shape
-  decision), not by a resident run id — there is no run to join.
-
-  Bounds: pages hold at most `limit` items
-  (default 20, max 100); reasons truncate to 500 bytes; queue inspection
-  reads bounded pages until the queue's configured live-record bound is
-  exhausted; ledger enumeration is bounded by `max_ops`. Recovery actions
-  are described as explicit requests (`recovery:` hint naming the existing
-  queue/ledger call with its required identity) — this module exposes no
-  mutating function and grants no new authority. Unknown work never
-  carries a retry action.
+  `live` contains identity and lease fields; `ledger` contains identity, revision,
+  attempts and bounded scrubbed evidence. Payloads and checkpoint contents are
+  excluded. Recovery envelopes expose only their key and generation identity.
   """
 
   @default_limit 20
@@ -47,22 +21,11 @@ defmodule Alto.Ops do
   @type item :: %{
           key: String.t(),
           status: status(),
-          source: String.t(),
-          operation: String.t(),
-          operation_key: String.t(),
-          record_id: pos_integer() | nil,
-          claim_id: String.t() | nil,
-          claimed_by: term(),
-          lease_until_ms: integer() | nil,
+          live: map() | nil,
+          ledger: map() | nil,
           stale: boolean() | nil,
-          attempts: non_neg_integer(),
-          reason: String.t(),
-          safe_to_retry: boolean(),
-          recovery: String.t(),
-          generation_id: String.t() | nil,
-          operation_revision: pos_integer() | nil,
-          attempt_id: String.t() | nil,
-          recovery_available: boolean()
+          safe_to_retry: false,
+          recovery: String.t()
         }
 
   @doc """
@@ -108,70 +71,36 @@ defmodule Alto.Ops do
   ## Collection (read-only; never writes, never reclaims eagerly)
 
   defp collect(queue, ledger) do
-    with {:ok, live} <- live_items(queue),
+    with {:ok, live} <- snapshot_pages(queue, 0, []),
          live_by_operation = Map.new(live, &{&1.operation_key, &1}),
-         {:ok, ledger_items} <- ledger_items_complete(ledger, live_by_operation) do
-      ledger_by_operation = Map.new(ledger_items, &{&1.operation_key, &1})
+         {:ok, entries} <-
+           ledger_call(fn -> Alto.OperationLog.request(ledger, {:entries, :all}) end) do
+      ledger_items =
+        entries
+        |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
+        |> Enum.sort_by(&inspection_rank/1)
+        |> Enum.flat_map(fn entry ->
+          record = Map.get(live_by_operation, entry.operation_key)
 
-      # Ledger recovery state overrides the live view when both exist: a
-      # dispatched key that looks pending live must still read as unknown —
-      # the recovery table forbids blind re-dispatch of dispatched work.
-      merged_live =
-        Enum.map(live, fn item ->
-          Map.get(ledger_by_operation, item.operation_key, item)
+          case disposition(entry, record) do
+            nil -> []
+            guidance -> [{entry.operation_key, item(record, entry, guidance)}]
+          end
         end)
 
-      {:ok,
-       merged_live ++
-         Enum.reject(ledger_items, &Map.has_key?(live_by_operation, &1.operation_key))}
-    end
-  end
+      ledger_by_operation = Map.new(ledger_items)
 
-  defp live_items(queue) do
-    with {:ok, records} <- snapshot_pages(queue, 0, []) do
-      {:ok,
-       Enum.map(records, fn record ->
-         stale =
-           if record.status == :claimed,
-             do: record.lease_until_ms <= System.system_time(:millisecond)
+      merged_live =
+        Enum.map(live, fn record ->
+          Map.get_lazy(ledger_by_operation, record.operation_key, fn ->
+            item(record, nil, live_disposition(record.status))
+          end)
+        end)
 
-         {status, reason, recovery} =
-           case record.status do
-             :pending ->
-               {:accepted, "pending; awaiting claim",
-                "claim via queue_claim, then handle under the ledger recovery table"}
+      remaining =
+        for {key, item} <- ledger_items, not Map.has_key?(live_by_operation, key), do: item
 
-             :claimed ->
-               reason =
-                 if stale,
-                   do: "lease expired; re-claimable, current owner is stale",
-                   else: "claimed under lease"
-
-               {:claimed, reason,
-                "await outcome; on expiry the next claim reconciles via the ledger"}
-           end
-
-         %{
-           key: record.key,
-           source: source_of(record.key),
-           operation: record.key,
-           operation_key: record.operation_key,
-           record_id: record.id,
-           attempts: 0,
-           safe_to_retry: false,
-           generation_id: record.generation_id,
-           operation_revision: nil,
-           recovery_available: false,
-           status: status,
-           claim_id: record.claim_id,
-           claimed_by: record.claimed_by,
-           lease_until_ms: record.lease_until_ms,
-           stale: stale,
-           reason: reason,
-           recovery: recovery,
-           attempt_id: record.claim_id
-         }
-       end)}
+      {:ok, merged_live ++ remaining}
     end
   end
 
@@ -193,20 +122,6 @@ defmodule Alto.Ops do
     end
   end
 
-  defp ledger_items_complete(ledger, live_by_operation) do
-    with {:ok, entries} <-
-           ledger_call(fn -> Alto.OperationLog.request(ledger, {:entries, :all}) end) do
-      {:ok,
-       entries
-       |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
-       |> Enum.sort_by(&inspection_rank/1)
-       |> Enum.flat_map(fn entry ->
-         live = Map.get(live_by_operation, entry.operation_key)
-         ledger_rows(entry, live)
-       end)}
-    end
-  end
-
   defp inspection_rank(%{status: {:decided, :requires_operator, _}}), do: 0
 
   defp inspection_rank(%{status: status})
@@ -223,98 +138,94 @@ defmodule Alto.Ops do
     end
   end
 
-  defp ledger_rows(%{status: {:intended}}, live) when not is_nil(live), do: []
+  defp disposition(%{status: {:intended}}, live) when not is_nil(live), do: nil
 
-  defp ledger_rows(
-         %{tool: "workspace", status: {:checkpointed, %{version: 2, status: phase}, _}} = entry,
-         live
+  defp disposition(
+         %{tool: "workspace", status: {:checkpointed, %{version: 2, status: phase}, _}},
+         _live
        )
-       when phase in ["intended", "in_progress"] do
-    [
-      ledger_item(
-        entry,
-        live,
-        {:unknown, "workspace #{phase}; no settled outcome",
-         "review the retained workspace; discard at its current revision, never blind retry"}
-      )
-    ]
-  end
+       when phase in ["intended", "in_progress"],
+       do:
+         {:unknown,
+          "review the retained workspace; discard at its current revision, never blind retry"}
 
-  defp ledger_rows(entry, live) do
-    case ledger_disposition(entry.status) do
-      nil -> []
-      disposition -> [ledger_item(entry, live, disposition)]
-    end
-  end
-
-  defp ledger_disposition({:decided, :requires_operator, evidence}),
+  defp disposition(%{status: {:decided, :requires_operator, _}}, _live),
     do:
-      {:parked, reason_of(evidence, :parked),
+      {:parked,
        "operator reviews evidence, then record an outcome and admit a new delivery to re-run"}
 
-  defp ledger_disposition({:decided, class, evidence})
+  defp disposition(%{status: {:decided, class, _}}, _live)
        when class in [:completed, :failed_known, :rejected_before_dispatch],
        do:
-         {:completed, reason_of(evidence, class),
+         {:completed,
           "terminal; no action (re-run by admitting a new delivery if business needs it)"}
 
-  defp ledger_disposition({:decided, :unknown, evidence}),
-    do:
-      {:unknown, reason_of(evidence, :unknown),
-       "reconcile the participant or park; never treat unknown as success"}
+  defp disposition(%{status: {:decided, :unknown, _}}, _live),
+    do: {:unknown, "reconcile the participant or park; never treat unknown as success"}
 
-  defp ledger_disposition({:dispatched, _attempt}),
+  defp disposition(%{status: {:dispatched, _}}, _live),
     do:
-      {:unknown, "dispatched without outcome; reconcile with the participant or park",
+      {:unknown,
        "reconcile with the authoritative participant, then record an outcome (never blind retry)"}
 
-  defp ledger_disposition({:intended}),
+  defp disposition(%{status: {:intended}}, _live),
     do:
-      {:unknown, "live work gone with no recorded outcome; operator review",
+      {:unknown,
        "review inbox/audit; record an outcome under the operation identity if warranted"}
 
-  defp ledger_disposition(_status), do: nil
+  defp disposition(_entry, _live), do: nil
 
-  defp ledger_item(entry, live, {status, reason, recovery}) do
-    envelope = entry.recovery
-    key = (live && live.key) || (is_map(envelope) && envelope[:key]) || entry.operation_key
-    generation = (is_map(envelope) && envelope[:generation_id]) || (live && live.generation_id)
+  defp live_disposition(:pending),
+    do: {:accepted, "claim via queue_claim, then handle under the ledger recovery table"}
+
+  defp live_disposition(:claimed),
+    do: {:claimed, "await outcome; on expiry the next claim reconciles via the ledger"}
+
+  defp item(live, ledger, {status, guidance}) do
+    envelope = ledger && ledger.recovery
 
     %{
-      key: key,
+      key: (live && live.key) || (is_map(envelope) && envelope[:key]) || ledger.operation_key,
       status: status,
-      source: source_of(key),
-      operation: key,
-      operation_key: entry.operation_key,
-      record_id: live && live.record_id,
-      claim_id: live && live.claim_id,
-      claimed_by: live && live.claimed_by,
-      lease_until_ms: live && live.lease_until_ms,
-      stale: live && live.stale,
-      attempts: entry.attempts,
-      reason: reason,
+      live:
+        live &&
+          Map.take(
+            live,
+            ~w(id key operation_key generation_id status claim_id claimed_by lease_until_ms)a
+          ),
+      ledger: ledger && ledger_projection(ledger),
+      stale:
+        if(live && live.status == :claimed,
+          do: live.lease_until_ms <= System.system_time(:millisecond)
+        ),
       safe_to_retry: false,
-      recovery: recovery,
-      generation_id: generation,
-      operation_revision: entry.revision,
-      attempt_id: entry.current_attempt || (live && live.claim_id),
-      recovery_available: is_map(envelope)
+      recovery: guidance
     }
   end
 
-  defp source_of(key) do
-    case String.split(key, ":", parts: 2) do
-      [source, _rest] when source != "" -> source
-      _other -> "business"
-    end
-  end
+  defp ledger_projection(entry) do
+    status =
+      case entry.status do
+        {:decided, class, evidence} ->
+          {:decided, class,
+           Alto.Text.truncate(
+             inspect(Map.delete(evidence, :__struct__), limit: 10),
+             @max_reason_bytes,
+             "..."
+           )}
 
-  defp reason_of(evidence, class) when is_map(evidence) do
-    base = "#{class}: #{inspect(Map.delete(evidence, :__struct__), limit: 10)}"
-    Alto.Text.truncate(base, @max_reason_bytes, "...")
-  end
+        {:checkpointed, checkpoint, attempt} ->
+          {:checkpointed, Map.take(checkpoint, [:version, :status, :action]), attempt}
 
-  defp reason_of(_evidence, class), do: "#{class}"
+        other ->
+          other
+      end
+
+    entry
+    |> Map.take(~w(operation_key revision tool inbox_key current_attempt attempts)a)
+    |> Map.put(:status, status)
+    |> Map.put(:recovery, entry.recovery && Map.take(entry.recovery, [:key, :generation_id]))
+  end
 
   defp filter_items(items, :all), do: items
   defp filter_items(items, status), do: Enum.filter(items, &(&1.status == status))

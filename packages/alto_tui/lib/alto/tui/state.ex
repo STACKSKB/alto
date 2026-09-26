@@ -9,6 +9,13 @@ defmodule Alto.TUI.State do
   @focuses [:rail, :transcript, :details, :composer]
   @max_entries_per_task 2_000
   @max_cached_tasks 12
+  @tui_options NimbleOptions.new!(
+                 type_to_compose: [type: :boolean],
+                 narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
+                 narrow_context_width: [type: {:in, 40..100}],
+                 narrow_context_fullscreen_below: [type: {:in, 0..300}],
+                 approval_auto_open: [type: :boolean]
+               )
 
   @enforce_keys [:textarea, :run_options, :catalog_opts]
   defstruct [
@@ -72,6 +79,7 @@ defmodule Alto.TUI.State do
   @spec new(Alto.Config.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def new(%Alto.Config{} = config, opts \\ []) do
     run_options = Alto.Config.run_options(config)
+    tui_options = run_options |> Keyword.get(:tui, []) |> NimbleOptions.validate!(@tui_options)
     catalog_opts = catalog_options(config, opts)
 
     root = opts |> Keyword.get(:project, File.cwd!()) |> Path.expand()
@@ -88,7 +96,6 @@ defmodule Alto.TUI.State do
          {:ok, projects, tasks} <- Catalog.navigation(catalog_opts) do
       selected_task = tasks |> Map.get(selected_project["id"], []) |> List.first()
       profile = List.first(profiles)
-      tui_options = Keyword.get(run_options, :tui, [])
 
       selected_backend =
         if selected_task,

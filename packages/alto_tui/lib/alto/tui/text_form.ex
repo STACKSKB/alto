@@ -33,13 +33,17 @@ defmodule Alto.TUI.TextForm do
   end
 
   def click(form, row) do
-    {submit_row, cancel_row} = button_rows(form)
+    {submit_row, _cancel_row} = button_rows(form)
 
     cond do
-      row in 2..(length(form.fields) + 1) -> {:edit, select(form, row - 2)}
-      row == submit_row -> :submit
-      row == cancel_row -> :cancel
-      true -> {:edit, form}
+      row in 2..(length(form.fields) + 1) ->
+        {:edit, select(form, row - 2)}
+
+      row >= submit_row and row < submit_row + length(form.buttons) ->
+        Enum.at(Map.get(form, :actions, [:submit, :cancel]), row - submit_row)
+
+      true ->
+        {:edit, form}
     end
   end
 
@@ -57,8 +61,11 @@ defmodule Alto.TUI.TextForm do
     if form.field_index == length(form.fields) - 1, do: :submit, else: {:edit, move(form, 1)}
   end
 
+  def key(form, %Key{code: "u", modifiers: ["ctrl"]}),
+    do: edit(form, &ExRatatui.text_input_set_value(&1, ""))
+
   def key(form, %Key{code: code, modifiers: modifiers}) do
-    if modifiers == [] or code in @editing_keys,
+    if Enum.all?(modifiers, &(&1 == "shift")) or code in @editing_keys,
       do: edit(form, &ExRatatui.text_input_handle_key(&1, code)),
       else: {:edit, form}
   end

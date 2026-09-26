@@ -108,12 +108,13 @@ existing folder path and press Enter (or click Open folder).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
 your draft. Tab extends the typed path to the longest common prefix of matching
-folders, then lists the matching folders or subfolders. For example, `/hom` becomes
-`/home/`, regardless of the current workspace. Up/Down followed by Tab accepts a
-specific suggestion. Suggestions start unselected: Enter opens the typed path.
-Down selects the first suggestion; Up selects the last. The hint changes when
-Enter will open a selected suggestion. Typing or completing a path clears that
-selection. Saved folders appear only while the input is empty.
+folders. For example, `/hom` becomes `/home/`, regardless of the current workspace.
+Use **Ctrl+O** or click **Choose folder** to open the folder chooser. Saved workspaces
+appear when the field is empty; otherwise it lists filesystem matches. Type to
+filter, use Up/Down or click a folder to copy it into the form, then press Enter to
+open it. Esc returns from the chooser without changing the typed path.
+**Ctrl+N** or **Create folder** creates and opens the typed path, including missing
+parent directories. **Ctrl+U** clears the field.
 The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 

@@ -6,7 +6,7 @@ defmodule Alto.TUI.App do
   alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Menu, Backend, Selection, State, TextForm, View, WorkspaceForm}
+  alias Alto.TUI.{Menu, Backend, Selection, State, TextForm, View}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -147,12 +147,9 @@ defmodule Alto.TUI.App do
     {:noreply, state}
   end
 
-  defp route_event(%Paste{content: content}, %{overlay: %{kind: :workspace_form} = form} = state),
-    do: {:noreply, %{state | overlay: WorkspaceForm.paste(form, content)}}
-
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
-    if overlay.kind in [:provider_form, :model_form, :worktree_form] do
+    if Map.has_key?(overlay, :fields) do
       {:noreply, form_result(state, TextForm.paste(overlay, content))}
     else
       {:noreply, filter_overlay(state, overlay.filter <> content)}
@@ -1029,14 +1026,37 @@ defmodule Alto.TUI.App do
      state.selected_task_id}
   end
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
-    do: form_result(state, WorkspaceForm.key(form, key))
+  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+         code: "n",
+         modifiers: ["ctrl"]
+       }),
+       do: form_result(state, :create)
 
-  defp overlay_key(%{overlay: %{kind: kind} = form} = state, key)
-       when kind in [:provider_form, :model_form, :worktree_form],
-       do: form_result(state, TextForm.key(form, key))
+  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+         code: "o",
+         modifiers: ["ctrl"]
+       }),
+       do: form_result(state, :choose)
 
-  defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
+  defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, %Key{code: "tab"}) do
+    case if(TextForm.value(form) == "",
+           do: :empty,
+           else: Alto.Harness.Folders.suggest(TextForm.value(form), form.base)
+         ) do
+      {:ok, %{completion: completion}} when is_binary(completion) and completion != "" ->
+        ExRatatui.text_input_set_value(hd(form.fields).input, completion)
+        ExRatatui.text_input_handle_key(hd(form.fields).input, "end")
+        %{state | overlay: %{form | error: nil}}
+
+      _ ->
+        state
+    end
+  end
+
+  defp overlay_key(%{overlay: %{fields: _} = form} = state, key),
+    do: form_result(state, TextForm.key(form, key))
+
+  defp overlay_key(state, %Key{code: "esc"}), do: close_overlay(state)
 
   defp overlay_key(state, %Key{code: code}) when code in ["up", "k", "down", "j"],
     do: move_overlay(state, if(code in ["up", "k"], do: -1, else: 1))
@@ -1077,6 +1097,12 @@ defmodule Alto.TUI.App do
 
       %{value: {:select_backend, backend}} ->
         select_backend(state, backend)
+
+      %{value: {:folder, path}} ->
+        form = state.overlay.return_form
+        ExRatatui.text_input_set_value(hd(form.fields).input, path)
+        ExRatatui.text_input_handle_key(hd(form.fields).input, "end")
+        %{state | overlay: %{form | error: nil}}
 
       %{value: :new_workspace} ->
         open_workspace_form(state)
@@ -1213,18 +1239,8 @@ defmodule Alto.TUI.App do
   defp activate_target(state, {:approval, decision}, _x),
     do: decide_approval(state, approval_decision(decision))
 
-  defp activate_target(%{overlay: %{kind: :workspace_form}} = state, {:overlay_row, row}, x) do
-    {width, height} = state.dimensions
-    rect = WorkspaceForm.rect(width, height)
-
-    form_result(
-      state,
-      WorkspaceForm.click(state.overlay, row, x - rect.x - 1, rect.height)
-    )
-  end
-
   defp activate_target(state, {:overlay_row, row}, _x), do: handle_overlay_click(state, row)
-  defp activate_target(state, :overlay_outside, _x), do: %{state | overlay: nil}
+  defp activate_target(state, :overlay_outside, _x), do: close_overlay(state)
   defp activate_target(state, _target, _x), do: state
 
   defp scroll_details(state, delta),
@@ -1475,7 +1491,20 @@ defmodule Alto.TUI.App do
 
     %{
       state
-      | overlay: WorkspaceForm.new(base, Enum.map(state.projects, & &1["root"])),
+      | overlay:
+          TextForm.new(
+            :workspace_form,
+            "Open folder",
+            [{:path, "Folder", "", [placeholder: "/path/to/project"]}],
+            base: base,
+            intro: "Relative paths start from: #{base}",
+            hint: "Tab complete · Ctrl+O choose · Ctrl+N create · Esc cancel",
+            buttons: ["[ Open folder ]", "[ Cancel ]", "[ Choose folder ]", "[ Create folder ]"],
+            actions: [:submit, :cancel, :choose, :create],
+            prefix_width: 10,
+            width_percent: 80,
+            height_percent: 65
+          ),
         leader?: false
     }
   end
@@ -1530,7 +1559,40 @@ defmodule Alto.TUI.App do
     }
   end
 
-  defp form_result(state, :cancel), do: %{state | overlay: nil}
+  defp close_overlay(state), do: %{state | overlay: Map.get(state.overlay, :return_form)}
+
+  defp form_result(state, :cancel), do: close_overlay(state)
+
+  defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :choose) do
+    path = TextForm.value(form)
+
+    saved =
+      if path == "",
+        do: Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/")),
+        else: []
+
+    found =
+      case Alto.Harness.Folders.suggest(path, form.base) do
+        {:ok, %{folders: folders}} -> folders
+        _ -> []
+      end
+
+    items =
+      Enum.map(Enum.take(Enum.uniq(saved ++ found), 50), &%{label: &1, value: {:folder, &1}})
+
+    %{
+      state
+      | overlay:
+          Map.put(Menu.new(:folder, "Choose folder · type to filter", items), :return_form, form)
+    }
+  end
+
+  defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :create),
+    do: form_result(state, {:create, TextForm.value(form)})
+
+  defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :submit),
+    do: form_result(state, {:submit, TextForm.value(form)})
+
   defp form_result(state, {:edit, form}), do: %{state | overlay: form}
 
   defp form_result(state, {:create, path}) do
@@ -1632,9 +1694,8 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp handle_overlay_click(%{overlay: %{kind: kind} = form} = state, row)
-       when kind in [:provider_form, :model_form, :worktree_form],
-       do: form_result(state, TextForm.click(form, row))
+  defp handle_overlay_click(%{overlay: %{fields: _} = form} = state, row),
+    do: form_result(state, TextForm.click(form, row))
 
   defp handle_overlay_click(state, row),
     do: state |> put_overlay_index(row - overlay_list_offset(state.overlay)) |> select_overlay()

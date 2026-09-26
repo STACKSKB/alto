@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,336 lines**, an **18.0% reduction**, with **4,878 lines remaining**.
+Current: **33,043 lines**, an **18.7% reduction**, with **4,585 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,20 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Folder entry now uses the existing text form, and folder suggestions use the
+existing searchable menu. The standalone folder picker and its separate rendering,
+geometry, input and mouse-selection paths are removed. Ctrl+O opens suggestions;
+selection returns to the typed form, Enter opens it, Tab completes paths, and
+Ctrl+N creates folders. Shared menu hit testing accounts for scrolling and excludes
+border cells. Configuration no longer maintains a duplicate option registry:
+trusted keyword options are validated by their consumers, with TUI constraints
+owned by TUI State. Operator inspection joins projected queue/ledger records
+instead of rebuilding flattened aliases; payloads and checkpoint contents remain
+private. These contract and workflow changes remove **293 physical production
+lines**: 232 code/typespec lines, 26 blank lines and 35 documentation/comment lines.
+Constructor-echo tests were removed; integration coverage exercises configured
+execution, inspection privacy, folder creation/completion and scrolled mouse input.
 
 Completed runs now carry `status` and `reason` directly on `Runner.Result`.
 Sessions, child summaries, CLI/TUI completion and subscriber notifications consume
@@ -128,7 +142,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,091 core tests** and **144 TUI tests** with application
+The current code passes **1,091 core tests** and **143 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

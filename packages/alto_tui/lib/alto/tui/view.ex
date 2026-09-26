@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{Menu, State, TextForm, WorkspaceForm}
+  alias Alto.TUI.{Menu, State, TextForm}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -55,11 +55,7 @@ defmodule Alto.TUI.View do
   end
 
   @doc "Content that supports ordinary selection; chrome requires Alt+drag."
-  def selection_content(%State{overlay: %{kind: :workspace_form} = form}, width, height),
-    do: WorkspaceForm.selection_content(form, width, height)
-
-  def selection_content(%State{overlay: %{kind: kind} = form}, width, height)
-      when kind in [:provider_form, :model_form, :worktree_form] do
+  def selection_content(%State{overlay: %{fields: _} = form}, width, height) do
     rect = content_rect(overlay_rect(form, width, height))
     prefix = form.prefix_width
 
@@ -117,7 +113,17 @@ defmodule Alto.TUI.View do
 
     if PaneLayout.contains?(popup, x, y) do
       row = y - popup.y - 1
-      if row >= 0, do: {:overlay_row, row}, else: :overlay
+
+      if PaneLayout.contains?(content_rect(popup), x, y) do
+        offset =
+          if Map.has_key?(overlay, :fields) or is_binary(Map.get(overlay, :message)),
+            do: 0,
+            else: max(overlay.index - (popup.height - 2) + 1, 0)
+
+        {:overlay_row, row + offset}
+      else
+        :overlay
+      end
     else
       :overlay_outside
     end
@@ -503,12 +509,8 @@ defmodule Alto.TUI.View do
 
   defp add_overlay(widgets, nil, _root), do: widgets
 
-  defp add_overlay(widgets, %{kind: :workspace_form} = form, root),
-    do: widgets ++ WorkspaceForm.widgets(form, root)
-
-  defp add_overlay(widgets, %{kind: kind} = form, root)
-       when kind in [:provider_form, :model_form, :worktree_form],
-       do: widgets ++ text_form_widgets(form, root)
+  defp add_overlay(widgets, %{fields: _} = form, root),
+    do: widgets ++ text_form_widgets(form, root)
 
   defp add_overlay(widgets, overlay, root) do
     items = Menu.items(overlay)
@@ -559,11 +561,9 @@ defmodule Alto.TUI.View do
     error_row = 2 + length(form.fields)
     {button_row, _cancel_row} = TextForm.button_rows(form)
 
-    rows = [
-      {if(form.error, do: "  ! " <> form.error, else: ""), error_row},
-      {"  " <> Enum.at(form.buttons, 0), button_row},
-      {"  " <> Enum.at(form.buttons, 1), button_row + 1}
-    ]
+    rows =
+      [{if(form.error, do: "  ! " <> form.error, else: ""), error_row}] ++
+        Enum.with_index(form.buttons, fn label, index -> {"  " <> label, button_row + index} end)
 
     background = [
       {%Clear{}, rect},
@@ -773,12 +773,8 @@ defmodule Alto.TUI.View do
 
   defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
 
-  defp overlay_rect(%{kind: :workspace_form}, width, height),
-    do: WorkspaceForm.rect(width, height)
-
-  defp overlay_rect(%{kind: kind} = form, width, height)
-       when kind in [:provider_form, :model_form, :worktree_form],
-       do: popup_rect(width, height, form.width_percent, form.height_percent)
+  defp overlay_rect(%{fields: _} = form, width, height),
+    do: popup_rect(width, height, form.width_percent, form.height_percent)
 
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
 

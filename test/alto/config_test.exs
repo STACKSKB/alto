@@ -3,6 +3,16 @@ defmodule Alto.ConfigTest do
 
   alias Alto.Config
 
+  defmodule ConfiguredTool do
+    use Alto.Tool, name: :configured_echo, execution_mode: :parallel, approval: :never
+
+    def schema(_opts),
+      do: %{description: "configured echo", parameters: %{type: "object"}}
+
+    def run(%{"value" => value}, _context, opts),
+      do: {:ok, value <> Keyword.fetch!(opts, :suffix)}
+  end
+
   setup do
     root = Path.join(System.tmp_dir!(), "alto-config-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
@@ -10,39 +20,37 @@ defmodule Alto.ConfigTest do
     %{root: root}
   end
 
-  test "loads a compiled Elixir configuration value", %{root: root} do
+  test "loads execution limits and defers their validation to the runner", %{root: root} do
+    path = Path.join(root, "config.exs")
+    File.write!(path, "Alto.Config.new(max_steps: 0)\n")
+
+    assert {:ok, config} = Config.load(path)
+
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:invalid_option, :max_steps, 0}
+           } = Alto.run("task", Config.run_options(config))
+  end
+
+  test "requires only a keyword-list container" do
+    assert_raise ArgumentError, ~r/keyword list/, fn ->
+      Config.new([:not_a_pair])
+    end
+  end
+
+  test "loaded loop and tool options drive an actual run", %{root: root} do
     path = Path.join(root, "config.exs")
 
     File.write!(
       path,
-      "Alto.Config.new(max_steps: 7, tools: [], loop: Alto.chat_loop())\n"
+      "Alto.Config.new(loop: Alto.rule_loop(steps: [\"configured_echo\"]), " <>
+        "tools: [{Alto.ConfigTest.ConfiguredTool, suffix: \"!\"}])\n"
     )
 
     assert {:ok, config} = Config.load(path)
 
-    assert Config.run_options(config) == [
-             max_steps: 7,
-             tools: [],
-             loop: Alto.chat_loop()
-           ]
-  end
-
-  test "rejects duplicate options" do
-    assert_raise ArgumentError, ~r/options must be unique/, fn ->
-      Config.new(max_steps: 1, max_steps: 2)
-    end
-  end
-
-  test "rejects duplicate TUI options" do
-    assert_raise ArgumentError, ~r/TUI configuration options must be unique/, fn ->
-      Config.new(tui: [approval_auto_open: true, approval_auto_open: false])
-    end
-  end
-
-  test "rejects listener modules without start_link" do
-    assert_raise NimbleOptions.ValidationError, fn ->
-      Config.new(listeners: [{String, []}])
-    end
+    assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
+             Alto.run(%{"value" => "configured"}, Config.run_options(config))
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do

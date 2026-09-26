@@ -312,7 +312,7 @@ defmodule Alto.TUI.AppTest do
         next
       end)
 
-    assert Alto.TUI.WorkspaceForm.path(typed.overlay) == "Second Project!"
+    assert Alto.TUI.TextForm.value(typed.overlay) == "Second Project!"
     {:noreply, opened} = App.handle_event(%Key{code: "enter"}, typed)
     assert opened.overlay == nil
     assert opened.selected_project_id != original
@@ -327,6 +327,172 @@ defmodule Alto.TUI.AppTest do
     restarted = state!(context, credentials_path: context.credentials)
 
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
+  end
+
+  test "folder chooser returns to the typed form and accepts keyboard and mouse choices",
+       context do
+    for folder <- ["alpha", "another folder/nested", ".hidden"],
+        do: File.mkdir_p!(Path.join(context.root, folder))
+
+    File.write!(Path.join(context.root, "a-file"), "not a folder")
+    state = state!(context)
+    form = folder_form(state)
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "a"}, form)
+    {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, form)
+
+    assert Enum.map(chooser.overlay.items, & &1.label) ==
+             [context.root <> "/alpha/", context.root <> "/another folder/"]
+
+    {:noreply, returned} = App.handle_event(%Key{code: "esc"}, chooser)
+    assert returned.overlay == form.overlay
+    assert Alto.TUI.TextForm.value(returned.overlay) == "a"
+    {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, returned)
+    {:noreply, chooser} = App.handle_event(%Key{code: "down"}, chooser)
+    {:noreply, selected} = App.handle_event(%Key{code: "enter"}, chooser)
+    assert Alto.TUI.TextForm.value(selected.overlay) == context.root <> "/another folder/"
+    {:noreply, completed} = App.handle_event(%Key{code: "tab"}, selected)
+    assert Alto.TUI.TextForm.value(completed.overlay) == context.root <> "/another folder/nested/"
+    {:noreply, opened} = App.handle_event(%Key{code: "enter"}, completed)
+    assert State.selected_project(opened)["root"] == context.root <> "/another folder/nested"
+
+    form = folder_form(state)
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "a"}, form)
+    {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, form)
+    {width, height} = chooser.dimensions
+    x = div(width - div(width * 62, 100), 2) + 2
+    y = div(height - div(height * 62, 100), 2) + 2
+
+    {:noreply, clicked} =
+      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, chooser)
+
+    {:noreply, clicked} =
+      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+
+    assert Alto.TUI.TextForm.value(clicked.overlay) == context.root <> "/another folder/"
+  end
+
+  test "folder completion preserves typed prefixes and saved folders remain explicit choices",
+       context do
+    for folder <- ["project-one", "project-two", "猫屋", "猫咪"],
+        do: File.mkdir_p!(Path.join(context.root, folder))
+
+    state = state!(context)
+    form = folder_form(state)
+    {:noreply, empty} = App.handle_event(%Key{code: "tab"}, form)
+    assert Alto.TUI.TextForm.value(empty.overlay) == ""
+    {:noreply, saved} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, empty)
+    assert Enum.any?(saved.overlay.items, &(&1.label == context.root <> "/"))
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "pro"}, form)
+    {:noreply, completed} = App.handle_event(%Key{code: "tab"}, form)
+    assert Alto.TUI.TextForm.value(completed.overlay) == context.root <> "/project-"
+    {:noreply, unchanged} = App.handle_event(%Key{code: "tab"}, completed)
+    assert Alto.TUI.TextForm.value(unchanged.overlay) == context.root <> "/project-"
+    {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, unchanged)
+    assert length(chooser.overlay.items) == 2
+    {:noreply, filtered} = App.handle_event(%ExRatatui.Event.Paste{content: "two"}, chooser)
+    {:noreply, selected} = App.handle_event(%Key{code: "enter"}, filtered)
+    assert Alto.TUI.TextForm.value(selected.overlay) == context.root <> "/project-two/"
+  end
+
+  test "folder chooser mouse selection follows its scrolled viewport", context do
+    for index <- 1..40,
+        do:
+          File.mkdir_p!(
+            Path.join(
+              context.root,
+              "folder-#{String.pad_leading(Integer.to_string(index), 2, "0")}"
+            )
+          )
+
+    state = %{state!(context) | dimensions: {80, 20}}
+    form = folder_form(state)
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "folder-"}, form)
+    {:noreply, chooser} = App.handle_event(%Key{code: "o", modifiers: ["ctrl"]}, form)
+
+    chooser =
+      Enum.reduce(1..20, chooser, fn _, state ->
+        {:noreply, next} = App.handle_event(%Key{code: "down"}, state)
+        next
+      end)
+
+    expected = Enum.at(chooser.overlay.items, 20).label
+    popup_height = div(20 * 62, 100)
+    popup_y = div(20 - popup_height, 2)
+    popup_x = div(80 - div(80 * 62, 100), 2)
+    terminal = ExRatatui.init_test_terminal(80, 20)
+    ExRatatui.draw(terminal, View.widgets(chooser, %{width: 80, height: 20}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "› " <> String.slice(expected, 0, 10)
+
+    {:noreply, selected} =
+      App.handle_event(
+        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + popup_height - 2},
+        chooser
+      )
+
+    {:noreply, selected} =
+      App.handle_event(
+        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + popup_height - 2},
+        selected
+      )
+
+    assert Alto.TUI.TextForm.value(selected.overlay) == expected
+  end
+
+  test "folder form exposes chooser and creation mouse controls on narrow terminals", context do
+    state = %{state!(context) | dimensions: {50, 16}}
+    form = folder_form(state)
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "猫 folder"}, form)
+    terminal = ExRatatui.init_test_terminal(50, 16)
+    ExRatatui.draw(terminal, View.widgets(form, %{width: 50, height: 16}))
+    screen = ExRatatui.get_buffer_content(terminal)
+
+    for label <- ["Open folder", "Cancel", "Choose folder", "Create folder"],
+        do: assert(screen =~ label)
+
+    assert length(View.selection_content(form, 50, 16)) == 1
+    popup_x = div(50 - div(50 * 80, 100), 2)
+    popup_y = div(16 - div(16 * 65, 100), 2)
+    {first_button, _} = Alto.TUI.TextForm.button_rows(form.overlay)
+
+    assert View.hit_target(form, 50, 16, popup_x, popup_y + 1 + first_button + 3) == :overlay
+
+    {:noreply, chooser} =
+      App.handle_event(
+        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 2},
+        form
+      )
+
+    {:noreply, chooser} =
+      App.handle_event(
+        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 2},
+        chooser
+      )
+
+    assert chooser.overlay.kind == :folder
+
+    {:noreply, returned} =
+      App.handle_event(%Mouse{kind: "down", button: "left", x: 0, y: 0}, chooser)
+
+    {:noreply, returned} =
+      App.handle_event(%Mouse{kind: "up", button: "left", x: 0, y: 0}, returned)
+
+    assert returned.overlay == form.overlay
+
+    {:noreply, opened} =
+      App.handle_event(
+        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 3},
+        returned
+      )
+
+    {:noreply, opened} =
+      App.handle_event(
+        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + 1 + first_button + 3},
+        opened
+      )
+
+    assert opened.overlay == nil
+    assert File.dir?(Path.join(context.root, "猫 folder"))
+    assert State.selected_project(opened)["root"] == Path.join(context.root, "猫 folder")
   end
 
   test "create folder opens the typed nested path without losing the draft", context do
@@ -353,7 +519,7 @@ defmodule Alto.TUI.AppTest do
     {:noreply, failed} = App.handle_event(%Key{code: "n", modifiers: ["ctrl"]}, form)
     assert failed.overlay.error =~ "already exists"
     assert failed.overlay.error =~ "Open folder"
-    assert Alto.TUI.WorkspaceForm.path(failed.overlay) == folder
+    assert Alto.TUI.TextForm.value(failed.overlay) == folder
     assert failed.selected_project_id == opened.selected_project_id
   end
 

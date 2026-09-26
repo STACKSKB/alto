@@ -487,9 +487,14 @@ queue plus the operation ledger (`Alto.Ops`).
 `accepted` | `claimed` | `parked` | `unknown` | `completed`) page through
 unified work items. Queue inspection walks bounded 100-record pages, so a
 live record beyond the oldest page remains reachable up to the queue's
-configured live-record bound. Items carry source, display operation,
-semantic `operation_key` where available, generation/revision/attempt
-identity, claim correlation, and a bounded reason. `unknown` items always carry
+configured live-record bound. Each item has `key`, `status`, `live`, `ledger`,
+`stale`, `safe_to_retry`, and bounded `recovery` guidance. `live` and `ledger`
+are nullable native record projections: live identity/lease fields and ledger
+operation/revision/attempt fields retain their original names. Ledger `status`
+retains its tuple structure with decided evidence rendered as bounded scrubbed
+text; checkpoint contents expose only version, phase and action. Ledger
+`recovery` exposes only its key and generation identity. Queue payloads and
+other recovery/checkpoint contents are excluded. `unknown` items always carry
 `"safe_to_retry": false` — recovery is reconcile-or-park under the
 existing queue/ledger identities, never a blind retry, and this command
 exposes no mutating action. The reply is `ok` with `items` plus

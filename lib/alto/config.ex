@@ -29,58 +29,6 @@ defmodule Alto.Config do
                         max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
                       ]
 
-  @allowed_options [
-                     :runner,
-                     :runner_options,
-                     :input,
-                     :messaging,
-                     :messaging_transport,
-                     :loop,
-                     :provider,
-                     :provider_profiles,
-                     :credentials_path,
-                     :tools,
-                     :model_tools,
-                     :approval,
-                     :checkpoint_version,
-                     :continuation_store,
-                     :prompt,
-                     :project_instructions,
-                     :max_effects,
-                     :budget_account,
-                     :max_model_requests,
-                     :run_timeout,
-                     :listeners,
-                     :queue,
-                     :runs,
-                     :sessions,
-                     :session_dir,
-                     :compaction,
-                     :retry_policy,
-                     :event_sink,
-                     :tool_presenter,
-                     :tui,
-                     :tui_backends
-                   ] ++ (Keyword.keys(@execution_limits) -- [:agent_depth, :resume_snapshot])
-
-  @tui_options [
-    type_to_compose: [type: :boolean],
-    narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
-    narrow_context_width: [type: {:in, 40..100}],
-    narrow_context_fullscreen_below: [type: {:in, 0..300}],
-    approval_auto_open: [type: :boolean]
-  ]
-  @schema NimbleOptions.new!(
-            Keyword.merge(Enum.map(@allowed_options, &{&1, [type: :any]}),
-              tui: [type: :keyword_list, keys: @tui_options],
-              sessions: [
-                type: {:or, [nil, :boolean, {:keyword_list, session_dir: [type: :string]}]}
-              ],
-              queue: [type: {:or, [nil, :keyword_list]}],
-              runs: [type: {:map, :string, :keyword_list}],
-              listeners: [type: {:list, {:custom, __MODULE__, :listener_spec, []}}]
-            )
-          )
   @enforce_keys [:run_options]
   defstruct [:run_options]
 
@@ -91,34 +39,14 @@ defmodule Alto.Config do
   @doc false
   def authority_fields, do: Keyword.keys(@authority_limits) ++ [:max_agent_depth]
 
-  @doc "Build a configuration from options accepted by `Alto.run/2`."
+  @doc "Build a trusted run configuration from a keyword list."
   @spec new(keyword()) :: t()
   def new(run_options \\ []) do
-    validate_unique!(run_options, "Alto")
-    validate_unique!(Keyword.get(run_options, :tui, []), "Alto TUI")
-    %__MODULE__{run_options: NimbleOptions.validate!(run_options, @schema)}
+    unless Keyword.keyword?(run_options),
+      do: raise(ArgumentError, "configuration must be a keyword list")
+
+    %__MODULE__{run_options: run_options}
   end
-
-  defp validate_unique!(options, label) do
-    unless Keyword.keyword?(options),
-      do: raise(ArgumentError, "#{label} configuration must be a keyword list")
-
-    keys = Keyword.keys(options)
-
-    if length(keys) != MapSet.size(MapSet.new(keys)),
-      do: raise(ArgumentError, "#{label} configuration options must be unique")
-  end
-
-  @doc false
-  def listener_spec({module, opts}) when is_atom(module) and is_list(opts) do
-    if Keyword.keyword?(opts) and Code.ensure_loaded?(module) and
-         function_exported?(module, :start_link, 1),
-       do: {:ok, {module, opts}},
-       else: {:error, "expected a listener module with start_link/1 and keyword options"}
-  end
-
-  def listener_spec(_),
-    do: {:error, "expected a listener module with start_link/1 and keyword options"}
 
   @doc "Return the validated runner options stored in a configuration."
   @spec run_options(t()) :: keyword()
@@ -131,8 +59,8 @@ defmodule Alto.Config do
 
     try do
       case Code.eval_file(expanded) do
-        {%__MODULE__{run_options: run_options}, _binding} ->
-          {:ok, new(run_options)}
+        {%__MODULE__{} = config, _binding} ->
+          {:ok, config}
 
         {_other, _binding} ->
           {:error, {:invalid_config_return, expanded}}

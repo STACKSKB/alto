@@ -37,23 +37,28 @@ defmodule Alto.OpsTest do
     %{dir: dir, queue: qname, ledger: lname, tag: tag}
   end
 
-  test "accepted and claimed work show source and correlation", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.request(q, {:admit, "/hooks/events:del-1", %{"body" => "x"}, []})
+  test "accepted and claimed work retain native identity without payloads", %{queue: q, ledger: l} do
+    {:ok, _} =
+      Queue.request(q, {:admit, "/hooks/events:del-1", %{"body" => "private-queue-payload"}, []})
+
     {:ok, _} = Queue.request(q, {:put, "job-9", %{"total" => 1}, []})
     {:ok, [claimed]} = Queue.request(q, {:claim, 1, "station-1", :infinity, :all})
 
     {:ok, %{items: items}} = Ops.list(q, l, limit: 20)
     by_key = Map.new(items, &{&1.key, &1})
 
-    assert %{status: :claimed, source: "/hooks/events", claim_id: claim_id} =
+    assert %{status: :claimed, live: %{key: "/hooks/events:del-1", claim_id: claim_id}} =
              by_key["/hooks/events:del-1"]
 
     assert claim_id == claimed.claim_id
-    assert %{status: :accepted, source: "business", operation: "job-9"} = by_key["job-9"]
+    assert %{status: :accepted, live: %{key: "job-9"}, ledger: nil} = by_key["job-9"]
 
     # Correlation is inbox key + claim identity, never an invented run.
-    assert by_key["/hooks/events:del-1"].record_id == claimed.id
+    assert by_key["/hooks/events:del-1"].live.id == claimed.id
     assert by_key["/hooks/events:del-1"].safe_to_retry == false
+    refute Map.has_key?(by_key["/hooks/events:del-1"].live, :payload)
+    refute Map.has_key?(by_key["/hooks/events:del-1"], :operation_key)
+    refute JSON.encode!(Alto.Protocol.encode_term(items)) =~ "private-queue-payload"
   end
 
   test "inspection accepts a registered ledger reference", %{queue: queue, ledger: ledger} do
@@ -76,8 +81,8 @@ defmodule Alto.OpsTest do
     assert {:ok, item} = Ops.get(q, l, "src:stale")
     assert item.status == :claimed
     assert item.stale == true
-    assert item.claim_id == claimed.claim_id
-    assert item.reason =~ "stale"
+    assert item.live.claim_id == claimed.claim_id
+    assert item.live.lease_until_ms == claimed.lease_until_ms
   end
 
   test "inspection reaches live work beyond the oldest bounded page", %{queue: q, ledger: l} do
@@ -100,7 +105,7 @@ defmodule Alto.OpsTest do
            ]
   end
 
-  test "parked work lists with bounded reasons and survives restart", %{
+  test "parked work lists with bounded evidence and survives restart", %{
     dir: dir,
     queue: q,
     ledger: l,
@@ -117,6 +122,7 @@ defmodule Alto.OpsTest do
         {:outcome, "src:park-me", claimed.claim_id, :requires_operator,
          %{
            park_reason: :handler_crashed,
+           token: "private-evidence-token",
            detail: String.duplicate("x", 5_000)
          }}
       )
@@ -127,7 +133,9 @@ defmodule Alto.OpsTest do
     assert parked.key == "src:park-me"
     assert parked.status == :parked
     assert parked.safe_to_retry == false
-    assert byte_size(parked.reason) <= 501
+    assert {:decided, :requires_operator, evidence} = parked.ledger.status
+    assert byte_size(evidence) <= 501
+    refute JSON.encode!(Alto.Protocol.encode_term(parked)) =~ "private-evidence-token"
 
     # Restart both stores over the same logs: parked work is still found.
     GenServer.stop(Process.whereis(q))
@@ -169,18 +177,61 @@ defmodule Alto.OpsTest do
         {:intent, "src:identity", "print", "src:identity",
          %{
            generation_id: "recovery-generation",
-           payload: String.duplicate("x", 5_000)
+           payload: "private-recovery-payload"
          }}
       )
 
     :ok = OperationLog.request(l, {:attempt, "src:identity", claimed.claim_id})
 
     assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
-    assert item.operation_revision == 2
-    assert item.attempt_id == claimed.claim_id
-    assert item.generation_id == "recovery-generation"
-    assert item.recovery_available == true
-    refute Map.has_key?(item, :recovery_envelope)
+    assert item.ledger.revision == 2
+    assert item.ledger.current_attempt == claimed.claim_id
+    assert item.ledger.recovery.generation_id == "recovery-generation"
+    assert Map.keys(item.ledger.recovery) == [:generation_id]
+    refute Map.has_key?(item.live, :payload)
+    refute Map.has_key?(item.ledger.recovery, :payload)
+    refute JSON.encode!(Alto.Protocol.encode_term(item)) =~ "private-recovery-payload"
+  end
+
+  test "interrupted workspace inspection excludes retained private contents", %{
+    queue: q,
+    ledger: l
+  } do
+    packet = %{
+      version: 2,
+      status: "in_progress",
+      action: "create",
+      workspace: %{secret: "private"}
+    }
+
+    :ok = OperationLog.request(l, {:retain, "workspace", "workspace", nil, "attempt", packet})
+
+    assert {:ok, item} = Ops.get(q, l, "workspace")
+    assert item.status == :unknown
+    assert item.live == nil
+    assert item.ledger.recovery == nil
+
+    assert item.ledger.status ==
+             {:checkpointed, Map.take(packet, [:version, :status, :action]), "attempt"}
+
+    refute Map.has_key?(item.ledger, :checkpoint)
+    refute JSON.encode!(Alto.Protocol.encode_term(item)) =~ "private"
+
+    :ok = OperationLog.request(l, {:intent, "evidence", "tool", nil, nil})
+    :ok = OperationLog.request(l, {:attempt, "evidence", "attempt"})
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:outcome, "evidence", "attempt", :completed,
+         %{token: "private-token", detail: "operator evidence"}}
+      )
+
+    assert {:ok, completed} = Ops.get(q, l, "evidence")
+    assert {:decided, :completed, evidence} = completed.ledger.status
+    assert evidence =~ "[redacted]"
+    assert evidence =~ "operator evidence"
+    refute JSON.encode!(Alto.Protocol.encode_term(completed)) =~ "private-token"
   end
 
   test "ledger projections preserve display keys beside semantic operation keys", %{
@@ -202,10 +253,10 @@ defmodule Alto.OpsTest do
 
     assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
     assert item.key == "job-display"
-    assert item.operation == "job-display"
-    assert item.operation_key == operation_key
-    assert item.generation_id == claimed.generation_id
-    assert item.attempt_id == claimed.claim_id
+    assert item.live.key == "job-display"
+    assert item.ledger.operation_key == operation_key
+    assert item.live.generation_id == claimed.generation_id
+    assert item.ledger.current_attempt == claimed.claim_id
   end
 
   test "a completed business generation remains visible beside a new live generation", %{
@@ -234,8 +285,8 @@ defmodule Alto.OpsTest do
     assert {:ok, %{items: items}} = Ops.list(q, l)
     assert Enum.map(items, & &1.key) == ["same-display", "same-display"]
     assert Enum.map(items, & &1.status) == [:accepted, :completed]
-    assert Enum.at(items, 0).operation_key != old_operation
-    assert Enum.at(items, 1).operation_key == old_operation
+    assert Enum.at(items, 0).live.operation_key != old_operation
+    assert Enum.at(items, 1).ledger.operation_key == old_operation
   end
 
   test "restored work joins ledger state by its explicit operation key", %{queue: q, ledger: l} do
@@ -248,8 +299,8 @@ defmodule Alto.OpsTest do
     assert {:ok, %{items: [item]}} = Ops.list(q, l)
     assert item.status == :unknown
     assert item.key == claimed.key
-    assert item.operation_key == operation_key
-    assert item.claim_id == claimed.claim_id
+    assert item.ledger.operation_key == operation_key
+    assert item.live.claim_id == claimed.claim_id
   end
 
   test "completed work lists terminal outcomes; pagination and limits hold", %{
