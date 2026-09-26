@@ -1,11 +1,11 @@
 defmodule Alto.Tools.ListAgents do
-  @moduledoc "Discover addresses, parent relationships and communication capabilities in this tree."
+  @moduledoc "Discover agent addresses, parent relationships and status in this tree."
   use Alto.Tool, name: :list_agents, execution_mode: :parallel, approval: :never
   @impl true
   def schema(_),
     do:
       Alto.Tool.object_schema(
-        "List agents in this execution tree, including your own address and parent. Use agent_id for messaging; labels can repeat. External backends may not support messaging.",
+        "List agents in this execution tree, including your own address and parent. Use agent_id for messaging; labels can repeat.",
         %{},
         []
       )

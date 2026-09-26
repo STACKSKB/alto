@@ -390,7 +390,7 @@ unknown messages are never automatically replayed.
 Identical idempotency keys deduplicate within the recipient channel; changed
 content under the same key is rejected. Host-selected transports determine
 mailbox persistence; checkpoint packets also retain queues and receipts.
-Unknown runs, closed recipients, full channels, and unsupported backends fail
+Unknown runs, closed recipients and full channels fail
 explicitly; submission does not start a new run or interrupt an active tool.
 
 **`list_agents`** — inspect addresses in one resident run's execution tree.
@@ -400,7 +400,7 @@ explicitly; submission does not start a new run or interrupt an active tool.
 ```
 
 The `ok` reply contains `agents` with `agent_id`, display `label`, `parent`,
-`status`, and `messaging` capability. At most 256 addresses are retained per tree.
+`status`, and `self`. At most 256 addresses are retained per tree.
 Root registration is asynchronous, so an immediate listing may be empty.
 Stable addresses, queued messages and receipts survive execution checkpoints.
 Admission to a captured mailbox returns `input_checkpointed` until restore.

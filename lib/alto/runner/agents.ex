@@ -51,23 +51,7 @@ defmodule Alto.Runner.Agents do
         {:reply, {:error, :agent_capacity}, state}
 
       true ->
-        entries =
-          Map.new(specs, fn spec ->
-            {spec.messaging.id,
-             %{
-               spec: spec,
-               run:
-                 run
-                 |> Map.drop([:messages_rev, :events_rev, :loop_state])
-                 |> Map.put(:execution_owner, self()),
-               starter: nil,
-               handle: nil,
-               ref: nil,
-               status: :pending,
-               summary: nil,
-               collected: false
-             }}
-          end)
+        entries = Map.new(specs, &{&1.messaging.id, new_entry(&1, run)})
 
         ids = Enum.map(specs, & &1.messaging.id)
         send(self(), :dispatch)
@@ -120,27 +104,16 @@ defmodule Alto.Runner.Agents do
     if length(saved) <= 256 and Enum.all?(saved, &valid_saved?/1) and
          length(Enum.uniq_by(saved, & &1.id)) == length(saved) do
       restored =
-        Enum.reduce_while(saved, {:ok, %{}}, fn e, {:ok, acc} ->
-          case Alto.Messaging.resolve(run.messaging.router, e.id) do
-            {:ok, sender} ->
-              entry = %{
-                spec: Map.put(e.spec, :messaging, sender),
-                status: if(e.status == :suspended, do: :pending, else: e.status),
+        Alto.Result.reduce(saved, %{}, fn e, acc ->
+          with {:ok, sender} <- Alto.Messaging.resolve(run.messaging.router, e.id) do
+            entry = %{
+              new_entry(Map.put(e.spec, :messaging, sender), run)
+              | status: if(e.status == :suspended, do: :pending, else: e.status),
                 summary: e.summary,
-                collected: e.collected,
-                starter: nil,
-                handle: nil,
-                ref: nil,
-                run:
-                  run
-                  |> Map.drop([:messages_rev, :events_rev, :loop_state])
-                  |> Map.put(:execution_owner, self())
-              }
+                collected: e.collected
+            }
 
-              {:cont, {:ok, Map.put(acc, e.id, entry)}}
-
-            error ->
-              {:halt, error}
+            {:ok, Map.put(acc, e.id, entry)}
           end
         end)
 
@@ -328,6 +301,22 @@ defmodule Alto.Runner.Agents do
         run: nil,
         summary: Children.child_summary(entry.spec.id, outcome)
     })
+  end
+
+  defp new_entry(spec, run) do
+    %{
+      spec: spec,
+      run:
+        run
+        |> Map.drop([:messages_rev, :events_rev, :loop_state])
+        |> Map.put(:execution_owner, self()),
+      starter: nil,
+      handle: nil,
+      ref: nil,
+      status: :pending,
+      summary: nil,
+      collected: false
+    }
   end
 
   defp valid_saved?(%{id: id, spec: spec, status: status, summary: _, collected: collected}) do

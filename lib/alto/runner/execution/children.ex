@@ -330,7 +330,7 @@ defmodule Alto.Runner.Execution.Children do
             _ -> nil
           end
 
-        [label: spec.id, parent: run.messaging.id, supported: true, id: id]
+        [label: spec.id, parent: run.messaging.id, id: id]
       end)
 
     with {:ok, senders} <- Alto.Messaging.register_many(run.messaging.router, options) do

@@ -252,7 +252,6 @@ defmodule Alto.Messaging do
              label: opts[:label],
              parent: opts[:parent],
              owned_input: is_nil(opts[:input]),
-             supported: Keyword.get(opts, :supported, true),
              pause: false
            }}
         end
@@ -306,8 +305,7 @@ defmodule Alto.Messaging do
                 input: input,
                 status: status,
                 label: entry.label,
-                parent: entry.parent,
-                supported: entry.supported
+                parent: entry.parent
               }
 
               {:cont, {:ok, Map.put(acc, id, value)}}
@@ -381,7 +379,6 @@ defmodule Alto.Messaging do
           label: entry.label,
           parent: entry.parent,
           status: entry.status,
-          messaging: entry.supported,
           self: sender[:id] == id
         }
       end)
@@ -395,9 +392,6 @@ defmodule Alto.Messaging do
       case state.entries[id] do
         nil ->
           {:error, :unknown_agent}
-
-        %{supported: false} ->
-          {:error, :messaging_unsupported}
 
         %{input: input, status: status} ->
           message = Map.merge(message, %{sender: sender, recipient: id})
@@ -434,9 +428,9 @@ defmodule Alto.Messaging do
     map_size(saved) in 1..256 and Map.has_key?(saved, root) and
       Enum.all?(saved, fn {id, e} ->
         is_binary(id) and byte_size(id) in 1..128 and is_map(e) and
-          Enum.sort(Map.keys(e)) == Enum.sort([:input, :status, :label, :parent, :supported]) and
+          Enum.sort(Map.keys(e)) == Enum.sort([:input, :status, :label, :parent]) and
           Alto.Input.valid_snapshot?(e.input) and e.status in [:pending, :closed] and
-          is_boolean(e.supported) and (is_nil(e.label) or is_binary(e.label)) and
+          (is_nil(e.label) or is_binary(e.label)) and
           (id == root or Map.has_key?(saved, e.parent)) and descendant?(id, root, saved)
       end)
   rescue

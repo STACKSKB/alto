@@ -78,22 +78,29 @@ defmodule Alto.Codex.Backend do
 
     with {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval, opts),
          {:ok, result} <-
-           Client.start_turn(client, %{
-             "threadId" => thread_id,
-             "input" => [%{"type" => "text", "text" => prompt}],
-             "cwd" => cwd,
-             "model" => model,
-             "effort" => Keyword.get(opts, :effort),
-             "summary" => "auto",
-             "approvalPolicy" => approval_policy(approval),
-             "sandboxPolicy" => sandbox_policy(approval)
-           }),
+           Client.start_turn(client, turn_params(thread_id, prompt, opts)),
          turn_id when is_binary(turn_id) <- get_in(result, ["turn", "id"]) do
       {:ok, %{thread_id: thread_id, turn_id: turn_id}}
     else
       nil -> {:error, :codex_turn_id_missing}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc false
+  def turn_params(thread_id, prompt, opts) do
+    approval = Keyword.get(opts, :approval, :ask)
+
+    %{
+      "threadId" => thread_id,
+      "input" => [%{"type" => "text", "text" => prompt}],
+      "cwd" => opts |> Keyword.fetch!(:cwd) |> Path.expand(),
+      "model" => opts[:model],
+      "effort" => opts[:effort],
+      "summary" => "auto",
+      "approvalPolicy" => approval_policy(approval),
+      "sandboxPolicy" => sandbox_policy(approval)
+    }
   end
 
   @doc "Open the managed ChatGPT OAuth URL with an injectable platform opener."

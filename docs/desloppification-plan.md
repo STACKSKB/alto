@@ -18,7 +18,8 @@ lines after integration. Input, retained-state and capability cleanup removed
 another 86 lines. Reusing ThousandIsland for Unix socket supervision removes
 69 more, reaching 33,379. Composable messaging transports, async checkpointing
 and live Codex delivery then added 1,014 net production lines after integration.
-The current count is **34,393 (15.4% below the original)**. **5,935 lines remain**
+Unifying child construction and removing obsolete messaging capability state
+removed another 20 lines. The current count is **34,373 (15.5% below the original)**. **5,915 lines remain**
 to reach the unchanged target.
 The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
@@ -88,6 +89,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   Native and Codex input share message rendering; live ingress and restored
   snapshots share message validation. Transport configuration uses the existing
   capability resolver, and mailbox reads use the existing bounded-file helper.
+  Fresh and restored async children share entry construction. Codex initial and
+  follow-up turns share request fields. The obsolete unsupported-agent flag,
+  rejection branch and test-only setup are removed; registered agents have channels.
 
 The “Analyze code duplication” findings were checked against actual callers.
 Extractions that added adapters without removing behavior were rejected.

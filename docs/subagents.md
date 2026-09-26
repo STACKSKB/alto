@@ -82,8 +82,8 @@ backend does not expose these native Alto tools. The adapter follows the
 `start_agents` accepts the same arguments and approval policy as `spawn_agents`,
 but returns an ordered `agents` list containing each display `id`, opaque
 `agent_id`, and status immediately after admission. `list_agents` discovers all
-addresses in the execution tree, including `self`, parent address, lifecycle
-status, and whether the backend supports messaging. Use opaque addresses in
+addresses in the execution tree, including `self`, parent address and lifecycle
+status. Use opaque addresses in
 messages; display labels can repeat across batches.
 
 ```json

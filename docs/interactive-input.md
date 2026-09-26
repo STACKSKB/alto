@@ -81,7 +81,7 @@ Registration occurs as the run starts; early listings may be empty. Hosts own
 explicit routers and should stop them when no longer needed. Automatic routers
 end with the root execution. Routing retains at most 256 agent instances,
 including closed addresses, so reusing a display label cannot redirect an old
-message to a new child. Sends to unknown, closed, or unsupported recipients
+message to a new child. Sends to unknown or closed recipients
 return explicit errors. Successfully admitted input remains queued if the run
 ends before consuming it; hosts with reusable input channels can inspect
 `Alto.Input.list/1`. `Alto.Input.take(input, :user)` starts only user submissions

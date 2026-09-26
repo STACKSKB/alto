@@ -39,7 +39,7 @@ defmodule Alto.MessagingTest do
     assert {:error, :recipient_closed} = Alto.Messaging.send(b, a.id, text: "late")
   end
 
-  test "user ingress rejects invalid metadata and external backends reject delivery" do
+  test "user ingress rejects invalid metadata and bounds message content" do
     {:ok, input} = Alto.Input.start_link(max_bytes: 4)
     assert {:error, :invalid_message} = Alto.Messaging.send(input, text: "x", sender: "agent")
 
@@ -49,9 +49,6 @@ defmodule Alto.MessagingTest do
     assert {:error, :input_capacity} = Alto.Messaging.send(input, text: "12345")
     assert {:ok, _} = Alto.Messaging.send(input, text: "1234", delivery: :follow_up)
     assert [%{sender: %{kind: :user}, mode: :follow_up}] = Alto.Input.list(input)
-    {:ok, router} = Alto.Messaging.start_link()
-    {:ok, external} = Alto.Messaging.register(router, supported: false)
-    assert {:error, :messaging_unsupported} = Alto.Messaging.send(router, external.id, text: "x")
   end
 
   test "recipient exit closes routing while accepted input remains inspectable" do

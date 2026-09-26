@@ -1,6 +1,6 @@
 defmodule Alto.Tools.CodexAgent do
   @moduledoc """
-  One read-only Codex App Server turn, owned by a supervised tool invocation.
+  Read-only Codex App Server execution owned by a supervised tool invocation.
 
   App Server owns its tools and internal model calls. Alto bounds the invocation's
   lifetime and output, but cannot meter Codex's internal calls against its native
@@ -58,7 +58,7 @@ defmodule Alto.Tools.CodexAgent do
           Map.merge(turn, %{
             monitor: Process.monitor(client),
             context: context,
-            opts: Keyword.put(opts, :model, model),
+            opts: Keyword.merge(opts, model: model, cwd: context.cwd, approval: :read_only),
             guardian: guardian,
             deliveries: [],
             calls: %{}
@@ -352,14 +352,7 @@ defmodule Alto.Tools.CodexAgent do
     Client.request(
       client,
       "turn/start",
-      %{
-        "threadId" => turn.thread_id,
-        "input" => [%{"type" => "text", "text" => Alto.Messaging.message_text(entry)}],
-        "model" => turn.opts[:model],
-        "effort" => turn.opts[:effort],
-        "approvalPolicy" => "never",
-        "sandboxPolicy" => Backend.sandbox_policy(:read_only)
-      },
+      Backend.turn_params(turn.thread_id, Alto.Messaging.message_text(entry), turn.opts),
       Keyword.get(turn.opts, :request_timeout, 5_000)
     )
   end

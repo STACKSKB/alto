@@ -105,7 +105,7 @@ defmodule Alto.Runner.Execution do
     outcome =
       case Keyword.pop(opts, :workspace_assignment) do
         {nil, opts} ->
-          run_without_workspace(task, opts)
+          run_with_options(task, opts)
 
         {{manager, snapshot, identity}, opts} ->
           run_in_workspace(task, opts, manager, snapshot, identity)
@@ -113,8 +113,6 @@ defmodule Alto.Runner.Execution do
 
     Children.retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
   end
-
-  defp run_without_workspace(task, opts), do: run_with_options(task, opts)
 
   defp run_with_options(task, opts) do
     opts =
@@ -757,7 +755,7 @@ defmodule Alto.Runner.Execution do
         manager,
         snapshot,
         identity,
-        &run_without_workspace/2
+        &run_with_options/2
       )
 
   defp batch_completed(results, run, journal) do

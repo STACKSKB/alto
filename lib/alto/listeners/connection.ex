@@ -215,7 +215,6 @@ defmodule Alto.Listeners.Connection do
 
   defp error_code(reason) when reason in [:invalid_message, :idempotency_conflict], do: "invalid"
   defp error_code(:unknown_agent), do: "not_found"
-  defp error_code(:messaging_unsupported), do: "unsupported"
 
   defp error_code(reason) when reason in [:unknown_run, :unknown_command],
     do: Atom.to_string(reason)
