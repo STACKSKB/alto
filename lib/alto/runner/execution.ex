@@ -70,26 +70,18 @@ defmodule Alto.Runner.Execution do
   end
 
   defp run_with_input(task, opts, scheduler) do
-    case Keyword.get(opts, :input) do
-      nil ->
+    input = Keyword.fetch!(opts, :input)
+
+    with :ok <- claim_input(input) do
+      try do
         run_scoped(task, opts, scheduler)
-
-      input ->
-        case claim_input(input) do
-          :ok ->
-            try do
-              run_scoped(task, opts, scheduler)
-            after
-              try do
-                Alto.Input.release(input)
-              catch
-                :exit, _ -> :ok
-              end
-            end
-
-          {:error, reason} ->
-            {:error, reason, Result.empty()}
+      after
+        try do
+          Alto.Input.release(input)
+        catch
+          :exit, _ -> :ok
         end
+      end
     end
   end
 
@@ -204,7 +196,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp admit_input(effects, %{input: input} = run, terminal) when not is_nil(input) do
+  defp admit_input(effects, %{input: input} = run, terminal) do
     modes =
       cond do
         effects == [] and match?({:stop, _}, terminal) -> [:steer, :follow_up]
@@ -223,7 +215,7 @@ defmodule Alto.Runner.Execution do
         entry ->
           case RunTranscript.append(run, input_message(entry)) do
             {:ok, next} ->
-              :ok = Alto.Input.ack(input, entry.id, max(Budget.remaining(run.budget), 1))
+              :ok = Alto.Input.ack(input, entry.message_id, max(Budget.remaining(run.budget), 1))
               event = Event.durable(:input_received, entry)
 
               rest =
@@ -244,8 +236,6 @@ defmodule Alto.Runner.Execution do
   catch
     :exit, reason -> {:done, {:error, {:input_unavailable, reason}, result(run, nil, :error)}}
   end
-
-  defp admit_input(effects, run, terminal), do: do_execute(effects, run, terminal)
 
   defp input_message(%{sender: %{kind: :agent}} = entry) do
     content =

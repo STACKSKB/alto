@@ -29,7 +29,7 @@ defmodule Alto.MessagingTest do
     assert {:ok, ^input} = Alto.Messaging.bind(a)
     assert :ok = Alto.Input.claim(input)
     entry = Alto.Input.peek(input, [:steer])
-    assert :ok = Alto.Input.ack(input, entry.id)
+    assert :ok = Alto.Input.ack(input, entry.message_id)
     assert :ok = Alto.Messaging.close(a)
     assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, id)
 

@@ -12,7 +12,6 @@ defmodule Alto.Input do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts)
 
-  def put(channel, text, mode \\ :steer), do: GenServer.call(channel, {:put, text, mode})
   @doc false
   def enqueue(channel, message), do: GenServer.call(channel, {:enqueue, message})
   @doc false
@@ -25,7 +24,10 @@ defmodule Alto.Input do
   def claim(channel), do: GenServer.call(channel, :claim)
   def release(channel), do: GenServer.call(channel, :release)
   def peek(channel, modes, timeout \\ 5_000), do: GenServer.call(channel, {:peek, modes}, timeout)
-  def ack(channel, id, timeout \\ 5_000), do: GenServer.call(channel, {:ack, id}, timeout)
+
+  def ack(channel, message_id, timeout \\ 5_000),
+    do: GenServer.call(channel, {:ack, message_id}, timeout)
+
   def list(channel), do: GenServer.call(channel, :list)
 
   @doc "Atomically consume the oldest entry while no runner owns the channel."
@@ -44,7 +46,6 @@ defmodule Alto.Input do
          receipts: %{},
          keys: %{},
          bytes: 0,
-         seq: 0,
          owner: nil,
          monitor: nil,
          max_messages: max_messages,
@@ -68,12 +69,6 @@ defmodule Alto.Input do
 
   def handle_call(:release, _, state), do: {:reply, {:error, :not_input_owner}, state}
 
-  def handle_call({:put, text, mode}, _from, state) do
-    enqueue(%{text: text, mode: mode, sender: %{kind: :user}}, state, :legacy)
-  end
-
-  def handle_call({:enqueue, message}, _from, state), do: enqueue(message, state, :receipt)
-
   def handle_call({:duplicate, message}, _from, state),
     do: {:reply, duplicate_receipt(message, state) || {:error, :recipient_closed}, state}
 
@@ -89,18 +84,12 @@ defmodule Alto.Input do
   def handle_call({:peek, _}, _, state), do: {:reply, {:error, :not_input_owner}, state}
 
   def handle_call({:ack, id}, {pid, _}, %{owner: pid} = state) do
-    case Enum.find(state.entries, &(&1.id == id)) do
+    case Enum.find(state.entries, &(&1.message_id == id)) do
       nil ->
         {:reply, {:error, :unknown_input}, state}
 
       entry ->
-        {:reply, :ok,
-         %{
-           state
-           | bytes: state.bytes - entry_bytes(entry),
-             receipts: consumed(state.receipts, entry),
-             entries: Enum.reject(state.entries, &(&1.id == id))
-         }}
+        {:reply, :ok, consume(state, entry, :consumed)}
     end
   end
 
@@ -112,13 +101,7 @@ defmodule Alto.Input do
         {:reply, :empty, state}
 
       entry ->
-        {:reply, {:ok, entry},
-         %{
-           state
-           | entries: Enum.reject(state.entries, &(&1.id == entry.id)),
-             bytes: state.bytes - entry_bytes(entry),
-             receipts: consumed(state.receipts, entry, :taken)
-         }}
+        {:reply, {:ok, entry}, consume(state, entry, :taken)}
     end
   end
 
@@ -126,37 +109,24 @@ defmodule Alto.Input do
 
   def handle_call(:list, _from, state), do: {:reply, state.entries, state}
 
-  defp enqueue(message, state, reply_kind) do
-    text = message.text
+  def handle_call({:enqueue, message}, _from, state) do
     bytes = entry_bytes(message)
     duplicate = duplicate_receipt(message, state)
 
     cond do
-      not is_binary(text) or not String.valid?(text) or text == "" ->
-        {:reply, {:error, :invalid_input_text}, state}
-
-      message.mode not in [:steer, :follow_up] ->
-        {:reply, {:error, :invalid_input_mode}, state}
-
       duplicate != nil ->
         {:reply, duplicate, state}
 
       length(state.entries) >= state.max_messages or state.bytes + bytes > state.max_bytes ->
         {:reply, {:error, :input_capacity}, state}
 
-      reply_kind == :receipt and map_size(state.receipts) >= 4096 ->
+      map_size(state.receipts) >= 4096 ->
         {:reply, {:error, :receipt_capacity}, state}
 
       true ->
-        id = state.seq + 1
         message_id = "msg-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
-        entry = Map.merge(message, %{id: id, message_id: message_id})
+        entry = Map.put(message, :message_id, message_id)
         receipt = %{message_id: message_id, status: :queued}
-
-        receipts =
-          if reply_kind == :receipt,
-            do: Map.put(state.receipts, message_id, receipt),
-            else: state.receipts
 
         keys =
           case message[:idempotency_key] do
@@ -164,15 +134,12 @@ defmodule Alto.Input do
             key -> Map.put(state.keys, {message.sender, key}, {fingerprint(message), message_id})
           end
 
-        reply = if reply_kind == :legacy, do: {:ok, id}, else: {:ok, receipt}
-
-        {:reply, reply,
+        {:reply, {:ok, receipt},
          %{
            state
-           | seq: id,
-             bytes: state.bytes + bytes,
+           | bytes: state.bytes + bytes,
              entries: state.entries ++ [entry],
-             receipts: receipts,
+             receipts: Map.put(state.receipts, message_id, receipt),
              keys: keys
          }}
     end
@@ -194,22 +161,21 @@ defmodule Alto.Input do
   defp fingerprint(message), do: :crypto.hash(:sha256, :erlang.term_to_binary(message))
 
   defp entry_bytes(%{text: text} = message) do
-    if is_binary(text) do
-      # Preserve legacy text-byte bounds; routed metadata also consumes capacity.
-      byte_size(text) +
-        if(Map.has_key?(message, :recipient),
-          do: :erlang.external_size(Map.drop(message, [:text, :id, :message_id])),
-          else: 0
-        )
-    else
-      0
-    end
+    # Routed metadata consumes capacity in addition to text.
+    byte_size(text) +
+      if(Map.has_key?(message, :recipient),
+        do: :erlang.external_size(Map.drop(message, [:text, :message_id])),
+        else: 0
+      )
   end
 
-  defp consumed(receipts, entry, status \\ :consumed) do
-    if Map.has_key?(receipts, entry.message_id),
-      do: Map.update!(receipts, entry.message_id, &%{&1 | status: status}),
-      else: receipts
+  defp consume(state, entry, status) do
+    %{
+      state
+      | bytes: state.bytes - entry_bytes(entry),
+        entries: Enum.reject(state.entries, &(&1.message_id == entry.message_id)),
+        receipts: Map.update!(state.receipts, entry.message_id, &%{&1 | status: status})
+    }
   end
 
   @impl true

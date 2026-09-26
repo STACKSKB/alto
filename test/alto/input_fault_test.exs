@@ -21,7 +21,7 @@ defmodule Alto.InputFaultTest do
 
   test "owner death releases the channel without dropping queued bytes" do
     {:ok, input} = Alto.Input.start_link(max_messages: 2, max_bytes: 3)
-    assert {:ok, id} = Alto.Input.put(input, "abc", :steer)
+    assert {:ok, %{message_id: id}} = Alto.Messaging.send(input, text: "abc", delivery: :steer)
     parent = self()
 
     owner =
@@ -42,11 +42,11 @@ defmodule Alto.InputFaultTest do
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
     assert :ok = claim_eventually(input)
 
-    assert %{id: ^id, text: "abc", mode: :steer} = Alto.Input.peek(input, [:steer])
+    assert %{message_id: ^id, text: "abc", mode: :steer} = Alto.Input.peek(input, [:steer])
     assert :ok = Alto.Input.ack(input, id)
 
     # Acknowledgement reclaims the exact encoded byte capacity.
-    assert {:ok, _} = Alto.Input.put(input, "xyz", :follow_up)
+    assert {:ok, _} = Alto.Messaging.send(input, text: "xyz", delivery: :follow_up)
   end
 
   defp claim_eventually(input, attempts \\ 100)

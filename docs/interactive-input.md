@@ -5,8 +5,8 @@ An interactive host can attach a bounded channel to any shared execution host:
 ```elixir
 {:ok, input} = Alto.Input.start_link(max_messages: 32, max_bytes: 64_000)
 {:ok, run} = Alto.start("Inspect this project", input: input, provider: provider)
-Alto.Input.put(input, "Focus on the parser", :steer)
-Alto.Input.put(input, "Then explain the change", :follow_up)
+Alto.Messaging.send(input, text: "Focus on the parser", delivery: :steer)
+Alto.Messaging.send(input, text: "Then explain the change", delivery: :follow_up)
 Alto.await(run)
 ```
 
@@ -43,7 +43,7 @@ follow-up queues and controls.
 ## Shared user and agent messaging
 
 `Alto.Messaging.send/2` is the host-facing form of the same ingress used by
-agent tools. Existing `Alto.Input.put/3` callers remain compatible:
+agent tools:
 
 ```elixir
 {:ok, input} = Alto.Input.start_link()
@@ -59,7 +59,7 @@ into the transcript, not understood, obeyed, or answered. Consumption emits
 `:input_received` with `message_id`, `sender`, `text`, and `mode`. A retry using
 the same sender, recipient, and idempotency key returns its existing receipt;
 changing the message under that key returns `:idempotency_conflict`. Receipt
-history is capped at 4,096 per channel and rejects further receipt-bearing
+history is capped at 4,096 per channel and rejects further
 submissions when full. Text is capped at 64 KB; routed metadata also counts
 against the channel's byte limit. Acceptance never promises crash recovery
 or exactly-once model execution.

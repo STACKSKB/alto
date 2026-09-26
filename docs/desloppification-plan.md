@@ -14,8 +14,9 @@ documentation, generated output, and dependencies are counted separately.
 The earlier pass reached 32,747 lines; model-selected subagents then added 593,
 bringing the starting point for this follow-up to 33,340. Cleanup removed 879
 production lines, reaching 32,461. Shared agent messaging then added 1,073 net
-lines after integration, leaving **33,534 (17.5% below the original)**.
-**5,076 lines remain** to reach the target. The reduction includes 15 lines of
+lines after integration. Unifying input then removed another 40 lines, leaving
+**33,494 (17.6% below the original)**. **5,036 lines remain** to reach the target.
+The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
 
 Reproduce the production count with:
@@ -70,6 +71,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   endpoint maps without a second internal struct or duplicate endpoint state.
   MCP and Codex ports also use native framing, with per-message payload limits;
   startup success and failure share waiter cleanup.
+- User and agent input share one messaging ingress and receipt representation.
+  Acknowledgements use `message_id`; the legacy enqueue API, numeric sequence,
+  duplicate validation, and unreachable channel-free execution branches are gone.
 
 The “Analyze code duplication” findings were checked against actual callers.
 Extractions that added adapters without removing behavior were rejected.
@@ -104,9 +108,8 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The integrated messaging and cleanup worktree passes **1,055 core tests and
-141 TUI tests**. A subsequent focused run passes all 28 delegation/messaging
-tests, including the added async mixed-error regression and both schema limits.
+The combined cleanup and messaging worktree passes **1,056 core tests and
+141 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and

@@ -474,8 +474,12 @@ defmodule Alto.TUI.App do
             if task_running?(next, task_id) do
               clear_input_route(next, task_id)
             else
-              case Alto.Input.put(input, entry.text, entry.mode) do
-                {:ok, _id} ->
+              case Alto.Messaging.send(input,
+                     text: entry.text,
+                     delivery: entry.mode,
+                     in_reply_to: entry[:in_reply_to]
+                   ) do
+                {:ok, _receipt} ->
                   %{
                     next
                     | input_routes: Map.put(next.input_routes, task_id, route),

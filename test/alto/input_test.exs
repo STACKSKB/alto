@@ -18,19 +18,24 @@ defmodule Alto.InputTest do
 
   test "bounded channel retains messages until acknowledged by its sole owner" do
     {:ok, input} = Alto.Input.start_link(max_messages: 2, max_bytes: 5)
-    assert {:ok, first} = Alto.Input.put(input, "one", :follow_up)
-    assert {:ok, second} = Alto.Input.put(input, "hi", :steer)
-    assert {:error, :input_capacity} = Alto.Input.put(input, "x")
+
+    assert {:ok, %{message_id: first}} =
+             Alto.Messaging.send(input, text: "one", delivery: :follow_up)
+
+    assert {:ok, %{message_id: second}} = Alto.Messaging.send(input, text: "hi", delivery: :steer)
+    assert {:error, :input_capacity} = Alto.Messaging.send(input, text: "x")
     assert :ok = Alto.Input.claim(input)
     assert {:error, :input_in_use} = Alto.Input.take(input)
-    assert %{id: ^second} = Alto.Input.peek(input, [:steer])
-    assert %{id: ^first} = Alto.Input.peek(input, [:follow_up])
+    assert %{message_id: ^second} = Alto.Input.peek(input, [:steer])
+    assert %{message_id: ^first} = Alto.Input.peek(input, [:follow_up])
     assert :ok = Alto.Input.ack(input, second)
-    assert [%{id: ^first}] = Alto.Input.list(input)
+    assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, second)
+    assert [%{message_id: ^first}] = Alto.Input.list(input)
     assert :ok = Alto.Input.release(input)
-    assert {:ok, %{id: ^first, text: "one", mode: :follow_up}} = Alto.Input.take(input)
+    assert {:ok, %{message_id: ^first, text: "one", mode: :follow_up}} = Alto.Input.take(input)
+    assert {:ok, %{status: :taken}} = Alto.Input.receipt(input, first)
     assert :empty = Alto.Input.take(input)
-    assert {:ok, _} = Alto.Input.put(input, "12345")
+    assert {:ok, _} = Alto.Messaging.send(input, text: "12345")
   end
 
   test "follow-ups continue the same run under the original model budget" do
@@ -39,12 +44,12 @@ defmodule Alto.InputTest do
     {:ok, handle} = Alto.start("first", opts)
     assert_receive {:request, first, worker}, @receive_timeout
     assert List.last(first)["content"] == "first"
-    assert {:ok, _} = Alto.Input.put(input, "second", :follow_up)
+    assert {:ok, _} = Alto.Messaging.send(input, text: "second", delivery: :follow_up)
     send(worker, :answer)
     assert_receive {:request, second, next}, @receive_timeout
     assert List.last(second)["content"] == "second"
     assert Enum.any?(second, &(&1["content"] == "answer"))
-    assert {:ok, _} = Alto.Input.put(input, "third", :follow_up)
+    assert {:ok, _} = Alto.Messaging.send(input, text: "third", delivery: :follow_up)
     send(next, :answer)
     assert {:error, {:model_step_limit, 2}, result} = Alto.await(handle)
     assert result.model_requests == 2
@@ -55,7 +60,7 @@ defmodule Alto.InputTest do
     {:ok, input} = Alto.Input.start_link()
     {:ok, handle} = Alto.start("first", input: input, provider: {Provider, owner: self()})
     assert_receive {:request, _, worker}, @receive_timeout
-    {:ok, _} = Alto.Input.put(input, "change direction", :steer)
+    {:ok, _} = Alto.Messaging.send(input, text: "change direction", delivery: :steer)
     refute_receive {:request, _, _}, 20
     send(worker, :answer)
     assert_receive {:request, history, next}, @receive_timeout
@@ -79,7 +84,7 @@ defmodule Alto.InputTest do
 
   test "a rejected transcript insertion leaves the queued message available" do
     {:ok, input} = Alto.Input.start_link()
-    {:ok, _} = Alto.Input.put(input, String.duplicate("x", 1000))
+    {:ok, _} = Alto.Messaging.send(input, text: String.duplicate("x", 1000))
 
     assert {:error, {:transcript_limit, 500}, _} =
              Alto.run("first",
