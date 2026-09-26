@@ -110,6 +110,6 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
     assert_receive {:middleware, :tool_completed, "probe-a", "batch_probe"}
     assert_receive {:probe_started, "b"}
     assert_receive {:middleware, :tool_completed, "probe-b", "batch_probe"}
-    assert {:ok, %{output: :done}} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok, output: :done} = Alto.await(handle)
   end
 end

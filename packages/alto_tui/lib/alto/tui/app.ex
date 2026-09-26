@@ -327,7 +327,10 @@ defmodule Alto.TUI.App do
 
   # Completion is a runner notification, independent of its implementation.
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
-    finish_runner_message(state, :ref, ref, result)
+    case Enum.find(state.runs, fn {_id, run} -> run[:ref] == ref end) do
+      nil -> {:noreply, state, render?: false}
+      {local_id, _run} -> {:noreply, finish_runner_result(state, local_id, result)}
+    end
   end
 
   def handle_info(
@@ -373,23 +376,12 @@ defmodule Alto.TUI.App do
           state
         )
 
-  def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
-    finish_runner_message(state, :monitor, monitor, {:error, {:run_exited, reason}})
-  end
-
   def handle_info(:prepare_backend, state), do: {:noreply, backend_action(state, :prepare)}
 
   def handle_info(message, state) do
     case Backend.message(state, message) do
       :pass -> {:noreply, state, render?: false}
       result -> result
-    end
-  end
-
-  defp finish_runner_message(state, key, value, result) do
-    case Enum.find(state.runs, fn {_id, run} -> run[key] == value end) do
-      nil -> {:noreply, state, render?: false}
-      {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
     end
   end
 
@@ -776,24 +768,17 @@ defmodule Alto.TUI.App do
 
   defp maybe_context_window(options, _metadata), do: options
 
-  defp finish_runner_result(state, local_id, _run, result) do
-    {status, session_id, entry, notice, persistence} =
-      case result do
-        {:ok, completed} ->
-          {"completed", completed.session_id, nil, "run completed", completed.persistence}
-
-        {:error, reason, completed} ->
-          {"failed", completed.session_id, %{kind: :error, text: human_error(reason)},
-           "run failed", completed.persistence}
-
-        other ->
-          {"failed", nil, %{kind: :error, text: human_error(other)}, "run failed", nil}
-      end
+  defp finish_runner_result(state, local_id, result) do
+    completed? = result.status == :ok
+    status = if completed?, do: "completed", else: "failed"
+    notice = if completed?, do: "run completed", else: "run failed"
+    entry = if completed?, do: nil, else: %{kind: :error, text: human_error(result.reason)}
+    persistence = result.persistence
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
 
     finish_run(state, local_id, status,
-      session_id: session_id,
+      session_id: result.session_id,
       entry: entry,
       notice: notice,
       continue?: status == "completed" and not match?({:degraded, _}, persistence)
@@ -1391,11 +1376,6 @@ defmodule Alto.TUI.App do
   defp cancel_run(_run), do: :ok
 
   def drop_run(state, local_id) do
-    case Map.get(state.runs, local_id) do
-      %{monitor: monitor} -> Process.demonitor(monitor, [:flush])
-      _ -> :ok
-    end
-
     state
     |> Map.update!(:runs, &Map.delete(&1, local_id))
     |> clear_approvals(&(Map.get(&1, :local_id) == local_id))

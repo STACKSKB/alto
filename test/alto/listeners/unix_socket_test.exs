@@ -192,7 +192,7 @@ defmodule Alto.Listeners.UnixSocketTest do
              "v" => 1,
              "type" => "result",
              "run_id" => ^run_id,
-             "outcome" => "ok",
+             "status" => "ok",
              "output" => "finished",
              "model_requests" => 2
            } = List.last(envelopes)
@@ -241,7 +241,7 @@ defmodule Alto.Listeners.UnixSocketTest do
 
     {result, _buffer} = recv_until(socket, buffer, &(&1["type"] == "result"))
     assert result["run_id"] == run_id
-    assert result["outcome"] == "ok"
+    assert result["status"] == "ok"
   end
 
   test "cancels a run and observes the cancelled outcome", %{socket: socket, buffer: buffer} do
@@ -273,7 +273,7 @@ defmodule Alto.Listeners.UnixSocketTest do
     {_cancel_ok, buffer} = recv_ok(socket, buffer, "c-3")
 
     {result, _buffer} = recv_until(socket, buffer, &(&1["type"] == "result"))
-    assert result["outcome"] == "cancelled"
+    assert result["status"] == "cancelled"
     assert result["reason"] == "operator_stop"
   end
 

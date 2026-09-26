@@ -194,25 +194,8 @@ defmodule Alto.Protocol do
   def notification(id, {:overflow, run_id, domain, last_seq}, max),
     do: envelope("overflow", id, %{run_id: run_id, domain: domain, last_seq: last_seq}, max)
 
-  def notification(id, {:result, run_id, outcome, output, model_requests}, max) do
-    {outcome_name, reason_field} =
-      case outcome do
-        :ok -> {"ok", %{}}
-        {:error, reason} -> {"error", %{"reason" => reason}}
-        {:cancelled, reason} -> {"cancelled", %{"reason" => reason}}
-      end
-
-    payload =
-      %{
-        "run_id" => run_id,
-        "outcome" => outcome_name,
-        "model_requests" => model_requests
-      }
-      |> Map.merge(reason_field)
-      |> maybe_put("output", output)
-
-    envelope("result", id, payload, max)
-  end
+  def notification(id, {:result, run_id, result}, max),
+    do: envelope("result", id, Map.put(result, :run_id, run_id), max)
 
   defp event_object(seq, %Event{} = event) do
     %{
@@ -232,9 +215,6 @@ defmodule Alto.Protocol do
       {:error, :overflow}
     end
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   ## Client → server decoding
 

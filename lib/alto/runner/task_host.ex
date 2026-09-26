@@ -207,5 +207,5 @@ defmodule Alto.Runner.TaskHost do
   defp cancel_timer(timer), do: Process.cancel_timer(timer)
 
   defp failed(reason),
-    do: {:error, {:run_process_failed, reason}, %{Result.empty() | verdict: :unknown}}
+    do: Result.error({:run_process_failed, reason}, %{Result.empty() | verdict: :unknown})
 end

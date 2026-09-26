@@ -262,7 +262,8 @@ defmodule Alto.External.MCP.ClientTest do
        server: [command: server, cwd: :workspace, request_timeout: 5_000, startup_timeout: 5_000],
        approval: :never}
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("call it",
                cwd: root,
                provider: {ToolCallingProvider, []},

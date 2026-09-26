@@ -39,7 +39,7 @@ defmodule Alto.Runner.HistoryBoundariesTest do
     dir: dir
   } do
     opts = Keyword.put(opts, :loop, Alto.rule_loop(steps: List.duplicate("tick", 257)))
-    assert {:ok, result} = Alto.run(%{}, opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run(%{}, opts)
     assert length(result.output) == 257
     assert result.persistence == :ok
     assert {:ok, snapshot} = Alto.Session.transcript(result.session_id, session_dir: dir)
@@ -49,7 +49,10 @@ defmodule Alto.Runner.HistoryBoundariesTest do
   test "a configured history cap fails before dispatch", %{opts: opts} do
     opts = Keyword.merge(opts, loop: Alto.rule_loop(steps: ["tick"]), max_conversation_bytes: 1)
 
-    assert {:error, {:session_history_failed, {:conversation_storage_limit, %{max_bytes: 1}}}, _} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:session_history_failed, {:conversation_storage_limit, %{max_bytes: 1}}}
+           } =
              Alto.run(%{}, opts)
 
     refute_receive :tick

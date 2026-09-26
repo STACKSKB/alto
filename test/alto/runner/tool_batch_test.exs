@@ -76,7 +76,7 @@ defmodule Alto.Runner.ToolBatchTest do
     assert_receive {:started, "second", _}
     refute_receive {:history, _}, 30
     send(first, :release)
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = Alto.await(handle)
     assert_receive {:history, history}
 
     assert Enum.filter(history, &(&1["role"] == "tool")) |> Enum.map(& &1["tool_call_id"]) == [
@@ -91,7 +91,7 @@ defmodule Alto.Runner.ToolBatchTest do
   test "prepared and rejected calls retain source order and execute only admitted work" do
     for rejected <- [["a"], ["b"], ["a", "b"]] do
       calls = for id <- ["a", "b"], do: call(id, %{value: id, reject: id in rejected})
-      assert {:ok, result} = Alto.run("read", options(calls))
+      assert %Alto.Runner.Result{status: :ok} = result = Alto.run("read", options(calls))
 
       for id <- ["a", "b"] do
         assert_receive {:prepared, ^id}
@@ -130,7 +130,7 @@ defmodule Alto.Runner.ToolBatchTest do
     assert_receive {:started, "first", first}
     refute_receive {:started, "last", _}, 30
     send(first, :release)
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert_receive {:started, "last", _}
     refute_receive {:write, _}, 20
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.name == "write"))
@@ -146,7 +146,7 @@ defmodule Alto.Runner.ToolBatchTest do
     send(two, :release)
     assert_receive {:started, 3, three}
     send(three, :release)
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = Alto.await(handle)
   end
 
   test "cancellation terminates all dispatched workers and retains unknown outcomes" do
@@ -164,7 +164,7 @@ defmodule Alto.Runner.ToolBatchTest do
     ma = Process.monitor(a)
     mb = Process.monitor(b)
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} = result = Alto.await(handle)
     assert_receive {:DOWN, ^ma, :process, ^a, _}
     assert_receive {:DOWN, ^mb, :process, ^b, _}
     assert result.verdict == :unknown
@@ -172,7 +172,7 @@ defmodule Alto.Runner.ToolBatchTest do
   end
 
   test "effect admission uses the shared cap before dispatch" do
-    assert {:error, _, _} =
+    assert %Alto.Runner.Result{status: :error} =
              Alto.run(
                "read",
                options(
@@ -203,7 +203,7 @@ defmodule Alto.Runner.ToolBatchTest do
     assert_receive {:started, 1, one}
     refute_receive {:started, 2, _}, 30
     send(one, :release)
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = Alto.await(handle)
     assert_receive {:started, 2, _}
   end
 
@@ -221,7 +221,7 @@ defmodule Alto.Runner.ToolBatchTest do
     assert_receive {:started, 2, two}
     m1 = Process.monitor(one)
     m2 = Process.monitor(two)
-    assert {:error, _, result} = Alto.Runner.terminate(handle)
+    assert %Alto.Runner.Result{status: :error} = result = Alto.Runner.terminate(handle)
     assert result.verdict == :unknown
     assert_receive {:DOWN, ^m1, :process, ^one, _}
     assert_receive {:DOWN, ^m2, :process, ^two, _}
@@ -239,11 +239,14 @@ defmodule Alto.Runner.ToolBatchTest do
         checkpoint_version: "batch-v1"
       )
 
-    assert {:error, :approval_suspended, paused} = Alto.run("read", opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             paused = Alto.run("read", opts)
+
     assert_receive {:started, "before", _}
     refute_receive {:started, "after", _}, 20
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("read", Keyword.put(opts, :checkpoint, {paused.checkpoint, :approve}))
 
     assert result.output == "done"
@@ -262,7 +265,7 @@ defmodule Alto.Runner.ToolBatchTest do
         tool_timeout: 80
       )
 
-    assert {:ok, result} = Alto.run("read", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("read", opts)
     assert result.verdict == :unknown
     assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.call_id == "a"))
     assert Enum.any?(result.events, &(&1.type == :tool_completed and &1.data.call_id == "b"))
@@ -271,7 +274,8 @@ defmodule Alto.Runner.ToolBatchTest do
   test "oversize parallel results use the same uncertain classification as serial dispatch" do
     huge = String.duplicate("x", 10_000)
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                "read",
                options([call("big", %{value: huge})], max_tool_result_bytes: 100)

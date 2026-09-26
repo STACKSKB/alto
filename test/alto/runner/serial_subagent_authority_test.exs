@@ -142,7 +142,11 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
         loop: Alto.loop(NativeLoop)
       }
 
-      assert {:error, {:invalid_spawn_agents, :tool_scope_exceeded}, _result} =
+      assert %Alto.Runner.Result{
+               status: :error,
+               reason: {:invalid_spawn_agents, :tool_scope_exceeded}
+             } =
+               _result =
                Alto.run(
                  %{spawn: request},
                  loop: parent_loop(1),
@@ -157,7 +161,9 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
       loop: Alto.loop(NativeLoop)
     }
 
-    assert {:ok, result} = Alto.run(%{spawn: request}, loop: parent_loop(1), tools: [SafeTool])
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(%{spawn: request}, loop: parent_loop(1), tools: [SafeTool])
+
     assert result.output.output.value == :safe
   end
 
@@ -182,7 +188,8 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     grandchild = %{id: "grand", task: "must not run"}
     child_loop = Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 100))
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{spawn: %{id: "child", task: %{spawn: grandchild}, loop: child_loop}},
                loop: parent_loop(1),
@@ -190,11 +197,12 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
              )
 
     refute_received :grandchild_provider_called
-    assert result.output.error == {:invalid_spawn_agents, :max_depth_exceeded}
+    assert result.output.reason == {:invalid_spawn_agents, :max_depth_exceeded}
   end
 
   test "unknown child tool outcome makes the parent verdict unknown" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{
                  spawn: %{id: "child", task: %{name: :unknown_tool}, loop: Alto.loop(NativeLoop)}
@@ -224,13 +232,15 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
       "usage-two" => {UsageProvider, usage: %{"input_tokens" => 5, "output_tokens" => 7}}
     }
 
-    assert {:ok, single} =
+    assert %Alto.Runner.Result{status: :ok} =
+             single =
              Alto.run(%{spawn: one}, loop: parent_loop(1, ParentLoop, child_providers: providers))
 
     assert single.usage.input_tokens == 2
     assert single.usage.output_tokens == 3
 
-    assert {:ok, batch} =
+    assert %Alto.Runner.Result{status: :ok} =
+             batch =
              Alto.run(%{spawns: [one, two]},
                loop: parent_loop(1, BatchParentLoop, child_providers: providers)
              )

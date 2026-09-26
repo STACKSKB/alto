@@ -17,7 +17,8 @@ defmodule Alto.Runner.CallTest do
     ref = make_ref()
     send(self(), {:alto_cancel, ref, :stop_before_start})
 
-    assert {:error, {:cancelled, :stop_before_start}, result} =
+    assert %Alto.Runner.Result{status: :cancelled, reason: :stop_before_start} =
+             result =
              Alto.run("task", cancel_ref: ref, event_sink: &send(owner, {:event, &1}))
 
     assert result.verdict == :rejected_before_dispatch

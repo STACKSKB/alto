@@ -215,7 +215,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "the default model loop without a provider fails closed at its model effect" do
-    assert {:error, :provider_required, result} = Alto.run("hello")
+    assert %Alto.Runner.Result{status: :error, reason: :provider_required} =
+             result = Alto.run("hello")
 
     assert result.messages == []
     assert result.events == []
@@ -227,13 +228,16 @@ defmodule Alto.Runner.SerialRuleLoopTest do
       opts =
         Keyword.merge([loop: Alto.loop(CountingRuleLoop), tools: [RuleEchoTool]], prompt_opts)
 
-      assert {:error, :prompt_options_require_provider, result} = Alto.run("hello", opts)
+      assert %Alto.Runner.Result{status: :error, reason: :prompt_options_require_provider} =
+               result = Alto.run("hello", opts)
+
       assert result.events == []
     end
   end
 
   test "project instructions are inert model state for provider-less runs" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(["hello"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [RuleEchoTool],
@@ -246,7 +250,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   test "a rule loop performs a bounded tool workflow with no provider configured" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(["a", "b"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [RuleEchoTool],
@@ -273,7 +278,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   test "invoke_tool passes a native map to the tool with no JSON round-trip" do
     # A JSON round-trip would degrade the {1, 2} tuple to [1, 2]; a native
     # invocation must deliver the exact term.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(:tuple_args,
                loop: Alto.loop(NativeRuleLoop),
                tools: [ArgsEchoTool]
@@ -283,7 +289,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "invoke_tool rejects non-map arguments as a bounded tool failure" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(:bad_args,
                loop: Alto.loop(NativeRuleLoop),
                tools: [RuleEchoTool]
@@ -294,7 +301,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "invoke_tool crosses the host-owned approval boundary" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(:guarded,
                loop: Alto.loop(NativeRuleLoop),
                tools: [{GuardedEchoTool, test_pid: self()}]
@@ -308,7 +316,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   test "rule-loop invocations still cross the host-owned approval boundary on approval" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(["hello"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [{GuardedEchoTool, test_pid: parent}],
@@ -338,7 +347,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   test "a denial is a tool result and never performs the effect" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(["hello"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [{GuardedEchoTool, test_pid: parent}],
@@ -363,7 +373,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "prepared tools resolve before approval and execute the frozen value" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("frozen",
                loop: Alto.loop(StampRuleLoop),
                tools: [RuleStampTool],
@@ -387,7 +398,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   test "tool_completed carries the native value" do
     parent = self()
 
-    assert {:ok, _result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _result =
              Alto.run(["a"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [RuleEchoTool],
@@ -422,7 +434,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
     parent = self()
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _ =
              Alto.run("hi",
                tools: [RuleEchoTool, HiddenTool],
                model_tools: ["echo"],
@@ -450,7 +463,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
       def handle_event(_event, state, _spec), do: Alto.Transition.continue(state)
     end
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(HiddenInvokeLoop),
                tools: [RuleEchoTool, HiddenTool]
@@ -458,7 +472,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
     assert result.output == %{hid: true}
 
-    assert {:error, {:unknown_model_tool, "missing"}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:unknown_model_tool, "missing"}} =
+             _ =
              Alto.run("hi",
                tools: [RuleEchoTool],
                model_tools: ["missing"],

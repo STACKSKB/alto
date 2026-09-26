@@ -64,7 +64,8 @@ defmodule Alto.Runner.SerialContinuationTest do
       %{id: "second", task: "second result", loop: Alto.loop(Return)}
     ]
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{agents: agents}, loop: loop(), continuation_store: ledger)
 
     assert {:ok, batch} = Continuation.restore(ledger, result.output.journal)
@@ -102,18 +103,22 @@ defmodule Alto.Runner.SerialContinuationTest do
     assert_receive {:journal, identity}, 2_000
     assert_receive {:child_entered, _, _}, 2_000
     assert :ok = Alto.cancel(parent, :stop)
-    assert {:error, {:cancelled, :stop}, _} = Alto.await(parent, 8_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :stop} = _ = Alto.await(parent, 8_000)
     assert {:ok, batch} = Continuation.restore(ledger, identity)
     assert {:ok, %{results: [{"active", active}, {"queued", queued}]}} = Continuation.join(batch)
     assert active.status == :cancelled
-    assert queued.error == {:not_started, {:cancelled, :stop}}
+    assert queued.reason == {:not_started, {:cancelled, :stop}}
     refute_receive {:child_entered, _, _}, 50
   end
 
   test "unavailable journal prevents any child callback", %{ledger: ledger} do
     stop_supervised!(OperationLog)
 
-    assert {:error, {:invalid_spawn_agents, {:retained_unavailable, _}}, _} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:invalid_spawn_agents, {:retained_unavailable, _}}
+           } =
+             _ =
              Alto.run(%{agents: [%{id: "worker", task: "work"}]},
                loop: loop(),
                continuation_store: ledger,
@@ -126,7 +131,11 @@ defmodule Alto.Runner.SerialContinuationTest do
   test "unportable child output remains uncertain instead of becoming a successful join", %{
     ledger: ledger
   } do
-    assert {:error, {:subagent_journal_failed, {:child_pending, "worker", "dispatched"}}, result} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:subagent_journal_failed, {:child_pending, "worker", "dispatched"}}
+           } =
+             result =
              Alto.run(%{agents: [%{id: "worker", task: self(), loop: Alto.loop(Return)}]},
                loop: loop(),
                continuation_store: ledger
@@ -168,7 +177,10 @@ defmodule Alto.Runner.SerialContinuationTest do
 
     assert :erlang.suspend_process(worker)
     assert :ok = Alto.cancel(parent, :forced_stop)
-    assert {:error, {:cancelled, :forced_stop}, result} = Alto.await(parent, 8_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :forced_stop} =
+             result = Alto.await(parent, 8_000)
+
     assert result.verdict == :unknown
     assert {:degraded, errors} = result.persistence
     assert {:subagent_journal, {:child_pending, "stuck", "dispatched"}} in errors

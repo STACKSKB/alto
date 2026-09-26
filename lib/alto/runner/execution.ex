@@ -22,7 +22,7 @@ defmodule Alto.Runner.Execution do
 
   @doc "Build a terminal outcome when a scheduler stops before its next effect."
   def abort(context, {:cancelled, reason}), do: cancelled(reason, context)
-  def abort(context, reason), do: {:error, reason, result(context, nil, :error)}
+  def abort(context, reason), do: result(context, nil, :error, reason)
 
   alias Alto.Runner.Execution.{Call, Children, Events, Model, Operation}
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
@@ -42,13 +42,13 @@ defmodule Alto.Runner.Execution do
 
   @type provider_spec :: module() | {module(), keyword()}
   @type approval_spec :: module() | {module(), keyword()}
-  @type run_result :: {:ok, Result.t()} | {:error, term(), Result.t()}
+  @type run_result :: Result.t()
 
   @spec run(term(), keyword(), (Frame.t(), context() -> run_result())) :: run_result()
   def run(task, opts, scheduler) do
     case Alto.Runner.Execution.Parent.options(opts) do
       {:ok, opts} -> run_opened(task, opts, scheduler)
-      {:error, reason} -> {:error, reason, Result.empty()}
+      {:error, reason} -> Result.error(reason)
     end
   end
 
@@ -67,7 +67,7 @@ defmodule Alto.Runner.Execution do
              end
            end
          end) do
-      {:error, reason} -> {:error, reason, Result.empty()}
+      {:error, reason} -> Result.error(reason)
       outcome -> outcome
     end
   end
@@ -143,7 +143,7 @@ defmodule Alto.Runner.Execution do
                   resume_checkpoint(run, packet, decision, opts)
 
                 _ ->
-                  {:error, :invalid_checkpoint, result(run, nil, :error)}
+                  result(run, nil, :error, :invalid_checkpoint)
               end
 
             outcome = schedule_outcome(outcome, opts)
@@ -153,14 +153,14 @@ defmodule Alto.Runner.Execution do
           {:error, {:cancelled, reason}} ->
             event = Event.durable(:run_cancelled, %{reason: reason})
             Alto.Events.notify(Keyword.get(opts, :event_sink, fn _ -> :ok end), event)
-            {:error, {:cancelled, reason}, %{Result.empty(session) | events: [event]}}
+            Result.error({:cancelled, reason}, %{Result.empty(session) | events: [event]})
 
           {:error, reason} ->
-            {:error, reason, Result.empty(session)}
+            Result.error(reason, Result.empty(session))
         end
 
       {:error, reason} ->
-        {:error, reason, Result.empty(nil)}
+        Result.error(reason)
     end
   end
 
@@ -189,7 +189,7 @@ defmodule Alto.Runner.Execution do
         {:done, cancelled(reason, run)}
 
       {_, {:error, reason}} ->
-        {:done, {:error, reason, result(run, nil, :error)}}
+        {:done, result(run, nil, :error, reason)}
 
       {:continue, :ok} ->
         run = activate_agents(run)
@@ -214,14 +214,14 @@ defmodule Alto.Runner.Execution do
       {:ok, next} ->
         case checkpoint_call(fn -> capture.(next) end, next) do
           {:ok, packet} ->
-            {:done, {:error, reason, %{result(next, nil, :checkpoint) | checkpoint: packet}}}
+            {:done, %{result(next, nil, :checkpoint, reason) | checkpoint: packet}}
 
           {:error, reason} ->
-            {:done, {:error, reason, result(next, nil, :error)}}
+            {:done, result(next, nil, :error, reason)}
         end
 
       {:error, reason, next} ->
-        {:done, {:error, reason, result(next, nil, :error)}}
+        {:done, result(next, nil, :error, reason)}
     end
   end
 
@@ -241,7 +241,7 @@ defmodule Alto.Runner.Execution do
           do_execute(effects, run, terminal)
 
         {:error, reason} ->
-          {:done, {:error, reason, result(run, nil, :error)}}
+          {:done, result(run, nil, :error, reason)}
 
         entry ->
           case RunTranscript.append(run, input_message(entry)) do
@@ -264,26 +264,26 @@ defmodule Alto.Runner.Execution do
               finish_effect({:event, event, next}, rest, next, :continue)
 
             {:error, reason, next} ->
-              {:done, {:error, reason, result(next, nil, :error)}}
+              {:done, result(next, nil, :error, reason)}
           end
       end
     else
       do_execute(effects, run, terminal)
     end
   catch
-    :exit, reason -> {:done, {:error, {:input_unavailable, reason}, result(run, nil, :error)}}
+    :exit, reason -> {:done, result(run, nil, :error, {:input_unavailable, reason})}
   end
 
   defp input_message(entry),
     do: %{"role" => "user", "content" => Alto.Messaging.message_text(entry)}
 
-  defp do_execute([], run, {:stop, output}), do: {:done, {:ok, result(run, output, :success)}}
+  defp do_execute([], run, {:stop, output}), do: {:done, result(run, output, :success)}
 
   defp do_execute([], run, {:error, reason}),
-    do: {:done, {:error, reason, result(run, nil, :error)}}
+    do: {:done, result(run, nil, :error, reason)}
 
   defp do_execute([], run, :continue),
-    do: {:done, {:error, :loop_stalled, result(run, nil, :error)}}
+    do: {:done, result(run, nil, :error, :loop_stalled)}
 
   defp do_execute(
          [
@@ -307,7 +307,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp do_execute([%Effect{kind: :run_tools} | _], run, _terminal),
-    do: {:done, {:error, :invalid_tool_batch, result(run, nil, :error)}}
+    do: {:done, result(run, nil, :error, :invalid_tool_batch)}
 
   defp do_execute(
          [%Effect{kind: :spawn_agents, data: data} | rest],
@@ -443,14 +443,14 @@ defmodule Alto.Runner.Execution do
   end
 
   defp ungranted_checkpoint(run, reason) do
-    value = result(run, nil, :error)
+    value = result(run, nil, :error, reason)
 
     value =
       if run.child_resume,
         do: %{value | checkpoint: %{"kind" => "child", "ungranted" => true}},
         else: value
 
-    {:error, reason, value}
+    value
   end
 
   defp claim_child_checkpoint(%{child_resume: nil}, _decision), do: :ok
@@ -490,21 +490,22 @@ defmodule Alto.Runner.Execution do
   defp parent_outcome({:error, reason, run}),
     do: ungranted_parent(abort(run, reason))
 
-  defp parent_outcome({:done, {:error, _, _} = outcome}), do: ungranted_parent(outcome)
+  defp parent_outcome({:done, %Result{status: status} = outcome}) when status != :ok,
+    do: ungranted_parent(outcome)
 
   defp parent_outcome({:suspended, reason, identity, run}) do
     value = %{
-      result(run, nil, :checkpoint)
+      result(run, nil, :checkpoint, {:children_pending, reason})
       | checkpoint: %{"kind" => "parent", "continuation" => identity}
     }
 
-    {:done, {:error, {:children_pending, reason}, value}}
+    {:done, value}
   end
 
   defp parent_outcome(other), do: other
 
-  defp ungranted_parent({:error, reason, value}) do
-    {:done, {:error, reason, %{value | checkpoint: %{"kind" => "parent", "ungranted" => true}}}}
+  defp ungranted_parent(value) do
+    {:done, %{value | checkpoint: %{"kind" => "parent", "ungranted" => true}}}
   end
 
   defp call_policy(fun, run) do
@@ -1303,7 +1304,7 @@ defmodule Alto.Runner.Execution do
 
   defp cancelled(reason, run) do
     run = Events.record(run, Event.durable(:run_cancelled, %{reason: reason}))
-    {:error, {:cancelled, reason}, result(run, nil, :cancelled)}
+    result(run, nil, :cancelled, {:cancelled, reason})
   end
 
   defp normalize_session_opt(nil), do: {:ok, nil}
@@ -1386,11 +1387,12 @@ defmodule Alto.Runner.Execution do
 
   defp runtime_context(run), do: Map.take(run, [:session_id, :cwd, :agent_identity])
 
-  defp result(run, output, disposition) do
+  defp result(run, output, disposition, reason \\ nil) do
     run = merge_async(run, if(disposition == :checkpoint, do: :collect, else: :close))
     messages = Enum.reverse(run.messages_rev)
 
-    %Result{
+    value = %Result{
+      status: :ok,
       output: output,
       loop_state: run.loop_state,
       messages: messages,
@@ -1413,6 +1415,8 @@ defmodule Alto.Runner.Execution do
       usage: Usage.to_map(run.usage),
       persistence: Result.persistence_status(Enum.reverse(run.persistence_errors))
     }
+
+    if disposition == :success, do: value, else: Result.error(reason, value)
   end
 
   defp final_verdict(:empty, :success), do: :completed

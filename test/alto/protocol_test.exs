@@ -140,44 +140,28 @@ defmodule Alto.ProtocolTest do
                decode_line(line)
     end
 
-    test "result covers all three outcomes and omits a nil output" do
-      assert {:ok, line} =
-               Protocol.notification(
-                 "s-9",
-                 {:result, "run-41", :ok, "finished", 3},
-                 @max_line_bytes
-               )
-
-      assert decode_line(line) == %{
-               "v" => 1,
-               "type" => "result",
-               "id" => "s-9",
-               "run_id" => "run-41",
-               "outcome" => "ok",
-               "output" => "finished",
-               "model_requests" => 3
-             }
+    test "result preserves structured failures through JSON encoding" do
+      result = %{
+        status: :error,
+        reason: {:model_request_failed, {:http_error, 402, %{message: "quota"}}},
+        output: nil,
+        model_requests: 1
+      }
 
       assert {:ok, line} =
-               Protocol.notification(
-                 "s-10",
-                 {:result, "run-41", {:error, :loop_stalled}, nil, 1},
-                 @max_line_bytes
-               )
+               Protocol.notification("s-10", {:result, "run-41", result}, @max_line_bytes)
 
       envelope = decode_line(line)
-      assert envelope["outcome"] == "error"
-      assert envelope["reason"] == "loop_stalled"
-      refute Map.has_key?(envelope, "output")
+      assert envelope["status"] == "error"
 
-      assert {:ok, line} =
-               Protocol.notification(
-                 "s-11",
-                 {:result, "run-41", {:cancelled, :user}, nil, 2},
-                 @max_line_bytes
-               )
+      assert envelope["reason"] == %{
+               "$tuple" => [
+                 "model_request_failed",
+                 %{"$tuple" => ["http_error", 402, %{"message" => "quota"}]}
+               ]
+             }
 
-      assert %{"outcome" => "cancelled", "reason" => "user"} = decode_line(line)
+      assert envelope["output"] == nil
     end
 
     test "error envelopes can omit a client id" do

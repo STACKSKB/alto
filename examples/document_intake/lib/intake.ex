@@ -263,13 +263,13 @@ defmodule DocumentIntake do
         ]
 
         case Alto.run(extraction_prompt(record), run_opts) do
-          {:ok, result} when is_map(result) ->
+          %Alto.Runner.Result{status: :ok} = result ->
             case JSON.decode(Map.get(result, :output, "")) do
               {:ok, candidate} -> apply_candidate(record, candidate, "alto")
               _ -> {:error, :invalid_llm_result}
             end
 
-          {:error, reason, _result} ->
+          %Alto.Runner.Result{reason: reason} ->
             {:error, {:llm_failed, reason}}
 
           _ ->

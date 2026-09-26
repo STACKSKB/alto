@@ -92,7 +92,7 @@ defmodule Alto.Runner.ContextPressureFaultTest do
         max_compactions: 3
       )
 
-    assert {:ok, result} = Alto.run("current", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("current", opts)
     assert_receive :reduction_attempted
     refute_receive :reduction_attempted, 20
     assert_receive {:provider_request, _}
@@ -110,7 +110,9 @@ defmodule Alto.Runner.ContextPressureFaultTest do
         max_compactions: 3
       )
 
-    assert {:error, {:context_limit, _}, result} = Alto.run("current", opts)
+    assert %Alto.Runner.Result{status: :error, reason: {:context_limit, _}} =
+             result = Alto.run("current", opts)
+
     assert_receive :reduction_attempted
     refute_receive :reduction_attempted, 20
     refute_receive {:provider_request, _}, 20
@@ -128,7 +130,7 @@ defmodule Alto.Runner.ContextPressureFaultTest do
         max_compactions: 2
       )
 
-    assert {:ok, result} = Alto.run("current", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("current", opts)
     assert_receive {:reduced_to, 500}
     assert_receive {:reduced_to, 5}
     refute_receive {:reduced_to, _}, 20
@@ -152,7 +154,10 @@ defmodule Alto.Runner.ContextPressureFaultTest do
     assert_receive {:reducer_started, reducer}, 3_000
     reducer_ref = Process.monitor(reducer)
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             result = Alto.await(handle)
+
     assert_receive {:DOWN, ^reducer_ref, :process, ^reducer, _}
     refute_receive {:provider_request, _}, 20
     assert result.model_requests == 0

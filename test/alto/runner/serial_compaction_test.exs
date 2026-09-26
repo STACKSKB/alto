@@ -158,7 +158,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "batch settlement records earlier tool outcomes before later compaction", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                String.duplicate("t", 800),
                base_opts(
@@ -195,7 +196,8 @@ defmodule Alto.Runner.SerialCompactionTest do
 
   test "one compaction recovers the run and records the summary fact", %{dir: dir} do
     # A large task message fills the budget so the final answer overflows it.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                String.duplicate("t", 200),
                base_opts(
@@ -232,7 +234,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "a caller composes a domain-specific context reducer", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                String.duplicate("t", 200),
                base_opts(
@@ -254,7 +257,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "compaction cannot make an extra provider call past the global budget", %{dir: dir} do
-    assert {:error, _, result} =
+    assert %Alto.Runner.Result{status: :error} =
+             result =
              Alto.run(
                String.duplicate("t", 200),
                base_opts(
@@ -273,7 +277,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "the default permits one compaction", %{dir: dir} do
-    assert {:error, {:transcript_limit, 400}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
+             result =
              Alto.run("go",
                provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
                tools: [EchoTool],
@@ -289,7 +294,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "an explicit limit permits repeat reductions and stops at that limit", %{dir: dir} do
-    assert {:error, {:transcript_limit, 800}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 800}} =
+             result =
              Alto.run("go",
                provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
                tools: [EchoTool],
@@ -468,7 +474,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "handoff strategy creates structured artifacts and a generated next step", %{dir: dir} do
     owner = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(String.duplicate("t", 300),
                provider: {HandoffProvider, []},
                event_sink: fn event -> send(owner, {:handoff_event, event}) end,
@@ -512,7 +519,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   test "compaction stays off unless enabled", %{dir: dir} do
     test_pid = self()
 
-    assert {:error, {:transcript_limit, 400}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
+             _result =
              Alto.run("go",
                provider: {ScriptedProvider, summary: :disabled, after_tool: :tool_call},
                tools: [EchoTool],
@@ -526,7 +534,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "compaction without a session fails closed", %{dir: dir} do
-    assert {:error, :compaction_requires_session, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: :compaction_requires_session} =
+             _result =
              Alto.run(
                "go",
                base_opts(max_transcript_bytes: 200, compaction: true, session_dir: dir)
@@ -534,7 +543,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "a failed summary degrades to the transcript error with an event", %{dir: dir} do
-    assert {:error, {:transcript_limit, 500}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 500}} =
+             result =
              Alto.run("go",
                provider: {ScriptedProvider, summary: {:error, :kaput}, after_tool: :tool_call},
                tools: [EchoTool],
@@ -548,7 +558,8 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "malformed compaction configuration fails at construction" do
-    assert {:error, {:invalid_compaction, _}, _} = Alto.run("go", base_opts(compaction: "yes"))
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_compaction, _}} =
+             Alto.run("go", base_opts(compaction: "yes"))
   end
 
   test "oversized reduction input fails intact and a raised bound includes early requirements", %{

@@ -137,7 +137,8 @@ defmodule Alto.Runner.SerialExposureTest do
   test "parent with model_tools: [] exposes no schemas in descendants", %{dir: dir} do
     test_pid = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{spawn: %{id: "sub-1", task: "child"}},
                loop: parent_loop(1),
                provider: {CaptureProvider, test_pid: test_pid},
@@ -159,7 +160,8 @@ defmodule Alto.Runner.SerialExposureTest do
 
     # Parent exposes only echo; child explicitly lists both tools and asks
     # for both, but the effective child exposure stays {echo}.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{
                  spawn: %{
@@ -188,7 +190,8 @@ defmodule Alto.Runner.SerialExposureTest do
     test_pid = self()
 
     # Provider tries to call hidden though only echo is exposed.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                provider: {HiddenCallProvider, []},
                tools: [EchoTool, {GuardedHiddenTool, test_pid: test_pid}],
@@ -207,7 +210,8 @@ defmodule Alto.Runner.SerialExposureTest do
   end
 
   test "native hidden-tool invocation still uses runtime capabilities", %{dir: _dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(HiddenInvokeLoop),
                tools: [EchoTool, HiddenTool],
@@ -233,7 +237,7 @@ defmodule Alto.Runner.SerialExposureTest do
       end
     end
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run(
                %{spawn: %{id: "sub-1", task: "hi", profile_key: "capture"}},
                loop:
@@ -256,7 +260,8 @@ defmodule Alto.Runner.SerialExposureTest do
   test "named nil providers inherit and unknown profiles fail before model dispatch", %{dir: dir} do
     test_pid = self()
 
-    assert {:ok, inherited} =
+    assert %Alto.Runner.Result{status: :ok} =
+             inherited =
              Alto.run(%{spawn: %{id: "sub-1", task: "hi", profile_key: "inherit"}},
                loop: parent_loop(1, child_providers: %{"inherit" => nil}),
                provider: {CaptureProvider, test_pid: test_pid},
@@ -267,13 +272,14 @@ defmodule Alto.Runner.SerialExposureTest do
     assert {:completed, %{status: :ok}} = inherited.output
     assert_receive {:seen_tools, []}
 
-    assert {:ok, rejected} =
+    assert %Alto.Runner.Result{status: :ok} =
+             rejected =
              Alto.run(%{spawn: %{id: "sub-2", task: "hi", profile_key: "missing"}},
                loop: parent_loop(1, child_providers: %{}),
                provider: {CaptureProvider, test_pid: test_pid}
              )
 
-    assert {:failed, %{status: :error, error: :unknown_profile}} = rejected.output
+    assert {:failed, %{status: :error, reason: :unknown_profile}} = rejected.output
     refute_receive {:seen_tools, _}
   end
 
@@ -310,7 +316,8 @@ defmodule Alto.Runner.SerialExposureTest do
     end
 
     # Approval still gates the exposed tool inside the child.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{spawn: %{id: "sub-1", task: "hi"}},
                loop: parent_loop(1),
                provider: {EchoCallProvider, []},

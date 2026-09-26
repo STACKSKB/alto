@@ -109,7 +109,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                state_dir: state_dir,
                diagnoser: fn checkout, _report ->
                  File.write!(Path.join(checkout, "REPAIR.md"), "generated\n")
-                 {:ok, %{deterministic: true}}
+                 %Alto.Runner.Result{status: :ok}
                end,
                tests: ["sh", "-c", "exit 0"]
              )
@@ -126,7 +126,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                state_dir: state_dir,
                diagnoser: fn checkout, _report ->
                  File.write!(Path.join(checkout, "REPAIR-2.md"), "second\n")
-                 {:ok, %{deterministic: true}}
+                 %Alto.Runner.Result{status: :ok}
                end,
                tests: ["sh", "-c", "exit 0"]
              )
@@ -143,7 +143,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                state_dir: state_dir,
                diagnoser: fn checkout, _report ->
                  File.write!(Path.join(checkout, "REPAIR-2.md"), "second\n")
-                 {:ok, %{deterministic: true}}
+                 %Alto.Runner.Result{status: :ok}
                end,
                tests: ["sh", "-c", "echo rerun"]
              )
@@ -245,7 +245,7 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
                state_dir: state_dir,
                diagnoser: fn checkout, _report ->
                  File.write!(Path.join(checkout, "README.md"), "changed\n")
-                 {:ok, %{deterministic: true}}
+                 %Alto.Runner.Result{status: :ok}
                end,
                tests: ["sh", "-c", "exit 7"]
              )

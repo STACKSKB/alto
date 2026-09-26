@@ -24,7 +24,7 @@ defmodule Alto.Runner.ResumeContextObservationTest do
   defp compacted?(result), do: Enum.any?(result.events, &(&1.type == :context_compacted))
 
   defp seed(opts) do
-    assert {:ok, result} = Alto.run("build authored history", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("build authored history", opts)
     assert result.model_requests == 4
     refute compacted?(result)
 
@@ -40,7 +40,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     opts: opts
   } do
     snapshot = seed(opts)
-    assert {:ok, result} = Alto.run("continue", Keyword.put(opts, :resume, snapshot))
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("continue", Keyword.put(opts, :resume, snapshot))
+
     refute compacted?(result)
     assert Enum.take(result.messages, length(snapshot["messages"])) == snapshot["messages"]
     assert result.model_requests == 1
@@ -48,7 +51,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
 
   test "Alto.resume forwards observed usage rather than just transcript bytes", %{opts: opts} do
     snapshot = seed(opts)
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", opts)
+
     refute compacted?(result)
     assert Enum.take(result.messages, length(snapshot["messages"])) == snapshot["messages"]
   end
@@ -62,7 +68,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
       )
 
     seed(opts)
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", opts)
+
     assert compacted?(result)
   end
 
@@ -70,7 +79,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
     opts = Keyword.put(opts, :session_history, :settled)
     snapshot = seed(opts)
     assert is_map(snapshot["context_observation"])
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", opts)
+
     refute compacted?(result)
   end
 
@@ -93,7 +105,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
         end
 
       snapshot = Map.put(snapshot, "context_observation", broken)
-      assert {:ok, result} = Alto.run("continue", Keyword.put(local, :resume, snapshot))
+
+      assert %Alto.Runner.Result{status: :ok} =
+               result = Alto.run("continue", Keyword.put(local, :resume, snapshot))
+
       assert compacted?(result)
     end
   end
@@ -106,7 +121,9 @@ defmodule Alto.Runner.ResumeContextObservationTest do
         |> Keyword.put(:provider, {Provider, model: "test-model", final_usage: usage})
 
       seed(local)
-      assert {:ok, result} = Alto.resume(local[:session], "continue", local)
+
+      assert %Alto.Runner.Result{status: :ok} =
+               result = Alto.resume(local[:session], "continue", local)
 
       assert compacted?(result),
              "invalid usage must not authorize a smaller estimate: #{inspect(usage)}"
@@ -149,7 +166,9 @@ defmodule Alto.Runner.ResumeContextObservationTest do
             {Keyword.put(local, :loop, loop), snapshot}
         end
 
-      assert {:ok, result} = Alto.run("continue", Keyword.put(local, :resume, history))
+      assert %Alto.Runner.Result{status: :ok} =
+               result = Alto.run("continue", Keyword.put(local, :resume, history))
+
       assert compacted?(result), "changed #{change} must invalidate observed usage"
     end
   end

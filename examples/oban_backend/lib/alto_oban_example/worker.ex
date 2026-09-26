@@ -4,13 +4,13 @@ defmodule AltoObanExample.Worker do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"run" => run, "payload" => %{"body" => body}}}) do
     with {:ok, run_options} <- AltoObanExample.Runs.fetch(run),
-         {:ok, _result} <- Alto.run(body, run_options) do
+         %Alto.Runner.Result{status: :ok} <- Alto.run(body, run_options) do
       :ok
     else
-      {:error, _reason, %{outcome: :unknown}} ->
+      %Alto.Runner.Result{verdict: :unknown} ->
         {:discard, "unknown outcome; reconcile the operation before restoring work"}
 
-      {:error, reason, _result} ->
+      %Alto.Runner.Result{reason: reason} ->
         {:error, inspect(reason)}
 
       {:error, reason} ->

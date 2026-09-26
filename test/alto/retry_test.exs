@@ -34,11 +34,11 @@ defmodule Alto.RetryTest do
         )
 
       if stream do
-        assert {:error, :host_transient, _} = result
+        assert %Alto.Runner.Result{status: :error, reason: :host_transient} = result
         refute_receive :retry_decided
         assert Agent.get(counter, & &1) == 1
       else
-        assert {:ok, _} = result
+        assert %Alto.Runner.Result{status: :ok} = result
         assert_receive :retry_decided
         assert Agent.get(counter, & &1) == 2
       end

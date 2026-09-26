@@ -59,7 +59,7 @@ defmodule Alto.PolicyCompositionTest do
 
   test "limits are resolved once per run instead of at every child projection" do
     loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self()})
-    assert {:ok, _} = Alto.run(:batch, provider: nil, loop: loop)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run(:batch, provider: nil, loop: loop)
     assert_receive {:limits_called, _}
     assert_receive {:admission_called, _}
     refute_receive {:limits_called, _}
@@ -77,14 +77,14 @@ defmodule Alto.PolicyCompositionTest do
       Alto.cancel(handle, :test_cancel)
       result = Alto.await(handle, 1_000)
       assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 1_000
-      assert {:error, {:cancelled, :test_cancel}, _} = result
+      assert %Alto.Runner.Result{status: :cancelled, reason: :test_cancel} = result
     end
   end
 
   test "child policy resolution respects the callback deadline" do
     loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: :limits})
 
-    assert {:error, {:participant_failed, :timeout}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
              Alto.run(:batch, provider: nil, loop: loop, tool_timeout: 50)
 
     assert_receive {:limits_called, worker}
@@ -93,10 +93,13 @@ defmodule Alto.PolicyCompositionTest do
 
   test "custom context policy is invoked and its rejection prevents dispatch" do
     loop = Alto.default_loop(context: {Context, owner: self()})
-    assert {:error, :host_context_rejected, _} = Alto.run("hello", loop: loop, provider: Provider)
+
+    assert %Alto.Runner.Result{status: :error, reason: :host_context_rejected} =
+             Alto.run("hello", loop: loop, provider: Provider)
+
     assert_receive {:checked, [_ | _]}
 
-    assert {:error, :invalid_context_policy, _} =
+    assert %Alto.Runner.Result{status: :error, reason: :invalid_context_policy} =
              Alto.run("hello",
                loop: Alto.default_loop(context: :not_a_policy),
                provider: Provider
@@ -137,7 +140,7 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   test "malformed compaction lists return configuration errors before schema validation" do
-    assert {:error, {:invalid_compaction, [:invalid]}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_compaction, [:invalid]}} =
              Alto.run("hello", provider: Provider, compaction: [:invalid])
   end
 end

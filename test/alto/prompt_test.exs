@@ -56,7 +56,8 @@ defmodule Alto.PromptTest do
   end
 
   test "chat and coding builders share the same runtime prompt boundary" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("say hello",
                loop: Alto.chat_loop(),
                prompt: {Alto.Prompts.Chat, identity: "Be pleasantly concise."},
@@ -118,7 +119,7 @@ defmodule Alto.PromptTest do
     assert {:ok, nil} = Alto.Prompt.build(nil, %{})
     assert {:ok, nil} = Alto.Prompt.build("", %{})
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run("hello", provider: {AnswerProvider, test_pid: self()}, prompt: "literal")
 
     assert_receive {:request, %{messages: [%{"role" => "system", "content" => "literal"} | _]}}

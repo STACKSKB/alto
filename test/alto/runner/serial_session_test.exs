@@ -52,7 +52,8 @@ defmodule Alto.Runner.SerialSessionTest do
   defp provider_opts, do: [provider: {HistoryProvider, test_pid: self()}, tools: []]
 
   test "a new session persists the run and reports its ids", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("first task", provider_opts() ++ [session: :new, session_dir: dir])
 
     assert result.session_id =~ ~r/\Asess-/
@@ -68,7 +69,7 @@ defmodule Alto.Runner.SerialSessionTest do
     assert started["provider"] == "Elixir.Alto.Runner.SerialSessionTest.HistoryProvider"
 
     completed = List.last(records)
-    assert completed["outcome"] == "ok"
+    assert completed["status"] == "ok"
     assert completed["model_requests"] == 1
 
     assert {:ok, %{"messages" => messages}} =
@@ -78,13 +79,15 @@ defmodule Alto.Runner.SerialSessionTest do
   end
 
   test "resume continues history with caller-owned composition", %{dir: dir} do
-    assert {:ok, first} =
+    assert %Alto.Runner.Result{status: :ok} =
+             first =
              Alto.run("first task", provider_opts() ++ [session: :new, session_dir: dir])
 
     assert {:provider_request, first_messages} = receive_request()
     assert [%{"role" => "user", "content" => "first task"}] = first_messages
 
-    assert {:ok, second} =
+    assert %Alto.Runner.Result{status: :ok} =
+             second =
              Alto.resume(first.session_id, "follow-up", provider_opts() ++ [session_dir: dir])
 
     assert second.session_id == first.session_id
@@ -115,7 +118,8 @@ defmodule Alto.Runner.SerialSessionTest do
   end
 
   test "construction failures still report the session id", %{dir: dir} do
-    assert {:error, _reason, result} =
+    assert %Alto.Runner.Result{status: :error, reason: _reason} =
+             result =
              Alto.run("task",
                provider: {HistoryProvider, test_pid: self()},
                tools: [Nope.NotAModule],
@@ -127,18 +131,22 @@ defmodule Alto.Runner.SerialSessionTest do
   end
 
   test "invalid session options fail closed at construction", %{dir: dir} do
-    assert {:error, {:invalid_session_id, "../evil"}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_session_id, "../evil"}} =
+             _result =
              Alto.run("task", provider_opts() ++ [session: "../evil", session_dir: dir])
 
-    assert {:error, {:invalid_session_option, 42}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_session_option, 42}} =
+             _result =
              Alto.run("task", provider_opts() ++ [session: 42, session_dir: dir])
 
-    assert {:error, {:invalid_session_dir, 42}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_session_dir, 42}} =
+             _result =
              Alto.run("task", provider_opts() ++ [session_dir: 42])
   end
 
   test "an explicit session id names its own log", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("task", provider_opts() ++ [session: "sess-explicit", session_dir: dir])
 
     assert result.session_id == "sess-explicit"
@@ -146,7 +154,9 @@ defmodule Alto.Runner.SerialSessionTest do
   end
 
   test "unpersisted runs stay silent by default", %{dir: dir} do
-    assert {:ok, result} = Alto.run("task", provider_opts() ++ [session_dir: dir])
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("task", provider_opts() ++ [session_dir: dir])
+
     assert result.session_id == nil
     assert result.run_id =~ ~r/\Arun-/
     refute File.exists?(dir)
@@ -157,7 +167,8 @@ defmodule Alto.Runner.SerialSessionTest do
     File.mkdir_p!(dir)
     File.write!(blocker, "not a directory")
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                "task",
                provider_opts() ++ [session: :new, session_dir: Path.join(blocker, "sub")]
@@ -170,7 +181,8 @@ defmodule Alto.Runner.SerialSessionTest do
   end
 
   test "simultaneous resumes report a stale writer instead of overwriting it", %{dir: dir} do
-    assert {:ok, first} =
+    assert %Alto.Runner.Result{status: :ok} =
+             first =
              Alto.run("first", provider_opts() ++ [session: :new, session_dir: dir])
 
     assert {:provider_request, _messages} = receive_request()
@@ -193,12 +205,17 @@ defmodule Alto.Runner.SerialSessionTest do
     send(right_provider, :continue)
 
     results = [Task.await(left), Task.await(right)]
-    assert Enum.count(results, &match?({:ok, %{persistence: :ok}}, &1)) == 1
+
+    assert Enum.count(results, &match?(%Alto.Runner.Result{status: :ok, persistence: :ok}, &1)) ==
+             1
 
     assert [conflicted] =
-             Enum.filter(results, &match?({:ok, %{persistence: {:degraded, _}}}, &1))
+             Enum.filter(
+               results,
+               &match?(%Alto.Runner.Result{status: :ok, persistence: {:degraded, _}}, &1)
+             )
 
-    assert {:ok, %{persistence: {:degraded, errors}}} = conflicted
+    assert %Alto.Runner.Result{status: :ok, persistence: {:degraded, errors}} = conflicted
     assert Enum.any?(errors, &match?({:session_conflict, _}, &1))
 
     assert {:ok, %{"revision" => 2, "messages" => committed}} =

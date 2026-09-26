@@ -28,6 +28,7 @@ defmodule Alto.Runner.Execution.SessionTest do
 
   defp result(loop_state \\ %{}) do
     %Result{
+      status: :ok,
       output: "done",
       loop_state: loop_state,
       messages: [%{"role" => "user", "content" => "task"}],
@@ -44,7 +45,7 @@ defmodule Alto.Runner.Execution.SessionTest do
   test "persists transcript and completion", %{dir: dir} do
     id = "sess-events"
     s = state(dir, id)
-    assert {:ok, %{persistence: :ok}} = ExecutionSession.persist_outcome(s, {:ok, result()})
+    assert %Result{status: :ok, persistence: :ok} = ExecutionSession.persist_outcome(s, result())
     assert {:ok, records} = DurableSession.read(id, session_dir: dir)
     assert Enum.count(records, &(&1["type"] == "completed")) == 1
     assert {:ok, transcript} = DurableSession.transcript(id, session_dir: dir)
@@ -55,8 +56,8 @@ defmodule Alto.Runner.Execution.SessionTest do
     id = "sess-suspended"
     s = state(dir, id, checkpoint_resume: true)
 
-    assert {:error, :approval_suspended, %{persistence: :ok}} =
-             ExecutionSession.persist_outcome(s, {:error, :approval_suspended, result(nil)})
+    assert %Result{status: :suspended, reason: :approval_suspended, persistence: :ok} =
+             ExecutionSession.persist_outcome(s, Result.error(:approval_suspended, result(nil)))
 
     assert {:ok, records} = DurableSession.read(id, session_dir: dir)
     assert Enum.count(records, &(&1["type"] == "completed")) == 1
@@ -69,7 +70,7 @@ defmodule Alto.Runner.Execution.SessionTest do
 
     degraded = %{result() | persistence: {:degraded, [:journal_failed]}}
 
-    assert {:ok, %{persistence: {:degraded, [:journal_failed]}}} =
-             ExecutionSession.persist_outcome(s, {:ok, degraded})
+    assert %Result{status: :ok, persistence: {:degraded, [:journal_failed]}} =
+             ExecutionSession.persist_outcome(s, degraded)
   end
 end

@@ -59,7 +59,8 @@ defmodule Alto.ReleaseRegressionTest do
   end
 
   test "strict provider correlation preserves call ids while minting host operation ids" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(:go,
                loop: Alto.loop(StrictLoop),
                tools: [EchoTool],

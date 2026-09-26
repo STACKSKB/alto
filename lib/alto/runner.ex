@@ -12,7 +12,7 @@ defmodule Alto.Runner do
   """
 
   alias Alto.Runner.{Handle, Result}
-  @type outcome :: {:ok, Result.t()} | {:error, term(), Result.t()}
+  @type outcome :: Result.t()
   @callback run(term(), keyword()) :: outcome()
   @callback start(term(), keyword()) :: {:ok, term()} | {:error, term()}
   @callback await(term(), timeout()) :: outcome() | {:error, :await_timeout}

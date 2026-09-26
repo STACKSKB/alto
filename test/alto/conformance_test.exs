@@ -41,7 +41,8 @@ defmodule Alto.ConformanceTest do
 
   test "committed-but-unacknowledged effects stay unknown", %{service: s} do
     # Timeout after commit: the service applied, the runner lost the reply.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run({"commit_then_timeout", %{}},
                loop: Alto.loop(OnceLoop),
                tools: [{FakeTool.CommitThenTimeout, service: s, key: "print-1"}],
@@ -53,7 +54,8 @@ defmodule Alto.ConformanceTest do
   end
 
   test "commit-then-crash is unknown with the commit recorded", %{service: s} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run({"commit_then_crash", %{}},
                loop: Alto.loop(OnceLoop),
                tools: [{FakeTool.CommitThenCrash, service: s, key: "print-2"}]

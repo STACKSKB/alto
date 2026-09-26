@@ -27,12 +27,12 @@ defmodule Alto.Runner.RequestContextTest do
       prompt: "system"
     ]
 
-    assert {:ok, _} = Alto.run("stage: planning", options)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run("stage: planning", options)
     assert_receive {:context_request, request}
     assert List.last(request.messages) == %{"role" => "user", "content" => "stage: planning"}
     assert hd(request.messages) == %{"role" => "system", "content" => "system"}
 
-    assert {:error, :invalid_context_message, _} =
+    assert %Alto.Runner.Result{status: :error, reason: :invalid_context_message} =
              Alto.run(%{"role" => "system", "content" => "override"}, options)
 
     refute_receive {:context_request, _}
@@ -47,7 +47,8 @@ defmodule Alto.Runner.RequestContextTest do
     ]
 
     # The original task fits; appending that text again as context crosses the cap.
-    assert {:error, {:transcript_limit, 500}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 500}} =
+             _result =
              Alto.run(String.duplicate("x", 300), options)
 
     refute_receive {:context_request, _}

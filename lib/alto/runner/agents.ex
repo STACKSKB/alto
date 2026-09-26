@@ -298,7 +298,9 @@ defmodule Alto.Runner.Agents do
       {true, _} ->
         %{entry | status: :completed, outcome: outcome}
 
-      {false, {:error, :execution_suspended, %{checkpoint: packet}}} when retain_checkpoint? ->
+      {false,
+       %Alto.Runner.Result{status: :suspended, reason: :execution_suspended, checkpoint: packet}}
+      when retain_checkpoint? ->
         %{
           entry
           | status: :suspended,
@@ -333,10 +335,14 @@ defmodule Alto.Runner.Agents do
     }
   end
 
-  defp valid_saved?(%{id: id, spec: spec, status: status, summary: _, collected: collected}),
-    do:
-      is_binary(id) and is_map(spec) and status in [:pending, :suspended, :completed] and
-        is_boolean(collected)
+  defp valid_saved?(%{id: id, spec: spec, status: status, summary: summary, collected: collected}) do
+    is_binary(id) and is_map(spec) and is_boolean(collected) and
+      case status do
+        :completed -> Children.validate_child_summary(spec[:id], summary) == :ok
+        status when status in [:pending, :suspended] -> is_nil(summary)
+        _ -> false
+      end
+  end
 
   defp valid_saved?(_), do: false
 

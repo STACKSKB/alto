@@ -123,7 +123,7 @@ defmodule Alto.Tools.CodexAgentTest do
     {:ok, handle} = Alto.start(%{"task" => "review"}, opts(context, tools: [tool]))
     wait_for(context.log, "initialize")
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, _}, _} = Alto.await(handle, 2_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: _} = Alto.await(handle, 2_000)
     assert_stopped(context.log)
     refute Enum.any?(requests(context.log), &(&1["method"] == "turn/start"))
   end
@@ -140,7 +140,7 @@ defmodule Alto.Tools.CodexAgentTest do
 
     wait_for(context.log, "turn/start")
     {:ok, receipt} = Alto.Messaging.send(input, text: "use the new plan")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     [value] = result.output
     assert [%{message_id: id, status: :delivered}] = value.deliveries
     assert id == receipt.message_id
@@ -174,7 +174,7 @@ defmodule Alto.Tools.CodexAgentTest do
     Process.sleep(40)
     assert Enum.count(requests(context.log), &(&1["method"] == "turn/start")) == 1
     {:ok, _} = Alto.Messaging.send(input, text: "finish current turn")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert [%{turn_id: "turn-2"}] = result.output
     turns = Enum.filter(requests(context.log), &(&1["method"] == "turn/start"))
     assert length(turns) == 2
@@ -189,7 +189,7 @@ defmodule Alto.Tools.CodexAgentTest do
     {:ok, inbox} = Alto.Input.start_link()
     {:ok, peer} = Alto.Messaging.register(router, input: inbox, label: "peer")
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run(
                %{"task" => "send:" <> peer.id},
                opts(context, messaging: router, tools: [context.tool, Alto.Tools.SendMessage])
@@ -211,7 +211,7 @@ defmodule Alto.Tools.CodexAgentTest do
     {:ok, inbox} = Alto.Input.start_link()
     {:ok, peer} = Alto.Messaging.register(router, input: inbox)
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run(
                %{"task" => "send:" <> peer.id},
                opts(context,
@@ -234,7 +234,7 @@ defmodule Alto.Tools.CodexAgentTest do
     {:ok, handle} = Alto.start(%{"task" => "timeout"}, opts(context, input: input, tools: [tool]))
     wait_for(context.log, "turn/start")
     {:ok, receipt} = Alto.Messaging.send(input, text: "timeout", idempotency_key: "once")
-    assert {:error, _, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :error, reason: _} = Alto.await(handle)
     assert {:ok, %{status: :unknown}} = Alto.Input.request(input, {:receipt, receipt.message_id})
 
     assert {:ok, %{status: :unknown}} =
@@ -252,7 +252,8 @@ defmodule Alto.Tools.CodexAgentTest do
 
   test "read-only turn returns correlated messages, usage and rejects permission requests",
        context do
-    assert {:ok, result} = Alto.run(%{"task" => "review"}, opts(context))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(%{"task" => "review"}, opts(context))
 
     assert [%{messages: %{"answer" => "Review complete"}, usage: %{"inputTokens" => 12}}] =
              result.output
@@ -269,7 +270,9 @@ defmodule Alto.Tools.CodexAgentTest do
 
   test "failed turns and disconnects remain uncertain", context do
     for task <- ["fail", "disconnect"] do
-      assert {:error, _, result} = Alto.run(%{"task" => task}, opts(context))
+      assert %Alto.Runner.Result{status: :error, reason: _} =
+               result = Alto.run(%{"task" => task}, opts(context))
+
       assert result.verdict == :unknown
     end
   end
@@ -277,7 +280,10 @@ defmodule Alto.Tools.CodexAgentTest do
   test "output bounds stop oversized agents", context do
     {module, config} = context.tool
     context = %{context | tool: {module, Keyword.put(config, :max_output_bytes, 64)}}
-    assert {:error, _, result} = Alto.run(%{"task" => "large"}, opts(context))
+
+    assert %Alto.Runner.Result{status: :error, reason: _} =
+             result = Alto.run(%{"task" => "large"}, opts(context))
+
     assert result.verdict == :unknown
     assert_stopped(context.log)
   end
@@ -286,14 +292,14 @@ defmodule Alto.Tools.CodexAgentTest do
     assert {:ok, handle} = Alto.start(%{"task" => "hang"}, opts(context))
     wait_for(context.log, "turn/start")
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, _}, _} = Alto.await(handle, 2_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: _} = Alto.await(handle, 2_000)
     assert_stopped(context.log)
   end
 
   test "tool timeout closes the owned App Server", context do
     assert {:ok, handle} = Alto.start(%{"task" => "hang"}, opts(context, tool_timeout: 3_000))
     wait_for(context.log, "turn/start")
-    assert {:error, _, result} = Alto.await(handle, 5_000)
+    assert %Alto.Runner.Result{status: :error, reason: _} = result = Alto.await(handle, 5_000)
     assert result.verdict == :unknown
     assert_stopped(context.log)
   end
@@ -305,7 +311,7 @@ defmodule Alto.Tools.CodexAgentTest do
         loop: Alto.rule_loop(steps: ["list_agent_models"])
       )
 
-    assert {:ok, result} = Alto.run(%{"backend" => "codex"}, opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run(%{"backend" => "codex"}, opts)
     assert [%{models: models}] = result.output
     assert Enum.map(models, & &1.model) == ["first-model", "second-model"]
     refute Enum.any?(requests(context.log), &(&1["method"] == "turn/start"))
@@ -330,7 +336,7 @@ defmodule Alto.Tools.CodexAgentTest do
         session_dir: Path.join(context.root, "sessions")
       )
 
-    assert {:ok, result} = Alto.run(args, opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run(args, opts)
 
     assert [
              %{

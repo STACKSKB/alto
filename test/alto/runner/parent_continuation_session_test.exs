@@ -82,7 +82,11 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
       )
 
     {:ok, _} =
-      Continuation.skip(cell, "worker", %{id: "worker", status: :error, error: :not_started})
+      Continuation.skip(
+        cell,
+        "worker",
+        Alto.Runner.Execution.Children.child_summary("worker", {:error, :not_started})
+      )
 
     opts = Keyword.put(opts, :continuation, Continuation.identity(cell))
     %{opts: opts, session: session, dir: dir, cell: cell}
@@ -96,7 +100,7 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     assert_receive {:joining, second_policy}, 2_000
 
     send(first_policy, :continue)
-    assert {:ok, winner} = Task.await(first, 5_000)
+    assert %Alto.Runner.Result{status: :ok} = winner = Task.await(first, 5_000)
     assert winner.output == "joined once"
     assert {:ok, before} = Session.transcript(session, session_dir: dir)
     assert before["messages"] == winner.messages
@@ -104,7 +108,7 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
 
     send(second_policy, :continue)
-    assert {:error, _reason, loser} = Task.await(second, 5_000)
+    assert %Alto.Runner.Result{status: :error} = loser = Task.await(second, 5_000)
     assert loser.checkpoint["kind"] == "parent"
     assert Session.transcript(session, session_dir: dir) == {:ok, before}
     refute_receive {:joining, _}, 30

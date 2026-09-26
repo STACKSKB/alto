@@ -104,7 +104,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   test "100-byte limit cannot retain a 100KB raw result (provider-less)" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
@@ -126,7 +127,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   test "nested terms are measured, not just top-level bytes" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "n-1", tool: "nested"),
                tools: [NestedBigTool],
@@ -138,7 +140,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   test "malformed post-dispatch returns are bounded and remain uncertain" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "malformed-1", tool: "malformed"),
                tools: [MalformedTool],
@@ -153,7 +156,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   test "small non-JSON values remain available as native results" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "t-1", tool: "tup"),
                tools: [TupleTool]
@@ -165,7 +169,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "providerless tools return bounded binary data without model serialization" do
     value = %{bytes: <<255, 0, 128>>}
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "binary", tool: "tup"),
                tools: [{TupleTool, value: value}]
@@ -177,7 +182,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "hybrid loop: oversize provider tool becomes bounded failure in transcript" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                provider: {ToolThenBigProvider, []},
                tools: [BigTool],
@@ -203,7 +209,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
@@ -230,7 +237,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   end
 
   test "frontend encoding of the failure stays within the line bound" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [BigTool],
@@ -249,7 +257,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
       def run(_args, _ctx, _opts), do: {:error, String.duplicate("x", 100_000)}
     end
 
-    assert {:error, _, result} =
+    assert %Alto.Runner.Result{status: :error, reason: _} =
+             result =
              Alto.run(%{},
                loop: Alto.rule_loop(steps: ["huge_failure"]),
                tools: [HugeFailureTool],
@@ -263,7 +272,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
   test "size failure after a mutating tool does not re-execute and preserves knowledge" do
     test_pid = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [{GuardedBigTool, test_pid: test_pid}],

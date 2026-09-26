@@ -118,7 +118,7 @@ defmodule Alto.Listeners.WebServerTest do
     assert %{
              "type" => "result",
              "run_id" => ^run_id,
-             "outcome" => "ok",
+             "status" => "ok",
              "output" => "finished",
              "model_requests" => 2
            } = List.last(envelopes)
@@ -164,7 +164,7 @@ defmodule Alto.Listeners.WebServerTest do
 
     {result, _buffer} = recv_until(socket, buffer, &(&1["type"] == "result"))
     assert result["run_id"] == run_id
-    assert result["outcome"] == "ok"
+    assert result["status"] == "ok"
   end
 
   test "replies with unknown_run errors over the websocket", %{port: port} do

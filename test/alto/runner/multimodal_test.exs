@@ -43,7 +43,8 @@ defmodule Alto.Runner.MultimodalTest do
     dir = Path.join(System.tmp_dir!(), "alto-vision-run-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("inspect",
                tool_presenter: {Alto.ToolDisplay, []},
                provider: {Provider, owner: self()},
@@ -67,7 +68,8 @@ defmodule Alto.Runner.MultimodalTest do
   end
 
   test "typed payloads have no implicit presentation or base64 text projection" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("inspect",
                provider: {Provider, owner: self()},
                tools: [{Tool, value: content()}]
@@ -79,7 +81,7 @@ defmodule Alto.Runner.MultimodalTest do
   end
 
   test "native tool content becomes a typed user context without orphan tool replies" do
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run("inspect",
                provider: {Provider, owner: self(), capture: true},
                tools: [{Tool, value: content()}],
@@ -97,7 +99,7 @@ defmodule Alto.Runner.MultimodalTest do
   test "lookalike ordinary values stay text and invalid typed images fail before retention" do
     ordinary = %{blocks: [%{type: "image", data: @png}]}
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run("inspect",
                provider: {Provider, owner: self()},
                tools: [{Tool, value: ordinary}]
@@ -108,7 +110,8 @@ defmodule Alto.Runner.MultimodalTest do
 
     invalid = Alto.Content.new([Alto.Content.image("image/png", @png, 900_000, 1)])
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("inspect",
                provider: {Provider, owner: self()},
                tools: [{Tool, value: invalid}]

@@ -95,7 +95,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
       call("spawn", "spawn_agents", %{"agents" => [task()]})
     ]
 
-    assert {:ok, result} = Alto.run("delegate", options(calls))
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("delegate", options(calls))
     assert result.output == "done"
     assert result.usage.total_tokens == 6
     replies = Enum.filter(result.messages, &(&1["role"] == "tool"))
@@ -120,7 +120,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
         Map.put(task(model), "model", model)
       end)
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                "delegate",
                options([call("spawn", "spawn_agents", %{"agents" => requests})])
@@ -144,7 +145,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
       requests = [task("successful"), task("failed") |> Map.put("model", "model-b")]
       calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(
                  "delegate",
                  options(calls,
@@ -163,7 +165,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
       assert %{"id" => "successful", "status" => "ok", "output" => "child done"} = successful
       assert is_binary(successful["run_id"])
       assert successful["usage"]["total_tokens"] == 6
-      assert %{"id" => "failed", "status" => "error", "error" => ^expected} = failed
+      assert %{"id" => "failed", "status" => "error", "reason" => ^expected} = failed
       refute Map.has_key?(JSON.decode!(reply), "encoding_error")
     end
   end
@@ -177,7 +179,9 @@ defmodule Alto.Runner.ModelSubagentsTest do
           subagents: Alto.Subagents.bounded(max_depth: 1, max_children: max_children)
         )
 
-      assert {:ok, _} = Alto.run("delegate", options(calls, loop: loop))
+      assert %Alto.Runner.Result{status: :ok} =
+               _ = Alto.run("delegate", options(calls, loop: loop))
+
       assert_receive {:request, request}
       assert_receive {:request, _}
 
@@ -193,7 +197,9 @@ defmodule Alto.Runner.ModelSubagentsTest do
     calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
     loop = Alto.default_loop(subagents: Alto.Subagents.bounded(max_depth: 1, max_children: 5))
 
-    assert {:ok, result} = Alto.run("delegate", options(calls, loop: loop))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("delegate", options(calls, loop: loop))
+
     reply = Enum.find(result.messages, &(&1["tool_call_id"] == "spawn"))["content"]
     assert %{"results" => results} = JSON.decode!(reply)
     assert Enum.map(results, & &1["id"]) == Enum.map(requests, & &1["id"])
@@ -207,7 +213,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
     calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
     loop = Alto.default_loop(subagents: Alto.Subagents.bounded(max_depth: 1, max_children: 4))
 
-    assert {:ok, result} = Alto.run("delegate", options(calls, loop: loop))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("delegate", options(calls, loop: loop))
 
     assert Enum.any?(
              result.events,
@@ -227,7 +234,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
         provider: {CurrentProvider, owner: self(), calls: calls, model: "parent-model"}
       )
 
-    assert {:ok, result} = Alto.run("delegate", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("delegate", opts)
     assert result.output == "done"
     assert_receive {:selected_model, "child-model"}
   end
@@ -257,7 +264,9 @@ defmodule Alto.Runner.ModelSubagentsTest do
       call("spawn", "spawn_agents", %{"agents" => [task()]})
     ]
 
-    assert {:ok, result} = Alto.run("delegate", options(calls, credentials_path: path))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("delegate", options(calls, credentials_path: path))
+
     assert_receive {:credential, "test-private-key"}
     refute inspect(result.messages) =~ "test-private-key"
   end
@@ -275,7 +284,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
           {"list_agent_models", %{}},
           {"spawn_agents", %{"agents" => [task()]}}
         ] do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(
                  "delegate",
                  options([call(name, name, arguments)],
@@ -292,7 +302,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
 
   test "multiple delegation calls and duplicate call IDs each settle once" do
     calls = Enum.map(1..2, &call("same", "spawn_agents", %{"agents" => [task("child-#{&1}")]}))
-    assert {:ok, result} = Alto.run("delegate", options(calls))
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("delegate", options(calls))
     assert Enum.count(result.messages, &(&1["role"] == "tool")) == 2
     assert result.usage.total_tokens == 12
   end
@@ -306,7 +316,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
     ]
 
     for {arguments, overrides} <- cases do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(
                  "delegate",
                  options([call("spawn", "spawn_agents", arguments)], overrides)
@@ -321,7 +332,9 @@ defmodule Alto.Runner.ModelSubagentsTest do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
 
     for overrides <- [[model_tools: [:list_agent_models]], [approval: Alto.Approvals.DenyAll]] do
-      assert {:ok, result} = Alto.run("delegate", options(calls, overrides))
+      assert %Alto.Runner.Result{status: :ok} =
+               result = Alto.run("delegate", options(calls, overrides))
+
       assert Enum.any?(result.events, &(&1.type == :tool_failed))
       refute_receive {:child, _}
     end
@@ -335,7 +348,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
       call("spawn", "spawn_agents", %{"agents" => [task()]})
     ]
 
-    assert {:ok, result} = Alto.run("delegate", options(calls, tools: restricted))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("delegate", options(calls, tools: restricted))
 
     reply =
       Enum.find(result.messages, &(&1["tool_call_id"] == "list"))["content"] |> JSON.decode!()
@@ -345,7 +359,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
     refute_receive {:child, _}
     allowed = Map.put(task(), "model", "model-b")
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _ =
              Alto.run(
                "delegate",
                options([call("spawn", "spawn_agents", %{"agents" => [allowed]})],
@@ -359,7 +374,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
   test "a backend omitted from an explicit model restriction is unavailable" do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("delegate", options(calls, tools: Alto.Tools.agents(models: %{})))
 
     assert Enum.any?(result.events, &(&1.type == :tool_failed))
@@ -376,7 +392,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
       })
     ]
 
-    assert {:ok, result} = Alto.run("discover", options(calls))
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("discover", options(calls))
     reply = Enum.find(result.messages, &(&1["role"] == "tool"))["content"] |> JSON.decode!()
     assert [%{"model" => "model-b"}] = reply["models"]
     assert reply["next_offset"] == nil
@@ -384,7 +400,10 @@ defmodule Alto.Runner.ModelSubagentsTest do
 
   test "a child still consumes the shared model-request budget" do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
-    assert {:error, _, result} = Alto.run("delegate", options(calls, max_model_requests: 1))
+
+    assert %Alto.Runner.Result{status: :error, reason: _} =
+             result = Alto.run("delegate", options(calls, max_model_requests: 1))
+
     refute_receive {:child, _}
     assert Enum.any?(result.messages, &(&1["role"] == "tool"))
   end
@@ -396,18 +415,22 @@ defmodule Alto.Runner.ModelSubagentsTest do
     assert_receive {:blocking, worker}, 2_000
     monitor = Process.monitor(worker)
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, _}, _} = Alto.await(handle, 2_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: _} = _ = Alto.await(handle, 2_000)
     assert_receive {:DOWN, ^monitor, :process, _, _}, 2_000
   end
 
   test "approval checkpoint restores the delegation dispatch and tool correlation" do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
     opts = options(calls, approval: Suspend, checkpoint_version: "delegation-1")
-    assert {:error, :approval_suspended, suspended} = Alto.run("delegate", opts)
+
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Alto.run("delegate", opts)
+
     refute_receive {:child, _}
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("delegate", Keyword.put(opts, :checkpoint, {packet, :approve}))
 
     assert result.output == "done"

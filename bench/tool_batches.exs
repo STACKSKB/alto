@@ -94,7 +94,7 @@ defmodule Alto.Bench.OfflineToolBatches do
       count = Agent.get(counter, & &1)
       Agent.stop(counter)
 
-      {:ok, run_result} = result
+      %Alto.Runner.Result{status: :ok} = run_result = result
       values = run_result.output
 
       unless count == @calls and length(values) == @calls do

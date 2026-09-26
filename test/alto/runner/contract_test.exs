@@ -4,7 +4,9 @@ defmodule Alto.Runner.ContractTest do
 
   defmodule ExternalRunner do
     @behaviour Alto.Runner
-    def run(task, _opts), do: {:ok, %{Result.empty() | output: task, verdict: :completed}}
+    def run(task, _opts),
+      do: %Result{Result.empty() | status: :ok, output: task, verdict: :completed}
+
     def start(task, opts), do: {:ok, {:external_job, task, opts}}
     def await({:external_job, task, opts}, _timeout), do: run(task, opts)
     def cancel(_job, _reason), do: :already_finished
@@ -36,12 +38,12 @@ defmodule Alto.Runner.ContractTest do
   test "public lifecycle dispatches opaque non-process handles to the selected runner" do
     opts = Alto.Config.new(runner: ExternalRunner) |> Alto.Config.run_options()
     assert {:ok, %Handle{} = handle} = Alto.start("external result", opts)
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.output == "external result"
     assert :already_finished = Alto.cancel(handle)
-    assert {:ok, ^result} = Alto.terminate(handle)
+    assert ^result = Alto.terminate(handle)
     assert {:ok, ref} = Alto.subscribe(handle)
-    assert_receive {:alto_runner_result, ^ref, {:ok, ^result}}
+    assert_receive {:alto_runner_result, ^ref, ^result}
     assert result.verdict == :completed
   end
 
@@ -56,7 +58,7 @@ defmodule Alto.Runner.ContractTest do
     assert {:ok, id} =
              Alto.FrontEnd.Registry.request(name, {:start_run, "external", "registry result", []})
 
-    assert {:ok, {:ok, %Result{output: "registry result"}}} =
+    assert {:ok, %Result{status: :ok, output: "registry result"}} =
              Alto.FrontEnd.Registry.request(name, {:run_result, id})
 
     assert Alto.FrontEnd.Registry.request(name, :run_ids) == []
@@ -75,8 +77,8 @@ defmodule Alto.Runner.ContractTest do
     assert {:ok,
             [
               {"rejected", {:error, :cannot_start}},
-              {"one", {:ok, %Result{output: "one"}}},
-              {"two", {:ok, %Result{output: "two"}}}
+              {"one", %Result{status: :ok, output: "one"}},
+              {"two", %Result{status: :ok, output: "two"}}
             ]} =
              Alto.Runner.Agents.batch(specs, 2, start, fn -> :continue end,
                runner: ExternalRunner
@@ -106,8 +108,9 @@ defmodule Alto.Runner.ContractTest do
     assert_receive {:subscribed, scheduler, ref}, 2_000
     send(task.pid, :cancel)
     assert_receive {:cancel_requested, {:cancelled, :operator}}, 2_000
-    send(scheduler, {:alto_runner_result, ref, {:ok, :settled}})
-    assert {{:cancelled, :operator}, [{"child", {:ok, :settled}}]} = Task.await(task)
+    settled = %Result{status: :ok, output: :settled}
+    send(scheduler, {:alto_runner_result, ref, settled})
+    assert {{:cancelled, :operator}, [{"child", ^settled}]} = Task.await(task)
     refute_receive :forced_termination
   end
 

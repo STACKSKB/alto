@@ -35,7 +35,8 @@ defmodule Alto.Loops.RuleTest do
 
   describe "step script" do
     test "runs steps in order and stops after the last tool result" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(~s({"value": "b"}),
                  loop:
                    Alto.rule_loop(
@@ -56,7 +57,8 @@ defmodule Alto.Loops.RuleTest do
     test "the task is the payload: name-only steps use the decoded task as arguments" do
       task = ~s({"key": "job-1", "payload": {"total": 10}})
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(task,
                  loop: Alto.rule_loop(steps: ["echo"]),
                  tools: [EchoTool]
@@ -67,7 +69,8 @@ defmodule Alto.Loops.RuleTest do
     end
 
     test "the :task marker passes the decoded task; a map passes as-is" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(~s({"n": 1}),
                  loop:
                    Alto.rule_loop(
@@ -84,7 +87,8 @@ defmodule Alto.Loops.RuleTest do
     end
 
     test "a map task is accepted without JSON decoding" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(%{"n" => 2},
                  loop: Alto.rule_loop(steps: ["echo"]),
                  tools: [EchoTool]
@@ -96,7 +100,11 @@ defmodule Alto.Loops.RuleTest do
 
   describe "fail closed" do
     test "a tool failure fails the run fast with the step identified" do
-      assert {:error, {:rule_step_failed, 1, "boom", :detonated}, result} =
+      assert %Alto.Runner.Result{
+               status: :error,
+               reason: {:rule_step_failed, 1, "boom", :detonated}
+             } =
+               result =
                Alto.run(%{},
                  loop:
                    Alto.rule_loop(steps: [%{tool: "boom"}, %{tool: "echo", arguments: :task}]),
@@ -109,20 +117,26 @@ defmodule Alto.Loops.RuleTest do
 
     test "an empty or malformed step script fails at init" do
       for steps <- [[], "queue_put", [%{tool: 42}], [%{tool: "echo", arguments: "no"}]] do
-        assert {:error, :invalid_steps, _result} =
+        assert %Alto.Runner.Result{status: :error, reason: :invalid_steps} =
+                 _result =
                  Alto.run(%{}, loop: Alto.rule_loop(steps: steps), tools: [EchoTool])
       end
     end
 
     test "an unstructured task fails at init" do
       for task <- ["not json", 42, nil] do
-        assert {:error, :invalid_task, _result} =
+        assert %Alto.Runner.Result{status: :error, reason: :invalid_task} =
+                 _result =
                  Alto.run(task, loop: Alto.rule_loop(steps: ["echo"]), tools: [EchoTool])
       end
     end
 
     test "an unknown tool fails the run through the normal tool pipeline" do
-      assert {:error, {:rule_step_failed, 1, "missing", {:unknown_tool, "missing"}}, _result} =
+      assert %Alto.Runner.Result{
+               status: :error,
+               reason: {:rule_step_failed, 1, "missing", {:unknown_tool, "missing"}}
+             } =
+               _result =
                Alto.run(%{}, loop: Alto.rule_loop(steps: ["missing"]), tools: [EchoTool])
     end
   end
@@ -140,7 +154,8 @@ defmodule Alto.Loops.RuleTest do
     test "queue_put keyed by the webhook task, then queue_cancel", %{queue: queue} do
       task = ~s({"key": "job-1", "payload": {"lines": 3}})
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(task,
                  loop: Alto.rule_loop(steps: ["queue_put"]),
                  tools: [{Alto.Tools.QueuePut, queue: queue}]
@@ -153,7 +168,8 @@ defmodule Alto.Loops.RuleTest do
 
       assert %{pending: 1} = Alto.Queue.request(queue, :count)
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run(~s({"key": "job-1"}),
                  loop: Alto.rule_loop(steps: ["queue_cancel"]),
                  tools: [{Alto.Tools.QueueCancel, queue: queue}]

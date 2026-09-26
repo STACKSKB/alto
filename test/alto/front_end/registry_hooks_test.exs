@@ -84,11 +84,12 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
   test "a callback can reenter the registry without deadlocking", %{name: name} do
     assert {:ok, %{"run_id" => run_id}} = Registry.command(name, "reenter", %{})
 
-    assert {:error, :invalid_steps,
-            %Alto.Runner.Result{
-              run_id: ^run_id,
-              verdict: :rejected_before_dispatch
-            }} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: :invalid_steps,
+             run_id: ^run_id,
+             verdict: :rejected_before_dispatch
+           } =
              eventually_result(name, run_id)
   end
 
@@ -116,8 +117,11 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     ref = Process.monitor(owner)
     assert_receive {:DOWN, ^ref, :process, ^owner, _}
 
-    assert {:error, {:cancelled, {:owner_down, :normal}},
-            %Alto.Runner.Result{verdict: :rejected_before_dispatch}} =
+    assert %Alto.Runner.Result{
+             status: :cancelled,
+             reason: {:owner_down, :normal},
+             verdict: :rejected_before_dispatch
+           } =
              eventually_result(name, run_id)
   end
 

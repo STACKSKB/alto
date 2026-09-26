@@ -110,7 +110,9 @@ defmodule Alto.Runner.DurableBudgetTest do
           checkpoint_version: "durable-budget-test"
         ]
 
-    assert {:error, :approval_suspended, suspended} = Alto.run("{}", opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Alto.run("{}", opts)
+
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
     assert {:ok, saved} = Alto.Runner.Checkpoint.decode(packet["state"])
     assert saved.budget["effects_used"] == 1
@@ -126,7 +128,7 @@ defmodule Alto.Runner.DurableBudgetTest do
       |> Keyword.put(:budget_account, account)
       |> Keyword.put(:checkpoint, {packet, :approve})
 
-    assert {:ok, completed} = Alto.run("{}", resumed_opts)
+    assert %Alto.Runner.Result{status: :ok} = completed = Alto.run("{}", resumed_opts)
     assert completed.output == ["original"]
     assert File.read!(Path.join(c.dir, "prepared")) == "1"
     assert File.read!(Path.join(c.dir, "output")) == "original"

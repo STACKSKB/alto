@@ -69,7 +69,9 @@ defmodule Alto.Runner.DurableDeadlineTest do
       {:ok, handle} = Alto.start("unused", budget_account: account, run_timeout: 10_000)
       assert {:error, :await_timeout} = Alto.await(handle, 20)
       assert :ok = Alto.cancel(handle, :storage_stalled)
-      assert {:error, {:cancelled, :storage_stalled}, _} = Alto.await(handle, 500)
+
+      assert %Alto.Runner.Result{status: :cancelled, reason: :storage_stalled} =
+               Alto.await(handle, 500)
     after
       :sys.resume(ledger)
     end
@@ -94,7 +96,9 @@ defmodule Alto.Runner.DurableDeadlineTest do
       Alto.Runner.Serial.advance(ticket)
       assert {:error, :await_timeout} = Alto.await(handle, 20)
       Alto.cancel(handle, :storage_stalled)
-      assert {:error, {:cancelled, :storage_stalled}, _} = Alto.await(handle, 500)
+
+      assert %Alto.Runner.Result{status: :cancelled, reason: :storage_stalled} =
+               Alto.await(handle, 500)
     after
       :sys.resume(ledger)
     end

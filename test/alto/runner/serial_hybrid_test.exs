@@ -81,13 +81,14 @@ defmodule Alto.Runner.SerialHybridTest do
       session_dir: dir
     ]
 
-    assert {:ok, first} = Alto.run("first", opts)
+    assert %Alto.Runner.Result{status: :ok} = first = Alto.run("first", opts)
     assert first.output == "model-2"
     assert first.persistence == :ok
     assert native_context_count(first.messages) == 2
     refute Enum.any?(first.messages, &(&1["role"] == "tool"))
 
-    assert {:ok, resumed} =
+    assert %Alto.Runner.Result{status: :ok} =
+             resumed =
              Alto.resume(first.session_id, "again", Keyword.drop(opts, [:session]))
 
     assert resumed.output == "model-4"

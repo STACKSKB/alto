@@ -38,7 +38,7 @@ defmodule Alto.Runner.SupportOwnerTest do
 
     assert_receive {:tool_participant, participant}, 3_000
     participant_ref = Process.monitor(participant)
-    assert {:error, _, _} = Alto.Runner.terminate(handle)
+    assert %Alto.Runner.Result{status: :error} = Alto.Runner.terminate(handle)
     assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}, 1_000
   end
 
@@ -47,7 +47,7 @@ defmodule Alto.Runner.SupportOwnerTest do
 
     assert_receive {:provider_participant, participant}, 3_000
     participant_ref = Process.monitor(participant)
-    assert {:error, _, _} = Alto.Runner.terminate(handle)
+    assert %Alto.Runner.Result{status: :error} = Alto.Runner.terminate(handle)
     assert_receive {:DOWN, ^participant_ref, :process, ^participant, :killed}, 1_000
   end
 end

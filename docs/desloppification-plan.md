@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,406 lines**, a **17.8% reduction**, with **4,948 lines remaining**.
+Current: **33,336 lines**, an **18.0% reduction**, with **4,878 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,20 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Completed runs now carry `status` and `reason` directly on `Runner.Result`.
+Sessions, child summaries, CLI/TUI completion and subscriber notifications consume
+that record instead of unpacking and rebuilding success/error tuples. Bounded
+child projections retain accounting and effect `verdict`; subscriber projections
+exclude transcripts and events. Session audit records use `status`, and listings
+use `last_status`. These API and record changes have no compatibility adapters.
+The TUI also removes its obsolete run-monitor completion/cleanup path; completion
+subscriptions already handle worker failure. This pass removes **70 net production
+lines**: 69 implementation lines and one source documentation/comment line.
+A workspace-retention prototype was discarded because it grew after formatting.
+The canonical-result change passes all 1,091 core tests and 144 TUI tests; coverage
+includes malformed restored child summaries, nested tuple errors with successful
+siblings, cancellation, suspension and real TUI worker-crash recovery.
 
 Budget accounts and child continuations now share one generation-bound retained
 record, storage envelope, validated snapshot and lifecycle. The change removes
@@ -114,7 +128,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,090 core tests** and **144 TUI tests** with application
+The current code passes **1,091 core tests** and **144 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

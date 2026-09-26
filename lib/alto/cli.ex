@@ -63,17 +63,21 @@ defmodule Alto.CLI do
          {:ok, command_mode} <- command_mode(options),
          {:ok, run_options, renderer} <- run_options(options, config, command_mode) do
       try do
-        {status, output, session_id} =
+        result =
           case run_task(options, task, run_options) do
-            {:ok, result} -> {:ok, result.output, result.session_id}
-            {:error, reason, result} -> {{:error, reason}, nil, result.session_id}
-            {:error, reason} -> {{:error, reason}, nil, nil}
+            {:error, reason} -> Alto.Runner.Result.error(reason)
+            result -> result
           end
 
+        status =
+          if match?(%Alto.Runner.Result{status: :ok}, result),
+            do: :ok,
+            else: {:error, result.reason}
+
         rendered = Renderer.stop(renderer)
-        if status == :ok, do: Renderer.finish(output, rendered)
+        if status == :ok, do: Renderer.finish(result.output, rendered)
         IO.write("\n")
-        report_session(session_id)
+        report_session(result.session_id)
         status
       after
         # A run that crashes before reaching the case above would otherwise
@@ -108,7 +112,7 @@ defmodule Alto.CLI do
           IO.puts(
             "#{summary.id}  #{format_session_time(summary.started_at_ms)}" <>
               "  runs:#{summary.runs} completed:#{summary.completed_runs}" <>
-              "  last:#{summary.last_outcome || "-"}  #{summary.task || ""}"
+              "  last:#{summary.last_status || "-"}  #{summary.task || ""}"
           )
         end)
 

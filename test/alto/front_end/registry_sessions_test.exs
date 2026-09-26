@@ -183,7 +183,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
   defp collect_until_result(run_id) do
     receive do
-      {:alto_notification, {:result, ^run_id, outcome, output, _}} -> {outcome, output}
+      {:alto_notification, {:result, ^run_id, result}} -> result
       {:alto_notification, _other} -> collect_until_result(run_id)
     after
       @receive_timeout -> flunk("no result for #{run_id}")
@@ -208,7 +208,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
       {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "first task", []})
-      assert {:ok, "finished"} = attach_collect(registry, run_id)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, run_id)
       assert_received {:tool_ran, "hello"}
 
       session_id = Registry.request(registry, {:run_session, run_id})
@@ -224,7 +224,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert {:ok, [summary]} = Registry.request(registry, :sessions)
       assert summary.id == session_id
       assert summary.completed_runs == 1
-      assert summary.last_outcome == "ok"
+      assert summary.last_status == "ok"
 
       # Server restart: same directory, new registry, session discoverable.
       GenServer.stop(registry)
@@ -238,7 +238,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       {:ok, run_id2} =
         Registry.request(registry2, {:start_run, "tool-loop", "thanks", [resume: session_id]})
 
-      assert {:ok, "finished"} = attach_collect(registry2, run_id2)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry2, run_id2)
 
       tool_runs = drain(:tool_ran)
       assert tool_runs == []
@@ -252,7 +252,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert {:ok, [summary3]} = Registry.request(registry2, :sessions)
       assert summary3.runs == 2
       assert summary3.completed_runs == 2
-      assert summary3.last_outcome == "ok"
+      assert summary3.last_status == "ok"
     end
   end
 
@@ -301,7 +301,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
       assert {:ok, [summary]} = Registry.request(registry, :sessions)
       assert summary.completed_runs == 0
-      assert summary.last_outcome == nil
+      assert summary.last_status == nil
     end
   end
 
@@ -358,7 +358,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
               &1["run_id"] == child_started["run_id"])
         )
 
-      assert child_completed["outcome"] == "cancelled"
+      assert child_completed["status"] == "cancelled"
 
       # Root snapshot ownership: the transcript holds only the root run's
       # single user message — the child never overwrote it.
@@ -382,7 +382,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       )
 
       {:ok, first} = Registry.request(registry, {:start_run, "tool-loop", "first", []})
-      assert {:ok, "finished"} = attach_collect(registry, first)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, first)
       first_session = Registry.request(registry, {:run_session, first})
 
       {:ok, _second} = Registry.request(registry, {:start_run, "tool-loop", "second", []})
@@ -399,7 +399,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
           {:start_run, "tool-loop", "follow-up", [resume: first_session]}
         )
 
-      assert {:ok, "finished"} = attach_collect(registry, resumed)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, resumed)
       assert Registry.request(registry, {:run_session, resumed}) == first_session
     end
 
@@ -412,7 +412,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       start_registry(registry, [sessions: [session_dir: blocker]], tool_resolver(parent))
 
       {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
-      assert {:ok, "finished"} = attach_collect(registry, run_id)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, run_id)
     end
 
     test "persisted records carry no credentials", %{session_dir: dir} do
@@ -434,7 +434,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       start_registry(registry, [sessions: [session_dir: dir]], resolver)
 
       {:ok, run_id} = Registry.request(registry, {:start_run, "secret-loop", "harmless task", []})
-      assert {:ok, "done"} = attach_collect(registry, run_id)
+      assert %{status: :ok, output: "done"} = attach_collect(registry, run_id)
 
       files = Path.wildcard(Path.join(dir, "**/*")) |> Enum.filter(&File.regular?/1)
       assert files != []
@@ -459,13 +459,13 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
       assert %{pending: 1} = Alto.Queue.request(queue, :count)
 
       {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
-      assert {:ok, "finished"} = attach_collect(registry, run_id)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, run_id)
       session_id = Registry.request(registry, {:run_session, run_id})
 
       {:ok, resumed} =
         Registry.request(registry, {:start_run, "tool-loop", "again", [resume: session_id]})
 
-      assert {:ok, "finished"} = attach_collect(registry, resumed)
+      assert %{status: :ok, output: "finished"} = attach_collect(registry, resumed)
 
       # Resume is transcript continuity, not workflow replay: the inbox is
       # exactly as the runs left it.

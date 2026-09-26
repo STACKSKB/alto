@@ -29,7 +29,7 @@ defmodule Alto.Session do
           agent_identity: map() | nil,
           runs: non_neg_integer(),
           completed_runs: non_neg_integer(),
-          last_outcome: String.t() | nil
+          last_status: String.t() | nil
         }
 
   @doc "Resolve the sessions directory, honouring an explicit override."
@@ -360,7 +360,7 @@ defmodule Alto.Session do
       "run_id" => Map.get(fields, :run_id),
       "subagent" => Map.get(fields, :subagent, false),
       "session_owner" => Map.get(fields, :session_owner, not Map.get(fields, :subagent, false)),
-      "outcome" => Map.get(fields, :outcome),
+      "status" => Atom.to_string(Map.fetch!(fields, :status)),
       "reason" => maybe_term(Map.get(fields, :reason)),
       "output" => maybe_term(Map.get(fields, :output)),
       "model_requests" => Map.get(fields, :model_requests)
@@ -502,7 +502,7 @@ defmodule Alto.Session do
          agent_identity: first["agent_identity"],
          runs: length(started),
          completed_runs: length(completed),
-         last_outcome: List.last(completed, %{})["outcome"]
+         last_status: List.last(completed, %{})["status"]
        }}
     end
   end

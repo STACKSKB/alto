@@ -71,7 +71,7 @@ defmodule Alto.Listeners.ConnectionMessagingTest do
 
     assert {:ok, []} = Registry.request(registry, {:input_status, id})
     {:ok, result} = Registry.request(registry, {:run_result, id})
-    assert {:ok, result} = result
+    assert %Alto.Runner.Result{status: :ok} = result
 
     assert Enum.any?(result.events, fn event ->
              event.type == :input_received and event.data.message_id == queued["message_id"]

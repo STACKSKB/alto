@@ -62,7 +62,7 @@ defmodule Alto.Runner.ContextPressureTest do
   test "model context pressure reduces before dispatch even below the transcript byte cap", %{
     opts: opts
   } do
-    assert {:ok, result} = Alto.run("current task", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("current task", opts)
     assert_receive :reduced
     assert_receive {:sent, messages}
     assert List.last(messages)["content"] == "current task"
@@ -73,12 +73,17 @@ defmodule Alto.Runner.ContextPressureTest do
 
   test "unresolvable context pressure stops under the configured compaction limit", %{opts: opts} do
     opts = Keyword.put(opts, :provider, {Provider, owner: self(), window: 20})
-    assert {:error, {:context_limit, _}, _} = Alto.run("current task", opts)
+
+    assert %Alto.Runner.Result{status: :error, reason: {:context_limit, _}} =
+             Alto.run("current task", opts)
+
     refute_receive {:sent, _}, 20
   end
 
   test "manual reduction is an ordinary loop effect", %{opts: opts} do
-    assert {:ok, result} = Alto.run("current task", Keyword.put(opts, :loop, Alto.loop(Manual)))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("current task", Keyword.put(opts, :loop, Alto.loop(Manual)))
+
     assert result.output == :done
     assert_receive :reduced
     assert_receive {:sent, _}
@@ -90,7 +95,7 @@ defmodule Alto.Runner.ContextPressureTest do
       |> Keyword.put(:provider, {Provider, owner: self(), window: 2_000})
       |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.5)))
 
-    assert {:ok, _} = Alto.run("current task", opts)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run("current task", opts)
     assert_receive :reduced
     assert_receive {:sent, messages}
     assert Alto.Context.Transcript.bytes(messages) < 1_000
@@ -103,7 +108,7 @@ defmodule Alto.Runner.ContextPressureTest do
       |> Keyword.put(:loop, Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.5)))
       |> Keyword.put(:compaction, false)
 
-    assert {:ok, _} = Alto.run("current task", opts)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run("current task", opts)
     refute_receive :reduced, 20
     assert_receive {:sent, _}
   end

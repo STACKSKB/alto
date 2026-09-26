@@ -164,7 +164,9 @@ defmodule Alto.Runner.ParentContinuationTest do
       %{id: "second", task: "two", loop: Alto.loop(ReturnLoop)}
     ]
 
-    assert {:ok, result} = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(%{agents: agents}, opts(ledgers, dir, runner))
+
     assert Enum.map(result.output.results, & &1.id) == ["first", "second"]
     assert_receive {:integrated, "joined"}, 2_000
     refute_receive {:integrated, _}, 50
@@ -175,7 +177,8 @@ defmodule Alto.Runner.ParentContinuationTest do
     assert {:error, :continuation_already_claimed} =
              Continuation.claim(cell, elem(Continuation.read(cell), 1).revision)
 
-    assert {:error, :continuation_already_claimed, _} =
+    assert %Alto.Runner.Result{status: :error, reason: :continuation_already_claimed} =
+             _ =
              Alto.run(:ignored, opts(ledgers, dir, runner, continuation: identity))
 
     assert {:ok, %{results: results}} = Continuation.join(cell)
@@ -186,7 +189,8 @@ defmodule Alto.Runner.ParentContinuationTest do
     ledgers = ledgers(dir, "history")
     agents = [%{id: "first", task: "one", loop: Alto.loop(ReturnLoop)}]
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{agents: agents, before_children: true},
                opts(ledgers, dir, Alto.Runner.Serial, session_history: :settled)
@@ -245,14 +249,17 @@ defmodule Alto.Runner.ParentContinuationTest do
     assert {:ok, %{results: [{"worker", ^saved}]}} = Continuation.join(journal)
     assert {:error, :child_already_admitted} = Continuation.dispatch(journal, "worker")
 
-    assert {:ok, result} = Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
+
     assert [%{id: "worker", output: "retained output"}] = result.output.results
     assert_receive {:integrated, "joined"}, 2_000
     refute_receive {:child_entered, _, _}, 50
     refute_receive {:integrated, _}, 50
     assert {:ok, %{phase: :claimed}} = Continuation.read(cell)
 
-    assert {:error, :continuation_already_claimed, _} =
+    assert %Alto.Runner.Result{status: :error, reason: :continuation_already_claimed} =
+             _ =
              Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
 
     assert {:ok, counts} = Account.read(ledgers.account)
@@ -287,7 +294,11 @@ defmodule Alto.Runner.ParentContinuationTest do
     assert_receive {:DOWN, ^parent_monitor, :process, ^parent_worker, :killed}, 2_000
     for pid <- [provider, worker], Process.alive?(pid), do: Process.exit(pid, :kill)
 
-    assert {:error, {:children_pending, {:child_pending, "worker", "dispatched"}}, result} =
+    assert %Alto.Runner.Result{
+             status: :suspended,
+             reason: {:children_pending, {:child_pending, "worker", "dispatched"}}
+           } =
+             result =
              Alto.run(:ignored, Keyword.put(run_opts, :continuation, identity))
 
     assert result.checkpoint["continuation"] == identity

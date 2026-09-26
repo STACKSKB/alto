@@ -102,12 +102,17 @@ defmodule Alto.Runner.CheckpointTest do
     dir: dir,
     opts: opts
   } do
-    assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Serial.run("{}", opts)
+
     assert File.read!(Path.join(dir, "first")) == "1"
     refute File.exists?(Path.join(dir, "guarded"))
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
     File.write!(Path.join(dir, "input"), "changed after preparation")
-    assert {:ok, result} = Serial.run("{}", Keyword.put(opts, :checkpoint, {packet, :approve}))
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Serial.run("{}", Keyword.put(opts, :checkpoint, {packet, :approve}))
+
     assert result.output == ["first", "original"]
     assert result.verdict == :completed
     assert File.read!(Path.join(dir, "guarded")) == "original"
@@ -130,12 +135,15 @@ defmodule Alto.Runner.CheckpointTest do
         "Saved system prompt"
       end)
 
-    assert {:error, :approval_suspended, suspended} = Serial.run("do the work", opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Serial.run("do the work", opts)
+
     assert_receive {:model_request, _}
     assert_receive :prompt_built
     assert suspended.checkpoint["request"]["call_id"] == "guarded-call"
 
-    assert {:ok, completed} =
+    assert %Alto.Runner.Result{status: :ok} =
+             completed =
              Serial.run(
                "do the work",
                Keyword.put(opts, :checkpoint, {suspended.checkpoint, :approve})
@@ -156,9 +164,11 @@ defmodule Alto.Runner.CheckpointTest do
     dir: dir,
     opts: opts
   } do
-    {:error, :approval_suspended, result} = Serial.run("{}", opts)
+    %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+      result = Serial.run("{}", opts)
 
-    assert {:error, {:rule_step_failed, 2, "guarded", _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:rule_step_failed, 2, "guarded", _}} =
+             _ =
              Serial.run("{}", Keyword.put(opts, :checkpoint, {result.checkpoint, :deny}))
 
     refute File.exists?(Path.join(dir, "guarded"))
@@ -166,14 +176,17 @@ defmodule Alto.Runner.CheckpointTest do
   end
 
   test "changed configuration fails before dispatch", %{dir: dir, opts: opts} do
-    {:error, :approval_suspended, result} = Serial.run("{}", opts)
+    %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+      result = Serial.run("{}", opts)
 
     changed =
       opts
       |> Keyword.put(:loop, Alto.rule_loop(steps: ["guarded"]))
       |> Keyword.put(:checkpoint, {result.checkpoint, :approve})
 
-    assert {:error, :checkpoint_mismatch, _} = Serial.run("{}", changed)
+    assert %Alto.Runner.Result{status: :error, reason: :checkpoint_mismatch} =
+             _ = Serial.run("{}", changed)
+
     refute File.exists?(Path.join(dir, "guarded"))
   end
 
@@ -186,7 +199,9 @@ defmodule Alto.Runner.CheckpointTest do
       |> Keyword.put(:loop, Alto.loop(HangingLoop, steps: ["guarded"]))
       |> Keyword.put(:run_timeout, 100)
 
-    assert {:error, {:participant_failed, :timeout}, _} = Serial.run("{}", opts)
+    assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
+             _ = Serial.run("{}", opts)
+
     refute File.exists?(Path.join(dir, "guarded"))
   end
 
@@ -194,7 +209,10 @@ defmodule Alto.Runner.CheckpointTest do
     opts: opts
   } do
     opts = Keyword.put(opts, :loop, Alto.loop(RaisingLoadLoop, steps: ["guarded"]))
-    assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
+
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Serial.run("{}", opts)
+
     assert {:ok, run} = Alto.Runner.Execution.Setup.open("{}", opts)
 
     assert_raise RuntimeError, "checkpoint programmer error", fn ->
@@ -209,11 +227,14 @@ defmodule Alto.Runner.CheckpointTest do
     equivalent_options = tool_options |> Map.to_list() |> Enum.reverse() |> Map.new()
 
     opts = Keyword.put(opts, :tools, [{First, options: tool_options}, Guarded])
-    assert {:error, :approval_suspended, suspended} = Serial.run("{}", opts)
+
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Serial.run("{}", opts)
 
     equivalent = Keyword.put(opts, :tools, [{First, options: equivalent_options}, Guarded])
 
-    assert {:ok, _resumed} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _resumed =
              Serial.run(
                "{}",
                Keyword.put(equivalent, :checkpoint, {suspended.checkpoint, :approve})
@@ -222,7 +243,8 @@ defmodule Alto.Runner.CheckpointTest do
     changed_options = Map.put(tool_options, "key-40", :changed)
     changed = Keyword.put(opts, :tools, [{First, options: changed_options}, Guarded])
 
-    assert {:error, :checkpoint_mismatch, _} =
+    assert %Alto.Runner.Result{status: :error, reason: :checkpoint_mismatch} =
+             _ =
              Serial.run("{}", Keyword.put(changed, :checkpoint, {suspended.checkpoint, :approve}))
   end
 
@@ -231,15 +253,18 @@ defmodule Alto.Runner.CheckpointTest do
       Keyword.put(opts, :loop, Alto.rule_loop(steps: ["guarded", "guarded", "first"]))
       |> Keyword.put(:max_effects, 2)
 
-    {:error, :approval_suspended, first} = Serial.run("{}", opts)
+    %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+      first = Serial.run("{}", opts)
 
-    {:error, :approval_suspended, second} =
+    %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+      second =
       Serial.run("{}", Keyword.put(opts, :checkpoint, {first.checkpoint, :approve}))
 
     assert {:ok, saved} = Checkpoint.decode(second.checkpoint["state"])
     assert saved.budget["effects_used"] == 2
 
-    assert {:error, {:effect_limit, 2}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:effect_limit, 2}} =
+             _ =
              Serial.run("{}", Keyword.put(opts, :checkpoint, {second.checkpoint, :approve}))
 
     assert File.read!(Path.join(dir, "guarded")) == "originaloriginal"

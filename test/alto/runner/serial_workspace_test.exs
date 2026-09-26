@@ -133,7 +133,9 @@ defmodule Alto.Runner.SerialWorkspaceTest do
         %{id: id, task: %{content: id <> "\n"}, loop: Alto.loop(WriteLoop)}
       end)
 
-    assert {:ok, result} = Alto.run(%{agents: agents}, run_opts(manager, c.dir))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(%{agents: agents}, run_opts(manager, c.dir))
+
     assert {:completed, results} = result.output
     assert Enum.all?(results, &(&1.status == :ok and &1.workspace.status == "frozen"))
     assert length(Enum.uniq_by(results, & &1.workspace.workspace["cwd"])) == 2
@@ -171,7 +173,7 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     assert_receive {:workspace_barrier_entered, second_approval}, 15_000
     send(first_approval, :release)
     send(second_approval, :release)
-    assert {:ok, result} = Task.await(task, 30_000)
+    assert %Alto.Runner.Result{status: :ok} = result = Task.await(task, 30_000)
     assert {:completed, results} = result.output
     assert Enum.all?(results, &(&1.status == :ok))
 
@@ -196,14 +198,17 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     outside = Path.join(dir, "tracked.txt")
     spoofed = %{id: "one", task: %{content: "child\n"}, cwd: dir, loop: Alto.loop(WriteLoop)}
 
-    assert {:error, {:invalid_spawn_agents, _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
              Alto.run(%{agents: [spoofed]}, run_opts(manager, dir))
 
     refute File.exists?(outside)
     assert Path.wildcard(Path.join(manager.root, "ws-*/checkout")) == []
 
     agents = [Map.delete(spoofed, :cwd)]
-    assert {:ok, result} = Alto.run(%{agents: agents}, run_opts(manager, dir))
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(%{agents: agents}, run_opts(manager, dir))
+
     assert {:completed, [%{status: :ok, workspace: workspace}]} = result.output
     assert File.read!(Path.join(source, "tracked.txt")) == "base\n"
     refute File.exists?(outside)
@@ -218,7 +223,8 @@ defmodule Alto.Runner.SerialWorkspaceTest do
   } do
     File.write!(Path.join(source, "tracked.txt"), "dirty\n")
 
-    assert {:error, {:invalid_spawn_agents, :source_dirty}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, :source_dirty}} =
+             _result =
              Alto.run(
                %{agents: [%{id: "never", task: %{content: "x\n"}, loop: Alto.loop(WriteLoop)}]},
                run_opts(manager, dir)
@@ -239,7 +245,9 @@ defmodule Alto.Runner.SerialWorkspaceTest do
 
     assert_receive :workspace_approval_started, 15_000
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, _result} = Alto.await(handle, 10_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             _result = Alto.await(handle, 10_000)
 
     [checkout] = Path.wildcard(Path.join(manager.root, "ws-*/checkout"))
     id = checkout |> Path.dirname() |> Path.basename()

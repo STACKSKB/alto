@@ -67,7 +67,7 @@ defmodule Alto.Runner.SettledHistoryTest do
   } do
     {:ok, handle} = Alto.start("change", opts)
     assert_receive {:after_tool, history, _}, 1000
-    assert {:error, _, _} = Alto.Runner.terminate(handle)
+    assert %Alto.Runner.Result{status: :error} = Alto.Runner.terminate(handle)
     assert {:ok, snapshot} = Alto.Session.transcript(id, session_dir: dir)
     assert snapshot["messages"] == history
     assert Enum.any?(snapshot["messages"], &(&1["role"] == "tool" and &1["content"] == "changed"))
@@ -76,7 +76,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     resume_opts =
       Keyword.put(opts, :provider, {Provider, owner: self(), instant: true})
 
-    assert {:ok, resumed} = Alto.resume(id, "continue", resume_opts)
+    assert %Alto.Runner.Result{status: :ok} = resumed = Alto.resume(id, "continue", resume_opts)
     assert resumed.transcript_persisted
     assert {:ok, resumed_snapshot} = Alto.Session.transcript(id, session_dir: dir)
     assert resumed.transcript_revision == resumed_snapshot["revision"]
@@ -97,7 +97,7 @@ defmodule Alto.Runner.SettledHistoryTest do
 
     {:ok, handle} = Alto.start(%{}, opts)
     assert_receive {:changed, _}, 5_000
-    assert {:error, _, _} = Alto.Runner.terminate(handle)
+    assert %Alto.Runner.Result{status: :error} = Alto.Runner.terminate(handle)
 
     assert {:error, {:session_unsettled_tool_dispatch, fence}} =
              Alto.Session.transcript(id, session_dir: dir)
@@ -120,7 +120,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     {:ok, handle} = Alto.start(%{}, opts)
     assert_receive {:changed, _}, 1000
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} = result = Alto.await(handle)
     assert result.verdict == :unknown
     assert result.persistence == :ok
     assert result.transcript_persisted
@@ -140,7 +140,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     {:ok, handle} = Alto.start("change", opts)
     assert_receive {:changed, _}, 1000
     assert :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} = result = Alto.await(handle)
 
     assert result.verdict == :unknown
     assert result.transcript_persisted
@@ -167,14 +167,15 @@ defmodule Alto.Runner.SettledHistoryTest do
     opts =
       Keyword.merge(opts, approval: Alto.Approvals.Checkpoint, checkpoint_version: "history-v1")
 
-    assert {:error, :approval_suspended, paused} = Alto.run("change", opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             paused = Alto.run("change", opts)
 
     {:ok, handle} =
       Alto.start("change", Keyword.put(opts, :checkpoint, {paused.checkpoint, :approve}))
 
     assert_receive {:after_tool, _, worker}, 1000
     send(worker, :release)
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.persistence == :ok
     assert {:ok, _} = Alto.Session.transcript(id, session_dir: dir)
   end

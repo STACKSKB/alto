@@ -141,32 +141,26 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  defp validate_child_summary(id, %{id: id, status: status} = data)
-       when status in [:ok, :error, :cancelled] do
-    if Map.has_key?(data, :usage) do
-      with true <- Usage.valid?(data.usage),
-           true <-
-             data[:outcome] in [
-               :empty,
-               :completed,
-               :rejected_before_dispatch,
-               :failed_known,
-               :unknown
-             ],
-           true <- is_integer(data[:model_requests]) and data.model_requests >= 0,
-           true <- valid_persistence?(Map.get(data, :persistence, :ok)) do
-        :ok
-      else
-        _ -> {:error, :invalid_retained_child_result}
-      end
+  def validate_child_summary(id, %{id: id, status: status} = data)
+      when status in [:ok, :error, :cancelled, :suspended] do
+    with true <- Usage.valid?(data[:usage]),
+         true <-
+           data[:verdict] in [
+             :empty,
+             :completed,
+             :rejected_before_dispatch,
+             :failed_known,
+             :unknown
+           ],
+         true <- is_integer(data[:model_requests]) and data.model_requests >= 0,
+         true <- valid_persistence?(data[:persistence]) do
+      :ok
     else
-      if status == :error and Map.has_key?(data, :error),
-        do: :ok,
-        else: {:error, :invalid_retained_child_result}
+      _ -> {:error, :invalid_retained_child_result}
     end
   end
 
-  defp validate_child_summary(_, _), do: {:error, :invalid_retained_child_result}
+  def validate_child_summary(_, _), do: {:error, :invalid_retained_child_result}
   defp valid_persistence?(value) when value in [:ok, :not_requested], do: true
   defp valid_persistence?({:degraded, errors}) when is_list(errors), do: true
   defp valid_persistence?(_), do: false
@@ -235,17 +229,20 @@ defmodule Alto.Runner.Execution.Children do
 
   def retain_child_outcome(
         _ticket,
-        {:error, _, %{checkpoint: %{"kind" => "child", "ungranted" => true}}} = outcome
+        %Result{checkpoint: %{"kind" => "child", "ungranted" => true}} = outcome
       ),
       do: outcome
 
-  def retain_child_outcome(%Continuation.Ticket{} = ticket, outcome) do
-    data = child_summary(ticket.id, outcome)
-    result = elem(outcome, tuple_size(outcome) - 1)
+  def retain_child_outcome(%Continuation.Ticket{} = ticket, result) do
+    data = child_summary(ticket.id, result)
 
     stored =
-      case outcome do
-        {:error, :approval_suspended, %{checkpoint: %{"kind" => "child"} = checkpoint}} ->
+      case result do
+        %Result{
+          status: :suspended,
+          reason: :approval_suspended,
+          checkpoint: %{"kind" => "child"} = checkpoint
+        } ->
           Continuation.suspend(ticket, checkpoint, result.workspace)
 
         _ ->
@@ -254,13 +251,15 @@ defmodule Alto.Runner.Execution.Children do
 
     case stored do
       {:ok, _} ->
-        outcome
+        result
 
       {:error, reason} ->
         errors = Result.persistence_errors(result) ++ [{:subagent_journal, reason}]
 
-        {:error, {:subagent_journal_failed, reason},
-         %{result | verdict: :unknown, persistence: Result.persistence_status(errors)}}
+        Result.error(
+          {:subagent_journal_failed, reason},
+          %{result | verdict: :unknown, persistence: Result.persistence_status(errors)}
+        )
     end
   end
 
@@ -583,28 +582,21 @@ defmodule Alto.Runner.Execution.Children do
   @doc "Remove journal-only accounting details from a child summary delivered to its loop."
   def public_child_summary(summary), do: Map.delete(summary, :persistence)
 
-  def child_summary(id, {:ok, result}),
-    do: Map.merge(child_fields(id, result), %{status: :ok})
+  def child_summary(id, %Result{} = result),
+    do:
+      result
+      |> Map.take(
+        ~w(status reason output model_requests usage persistence run_id session_id workspace verdict)a
+      )
+      |> Map.put(:id, id)
 
-  def child_summary(id, {:error, {:cancelled, reason}, result}),
-    do: Map.merge(child_fields(id, result), %{status: :cancelled, reason: reason})
-
-  def child_summary(id, {:error, reason, result}),
-    do: Map.merge(child_fields(id, result), %{status: :error, error: reason})
-
-  def child_summary(id, {:error, reason}), do: %{id: id, status: :error, error: reason}
-
-  defp child_fields(id, result) do
-    result
-    |> Map.take(~w(output model_requests usage persistence run_id session_id workspace)a)
-    |> Map.merge(%{id: id, outcome: result.verdict})
+  def child_summary(id, {:error, reason}) do
+    verdict = if match?({:run_process_failed, _}, reason), do: :unknown, else: :empty
+    child_summary(id, Result.error(reason, %{Result.empty() | verdict: verdict}))
   end
 
-  def merge_child_summary(run, %{error: {:run_process_failed, _}}),
-    do: Events.merge_verdict(run, :unknown)
-
-  def merge_child_summary(run, %{usage: usage, outcome: outcome} = summary) do
-    run = Events.merge_verdict(run, outcome)
+  def merge_child_summary(run, %{usage: usage, verdict: verdict} = summary) do
+    run = Events.merge_verdict(run, verdict)
     run = %{run | usage: Usage.merge(run.usage, struct(Usage, usage))}
 
     Enum.reduce(
@@ -613,8 +605,6 @@ defmodule Alto.Runner.Execution.Children do
       &Events.add_persistence_error(&2, {:subagent, &1})
     )
   end
-
-  def merge_child_summary(run, _summary), do: run
 
   defp validate_subagent_tools(:inherit, _run), do: :ok
 

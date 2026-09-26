@@ -34,7 +34,7 @@ defmodule Alto.Runner.AgentIdentityTest do
       agent_identity: %{root_run_id: "forged", path: ["forged"]}
     }
 
-    assert {:error, {:invalid_spawn_agents, _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
              Alto.run(%{spawn: spoofed},
                loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 1)),
                tools: [{CaptureTool, owner: self()}]
@@ -44,7 +44,7 @@ defmodule Alto.Runner.AgentIdentityTest do
 
     request = Map.delete(spoofed, :agent_identity)
 
-    assert {:ok, %{output: :done}} =
+    assert %Alto.Runner.Result{status: :ok, output: :done} =
              Alto.run(%{spawn: request},
                loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 1)),
                tools: [{CaptureTool, owner: self()}]
@@ -60,7 +60,10 @@ defmodule Alto.Runner.AgentIdentityTest do
           %{root_run_id: String.duplicate("x", 257), path: []},
           %{root_run_id: "root", path: List.duplicate("x", 65)}
         ] do
-      assert {:error, {:invalid_option, :agent_identity, ^identity}, _} =
+      assert %Alto.Runner.Result{
+               status: :error,
+               reason: {:invalid_option, :agent_identity, ^identity}
+             } =
                Alto.run(%{},
                  loop: Alto.rule_loop(steps: ["capture"]),
                  tools: [{CaptureTool, owner: self()}],
@@ -68,7 +71,7 @@ defmodule Alto.Runner.AgentIdentityTest do
                )
     end
 
-    assert {:error, {:invalid_option, :agent_identity, _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_option, :agent_identity, _}} =
              Alto.run(%{},
                loop: Alto.rule_loop(steps: ["capture"]),
                tools: [{CaptureTool, owner: self()}],
@@ -80,9 +83,9 @@ defmodule Alto.Runner.AgentIdentityTest do
 
   test "fresh runs receive distinct root identities" do
     opts = [loop: Alto.rule_loop(steps: ["capture"]), tools: [{CaptureTool, owner: self()}]]
-    assert {:ok, _} = Alto.run(%{}, opts)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run(%{}, opts)
     assert_receive {:identity, first}
-    assert {:ok, _} = Alto.run(%{}, opts)
+    assert %Alto.Runner.Result{status: :ok} = Alto.run(%{}, opts)
     assert_receive {:identity, second}
     assert first.path == []
     assert second.path == []
@@ -101,7 +104,8 @@ defmodule Alto.Runner.AgentIdentityTest do
         )
     }
 
-    assert {:ok, %{output: :done} = result} =
+    assert %Alto.Runner.Result{status: :ok, output: :done} =
+             result =
              Alto.run(%{spawn: outer},
                loop: Alto.loop(SpawnLoop, subagents: Alto.Subagents.bounded(max_depth: 2)),
                tools: [{CaptureTool, owner: self()}]
@@ -133,12 +137,15 @@ defmodule Alto.Runner.AgentIdentityTest do
       checkpoint_version: "identity-test"
     ]
 
-    assert {:error, :approval_suspended, suspended} = Alto.run(%{}, opts)
+    assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+             suspended = Alto.run(%{}, opts)
+
     {:ok, saved} = Alto.Runner.Checkpoint.decode(suspended.checkpoint["state"])
     assert saved.run.agent_identity == suspended.agent_identity
     assert saved.run.agent_identity.path == []
 
-    assert {:ok, resumed} =
+    assert %Alto.Runner.Result{status: :ok} =
+             resumed =
              Alto.run(%{}, Keyword.put(opts, :checkpoint, {suspended.checkpoint, :approve}))
 
     assert resumed.agent_identity == suspended.agent_identity

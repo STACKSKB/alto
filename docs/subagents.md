@@ -98,7 +98,7 @@ See [interactive input](interactive-input.md) for delivery and retention bounds.
 `wait_agents` accepts child addresses and an optional `timeout_ms` (0–60,000;
 default 30,000). It returns on any selected child's completion, incoming steering,
 or timeout. Results preserve the requested order; completed child summaries
-include usage and outcome. An empty address list waits only for steering.
+include usage and verdict. An empty address list waits only for steering.
 Already completed children return immediately, so omit them when waiting for
 remaining children. Responses and tool calls settle before received messages
 are inserted into provider history.
@@ -178,9 +178,12 @@ initial dispatch and recovery. Requests with a `:model` also select a configured
 backend through the host, as model-facing delegation does. Raw provider
 configuration is rejected.
 The batch preserves input order in `data.results`, even when children finish in
-a different order. A completed child result has `id`, `status`, `output`, `error` when applicable,
-`reason` for cancellation, `model_requests`, `usage`, `outcome`, `run_id`, `session_id`, and an optional `workspace` resource reference.
-A child that could not start has only `id`, `status: :error`, and `error`.
+a different order. Child results are bounded projections of `Alto.Runner.Result`:
+`id`, `status`, `reason`, `output`, `model_requests`, `usage`, `verdict`, `run_id`,
+`session_id`, and `workspace`. Status is `:ok`, `:error`, `:cancelled`, or
+`:suspended`; reason carries the error or cancellation cause. Children that
+could not start use the same fields with empty accounting. Full messages and
+events remain in the child run rather than the batch summary.
 A completed batch emits one `:subagents_completed` event containing
 `%{results: results}`, including one-element batches.
 

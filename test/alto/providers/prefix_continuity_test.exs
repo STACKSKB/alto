@@ -57,7 +57,7 @@ defmodule Alto.Providers.PrefixContinuityTest do
   test "profile composition observes requests without adding diagnostics to executor events" do
     parent = self()
 
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
              Alto.run("PRIVATE-BODY",
                provider:
                  Alto.Providers.Observe.wrap(Provider, fn request ->

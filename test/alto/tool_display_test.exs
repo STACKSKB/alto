@@ -132,7 +132,8 @@ defmodule Alto.ToolDisplayTest do
           {nil, "read_file"},
           {{Presenter, prefix: "custom "}, "custom read_file"}
         ] do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run("read",
                  provider: {Provider, []},
                  tools: [Alto.Tools.ReadFile],
@@ -150,7 +151,8 @@ defmodule Alto.ToolDisplayTest do
     for execution <- [:serial, {:parallel, 2}] do
       owner = self()
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run("read",
                  tool_presenter: {Alto.ToolDisplay, []},
                  provider: {Provider, []},

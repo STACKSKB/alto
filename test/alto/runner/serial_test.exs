@@ -269,7 +269,8 @@ defmodule Alto.Runner.SerialTest do
   test "executes one model/tool/model cycle in strict order" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("do the thing",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
@@ -307,7 +308,8 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "returns a bounded error instead of starting another paid step" do
-    assert {:error, {:model_step_limit, 1}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:model_step_limit, 1}} =
+             result =
              Alto.run("loop once",
                provider: {ToolThenAnswerProvider, test_pid: self()},
                tools: [EchoTool],
@@ -318,7 +320,8 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "rejects an initial transcript over its hard limit" do
-    assert {:error, {:transcript_limit, 8}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 8}} =
+             result =
              Alto.run("too long", provider: ToolThenAnswerProvider, max_transcript_bytes: 8)
 
     assert result.model_requests == 0
@@ -327,7 +330,8 @@ defmodule Alto.Runner.SerialTest do
   test "denied approval becomes a tool result and does not run the tool" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("do not run it",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
@@ -357,7 +361,8 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "tools marked approval never bypass the policy" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("safe read",
                provider: {ToolThenAnswerProvider, test_pid: self()},
                tools: [SafeEchoTool],
@@ -370,7 +375,8 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "configured tools receive their component options" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("configured tool",
                provider: {ToolThenAnswerProvider, test_pid: self()},
                tools: [{ConfiguredEchoTool, suffix: "!"}]
@@ -383,7 +389,8 @@ defmodule Alto.Runner.SerialTest do
   test "prepares once before approval and executes the exact prepared value" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("prepare it",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [{PreparedEchoTool, test_pid: parent}],
@@ -413,7 +420,10 @@ defmodule Alto.Runner.SerialTest do
     assert {:error, :await_timeout} = Alto.await(handle, 10)
     assert Process.alive?(Alto.Test.Runner.worker(handle))
     assert :ok = Alto.cancel(handle, :user)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle, 1_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} =
+             result = Alto.await(handle, 1_000)
+
     assert Enum.map(result.events, & &1.type) == [:run_cancelled]
     assert_receive {:DOWN, ^monitor, :process, ^provider_pid, _reason}
   end
@@ -455,7 +465,10 @@ defmodule Alto.Runner.SerialTest do
 
     assert_receive {:event, %Event{domain: :live, type: :tool_started}}
     assert :ok = Alto.cancel(handle, :user)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle, 1_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} =
+             result = Alto.await(handle, 1_000)
+
     assert Enum.map(result.events, & &1.type) == [:model_completed, :tool_failed, :run_cancelled]
     assert Enum.find(result.events, &(&1.type == :tool_failed)).data.outcome == :unknown
     assert List.last(result.messages)["role"] == "tool"
@@ -474,7 +487,9 @@ defmodule Alto.Runner.SerialTest do
 
     assert :ok = Alto.cancel(handle, :operator_stop)
 
-    assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle, 1_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             result = Alto.await(handle, 1_000)
+
     assert Enum.map(result.events, & &1.type) == [:model_completed, :run_cancelled]
     refute Enum.any?(result.events, &(&1.type in [:tool_completed, :tool_failed]))
     assert_receive {:DOWN, ^monitor, :process, ^approval_pid, _reason}
@@ -513,7 +528,9 @@ defmodule Alto.Runner.SerialTest do
       event_sink: fn event -> send(parent, {:event, event}) end
     ]
 
-    assert {:ok, result} = Alto.run(prompt, Keyword.merge(defaults, options))
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run(prompt, Keyword.merge(defaults, options))
+
     result
   end
 
@@ -561,7 +578,9 @@ defmodule Alto.Runner.SerialTest do
 
     assert :ok = Alto.cancel(handle, :user)
 
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle, 1_000)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} =
+             result = Alto.await(handle, 1_000)
+
     assert Enum.map(result.events, & &1.type) == [:model_completed, :run_cancelled]
     refute_receive {:approval_decision, _request}
     refute_receive {:event, %Event{type: :approval_requested}}
@@ -572,7 +591,8 @@ defmodule Alto.Runner.SerialTest do
   test "preparation timeout terminates its task and does not continue to approval" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("time out prepare",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [{BlockingPrepareTool, test_pid: parent}],
@@ -606,7 +626,11 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "approval policies without a decision callback fail before provider dispatch" do
-    assert {:error, {:invalid_capability, Alto.Approval, {MissingRunTool, []}}, result} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:invalid_capability, Alto.Approval, {MissingRunTool, []}}
+           } =
+             result =
              Alto.run("construct",
                provider: {ToolThenAnswerProvider, test_pid: self()},
                approval: MissingRunTool
@@ -619,7 +643,11 @@ defmodule Alto.Runner.SerialTest do
   test "tools without a run callback are rejected" do
     parent = self()
 
-    assert {:error, {:invalid_capability, Alto.Tool, {MissingRunTool, []}}, result} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:invalid_capability, Alto.Tool, {MissingRunTool, []}}
+           } =
+             result =
              Alto.run("construct",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [MissingRunTool]
@@ -634,7 +662,8 @@ defmodule Alto.Runner.SerialTest do
   test "unprepared tools use run/3 and expose arguments for approval" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("unprepared tool",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
@@ -655,7 +684,8 @@ defmodule Alto.Runner.SerialTest do
   test "a non-encodable tool result stays a bounded tool message and does not fail the run" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("use a tool then answer",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [NonEncodableTool]
@@ -673,7 +703,8 @@ defmodule Alto.Runner.SerialTest do
     File.write!(Path.join(root, "AGENTS.md"), "Prefer exact edits in this repository.")
     parent = self()
 
-    assert {:ok, _result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _result =
              Alto.run("answer",
                provider: {AnswerProvider, test_pid: parent},
                prompt: Alto.Prompts.Coding,
@@ -687,14 +718,16 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "rejects invalid project instruction options" do
-    assert {:error, {:invalid_project_instructions, 5}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_project_instructions, 5}} =
+             _result =
              Alto.run("answer", provider: AnswerProvider, project_instructions: 5)
   end
 
   test "duplicate model tool call ids settle after every invocation reports" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("duplicate calls",
                provider: {DuplicateCallProvider, test_pid: parent},
                tools: [SafeEchoTool]
@@ -709,7 +742,8 @@ defmodule Alto.Runner.SerialTest do
   test "retains only the newest durable events under the event log bound" do
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("use a tool then answer",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [SafeEchoTool],
@@ -743,7 +777,8 @@ defmodule Alto.Runner.SerialTest do
 
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("use a tool then answer",
                loop: spec,
                provider: {ToolThenAnswerProvider, test_pid: parent},
@@ -787,7 +822,8 @@ defmodule Alto.Runner.SerialTest do
 
     parent = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("use a tool then answer",
                loop: spec,
                provider: {ToolThenAnswerProvider, test_pid: parent},
@@ -817,7 +853,8 @@ defmodule Alto.Runner.SerialTest do
       Alto.default_loop()
       |> Alto.Loop.after_event(:step_settled, hook_effects)
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("answer directly",
                loop: spec,
                provider: {AnswerProvider, test_pid: self()},

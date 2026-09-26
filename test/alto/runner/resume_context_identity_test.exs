@@ -36,7 +36,7 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
   defp compacted?(result), do: Enum.any?(result.events, &(&1.type == :context_compacted))
 
   defp seed(opts) do
-    assert {:ok, result} = Alto.run("build authored history", opts)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.run("build authored history", opts)
     assert result.model_requests == 4
     refute compacted?(result)
     assert Alto.Context.Transcript.bytes(result.messages) > 4_096
@@ -44,14 +44,20 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
 
   test "advertised model without a model option survives durable resume", %{opts: opts} do
     seed(opts)
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", opts)
+
     refute compacted?(result)
   end
 
   test "unknown model preserves live estimation but cannot authorize durable reuse", %{opts: opts} do
     opts = Keyword.put(opts, :provider, {UnknownProvider, []})
     seed(opts)
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", opts)
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", opts)
+
     assert compacted?(result)
   end
 
@@ -90,7 +96,9 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
         {DescribedProvider, Keyword.put(provider_opts, :log_path, "other-log")}
       )
 
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", same)
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", same)
+
     refute compacted?(result)
 
     changed =
@@ -100,7 +108,9 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
         {DescribedProvider, Keyword.put(provider_opts, :endpoint, "https://elsewhere.invalid/v1")}
       )
 
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", changed)
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", changed)
+
     assert compacted?(result)
   end
 
@@ -111,7 +121,9 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
     changed =
       Keyword.put(opts, :provider, {DescribedProvider, base_url: "https://second.invalid/v1"})
 
-    assert {:ok, result} = Alto.resume(opts[:session], "continue", changed)
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.resume(opts[:session], "continue", changed)
+
     assert compacted?(result)
   end
 end

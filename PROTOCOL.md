@@ -195,11 +195,12 @@ repeated; durable events were already streamed.
 
 ```json
 {"v": 1, "type": "result", "id": "s-9", "run_id": "run-41",
- "outcome": "ok", "output": "finished", "model_requests": 3}
+ "status": "ok", "reason": null, "output": "finished", "model_requests": 3}
 ```
 
-`outcome` is `"ok"`, `"error"` (then `reason` is present), or `"cancelled"`
-(then `reason` is present).
+`status` is `"ok"`, `"error"`, `"cancelled"`, or `"suspended"`. `reason` carries
+the failure, cancellation cause, or suspension reason, and is null for success.
+The fields use the same names as the completed runner result.
 
 **`overflow`** — the server dropped material a client subscribed to.
 
@@ -315,7 +316,7 @@ callbacks should remain bounded.
 ```
 
 The reply is `ok` with `{"sessions": [...]}` summaries (`id`, `task`,
-`runs`, `completed_runs`, `last_outcome`, newest first, capped) read from
+`runs`, `completed_runs`, `last_status`, newest first, capped) read from
 the server's session directory — independent of the live-run replay
 window, so evicted and restarted-away runs stay discoverable. An
 unreadable store answers `error` (`internal`).
@@ -416,7 +417,7 @@ released on eviction. Trusted hosts can inspect unconsumed root submissions with
 ```
 
 The reply is `ok`; the observable effect arrives as the durable
-`run_cancelled` event and a `result` with `outcome: "cancelled"`.
+`run_cancelled` event and a `result` with `status: "cancelled"`.
 
 **`approval_response`** — answer a pending approval request.
 

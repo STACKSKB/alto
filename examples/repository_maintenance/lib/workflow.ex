@@ -168,7 +168,7 @@ defmodule RepositoryMaintenance.Workflow do
     end
   end
 
-  defp build_manifest(_repo, checkout, {:ok, _run}, opts) do
+  defp build_manifest(_repo, checkout, %Alto.Runner.Result{status: :ok}, opts) do
     with {:ok, test_output} <- run_tests(checkout, opts),
          {:ok, _} <- git(checkout, ["add", "--all"]),
          {:ok, _} <-
@@ -221,7 +221,7 @@ defmodule RepositoryMaintenance.Workflow do
   defp build_manifest(_repo, _checkout, {:error, reason}, _opts),
     do: {:error, {:diagnosis_failed, reason}}
 
-  defp build_manifest(_repo, _checkout, {:error, reason, _result}, _opts),
+  defp build_manifest(_repo, _checkout, %Alto.Runner.Result{reason: reason}, _opts),
     do: {:error, {:diagnosis_failed, reason}}
 
   defp build_manifest(_repo, _checkout, other, _opts),

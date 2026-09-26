@@ -15,7 +15,7 @@ defmodule Alto.InputFaultTest do
     {:ok, input} = Alto.Input.start_link()
     GenServer.stop(input)
 
-    assert {:error, {:input_unavailable, _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:input_unavailable, _}} =
              Alto.Runner.Execution.run(%{}, [input: input], fn _, _ -> flunk("dispatched") end)
   end
 

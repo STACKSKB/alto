@@ -109,7 +109,7 @@ defmodule Alto.SessionTest do
                id,
                Session.completed_record(%{
                  run_id: "run-1",
-                 outcome: "error",
+                 status: :error,
                  reason: {:model_request_failed, :boom},
                  output: nil,
                  model_requests: 4
@@ -118,7 +118,7 @@ defmodule Alto.SessionTest do
              )
 
     assert {:ok, [_started, completed]} = Session.read(id, session_dir: dir)
-    assert completed["outcome"] == "error"
+    assert completed["status"] == "error"
     assert {:ok, {:model_request_failed, :boom}} = Session.decode_term(completed["reason"])
   end
 
@@ -225,7 +225,7 @@ defmodule Alto.SessionTest do
     assert newest.task == "second"
     assert newest.runs == 1
     assert newest.completed_runs == 0
-    assert newest.last_outcome == nil
+    assert newest.last_status == nil
     assert is_integer(newest.started_at_ms)
   end
 

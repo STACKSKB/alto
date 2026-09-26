@@ -540,20 +540,13 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp run_summary(run, pending) do
-    status =
-      case run.result do
-        :running -> "running"
-        {:error, :approval_suspended, _} -> "suspended"
-        {:ok, _} -> "completed"
-        {:error, {:cancelled, _}, _} -> "cancelled"
-        _ -> "failed"
-      end
-
-    usage =
-      case run.result do
-        {:ok, value} -> value.usage
-        {:error, _, value} when not is_nil(value) -> value.usage
-        _ -> %{}
+    {status, usage} =
+      if run.result == :running do
+        {"running", %{}}
+      else
+        {%{ok: "completed", error: "failed", cancelled: "cancelled", suspended: "suspended"}[
+           run.result.status
+         ], run.result.usage}
       end
 
     %{
@@ -696,24 +689,8 @@ defmodule Alto.FrontEnd.Registry do
     publish(state, run.id, result_notification(run), :result)
   end
 
-  defp result_notification(run) do
-    {outcome, output, model_requests} =
-      case run.result do
-        {:ok, result} ->
-          {:ok, result.output, result.model_requests}
-
-        {:error, {:cancelled, reason}, result} ->
-          {{:cancelled, reason}, nil, model_requests_of(result)}
-
-        {:error, reason, result} ->
-          {{:error, reason}, nil, model_requests_of(result)}
-
-        _other ->
-          {{:error, :invalid_runner_result}, nil, 0}
-      end
-
-    {:result, run.id, outcome, output, model_requests}
-  end
+  defp result_notification(run),
+    do: {:result, run.id, Map.take(run.result, [:status, :reason, :output, :model_requests])}
 
   defp track_finished(state, run_id) do
     order = state.finished_order ++ [run_id]
@@ -735,9 +712,6 @@ defmodule Alto.FrontEnd.Registry do
     if Process.alive?(run.messaging), do: GenServer.stop(run.messaging)
     Alto.Input.close(run.input)
   end
-
-  defp model_requests_of(nil), do: 0
-  defp model_requests_of(%Alto.Runner.Result{} = result), do: result.model_requests
 
   ## Approvals
 

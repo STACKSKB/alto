@@ -140,7 +140,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     tool(root, "wait_agents", %{"agents" => [child_id], "timeout_ms" => 0})
     assert_receive {:request, "root", _, root}, @timeout
     answer(root, "root done")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.loop_state.task == "root"
     assert result.output == "root done"
     assert result.usage.total_tokens == 18
@@ -172,7 +172,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert_receive {:request, "root", joined, root}, @timeout
     assert Enum.map(reply(joined)["agents"], & &1["id"]) == ["b", "a"]
     answer(root, "done")
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = _ = Alto.await(handle)
   end
 
   test "async child errors preserve successful siblings in provider replies" do
@@ -197,7 +197,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert %{
              "id" => "failed",
              "status" => "error",
-             "error" => %{
+             "reason" => %{
                "$tuple" => [
                  "http_error",
                  402,
@@ -207,7 +207,7 @@ defmodule Alto.Runner.AgentMessagingTest do
            } = failed
 
     answer(root, "done")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert :ok = Alto.Context.Transcript.validate(result.messages)
   end
 
@@ -232,16 +232,16 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert Enum.all?(results, &(&1["status"] == "completed"))
     [crashed, successful, refused] = Enum.map(results, & &1["result"])
 
-    assert crashed["error"]["$tuple"] == [
+    assert crashed["reason"]["$tuple"] == [
              "run_process_failed",
              %{"$tuple" => ["child_start_failed", "start_crashed"]}
            ]
 
     assert successful["output"] == "child done"
     assert successful["usage"]["total_tokens"] == 2
-    assert refused["error"] == "refused"
+    assert refused["reason"] == "refused"
     answer(root, "done")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.verdict == :unknown
     assert result.usage.total_tokens == 10
   end
@@ -263,7 +263,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert :ok = Alto.Context.Transcript.validate(request.messages)
     assert {:ok, %{status: :consumed}} = Alto.Input.request(input, {:receipt, receipt.message_id})
     answer(root, "done")
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.loop_state.task == "new direction"
   end
 
@@ -278,7 +278,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     monitor = Process.monitor(child)
     tool(root, "wait_agents", %{"agents" => [a]})
     :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, :user}, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} = _ = Alto.await(handle)
     assert_receive {:DOWN, ^monitor, :process, ^child, _}, @timeout
     refute_receive {:request, "b", _, _}, 30
     {:ok, agents} = Alto.Messaging.list(router)
@@ -302,7 +302,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     answer(first, "done")
     assert_receive {:request, "root", _, root}, @timeout
     answer(root, "done")
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = _ = Alto.await(handle)
   end
 
   test "async dispatch cannot multiply the root model-request allowance" do
@@ -310,7 +310,8 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert_receive {:request, "root", _, root}, @timeout
     tool(root, "start_agents", %{"agents" => [agent("a"), agent("b")]})
 
-    assert {:error, {:model_request_limit, 1}, result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:model_request_limit, 1}} =
+             result =
              Alto.await(handle)
 
     assert result.usage.requests == 1
@@ -376,7 +377,10 @@ defmodule Alto.Runner.AgentMessagingTest do
       wait_paused(sender)
       # The in-flight model request settles once; its answer must not be replayed.
       answer(child, "a finished")
-      assert {:error, :approval_suspended, suspended} = Alto.await(handle)
+
+      assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
+               suspended = Alto.await(handle)
+
       refute_receive {:request, "b", _, _}, 30
       packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
       {:ok, restored_router} = Alto.Messaging.start_link(transport: transport)
@@ -407,7 +411,7 @@ defmodule Alto.Runner.AgentMessagingTest do
       assert_receive {:request, "root", joined, root}, @timeout
       assert Enum.map(reply(joined)["agents"], & &1["agent_id"]) == [a, b]
       answer(root, "done")
-      assert {:ok, result} = Alto.await(resumed)
+      assert %Alto.Runner.Result{status: :ok} = result = Alto.await(resumed)
       assert :ok = Alto.Context.Transcript.validate(result.messages)
     end
   end
@@ -420,7 +424,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert_receive {:request, "a", _, child}, @timeout
     monitor = Process.monitor(child)
     :ok = Alto.cancel(handle)
-    assert {:error, {:cancelled, :user}, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :cancelled, reason: :user} = result = Alto.await(handle)
     assert result.verdict == :unknown
     assert_receive {:DOWN, ^monitor, :process, ^child, _}, @timeout
   end

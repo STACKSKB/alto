@@ -142,7 +142,11 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "delegation is disabled without a depth budget", %{dir: dir} do
-    assert {:error, {:invalid_spawn_agents, :max_depth_exceeded}, result} =
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:invalid_spawn_agents, :max_depth_exceeded}
+           } =
+             result =
              Alto.run(%{spawn: %{id: "sub-1", task: "child task"}},
                loop: parent_loop(0),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -154,7 +158,8 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "the child inherits provider, tools, and approval by default", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{spawn: %{id: "sub-1", task: "do the echo"}},
                loop: parent_loop(1),
@@ -184,7 +189,8 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     # The child calls the guarded tool under DenyAll, proving the parent
     # policy governs the child: a widened policy would have run it.
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{
                  spawn: %{
@@ -205,7 +211,8 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "an explicit tool set overrides inheritance", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{
                  spawn: %{
@@ -248,7 +255,8 @@ defmodule Alto.Runner.SerialSubagentTest do
   end
 
   test "invalid delegation requests fail the run", %{dir: dir} do
-    assert {:error, {:invalid_spawn_agents, _}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
+             _result =
              Alto.run(%{spawn: %{id: "sub-1"}},
                loop: parent_loop(1),
                provider: {AnswerProvider, test_pid: self(), answer: "unused"},
@@ -262,7 +270,8 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     grandchild = %{id: "grand", task: "never runs"}
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{spawn: %{id: "sub-1", task: %{spawn: grandchild}, loop: parent_loop(1)}},
                loop: parent_loop(1),
                provider: {AnswerProvider, test_pid: test_pid, answer: "unused"},
@@ -274,12 +283,13 @@ defmodule Alto.Runner.SerialSubagentTest do
             %{
               id: "sub-1",
               status: :error,
-              error: {:invalid_spawn_agents, :max_depth_exceeded}
+              reason: {:invalid_spawn_agents, :max_depth_exceeded}
             }} = result.output
   end
 
   test "a crashing child becomes a failed event, not a parent crash", %{dir: dir} do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(
                %{spawn: %{id: "sub-1", task: "boom", loop: Alto.loop(ExplodingLoop)}},
                loop: parent_loop(1),
@@ -288,7 +298,7 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:failed, %{id: "sub-1", error: {:participant_failed, _}}} = result.output
+    assert {:failed, %{id: "sub-1", reason: {:participant_failed, _}}} = result.output
   end
 
   test "parent cancellation tears the child down", %{dir: dir} do
@@ -304,7 +314,10 @@ defmodule Alto.Runner.SerialSubagentTest do
 
     assert_receive :child_entered, 2_000
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, parent_result} = Alto.await(handle, 10_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             parent_result = Alto.await(handle, 10_000)
+
     assert parent_result.session_id != nil
 
     assert {:ok, records} = Session.read(parent_result.session_id, session_dir: dir)
@@ -312,6 +325,6 @@ defmodule Alto.Runner.SerialSubagentTest do
     child_done =
       Enum.find(records, &(&1["type"] == "completed" and &1["run_id"] != parent_result.run_id))
 
-    assert child_done["outcome"] == "cancelled"
+    assert child_done["status"] == "cancelled"
   end
 end

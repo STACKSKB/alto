@@ -106,7 +106,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
   describe "runner tags" do
     test "a returned value completes" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run({"ok_tool", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [OkTool]
@@ -119,7 +120,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
     test "a participant error is a known failure, executed exactly once" do
       test_pid = self()
 
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run({"flaky", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [{FlakyTool, []}],
@@ -138,7 +140,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
     end
 
     test "a commit followed by a lost response is unknown, never a success" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run({"committer", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [{CommitThenTimeoutTool, test_pid: self()}],
@@ -152,7 +155,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
     end
 
     test "a commit followed by a crash is unknown" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run({"crasher", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [{CommitThenCrashTool, test_pid: self()}]
@@ -164,7 +168,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
     end
 
     test "later uncertainty dominates earlier success after event eviction" do
-      assert {:error, _reason, result} =
+      assert %Alto.Runner.Result{status: :error, reason: _reason} =
+               result =
                Alto.run(%{},
                  loop: Alto.rule_loop(steps: ["ok_tool", "committer"]),
                  tools: [OkTool, {CommitThenTimeoutTool, test_pid: self()}],
@@ -179,7 +184,8 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
     test "definite pre-dispatch rejections are known" do
       # Unknown tool never dispatches.
-      assert {:ok, missing} =
+      assert %Alto.Runner.Result{status: :ok} =
+               missing =
                Alto.run({"missing", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [OkTool]
@@ -204,12 +210,15 @@ defmodule Alto.Runner.SerialOutcomeTest do
         def handle_event(_e, s, _spec), do: Transition.continue(s)
       end
 
-      assert {:ok, bad} = Alto.run(:go, loop: Alto.loop(BadArgsLoop), tools: [OkTool])
+      assert %Alto.Runner.Result{status: :ok} =
+               bad = Alto.run(:go, loop: Alto.loop(BadArgsLoop), tools: [OkTool])
+
       assert %{outcome: :rejected_before_dispatch} = bad.output
     end
 
     test "an approval denial is a pre-dispatch rejection" do
-      assert {:ok, result} =
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
                Alto.run({"ok_tool", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [GuardedOkTool],
@@ -235,7 +244,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
       # Wait until the tool is dispatched, then cancel into the dispatch.
       assert_receive {:event, %Event{type: :tool_started}}, 2_000
       assert :ok = Alto.cancel(handle, :operator_stop)
-      assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle, 5_000)
+
+      assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+               result = Alto.await(handle, 5_000)
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
 
@@ -257,7 +268,9 @@ defmodule Alto.Runner.SerialOutcomeTest do
 
       assert_receive :approval_entered, 2_000
       assert :ok = Alto.cancel(handle, :operator_stop)
-      assert {:error, {:cancelled, :operator_stop}, result} = Alto.await(handle, 5_000)
+
+      assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+               result = Alto.await(handle, 5_000)
 
       cancelled = Enum.find(result.events, &(&1.type == :run_cancelled))
       assert %{reason: :operator_stop} = cancelled.data

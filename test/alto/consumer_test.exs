@@ -131,7 +131,8 @@ defmodule Alto.ConsumerTest do
     {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
 
     handler = fn _payload, _ctx ->
-      {:ok, result} =
+      %Alto.Runner.Result{status: :ok} =
+        result =
         Alto.run("go",
           loop: Alto.loop(UnknownLoop),
           tools: [SleepyTool],

@@ -66,7 +66,8 @@ defmodule Alto.Runner.SerialChildSessionsTest do
   end
 
   test "separate persisted children have independent sessions and parent linkage", %{dir: dir} do
-    assert {:ok, parent} =
+    assert %Alto.Runner.Result{status: :ok} =
+             parent =
              Alto.run(%{agents: agents()}, loop: loop(:separate), session: :new, session_dir: dir)
 
     assert {:completed, results} = parent.output
@@ -114,7 +115,7 @@ defmodule Alto.Runner.SerialChildSessionsTest do
       assert summary.task == assignment.task
       assert summary.runs == 1
       assert summary.completed_runs == 1
-      assert summary.last_outcome == "ok"
+      assert summary.last_status == "ok"
       assert summary.parent_session_id == parent.session_id
       assert summary.agent_identity == identity
     end)
@@ -128,7 +129,8 @@ defmodule Alto.Runner.SerialChildSessionsTest do
   end
 
   test "shared remains the default and marks children non-owners", %{dir: dir} do
-    assert {:ok, parent} =
+    assert %Alto.Runner.Result{status: :ok} =
+             parent =
              Alto.run(%{agents: agents()},
                loop:
                  Alto.loop(BatchLoop,
@@ -148,7 +150,8 @@ defmodule Alto.Runner.SerialChildSessionsTest do
   end
 
   test "separate mode does not persist children when parent is nonpersisted", %{dir: dir} do
-    assert {:ok, parent} =
+    assert %Alto.Runner.Result{status: :ok} =
+             parent =
              Alto.run(%{agents: agents()}, loop: loop(:separate), session: nil, session_dir: dir)
 
     assert {:completed, results} = parent.output

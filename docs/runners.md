@@ -7,7 +7,18 @@ inherited by child runs. A runner owns scheduling and its private handle.
 
 Every host implements `run/2`, `start/2`, `await/2`, `cancel/2`, `terminate/2`,
 and `subscribe/2`. The public dispatcher wraps private handles in the opaque
-`Alto.Runner.Handle`. Outcomes use `Alto.Runner.Result`:
+`Alto.Runner.Handle`. Completed runs return `Alto.Runner.Result` directly,
+with `status: :ok | :error | :cancelled | :suspended` and a `reason` field.
+Cancellation reasons contain the cause without an extra cancellation tuple.
+The separate `verdict` describes effect certainty, so a cancelled or failed run
+can still have an unknown effect outcome. Startup and transport failures that
+have no run result continue to return `{:error, reason}`.
+
+```elixir
+%Alto.Runner.Result{status: :ok, output: output} = Alto.run(task, tools: tools, loop: loop)
+```
+
+Subscriptions deliver that same result:
 
 ```elixir
 {:ok, handle} = Alto.start(task, runner: MyRunner, tools: tools, loop: loop)

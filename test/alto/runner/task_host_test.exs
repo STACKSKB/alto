@@ -11,7 +11,7 @@ defmodule Alto.Runner.TaskHostTest do
           TaskHost.start(
             fn ref ->
               receive do
-                {:alto_cancel, ^ref, reason} -> {:error, {:cancelled, reason}, Result.empty()}
+                {:alto_cancel, ^ref, reason} -> Result.error({:cancelled, reason})
               end
             end,
             []
@@ -24,13 +24,13 @@ defmodule Alto.Runner.TaskHostTest do
     assert_receive {:detached, handle}
     assert_receive {:DOWN, ^monitor, :process, ^creator, _}
     assert :ok = TaskHost.cancel(handle, :done)
-    assert {:error, {:cancelled, :done}, _} = TaskHost.await(handle, 1000)
+    assert %Result{status: :cancelled, reason: :done} = TaskHost.await(handle, 1000)
     assert {:ok, ref} = TaskHost.subscribe(handle)
-    assert_receive {:alto_runner_result, ^ref, {:error, {:cancelled, :done}, _}}
+    assert_receive {:alto_runner_result, ^ref, %Result{status: :cancelled, reason: :done}}
   end
 
   test "completion can be awaited and observed from independent callers" do
-    outcome = {:ok, %{Result.empty() | output: "done", verdict: :completed}}
+    outcome = %Result{Result.empty() | status: :ok, output: "done", verdict: :completed}
     {:ok, handle} = TaskHost.start(fn _ -> outcome end, [])
     assert ^outcome = TaskHost.await(handle, 1000)
     parent = self()
@@ -45,7 +45,7 @@ defmodule Alto.Runner.TaskHostTest do
       TaskHost.start(
         fn cancel_ref ->
           receive do
-            {:alto_cancel, ^cancel_ref, reason} -> {:error, {:cancelled, reason}, Result.empty()}
+            {:alto_cancel, ^cancel_ref, reason} -> Result.error({:cancelled, reason})
           end
         end,
         []
@@ -54,8 +54,8 @@ defmodule Alto.Runner.TaskHostTest do
     assert {:error, :await_timeout} = TaskHost.await(handle, 10)
     {:ok, ref} = TaskHost.subscribe(handle)
     assert :ok = TaskHost.cancel(handle, :test)
-    assert {:error, {:cancelled, :test}, _} = TaskHost.await(handle, 1000)
-    assert_receive {:alto_runner_result, ^ref, {:error, {:cancelled, :test}, _}}
+    assert %Result{status: :cancelled, reason: :test} = TaskHost.await(handle, 1000)
+    assert_receive {:alto_runner_result, ^ref, %Result{status: :cancelled, reason: :test}}
     refute_receive {:alto_runner_result, ^ref, _}
   end
 
@@ -66,7 +66,10 @@ defmodule Alto.Runner.TaskHostTest do
     on_exit(fn -> Process.exit(worker, :kill) end)
     {:ok, ref} = TaskHost.subscribe(handle)
     Process.exit(handle.pid, :kill)
-    assert_receive {:alto_runner_result, ^ref, {:error, {:run_process_failed, :killed}, result}}
+
+    assert_receive {:alto_runner_result, ^ref,
+                    %Result{status: :error, reason: {:run_process_failed, :killed}} = result}
+
     assert result.verdict == :unknown
     assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 500
     refute_receive {:alto_runner_result, ^ref, _}
@@ -95,10 +98,13 @@ defmodule Alto.Runner.TaskHostTest do
   test "forced termination reports uncertain execution and releases observers" do
     {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
     {:ok, ref} = TaskHost.subscribe(handle)
-    assert {:error, {:run_process_failed, :cancel_timeout}, result} = TaskHost.terminate(handle)
+
+    assert %Result{status: :error, reason: {:run_process_failed, :cancel_timeout}} =
+             result = TaskHost.terminate(handle)
+
     assert result.verdict == :unknown
 
     assert_receive {:alto_runner_result, ^ref,
-                    {:error, {:run_process_failed, :cancel_timeout}, _}}
+                    %Result{status: :error, reason: {:run_process_failed, :cancel_timeout}}}
   end
 end

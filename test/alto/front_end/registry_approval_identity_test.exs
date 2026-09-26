@@ -197,12 +197,18 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
 
     assert :ok = Registry.request(registry, {:approval_response, second_req.id, {:deny, :second}})
 
-    assert_receive {:alto_notification, {:result, ^first, :ok, _, _}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^first, %{status: :ok, output: _, model_requests: _}}},
+                   @receive_timeout
 
     assert_receive {:alto_notification,
                     {:result, ^second,
-                     {:error, {:rule_step_failed, 1, "echo", {:approval_denied, :second}}}, _,
-                     _}},
+                     %{
+                       status: :error,
+                       reason: {:rule_step_failed, 1, "echo", {:approval_denied, :second}},
+                       output: _,
+                       model_requests: _
+                     }}},
                    @receive_timeout
 
     # Late replies are rejected.
@@ -235,7 +241,9 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert second.id != first.id
     assert :ok = Registry.request(registry, {:approval_response, second.id, :approve})
 
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: "finished", model_requests: _}}},
+                   @receive_timeout
   end
 
   test "cancellation while approval is pending clears the handle", %{
@@ -254,7 +262,9 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert_receive {:alto_notification, {:event, ^run_id, _seq, %Event{type: :run_cancelled}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:result, ^run_id, {:cancelled, :operator_stop}, _, _}},
+    assert_receive {:alto_notification,
+                    {:result, ^run_id,
+                     %{status: :cancelled, reason: :operator_stop, output: _, model_requests: _}}},
                    @receive_timeout
 
     # The pending handle was released; a late decision cannot resurrect it.
@@ -281,7 +291,10 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert replayed.id == request.id
 
     assert :ok = Registry.request(registry, {:approval_response, request.id, :approve})
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, _, _}}, @receive_timeout
+
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: _, model_requests: _}}},
+                   @receive_timeout
   end
 
   test "approved prepared operation is exactly the one executed", %{
@@ -315,8 +328,8 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     first_out = wait_result(first)
     second_out = wait_result(second)
 
-    assert {:ok, [%{stamped: "first", token: first_tok}]} = first_out
-    assert {:ok, [%{stamped: "second", token: second_tok}]} = second_out
+    assert %{status: :ok, output: [%{stamped: "first", token: first_tok}]} = first_out
+    assert %{status: :ok, output: [%{stamped: "second", token: second_tok}]} = second_out
 
     assert first_tok == first_req.details.token
     assert second_tok == second_req.details.token
@@ -326,7 +339,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
 
   defp wait_result(run_id) do
     receive do
-      {:alto_notification, {:result, ^run_id, outcome, output, _}} -> {outcome, output}
+      {:alto_notification, {:result, ^run_id, result}} -> result
     after
       @receive_timeout -> flunk("no result for #{run_id}")
     end

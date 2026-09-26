@@ -54,7 +54,10 @@ defmodule Alto.InputTest do
     assert Enum.any?(second, &(&1["content"] == "answer"))
     assert {:ok, _} = Alto.Messaging.send(input, text: "third", delivery: :follow_up)
     send(next, :answer)
-    assert {:error, {:model_step_limit, 2}, result} = Alto.await(handle)
+
+    assert %Alto.Runner.Result{status: :error, reason: {:model_step_limit, 2}} =
+             result = Alto.await(handle)
+
     assert result.model_requests == 2
     assert Enum.count(result.events, &(&1.type == :input_received)) == 2
   end
@@ -69,7 +72,7 @@ defmodule Alto.InputTest do
     assert_receive {:request, history, next}, @receive_timeout
     assert List.last(history)["content"] == "change direction"
     send(next, :answer)
-    assert {:ok, result} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.model_requests == 2
     assert Alto.Input.request(input, :list) == []
   end
@@ -79,9 +82,9 @@ defmodule Alto.InputTest do
     opts = [input: input, provider: {Provider, owner: self()}]
     {:ok, handle} = Alto.start("first", opts)
     assert_receive {:request, _, worker}, @receive_timeout
-    assert {:error, :input_in_use, _} = Alto.run("second", opts)
+    assert %Alto.Runner.Result{status: :error, reason: :input_in_use} = Alto.run("second", opts)
     send(worker, :answer)
-    assert {:ok, _} = Alto.await(handle)
+    assert %Alto.Runner.Result{status: :ok} = Alto.await(handle)
     assert {:ok, _reader} = Alto.Input.request(input, :claim)
   end
 
@@ -89,7 +92,7 @@ defmodule Alto.InputTest do
     {:ok, input} = Alto.Input.start_link()
     {:ok, _} = Alto.Messaging.send(input, text: String.duplicate("x", 1000))
 
-    assert {:error, {:transcript_limit, 500}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 500}} =
              Alto.run("first",
                input: input,
                provider: {Provider, owner: self()},

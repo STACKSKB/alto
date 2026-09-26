@@ -20,7 +20,8 @@ defmodule Alto.Runner.SerialUsageTest do
   end
 
   test "provider usage survives into durable events and the final result" do
-    assert {:ok, result} = Alto.run("task", loop: Alto.chat_loop(), provider: Provider)
+    assert %Alto.Runner.Result{status: :ok} =
+             result = Alto.run("task", loop: Alto.chat_loop(), provider: Provider)
 
     assert result.usage == %{
              input_tokens: 800,

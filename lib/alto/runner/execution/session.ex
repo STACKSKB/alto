@@ -12,9 +12,7 @@ defmodule Alto.Runner.Execution.Session do
 
   require Logger
 
-  @type outcome ::
-          {:ok, Result.t()}
-          | {:error, term(), Result.t()}
+  @type outcome :: Result.t()
 
   @doc "Append a lifecycle record, returning any persistence errors. Build only when logging is enabled."
   def append(run, warning, build)
@@ -33,21 +31,18 @@ defmodule Alto.Runner.Execution.Session do
 
   @doc "Persist the terminal or suspended outcome using the required run fields."
   @spec persist_outcome(map(), outcome()) :: outcome()
-  def persist_outcome(%{session: nil}, outcome) do
-    # A run without a transcript can still request durable child journals.
-    # Keep their persistence failures visible instead of erasing them here.
-    result = elem(outcome, tuple_size(outcome) - 1)
-
-    put_persistence(
-      outcome,
-      result,
-      Result.persistence_status(Result.persistence_errors(result), :not_requested)
-    )
+  def persist_outcome(%{session: nil}, result) do
+    %{
+      result
+      | persistence: Result.persistence_status(Result.persistence_errors(result), :not_requested)
+    }
   end
 
-  def persist_outcome(state, outcome) do
-    result = elem(outcome, tuple_size(outcome) - 1)
-    {status, reason, save_transcript?} = completion(outcome)
+  def persist_outcome(state, result) do
+    bound_checkpoint? =
+      not is_nil(result.checkpoint) and result.checkpoint["kind"] in ["parent", "child"]
+
+    save_transcript? = result.status != :suspended and not bound_checkpoint?
 
     {result, transcript_errors} =
       if save_transcript?, do: persist_transcript(state, result), else: {result, []}
@@ -55,30 +50,10 @@ defmodule Alto.Runner.Execution.Session do
     errors =
       Result.persistence_errors(result) ++
         transcript_errors ++
-        persist_completed(state, status, reason, result)
+        persist_completed(state, result)
 
-    put_persistence(outcome, result, Result.persistence_status(errors))
+    %{result | persistence: Result.persistence_status(errors)}
   end
-
-  defp completion({:ok, _result}), do: {"ok", nil, true}
-  defp completion({:error, :execution_suspended, _result}), do: {"suspended", nil, false}
-
-  defp completion({:error, :approval_suspended, _result}), do: {"suspended", nil, false}
-
-  defp completion({:error, reason, %{checkpoint: %{"kind" => kind}}})
-       when kind in ["parent", "child"] do
-    status =
-      case reason do
-        {:cancelled, _} -> "cancelled"
-        {:children_pending, _} -> "suspended"
-        _ -> "error"
-      end
-
-    {status, reason, false}
-  end
-
-  defp completion({:error, {:cancelled, cause}, _result}), do: {"cancelled", cause, true}
-  defp completion({:error, reason, _result}), do: {"error", reason, true}
 
   defp persist_transcript(%{resume_snapshot: false}, result), do: {result, []}
   defp persist_transcript(_state, %{transcript_persisted: true} = result), do: {result, []}
@@ -112,20 +87,17 @@ defmodule Alto.Runner.Execution.Session do
     end
   end
 
-  defp persist_completed(state, outcome, reason, result) do
+  defp persist_completed(state, result) do
     append(state, "completion not persisted", fn ->
       DurableSession.completed_record(%{
         run_id: state.session_id,
         subagent: state.agent_depth > 0,
         session_owner: state.agent_depth == 0 or state.resume_snapshot,
-        outcome: outcome,
-        reason: reason,
+        status: result.status,
+        reason: result.reason,
         output: result.output,
         model_requests: result.model_requests
       })
     end)
   end
-
-  defp put_persistence(outcome, result, status),
-    do: put_elem(outcome, tuple_size(outcome) - 1, %{result | persistence: status})
 end

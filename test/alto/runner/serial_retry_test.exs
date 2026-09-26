@@ -82,7 +82,8 @@ defmodule Alto.Runner.SerialRetryTest do
       _n -> {:ok, %{message: "recovered", tool_calls: []}}
     end
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("retry me",
                provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
                tools: [],
@@ -114,11 +115,11 @@ defmodule Alto.Runner.SerialRetryTest do
         )
 
       if retried? do
-        assert {:ok, _} = outcome
+        assert %Alto.Runner.Result{status: :ok} = outcome
         assert attempts(agent) == 2
         assert [{1, 3, {:http, ^status}}] = retry_events()
       else
-        assert {:error, {:http_error, ^status, _}, _} = outcome
+        assert %Alto.Runner.Result{status: :error, reason: {:http_error, ^status, _}} = outcome
         assert attempts(agent) == 1
         assert retry_events() == []
       end
@@ -128,7 +129,8 @@ defmodule Alto.Runner.SerialRetryTest do
   test "exhausted retries surface the last failure uniformly", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :timeout}} end
 
-    assert {:error, {:transport_error, :timeout}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transport_error, :timeout}} =
+             _result =
              Alto.run("retry me",
                provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
                tools: [],
@@ -143,7 +145,8 @@ defmodule Alto.Runner.SerialRetryTest do
   test "retry stays off unless configured", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :boom}} end
 
-    assert {:error, {:transport_error, :boom}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:transport_error, :boom}} =
+             _ =
              Alto.run("retry me",
                provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
                tools: []
@@ -155,7 +158,8 @@ defmodule Alto.Runner.SerialRetryTest do
   test "our own deadline is never retried" do
     # SleepyProvider outlives the deadline; the timeout must surface once,
     # not as four attempts.
-    assert {:error, {:participant_failed, :timeout}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
+             _ =
              Alto.run("retry me",
                provider: {SleepyProvider, []},
                tools: [],
@@ -179,14 +183,18 @@ defmodule Alto.Runner.SerialRetryTest do
 
     assert_receive {:evt, %Event{type: :model_retry}}, 2_000
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, _} = Alto.await(handle, 2_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             _ = Alto.await(handle, 2_000)
+
     assert attempts(agent) == 1
   end
 
   test "tool effects are never retried" do
     test_pid = self()
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run("use the tool",
                provider: {ToolThenAnswerProvider, test_pid: test_pid},
                tools: [BoomTool],

@@ -42,9 +42,12 @@ defmodule Alto.ReasoningTest do
     dir = Path.join(System.tmp_dir!(), "alto-reasoning-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
     opts = [provider: {Provider, owner: self()}, tools: [], session: :new, session_dir: dir]
-    assert {:ok, first} = Alto.run("hello", opts)
+    assert %Alto.Runner.Result{status: :ok} = first = Alto.run("hello", opts)
     assert_receive {:reasoning_request, _}
-    assert {:ok, _} = Alto.resume(first.session_id, "continue", Keyword.delete(opts, :session))
+
+    assert %Alto.Runner.Result{status: :ok} =
+             Alto.resume(first.session_id, "continue", Keyword.delete(opts, :session))
+
     assert_receive {:reasoning_request, request}
     assistant = Enum.find(request.messages, &(&1["role"] == "assistant"))
     assert assistant["content"] == "answer"

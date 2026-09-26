@@ -313,7 +313,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert {:error, %NimbleOptions.ValidationError{key: :query}} =
              Alto.Tool.run(SearchFiles, %{"query" => "too long"}, context, options)
 
-    assert {:ok, run} =
+    assert %Alto.Runner.Result{status: :ok} =
+             run =
              Alto.run(%{"query" => "needle"},
                loop: Alto.rule_loop(steps: ["search_files"]),
                tools: [{SearchFiles, options}],

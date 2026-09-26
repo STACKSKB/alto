@@ -92,14 +92,15 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
     assert_receive {:batch_child_entered, third}, 5_000
     send(third, :release)
 
-    assert {:ok, result} = Alto.await(handle, 10_000)
+    assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle, 10_000)
     assert {:completed, %{results: results}} = result.output
     assert Enum.map(results, & &1.id) == ["batch-1", "batch-2", "batch-3"]
     assert Enum.all?(results, &(&1.status == :ok))
   end
 
   test "the parent budget caps aggregate child model requests", %{dir: dir} do
-    {:ok, result} =
+    %Alto.Runner.Result{status: :ok} =
+      result =
       Alto.run(%{agents: agents(3)},
         loop: batch_loop(max_concurrency: 3),
         provider: {CountingProvider, test_pid: self()},
@@ -119,7 +120,8 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
   test "duplicate ids reject the entire batch before dispatch", %{dir: dir} do
     duplicate = [%{id: "same", task: "a"}, %{id: "same", task: "b"}]
 
-    assert {:error, {:invalid_spawn_agents, _reason}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _reason}} =
+             _result =
              Alto.run(%{agents: duplicate},
                loop: batch_loop(max_concurrency: 2),
                provider: {CountingProvider, test_pid: self()},
@@ -131,7 +133,8 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
   end
 
   test "exceeding max_children rejects the entire batch before dispatch", %{dir: dir} do
-    assert {:error, {:invalid_spawn_agents, _reason}, _result} =
+    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _reason}} =
+             _result =
              Alto.run(%{agents: agents(3)},
                loop: batch_loop(max_children: 2),
                provider: {CountingProvider, test_pid: self()},
@@ -154,7 +157,8 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
       model_tools: nil
     }
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{agents: [request]},
                loop: batch_loop([]),
                provider: {CountingProvider, test_pid: self()}
@@ -174,7 +178,7 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
           %{id: "child", task: "work", system_prompt: String.duplicate("x", 64_001)},
           %{id: "child", task: "work", model_tools: [""]}
         ] do
-      assert {:error, {:invalid_spawn_agents, _}, _} =
+      assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
                Alto.run(%{agents: [invalid]},
                  loop: batch_loop([]),
                  provider: {CountingProvider, test_pid: self()}
@@ -198,7 +202,10 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
     refute_receive {:batch_child_entered, _third}, 100
 
     assert :ok = Alto.cancel(handle, :operator_stop)
-    assert {:error, {:cancelled, :operator_stop}, _result} = Alto.await(handle, 10_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
+             _result = Alto.await(handle, 10_000)
+
     assert_receive {:DOWN, ^first_ref, :process, ^first, _reason}, 2_000
     assert_receive {:DOWN, ^second_ref, :process, ^second, _reason}, 2_000
     refute_receive {:batch_child_entered, _third}, 100

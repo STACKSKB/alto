@@ -20,7 +20,7 @@ defmodule Alto.Runner.ChildSummaryTest do
         persistence: {:degraded, [:transcript_write_failed]}
     }
 
-    summary = Children.child_summary("worker", {:ok, result})
+    summary = Children.child_summary("worker", %Result{result | status: :ok})
     initial = %{usage: Usage.new(), verdict: :empty, persistence_errors: []}
     live = Children.merge_child_summary(initial, summary)
 
@@ -44,9 +44,14 @@ defmodule Alto.Runner.ChildSummaryTest do
         persistence: {:degraded, [:write_failed]}
     }
 
-    cancelled = Children.child_summary("cancelled", {:error, {:cancelled, :owner}, result})
+    cancelled = Children.child_summary("cancelled", Result.error({:cancelled, :owner}, result))
     failed = Children.child_summary("failed", {:error, :provider_required})
-    crashed = Children.child_summary("crashed", {:error, {:run_process_failed, :boom}, result})
+
+    crashed =
+      Children.child_summary(
+        "crashed",
+        Result.error({:run_process_failed, :boom}, %{result | verdict: :unknown})
+      )
 
     assert {:ok, _, retained} =
              Children.merge_retained(
@@ -60,13 +65,17 @@ defmodule Alto.Runner.ChildSummaryTest do
 
     assert retained == live
     assert retained.verdict == :unknown
-    assert retained.usage.output_tokens == 3
-    assert retained.persistence_errors == [{:subagent, :write_failed}]
+    assert retained.usage.output_tokens == 6
+
+    assert retained.persistence_errors == [
+             {:subagent, :write_failed},
+             {:subagent, :write_failed}
+           ]
   end
 
   test "retained summary rejects invalid accounting fields" do
     initial = %{usage: Usage.new(), verdict: :empty, persistence_errors: []}
-    summary = Children.child_summary("worker", {:ok, Result.empty()})
+    summary = Children.child_summary("worker", %Result{Result.empty() | status: :ok})
 
     assert {:error, :invalid_retained_child_result} =
              Children.merge_retained(
@@ -76,5 +85,16 @@ defmodule Alto.Runner.ChildSummaryTest do
 
     assert {:error, :invalid_retained_child_result} =
              Children.merge_retained([{"other", summary}], initial)
+  end
+
+  test "restore rejects a completed child without a canonical summary" do
+    {:ok, agents} = Alto.Runner.Agents.start_link(self())
+    on_exit(fn -> if Process.alive?(agents), do: GenServer.stop(agents) end)
+
+    saved = [
+      %{id: "worker", spec: %{id: "worker"}, status: :completed, summary: %{}, collected: false}
+    ]
+
+    assert {:error, :invalid_async_checkpoint} = Alto.Runner.Agents.restore(agents, saved, %{})
   end
 end

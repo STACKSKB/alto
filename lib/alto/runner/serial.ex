@@ -37,7 +37,7 @@ defmodule Alto.Runner.Serial do
         end
 
       {:error, reason} ->
-        {:error, reason, Result.empty()}
+        Result.error(reason)
     end
   end
 

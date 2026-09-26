@@ -260,8 +260,8 @@ defmodule Alto.FrontEnd.RegistryTest do
         _other -> []
       end)
 
-    assert [{:result, ^run_id, :ok, "finished", 2}] =
-             Enum.filter(notifications, &match?({:result, _, _, _, _}, &1))
+    assert [{:result, ^run_id, %{status: :ok, output: "finished", model_requests: 2}}] =
+             Enum.filter(notifications, &match?({:result, _, _}, &1))
 
     seqs = events |> Enum.map(&elem(&1, 0)) |> Enum.reject(&is_nil/1)
     assert seqs == Enum.to_list(1..length(seqs))
@@ -338,7 +338,9 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, {:event, ^run_id, _seq, %Event{type: :tool_completed}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: "finished", model_requests: _}}},
+                   @receive_timeout
   end
 
   test "a denied approval becomes a bounded tool failure", %{registry: registry, root: root} do
@@ -365,7 +367,9 @@ defmodule Alto.FrontEnd.RegistryTest do
 
     assert error == {:approval_denied, "not today"}
 
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: "finished", model_requests: _}}},
+                   @receive_timeout
   end
 
   test "simultaneous guarded runs have independently addressable approvals", %{
@@ -400,10 +404,12 @@ defmodule Alto.FrontEnd.RegistryTest do
       assert :ok = Registry.request(registry, {:approval_response, request.id, decision})
     end
 
-    assert_receive {:alto_notification, {:result, ^first_run, :ok, "finished", _}},
+    assert_receive {:alto_notification,
+                    {:result, ^first_run, %{status: :ok, output: "finished", model_requests: _}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:result, ^second_run, :ok, "finished", _}},
+    assert_receive {:alto_notification,
+                    {:result, ^second_run, %{status: :ok, output: "finished", model_requests: _}}},
                    @receive_timeout
   end
 
@@ -435,7 +441,9 @@ defmodule Alto.FrontEnd.RegistryTest do
                      {:error, {:participant_failed, :timeout}}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: "finished", model_requests: _}}},
+                   @receive_timeout
 
     # A decision arriving after resolution is rejected.
     assert {:error, :not_found} =
@@ -464,7 +472,9 @@ defmodule Alto.FrontEnd.RegistryTest do
                      %Event{type: :run_cancelled, data: %{reason: :operator_stop}}}},
                    @receive_timeout
 
-    assert_receive {:alto_notification, {:result, ^run_id, {:cancelled, :operator_stop}, nil, 0}},
+    assert_receive {:alto_notification,
+                    {:result, ^run_id,
+                     %{status: :cancelled, reason: :operator_stop, output: nil, model_requests: 0}}},
                    @receive_timeout
 
     assert Registry.request(registry, :run_ids) == [blocking_id]
@@ -529,7 +539,9 @@ defmodule Alto.FrontEnd.RegistryTest do
              :step_settled
            ]
 
-    assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", 2}}, @receive_timeout
+    assert_receive {:alto_notification,
+                    {:result, ^run_id, %{status: :ok, output: "finished", model_requests: 2}}},
+                   @receive_timeout
   end
 
   test "a full subscriber buffer overflows durably instead of silently dropping", %{
@@ -693,7 +705,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert_receive {:alto_notification, notification}, @receive_timeout
 
     case notification do
-      {:result, ^run_id, :ok, "finished", _} -> [notification]
+      {:result, ^run_id, %{status: :ok, output: "finished", model_requests: _}} -> [notification]
       other -> [other | collect_until_result(run_id)]
     end
   end

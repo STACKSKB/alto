@@ -65,7 +65,7 @@ defmodule EchoTool do
   def run(arguments, _context, _opts), do: {:ok, arguments}
 end
 
-{:ok, result} =
+%Alto.Runner.Result{status: :ok} = result =
   Alto.run(%{"message" => "hello"},
     loop: Alto.rule_loop(steps: ["echo"]),
     tools: [EchoTool],

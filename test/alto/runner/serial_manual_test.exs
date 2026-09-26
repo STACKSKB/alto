@@ -48,7 +48,9 @@ defmodule Alto.Runner.SerialManualTest do
     refute_receive {:tool_ran, _}, 100
     assert :ok = Alto.Runner.Serial.advance(second)
     assert_receive {:tool_ran, :manual}, 2_000
-    assert {:ok, %{output: [:manual_ok, :manual_ok]}} = Alto.await(handle, 2_000)
+
+    assert %Alto.Runner.Result{status: :ok, output: [:manual_ok, :manual_ok]} =
+             Alto.await(handle, 2_000)
 
     assert {:ok, cancel_handle} =
              Alto.start(
@@ -63,7 +65,9 @@ defmodule Alto.Runner.SerialManualTest do
 
     assert_receive {:alto_step_ready, _cancel_ticket, _}, 2_000
     assert :ok = Alto.cancel(cancel_handle, :manual_cancel)
-    assert {:error, {:cancelled, :manual_cancel}, _} = Alto.await(cancel_handle, 2_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: :manual_cancel} =
+             _ = Alto.await(cancel_handle, 2_000)
 
     assert {:ok, deadline_handle} =
              Alto.start(
@@ -77,7 +81,9 @@ defmodule Alto.Runner.SerialManualTest do
              )
 
     assert_receive {:alto_step_ready, _deadline_ticket, _}, 2_000
-    assert {:error, :run_timeout, _} = Alto.await(deadline_handle, 2_000)
+
+    assert %Alto.Runner.Result{status: :error, reason: :run_timeout} =
+             _ = Alto.await(deadline_handle, 2_000)
 
     parent = self()
 
@@ -102,6 +108,8 @@ defmodule Alto.Runner.SerialManualTest do
 
     assert_receive {:alto_step_ready, _owner_ticket, _}, 2_000
     Process.exit(controller, :kill)
-    assert {:error, {:cancelled, {:step_controller_down, _}}, _} = Alto.await(owner_handle, 2_000)
+
+    assert %Alto.Runner.Result{status: :cancelled, reason: {:step_controller_down, _}} =
+             _ = Alto.await(owner_handle, 2_000)
   end
 end

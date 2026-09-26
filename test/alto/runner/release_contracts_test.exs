@@ -69,17 +69,20 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   test "deterministic cycles consume a shared effect budget" do
-    assert {:error, {:effect_limit, 5}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:effect_limit, 5}} =
+             _ =
              Alto.run(%{}, loop: Alto.loop(Cycling), max_effects: 5)
   end
 
   test "a blocked policy callback cannot outlive the run deadline" do
-    assert {:error, {:participant_failed, :timeout}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
+             _ =
              Alto.run(%{}, loop: Alto.loop(Stuck), run_timeout: 30)
   end
 
   test "transport uncertainty survives the native tool and result boundary" do
-    assert {:error, _, result} =
+    assert %Alto.Runner.Result{status: :error, reason: _} =
+             result =
              Alto.run(%{}, loop: Alto.rule_loop(steps: ["remote"]), tools: [UnknownTool])
 
     assert result.verdict == :unknown
@@ -91,7 +94,8 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   test "model request options and narrowed tool definitions reach the provider" do
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _ =
              Alto.run(
                %{
                  options: %{"temperature" => 0, "response_format" => %{"type" => "json_object"}},
@@ -113,7 +117,8 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   test "context policy rejects excess input before provider dispatch" do
-    assert {:error, {:context_limit, _}, _} =
+    assert %Alto.Runner.Result{status: :error, reason: {:context_limit, _}} =
+             _ =
              Alto.run(String.duplicate("x", 500),
                loop: Alto.chat_loop(context: Alto.Context.Window.new(max_tokens: 50)),
                provider: {Provider, owner: self()}
@@ -123,7 +128,8 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   test "context output reservation is enforced on the model request" do
-    assert {:ok, _} =
+    assert %Alto.Runner.Result{status: :ok} =
+             _ =
              Alto.run("go",
                loop:
                  Alto.chat_loop(
@@ -141,14 +147,16 @@ defmodule Alto.Runner.ReleaseContractsTest do
       %{tool: "native", arguments: fn _task, [first] -> %{"value" => {:typed, first.value}} end}
     ]
 
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{"value" => 42}, loop: Alto.rule_loop(steps: steps), tools: [Native])
 
     assert result.output == [%{value: 42}, %{value: {:typed, 42}}]
   end
 
   test "a providerless parent can delegate to a deterministic child" do
-    assert {:ok, result} =
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
              Alto.run(%{},
                loop: Alto.loop(Parent, subagents: Alto.Subagents.bounded(max_depth: 1)),
                tools: [Native]

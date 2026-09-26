@@ -1,6 +1,6 @@
 defmodule Alto.Runner.Execution.Workspace do
   @moduledoc "Optional resource setup and capture around an arbitrary worker callback."
-  alias Alto.Runner.Budget
+  alias Alto.Runner.{Budget, Result}
   @default_tool_timeout 125_000
   def execute(task, opts, manager, snapshot, identity, execute) do
     budget = Keyword.fetch!(opts, :budget)
@@ -37,11 +37,18 @@ defmodule Alto.Runner.Execution.Workspace do
 
   defp finish_work({:error, reason}, _, _, identity),
     do:
-      {:error, {:workspace_failed, reason},
-       %{Alto.Runner.Result.empty() | verdict: :unknown, agent_identity: identity}}
+      Result.error({:workspace_failed, reason}, %Result{
+        verdict: :unknown,
+        agent_identity: identity
+      })
 
-  defp finish({:error, :approval_suspended, _} = outcome, worked, _opts, _manager),
-    do: attach_workspace(outcome, worked)
+  defp finish(
+         %Result{reason: :approval_suspended} = outcome,
+         worked,
+         _opts,
+         _manager
+       ),
+       do: attach_workspace(outcome, worked)
 
   defp finish(outcome, worked, opts, manager) do
     case call(
@@ -70,13 +77,8 @@ defmodule Alto.Runner.Execution.Workspace do
     end
   end
 
-  defp attach_workspace({:ok, result}, info), do: {:ok, %{result | workspace: info}}
+  defp attach_workspace(result, info), do: %{result | workspace: info}
 
-  defp attach_workspace({:error, reason, result}, info),
-    do: {:error, reason, %{result | workspace: info}}
-
-  defp workspace_failure(outcome, info, reason) do
-    result = elem(outcome, tuple_size(outcome) - 1)
-    {:error, {:workspace_failed, reason}, %{result | verdict: :unknown, workspace: info}}
-  end
+  defp workspace_failure(result, info, reason),
+    do: Result.error({:workspace_failed, reason}, %{result | verdict: :unknown, workspace: info})
 end

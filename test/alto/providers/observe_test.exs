@@ -20,7 +20,7 @@ defmodule Alto.Providers.ObserveTest do
     provider =
       Observe.wrap({RetryingProvider, counter: counter}, fn _ -> send(owner, :observed) end)
 
-    assert {:ok, %{output: "recovered"}} =
+    assert %Alto.Runner.Result{status: :ok, output: "recovered"} =
              Alto.run("hello", provider: provider, tools: [], provider_retries: 1)
 
     assert Agent.get(counter, & &1) == 2
