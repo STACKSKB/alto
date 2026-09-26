@@ -8,7 +8,6 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.{Event, Usage}
   alias Alto.Runner.{Budget, Result}
   alias Alto.Subagents.Continuation
-  alias Alto.Subagents.Policy, as: ChildPolicy
   alias Alto.Runner.Execution.{Events, Operation}
 
   @spawn_schema NimbleOptions.new!(
@@ -621,7 +620,7 @@ defmodule Alto.Runner.Execution.Children do
 
   defp admit(run, agents) do
     Alto.Runner.Execution.Call.run(
-      fn -> ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}) end,
+      fn -> run.child_limits.admit.(agents, %{depth: run.agent_depth}) end,
       Budget.timeout(run.budget, run.tool_timeout),
       run.cancel_ref
     )

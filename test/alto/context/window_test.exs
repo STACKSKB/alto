@@ -1,7 +1,7 @@
 defmodule Alto.Context.WindowTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Context.{Policy, Window}
+  alias Alto.Context.Window
 
   test "admission applies the smaller model or user cap before reserving output" do
     policy =
@@ -10,10 +10,10 @@ defmodule Alto.Context.WindowTest do
     request = %{messages: [], tools: []}
 
     assert {:error, {:context_limit, %{input_upper_bound: 120_000, budget: 112_000}}} =
-             Policy.check(policy, request, %{context_window: 128_000})
+             policy.check.(request, %{context_window: 128_000})
 
     assert {:ok, %{context_window: 200_000, input_tokens: 184_000, reserve_output: 16_000}} =
-             Policy.check(policy, request, %{context_window: 1_000_000})
+             policy.check.(request, %{context_window: 1_000_000})
   end
 
   test "observed prefix counts prevent premature compaction but edits invalidate the observation" do
@@ -29,22 +29,20 @@ defmodule Alto.Context.WindowTest do
     observation = %{messages: messages, tools: tools, input_tokens: 200}
     suffix = %{"role" => "assistant", "content" => String.duplicate("word ", 30)}
     request = %{messages: messages ++ [suffix], tools: tools, context_observation: observation}
-    assert {:ok, budget} = Policy.check(policy, request, %{})
+    assert {:ok, budget} = policy.check.(request, %{})
     refute Map.get(budget, :pressure, false)
 
     assert {:ok, %{pressure: true}} =
-             Policy.check(Window.new(options), request, %{})
+             Window.new(options).check.(request, %{})
 
     assert {:ok, %{pressure: true}} =
-             Policy.check(
-               policy,
+             policy.check.(
                %{request | tools: tools ++ [%{"function" => %{"name" => "edit"}}]},
                %{}
              )
 
     assert {:ok, %{pressure: true}} =
-             Policy.check(
-               policy,
+             policy.check.(
                %{
                  request
                  | messages: [

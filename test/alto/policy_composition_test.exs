@@ -1,22 +1,20 @@
 defmodule Alto.PolicyCompositionTest do
   use ExUnit.Case, async: true
 
-  defmodule Context do
-    @behaviour Alto.Context.Policy
-    def check(opts, request, _description) do
-      send(opts[:owner], {:checked, request.messages})
-      {:error, :host_context_rejected}
-    end
-  end
-
   defmodule Provider do
     def describe(_), do: %{}
     def stream(_, _, _), do: raise("must not dispatch rejected request")
   end
 
   defmodule Children do
-    @behaviour Alto.Subagents.Policy
-    def limits(_), do: %{max_depth: 2, max_children: 3, max_concurrency: 2}
+    def policy(opts),
+      do:
+        Alto.Subagents.bounded(
+          max_depth: 2,
+          max_children: 3,
+          max_concurrency: 2,
+          admit: &admit(opts, &1, &2)
+        )
 
     def admit(opts, agents, context) do
       send(opts[:owner], {:admitted, agents, context})
@@ -25,11 +23,16 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   defmodule BlockingChildren do
-    @behaviour Alto.Subagents.Policy
-    def limits(opts) do
+    def policy(opts) do
       send(opts[:owner], {:limits_called, self()})
       if opts[:block] == :limits, do: wait()
-      %{max_depth: 2, max_children: 3, max_concurrency: 2}
+
+      Alto.Subagents.bounded(
+        max_depth: 2,
+        max_children: 3,
+        max_concurrency: 2,
+        admit: &admit(opts, &1, &2)
+      )
     end
 
     def admit(opts, _, _) do
@@ -58,7 +61,8 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   test "limits are resolved once per run instead of at every child projection" do
-    loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self()})
+    owner = self()
+    loop = Alto.loop(ParentLoop, subagents: fn -> BlockingChildren.policy(owner: owner) end)
     assert %Alto.Runner.Result{status: :ok} = Alto.run(:batch, provider: nil, loop: loop)
     assert_receive {:limits_called, _}
     assert_receive {:admission_called, _}
@@ -66,11 +70,17 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   test "limits and admission are cancellable" do
+    owner = self()
+
     for {kind, phase, message} <- [
           {:batch, :limits, :limits_called},
           {:batch, :admit, :admission_called}
         ] do
-      loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: phase})
+      loop =
+        Alto.loop(ParentLoop,
+          subagents: fn -> BlockingChildren.policy(owner: owner, block: phase) end
+        )
+
       assert {:ok, handle} = Alto.start(kind, provider: nil, loop: loop, tool_timeout: 5_000)
       assert_receive {^message, worker}, 1_000
       monitor = Process.monitor(worker)
@@ -82,7 +92,12 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   test "child policy resolution respects the callback deadline" do
-    loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: :limits})
+    owner = self()
+
+    loop =
+      Alto.loop(ParentLoop,
+        subagents: fn -> BlockingChildren.policy(owner: owner, block: :limits) end
+      )
 
     assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
              Alto.run(:batch, provider: nil, loop: loop, tool_timeout: 50)
@@ -92,26 +107,29 @@ defmodule Alto.PolicyCompositionTest do
   end
 
   test "custom context policy is invoked and its rejection prevents dispatch" do
-    loop = Alto.default_loop(context: {Context, owner: self()})
+    owner = self()
+
+    policy = %{
+      check: fn request, _description ->
+        send(owner, {:checked, request.messages})
+        {:error, :host_context_rejected}
+      end
+    }
+
+    loop = Alto.default_loop(context: policy)
 
     assert %Alto.Runner.Result{status: :error, reason: :host_context_rejected} =
              Alto.run("hello", loop: loop, provider: Provider)
 
     assert_receive {:checked, [_ | _]}
-
-    assert %Alto.Runner.Result{status: :error, reason: :invalid_context_policy} =
-             Alto.run("hello",
-               loop: Alto.default_loop(context: :not_a_policy),
-               provider: Provider
-             )
   end
 
   test "custom child admission shares the built-in authority and bounds checks" do
-    policy = {Children, owner: self()}
+    policy = Children.policy(owner: self())
     {:ok, budget} = Alto.Runner.Budget.new([])
 
     run = %{
-      child_limits: Alto.Subagents.Policy.limits!(policy),
+      child_limits: policy,
       budget: budget,
       tool_timeout: 1_000,
       cancel_ref: nil,
@@ -133,9 +151,5 @@ defmodule Alto.PolicyCompositionTest do
                %{agents: [%{id: "child", task: "hello", tools: [Alto.Tools.WriteFile]}]},
                run
              )
-  end
-
-  test "invalid custom subagent policy is rejected" do
-    assert {:error, :invalid_subagent_policy} = Alto.Subagents.Policy.validate({String, []})
   end
 end

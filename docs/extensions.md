@@ -261,18 +261,33 @@ its policy decision. Built-in implementations use the same callbacks as host cod
 
 | Configuration | Contract | Shipped implementation |
 | --- | --- | --- |
-| `loop.context` | `Alto.Context.Policy.check/3` | `Alto.Context.Window` |
-| `loop.subagents` | `Alto.Subagents.Policy.limits/1`, `admit/3` | `Alto.Subagents` |
+| `loop.context` | `%{check: fn(request, provider_info)}` | `Alto.Context.Window.new/1` |
+| `loop.subagents` | Limits map with `admit: fn(agents, context)` | `Alto.Subagents.bounded/1` |
 | `compaction[:strategy]` | `Alto.Context.Reducer.compact/3` | `Reducers.Summary`, `Reducers.Handoff` |
 | `retry_policy` | `fn(reason, attempt)` | `&Alto.Retry.Transient.decide/2` |
 | `tool_presenter` | `fn(name, arguments)` | `&Alto.ToolDisplay.summary/2` |
 
-Context and child policies use `{Module, state}`, where state may be any term.
-A context check returns `{:ok, :unavailable}`, a budget map
-with a nonnegative `:reserve_output` and optional boolean `:pressure`, or an
-error. Invalid implementations and malformed results are rejected. Child limits
-are normalized with NimbleOptions before execution enforces them; admission
-cannot expand inherited tool authority.
+Context and child policies are maps containing functions. Capture host state in
+closures. A context check returns `{:ok, :unavailable}`, `{:ok, budget}` with a
+nonnegative `:reserve_output` and optional boolean `:pressure`, or `{:error, reason}`.
+`nil` disables context admission. These are trusted callback contracts; malformed
+configuration may fail under supervision.
+
+`Subagents.bounded/1` validates child limits and accepts an `:admit` function
+returning `:ok` or `{:error, reason}`. Admission cannot expand inherited tool
+authority. To select limits for each run, supply a zero-argument factory returning
+the policy map; execution calls it once under the tool deadline and cancellation
+boundary. The resolved limits also determine the agent tools' advertised schema.
+
+```elixir
+children = Alto.Subagents.bounded(
+  max_depth: 2,
+  max_children: 8,
+  max_concurrency: 4,
+  admit: fn agents, context -> MyPolicy.admit(agents, context, settings) end
+)
+loop = Alto.default_loop(subagents: children)
+```
 
 Reducers receive structured pinned, middle and recent messages, historical tool
 schemas, limits and artifact metadata, plus a bounded model-call function. They

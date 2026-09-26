@@ -36,8 +36,7 @@ defmodule Alto.Context.EstimatorTest do
       )
 
     assert {:ok, budget} =
-             Alto.Context.Policy.check(
-               policy,
+             policy.check.(
                %{messages: [%{"role" => "user", "content" => "hello"}], tools: []},
                %{context_window: 100}
              )
@@ -45,8 +44,7 @@ defmodule Alto.Context.EstimatorTest do
     assert budget.input_tokens == 24
 
     assert {:error, {:context_limit, %{input_upper_bound: 44, budget: 24}}} =
-             Alto.Context.Policy.check(
-               policy,
+             policy.check.(
                %{messages: [%{"content" => "hello"}, %{"content" => "again"}], tools: []},
                %{context_window: 100}
              )

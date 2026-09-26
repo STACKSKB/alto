@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,458 lines**, a **20.2% reduction**, with **4,000 lines remaining**.
+Current: **32,333 lines**, a **20.5% reduction**, with **3,875 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,18 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Context and child admission now use canonical maps containing functions, deleting
+Context.Policy and Subagents.Policy. The built-in constructors retain option
+validation; custom callbacks capture configuration directly. Child limits can
+still come from a per-run factory under the existing timeout and cancellation
+boundary. The resolved map supplies admission, tool schemas and runtime ceilings.
+Checkpoint fingerprints bind both factory and resolved policy, including callback
+code and durable identities for captured workspace resources. This pass removes
+**125 production lines**: **86 code/typespec**, **26 blank**, and **13
+documentation/comment** lines. Constructor validation echoes were removed while
+factory cancellation, deadlines, child authority and checkpoint binding coverage
+remain.
 
 TUI forms and menus now share one item list, selection, scrolling window,
 keyboard/paste handling, renderer and mouse hit-testing path. Fields use native
@@ -210,7 +222,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,083 core tests** and **145 TUI tests** with application
+The current code passes **1,082 core tests** and **145 TUI tests** with application
 modules preloaded. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

@@ -513,8 +513,9 @@ defmodule Alto.Runner.Checkpoint do
 
     data =
       {@continuation_format, run.spec.driver, run.spec.driver.module_info(:md5),
-       run.spec.driver_options, run.spec.middleware, stable_subagents(run.spec.subagents), tools,
-       run.model_tools, run.cwd, Map.get(run, :session_history, :completed),
+       run.spec.driver_options, run.spec.middleware,
+       {run.spec.subagents, Map.get(run, :child_limits)}, tools, run.model_tools, run.cwd,
+       Map.get(run, :session_history, :completed),
        Map.get(run, :max_conversation_bytes, 128_000_000)}
 
     {:ok, fingerprint_data(data)}
@@ -526,17 +527,26 @@ defmodule Alto.Runner.Checkpoint do
   # Fun ETF includes its creating process. Bind the code and closed-over
   # environment instead so trusted pure argument functions survive a new VM.
   defp fingerprint_data(value) when is_function(value) do
-    Enum.map([:module, :name, :arity, :index, :uniq, :env], fn key ->
-      {^key, data} = :erlang.fun_info(value, key)
-      {key, fingerprint_data(data)}
-    end)
+    {:module, module} = :erlang.fun_info(value, :module)
+
+    [
+      module_md5(module)
+      | Enum.map([:module, :name, :arity, :index, :uniq, :env], fn key ->
+          {^key, data} = :erlang.fun_info(value, key)
+          {key, fingerprint_data(data)}
+        end)
+    ]
   end
 
-  defp fingerprint_data({module, _options} = value) when is_atom(module) do
-    if Alto.Subagents.Policy.implementation?(module),
-      do: stable_subagents(value),
-      else: value |> Tuple.to_list() |> Enum.map(&fingerprint_data/1) |> List.to_tuple()
-  end
+  defp fingerprint_data(%Alto.Workspaces{} = manager),
+    do: manager |> stable_resource() |> fingerprint_data()
+
+  defp fingerprint_data(%{admit: admit, workspaces: manager} = policy) when is_function(admit, 2),
+    do:
+      policy
+      |> Map.put(:workspaces, stable_resource(manager))
+      |> Map.to_list()
+      |> fingerprint_data()
 
   defp fingerprint_data(value) when is_map(value),
     do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
@@ -559,12 +569,6 @@ defmodule Alto.Runner.Checkpoint do
       {:ok, term} -> {:ok, term}
       {:error, _} -> {:error, :invalid_checkpoint_data}
     end
-  end
-
-  defp stable_subagents(nil), do: nil
-
-  defp stable_subagents(policy) do
-    Alto.Subagents.Policy.fingerprint(policy, &stable_resource/1) |> fingerprint_data()
   end
 
   defp stable_resource(nil), do: nil

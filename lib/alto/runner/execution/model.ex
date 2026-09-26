@@ -9,7 +9,6 @@ defmodule Alto.Runner.Execution.Model do
   alias Alto.{Event, Usage}
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
-  alias Alto.Context.Policy
 
   @doc "Dispatch a model request and return its outcome with updated run accounting."
   def request(_request, %{provider: nil} = run, _sink),
@@ -60,7 +59,7 @@ defmodule Alto.Runner.Execution.Model do
             |> Map.put(:context_identity, identity)
             |> Map.put(:context_observation, observation)
 
-          {request, Policy.check(policy, request, description)}
+          {request, policy.check.(request, description)}
         end,
         Budget.timeout(caps.budget, caps.provider_timeout),
         caps.cancel_ref

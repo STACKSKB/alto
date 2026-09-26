@@ -27,7 +27,6 @@ defmodule Alto.Runner.Execution.Setup do
       )
 
     with {:ok, limits} <- limits(opts),
-         :ok <- Alto.Context.Policy.validate(spec.context),
          {:ok, budget} <- resolve_budget(opts[:budget], opts),
          {:ok, child_limits} <-
            resolve_child_policy(
@@ -145,16 +144,15 @@ defmodule Alto.Runner.Execution.Setup do
 
   def normalize_provider(spec), do: Alto.Capabilities.resolve(spec, Alto.Provider)
 
-  defp resolve_child_policy(nil, _budget, _timeout, _cancel_ref),
-    do: Alto.Subagents.Policy.resolve(nil)
-
-  defp resolve_child_policy(policy, budget, timeout, cancel_ref) do
-    Alto.Runner.Execution.Call.run(
-      fn -> Alto.Subagents.Policy.resolve(policy) end,
-      Budget.timeout(budget, timeout),
-      cancel_ref
-    )
+  defp resolve_child_policy(factory, budget, timeout, cancel_ref) when is_function(factory, 0) do
+    case Alto.Runner.Execution.Call.run(factory, Budget.timeout(budget, timeout), cancel_ref) do
+      {:error, _} = error -> error
+      policy -> {:ok, policy}
+    end
   end
+
+  defp resolve_child_policy(policy, _budget, _timeout, _cancel_ref),
+    do: {:ok, policy || Alto.Subagents.bounded(max_children: 1)}
 
   defp resolve_budget(nil, opts), do: Budget.new(opts)
   defp resolve_budget(%Budget{} = budget, _opts), do: {:ok, budget}

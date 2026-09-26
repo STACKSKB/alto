@@ -1,8 +1,6 @@
 defmodule Alto.Context.Window do
   @moduledoc "A context cap resolved against the selected model's advertised window."
 
-  @behaviour Alto.Context.Policy
-
   @options_schema [
     max_tokens: [type: {:or, [:pos_integer, nil]}, default: nil],
     reserve_output: [type: :non_neg_integer, default: 0],
@@ -11,7 +9,7 @@ defmodule Alto.Context.Window do
     usage_estimation: [type: :boolean, default: false]
   ]
 
-  @spec new(keyword()) :: {module(), map()}
+  @spec new(keyword()) :: map()
   def new(opts \\ []) do
     opts = NimbleOptions.validate!(opts, @options_schema)
     fraction = opts[:compact_at]
@@ -19,7 +17,8 @@ defmodule Alto.Context.Window do
     if fraction != nil and (fraction <= 0 or fraction > 1),
       do: raise(ArgumentError, "compact_at must be a fraction greater than zero and at most one")
 
-    {__MODULE__, Map.new(opts)}
+    policy = Map.new(opts)
+    Map.put(policy, :check, &check(policy, &1, &2))
   end
 
   # An unchanged observed prefix already has an authoritative provider count.

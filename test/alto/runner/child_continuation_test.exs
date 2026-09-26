@@ -372,8 +372,7 @@ defmodule Alto.Runner.ChildContinuationTest do
       )
 
     loop = options[:loop]
-    {policy, limits} = loop.subagents
-    loop = %{loop | subagents: {policy, %{limits | workspaces: manager}}}
+    loop = %{loop | subagents: %{loop.subagents | workspaces: manager}}
     options = Keyword.put(options, :loop, loop)
 
     assert %Alto.Runner.Result{status: :suspended, reason: {:children_pending, _}} =
@@ -431,8 +430,7 @@ defmodule Alto.Runner.ChildContinuationTest do
       )
 
     loop = options[:loop]
-    {policy, limits} = loop.subagents
-    loop = %{loop | subagents: {policy, %{limits | workspaces: manager}}}
+    loop = %{loop | subagents: %{loop.subagents | workspaces: manager}}
     options = Keyword.put(options, :loop, loop)
 
     agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}

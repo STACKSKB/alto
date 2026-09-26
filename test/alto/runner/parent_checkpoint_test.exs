@@ -13,14 +13,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
     def load_checkpoint(state, _spec), do: {:ok, state}
   end
 
-  defmodule HostChildPolicy do
-    @behaviour Alto.Subagents.Policy
-    def limits(options),
-      do: Map.merge(%{max_depth: 2, max_children: 2, max_concurrency: 1}, Map.new(options))
-
-    def admit(_, _, _), do: :ok
-  end
-
   setup do
     dir =
       Path.join(System.tmp_dir!(), "alto-parent-checkpoint-#{System.unique_integer([:positive])}")
@@ -199,18 +191,28 @@ defmodule Alto.Runner.ParentCheckpointTest do
     assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
 
     manager = Alto.Workspaces.new(root: Path.join(context.dir, "workers"), ledger: dead)
-    nested = {HostChildPolicy, workspaces: manager}
+    nested = Alto.Subagents.bounded(max_depth: 2, max_children: 2, workspaces: manager)
     nested_options = %{run | spec: %{run.spec | driver_options: [nested_policy: nested]}}
 
     assert {:error, {:durable_identity_unavailable, _}} =
              Checkpoint.capture_parent(nested_options, pending, [], :continue)
   end
 
-  test "keyword policy state normalizes resource identity just like a built-in struct" do
-    resource = fn _ -> %{id: "stable-ledger"} end
+  test "resolved policy and nested factory resources bind durable identities", context do
+    %{run: run, pending: pending, opts: opts} = context
 
-    assert Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :first}, resource) ==
-             Alto.Subagents.Policy.fingerprint({HostChildPolicy, workspaces: :second}, resource)
+    manager =
+      Alto.Workspaces.new(root: Path.join(context.dir, "workers"), ledger: run.continuation_store)
+
+    policy = Alto.Subagents.bounded(max_depth: 2, max_children: 2, workspaces: manager)
+    factory = fn -> policy end
+    configured = %{run | spec: %{run.spec | subagents: factory}}
+    configured = Map.put(configured, :child_limits, policy)
+    assert {:ok, packet} = Checkpoint.capture_parent(configured, pending, [], :continue)
+    assert {:ok, _, _} = Checkpoint.restore_parent(configured, packet, opts)
+
+    changed = Map.put(configured, :child_limits, %{policy | max_children: 3})
+    assert {:error, :checkpoint_mismatch} = Checkpoint.restore_parent(changed, packet, opts)
   end
 
   test "restored authority is the intersection of saved and current ceilings", context do
