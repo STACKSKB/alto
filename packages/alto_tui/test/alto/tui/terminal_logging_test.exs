@@ -8,9 +8,15 @@ defmodule Alto.TUI.TerminalLoggingTest do
     on_exit(fn -> File.rm_rf!(dir) end)
   end
 
-  for scenario <- ["normal", "crash", "startup_failure", "owner_exit"] do
+  for scenario <- [
+        "gear_q",
+        "ctrl_c",
+        "crash",
+        "startup_failure",
+        "owner_exit"
+      ] do
     @tag timeout: 30_000
-    test "real terminal keeps logs out of frames and restores logging after #{scenario}", %{
+    test "real terminal restores logging and emits mode resets after #{scenario}", %{
       tmp_dir: root
     } do
       scenario = unquote(scenario)
@@ -40,6 +46,20 @@ defmodule Alto.TUI.TerminalLoggingTest do
       refute frame =~ "[warning]"
       refute frame =~ "[error]"
       assert after_terminal =~ "TUI_CONSOLE_RESTORED"
+
+      # Track final reporting modes rather than interpreting leftover input as
+      # evidence of an enabled mode. Cleanup can run more than once on failure.
+      [before_console | _] = String.split(output, "TUI_CONSOLE_RESTORED", parts: 2)
+      modes = Regex.scan(~r/\e\[\?([0-9;]+)([hl])/, before_console)
+
+      final =
+        Enum.reduce(modes, %{}, fn [_, numbers, setting], acc ->
+          Enum.reduce(String.split(numbers, ";"), acc, &Map.put(&2, &1, setting))
+        end)
+
+      for mode <- ~w(1000 1002 1003 1006 1015 1004 2004 1049) do
+        assert final[mode] == "l", "mode #{mode} remained enabled: #{inspect(final)}"
+      end
 
       if scenario != "startup_failure" do
         assert frame =~ "Welcome to Alto"

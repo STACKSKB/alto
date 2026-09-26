@@ -45,9 +45,8 @@ if scenario != "startup_failure" do
       "owner_exit" ->
         send(fixture, :terminate_owner)
 
-      "normal" ->
-        Runtime.inject_event(app, %Key{code: "g", kind: "press", modifiers: ["ctrl"]})
-        Runtime.inject_event(app, %Key{code: "q", kind: "press", modifiers: []})
+      scenario when scenario in ["gear_q", "ctrl_c"] ->
+        IO.puts("TUI_PTY_READY:#{scenario}")
     end
   end)
 end
@@ -92,7 +91,7 @@ result =
   end
 
 case {scenario, result} do
-  {"normal", :ok} -> :ok
+  {scenario, :ok} when scenario in ["gear_q", "ctrl_c"] -> :ok
   {"owner_exit", :ok} -> :ok
   {"crash", {:error, {:tui_stopped, :fixture_failure}}} -> :ok
   {"startup_failure", {:error, _}} -> :ok

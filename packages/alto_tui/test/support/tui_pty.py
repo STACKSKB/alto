@@ -2,6 +2,7 @@
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -33,7 +34,13 @@ try:
         while b"\x1b[6n" in pending:
             _, pending = pending.split(b"\x1b[6n", 1)
             os.write(fd, b"\x1b[1;1R")
-        pending = pending[-3:]
+        while True:
+            ready = re.search(rb"TUI_PTY_READY:(gear_q|ctrl_c)\r?\n", pending)
+            if ready is None:
+                break
+            os.write(fd, b"\x07q" if ready[1] == b"gear_q" else b"\x03")
+            pending = pending[ready.end():]
+        pending = pending[-80:]
     else:
         output.extend(b"\nPTY fixture timed out\n")
         os.killpg(pid, signal.SIGKILL)

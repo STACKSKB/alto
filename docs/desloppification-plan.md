@@ -186,7 +186,7 @@ recovery, and actual user interactions.
 ## Verification
 
 The combined cleanup and messaging worktree passes **1,071 core tests and
-141 TUI tests**.
+142 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and
@@ -205,3 +205,9 @@ Codex-agent, and external-tool tests, plus the TUI backend integration suite.
 Protocol normalization matched the previous decoder across 8,721 input cases.
 Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including
 buffer limits, overflow, replay cursors, and disconnect decisions.
+
+Terminal exit coverage sends real Ctrl+G/Q and Ctrl+C through a PTY and checks
+mode-reset output before logging returns to the console. The documented
+`mix alto.tui --config ../../alto.agentic.exs` entry point also emits the resets
+on normal exit. The reported mouse leakage under GNU Screen/GNOME Terminal is
+not reproduced; no speculative production reset workaround was retained.
