@@ -5,10 +5,35 @@ defmodule Alto.Runner.Execution.Model do
   Providers receive only the request, stream sink, and configured options.
   """
 
-  alias Alto.Event
+  alias Alto.{Event, Usage}
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
   alias Alto.Context.Policy
+
+  @doc "Dispatch a model request and return its outcome with updated run accounting."
+  def request(_request, %{provider: nil} = run, _sink),
+    do: {{:error, :provider_required}, run}
+
+  def request(_request, %{model_requests: count, max_steps: limit} = run, _sink)
+      when count >= limit,
+      do: {{:error, {:model_step_limit, limit}}, run}
+
+  def request(request, run, sink) do
+    {provider, opts} = run.provider
+    step = run.model_requests + 1
+    Alto.Events.notify(run.event_sink, Event.live(:model_started, %{step: step}))
+    outcome = stream(provider, request, sink, opts, run, step)
+    run = %{run | model_requests: step}
+
+    case outcome do
+      {:ok, completion} ->
+        usage = Usage.normalize(if(is_map(completion), do: completion[:usage]))
+        {outcome, %{run | usage: Usage.merge(run.usage, usage)}}
+
+      {:error, _} ->
+        {outcome, run}
+    end
+  end
 
   @doc "Check a request against a provider's context window and reserve output."
   @spec check_context(map(), term(), module(), keyword(), map()) ::

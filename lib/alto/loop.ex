@@ -29,11 +29,15 @@ defmodule Alto.Loop do
   @optional_callbacks dump_checkpoint: 2, load_checkpoint: 2, resolve_child_provider: 2
 
   @doc "Run a hook after a lifecycle event has occurred and before continuation effects execute."
-  @spec after_event(Spec.t(), atom(), Alto.Hook.handler()) :: Spec.t()
-  def after_event(%Spec{} = spec, event_type, hook) when is_atom(event_type) do
-    Spec.add_middleware(
-      spec,
-      {Alto.Middleware.After, event: event_type, hook: hook}
-    )
+  @spec after_event(Spec.t(), atom(), (Event.t(), map() -> [Alto.Effect.t()])) :: Spec.t()
+  def after_event(%Spec{} = spec, event_type, hook)
+      when is_atom(event_type) and is_function(hook, 2) do
+    Spec.add_middleware(spec, fn event, context, next ->
+      transition = next.(event)
+
+      if event.type == event_type,
+        do: Transition.prepend_effects(transition, hook.(event, context)),
+        else: transition
+    end)
   end
 end

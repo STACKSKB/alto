@@ -110,6 +110,10 @@ defmodule Alto.Capabilities do
   defp compaction(false), do: false
   defp compaction(true), do: "summary"
   defp compaction(opts), do: opts |> Keyword.get(:strategy, :summary) |> module_name()
+
+  defp module_name(fun) when is_function(fun),
+    do: fun |> Function.info(:module) |> elem(1) |> module_name()
+
   defp module_name(nil), do: nil
   defp module_name({module, _opts}), do: module_name(module)
   defp module_name(module) when is_atom(module), do: Atom.to_string(module)

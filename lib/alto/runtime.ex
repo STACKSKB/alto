@@ -9,7 +9,6 @@ defmodule Alto.Runtime do
 
   alias Alto.Event
   alias Alto.Loop.Spec
-  alias Alto.Middleware
   alias Alto.Transition
 
   @spec init(Spec.t(), term()) :: Transition.t()
@@ -21,7 +20,7 @@ defmodule Alto.Runtime do
 
     pipeline =
       Enum.reduce(Enum.reverse(spec.middleware), terminal, fn middleware, next ->
-        fn next_event -> Middleware.call(middleware, next_event, context, next) end
+        fn next_event -> middleware.(next_event, context, next) end
       end)
 
     pipeline.(event)

@@ -62,8 +62,6 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
   end
 
   defmodule CompletionEffect do
-    @behaviour Alto.Middleware
-
     def call(%Event{} = event, _context, next, opts) do
       owner = Keyword.fetch!(opts, :owner)
       send(owner, {:middleware, event.type, event.data[:call_id], event.data[:name]})
@@ -84,7 +82,8 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
   end
 
   test "middleware sees source order and its effects wait for the whole group" do
-    loop = Alto.loop(Loop, middleware: [{CompletionEffect, owner: self()}])
+    opts = [owner: self()]
+    loop = Alto.loop(Loop, middleware: [&CompletionEffect.call(&1, &2, &3, opts)])
 
     {:ok, handle} =
       Alto.start(:ignored,

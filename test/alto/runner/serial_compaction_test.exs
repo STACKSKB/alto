@@ -109,6 +109,23 @@ defmodule Alto.Runner.SerialCompactionTest do
     end
   end
 
+  defmodule ConcurrentReducer do
+    @behaviour Alto.Context.Reducer
+
+    def compact(_input, model, opts) do
+      results =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            model.(%{messages: [%{"role" => "user", "content" => "Summarize this agent work"}]})
+          end)
+        end
+        |> Enum.map(&Task.await/1)
+
+      send(opts[:owner], {:concurrent_reduction, results})
+      {:error, :probe_complete}
+    end
+  end
+
   defmodule DeterministicReducer do
     @behaviour Alto.Context.Reducer
 
@@ -415,6 +432,19 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert state.messages_rev == before
     assert state.compaction_count == 0
+  end
+
+  test "concurrent reducer model callbacks share the run step cap", %{dir: dir} do
+    state = reduction_state(dir, {ConcurrentReducer, owner: self()})
+    state = %{state | provider: {ScriptedProvider, test_pid: self()}, max_steps: 1}
+
+    assert {:error, :probe_complete, failed} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert_receive {:concurrent_reduction, results}
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert {:error, {:model_step_limit, 1}} in results
+    assert failed.model_requests == 1
+    assert_receive {:stream_call, _}
+    refute_receive {:stream_call, _}
   end
 
   test "a reducer crash is reported and leaves transcript and accounting intact", %{dir: dir} do

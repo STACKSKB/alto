@@ -28,8 +28,10 @@ Independent hosts can call `Alto.Runner.Execution.Transcript.reduce/2` directly.
 The optional `required_headroom` specifies how many transcript bytes must fit
 afterwards. A successful reduction must strictly shrink the retained context;
 each success consumes the configured compaction allowance. Provider reductions
-also consume the shared model budget. Compaction never refreshes deadlines or
-execution budgets, and its count is preserved in approval checkpoints.
+use the same dispatch, retry, request-count and usage-accounting path as ordinary
+model calls. Concurrent calls from a reducer serialize through that shared run
+state. Compaction never refreshes deadlines or execution budgets, and its count
+is preserved in approval checkpoints.
 
 Compaction is disabled by default. When enabled, the default allowance is one
 reduction per run. Custom reducers implement `Alto.Context.Reducer.compact/3`;

@@ -4,7 +4,8 @@ defmodule Alto.Loop.Spec do
   @enforce_keys [:driver]
   defstruct [:driver, :context, :subagents, driver_options: [], middleware: []]
 
-  @type middleware :: module() | {module(), keyword()}
+  @type middleware :: (Alto.Event.t(), map(), (Alto.Event.t() -> Alto.Transition.t()) ->
+                         Alto.Transition.t())
   @type t :: %__MODULE__{
           driver: module(),
           context: term(),

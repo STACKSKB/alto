@@ -638,34 +638,16 @@ defmodule Alto.Runner.Execution do
   end
 
   defp request_model(request, run) do
-    if run.model_requests >= run.max_steps do
-      {:error, {:model_step_limit, run.max_steps}, run}
-    else
-      live_sink = fn event -> Alto.Events.notify(run.event_sink, event) end
-      {provider, provider_opts} = run.provider
-      step = run.model_requests + 1
+    sink = fn event -> Alto.Events.notify(run.event_sink, event) end
 
-      Alto.Events.notify(
-        run.event_sink,
-        Event.live(:model_started, %{step: step})
-      )
+    case Model.request(request, run, sink) do
+      {{:ok, completion}, run} ->
+        usage = Usage.normalize(if(is_map(completion), do: completion[:usage]))
+        observation = Alto.Context.Observation.new(request, usage.input_tokens)
+        complete_model(Map.put(run, :context_observation, observation), completion)
 
-      outcome =
-        Model.stream(provider, request, live_sink, provider_opts, run, step)
-
-      run = %{run | model_requests: run.model_requests + 1}
-
-      case outcome do
-        {:ok, completion} ->
-          usage = Usage.normalize(if(is_map(completion), do: Map.get(completion, :usage)))
-
-          observation = Alto.Context.Observation.new(request, usage.input_tokens)
-
-          complete_model(Map.put(run, :context_observation, observation), completion)
-
-        {:error, reason} ->
-          {:error, reason, run}
-      end
+      {{:error, reason}, run} ->
+        {:error, reason, run}
     end
   end
 
@@ -766,7 +748,6 @@ defmodule Alto.Runner.Execution do
         case RunTranscript.append(run, assistant) do
           {:ok, run} ->
             request_usage = Usage.normalize(Map.get(completion, :usage))
-            run = %{run | usage: Usage.merge(run.usage, request_usage)}
             run = add_pending_provider_calls(run, calls)
 
             event =

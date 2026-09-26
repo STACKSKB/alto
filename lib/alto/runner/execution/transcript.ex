@@ -5,10 +5,10 @@ defmodule Alto.Runner.Execution.Transcript do
   Functions update the supplied map directly, so standalone callers may pass
   any map containing the fields needed by the selected operation.
   """
-  alias Alto.{Event, Usage}
+  alias Alto.Event
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
-  alias Alto.Runner.Execution.Events
+  alias Alto.Runner.Execution.{Events, Model}
 
   def append(run, message) do
     message_bytes = byte_size(JSON.encode!(message))
@@ -36,22 +36,11 @@ defmodule Alto.Runner.Execution.Transcript do
   def reduce(%{session: nil} = run, _opts),
     do: {:error, :compaction_requires_session, run}
 
-  def reduce(run, opts) when is_list(opts) do
-    if Keyword.keyword?(opts),
-      do: reduce_with_options(run, opts),
-      else: {:error, {:invalid_compaction_options, opts}, run}
-  end
-
-  def reduce(run, opts), do: {:error, {:invalid_compaction_options, opts}, run}
-
-  defp reduce_with_options(run, opts) do
+  def reduce(run, opts) do
     required_headroom = Keyword.get(opts, :required_headroom, 0)
     reason = Keyword.get(opts, :reason, :manual)
 
     cond do
-      not is_integer(required_headroom) or required_headroom < 0 ->
-        {:error, {:invalid_compaction_headroom, required_headroom}, run}
-
       required_headroom > run.max_transcript_bytes ->
         {:error, insufficient_headroom(run, run.transcript_bytes, required_headroom), run}
 
@@ -80,9 +69,6 @@ defmodule Alto.Runner.Execution.Transcript do
 
       {:error, {:cancelled, _} = reason, run} ->
         {:error, reason, run}
-
-      {:error, :compaction_requires_provider, run} ->
-        {:error, :compaction_requires_provider, run}
 
       {:error, _reason, run} ->
         {:error, {:transcript_limit, run.max_transcript_bytes}, run}
@@ -146,19 +132,27 @@ defmodule Alto.Runner.Execution.Transcript do
     outcome =
       Alto.Runner.Execution.Call.run(
         fn ->
-          {:ok, accounting} = Agent.start_link(fn -> {0, Usage.new()} end)
+          {:ok, accounting} = Agent.start_link(fn -> run end)
 
           try do
             model = fn request ->
               try do
-                Agent.get_and_update(accounting, &reduction_model(run, request, &1), :infinity)
+                request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
+
+                Agent.get_and_update(
+                  accounting,
+                  &Model.request(request, &1, compaction_sink(run.event_sink)),
+                  :infinity
+                )
               catch
                 :exit, _ -> {:error, :reduction_model_closed}
               end
             end
 
             result = module.compact(input, model, opts)
-            {:compacted, result, Agent.get(accounting, & &1, :infinity)}
+
+            {:compacted, result,
+             Agent.get(accounting, &Map.take(&1, [:model_requests, :usage]), :infinity)}
           after
             if Process.alive?(accounting), do: Agent.stop(accounting)
           end
@@ -168,12 +162,8 @@ defmodule Alto.Runner.Execution.Transcript do
       )
 
     case outcome do
-      {:compacted, result, {requests, usage}} ->
-        run = %{
-          run
-          | usage: Usage.merge(run.usage, usage),
-            model_requests: run.model_requests + requests
-        }
+      {:compacted, result, accounting} ->
+        run = Map.merge(run, accounting)
 
         case result do
           {:ok, product} -> apply_product(run, input, product, headroom)
@@ -188,32 +178,6 @@ defmodule Alto.Runner.Execution.Transcript do
         record_compact_failed(run, reason)
     end
   end
-
-  defp reduction_model(%{provider: nil}, _request, accounting),
-    do: {{:error, :compaction_requires_provider}, accounting}
-
-  defp reduction_model(run, request, {count, usage} = accounting) when is_map(request) do
-    {provider, opts} = run.provider
-
-    with true <- is_list(request[:messages]) and is_list(Map.get(request, :tools, [])),
-         :ok <- take_compaction_model(%{run | model_requests: run.model_requests + count}) do
-      request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
-
-      case provider.stream(request, compaction_sink(run.event_sink), opts) do
-        {:ok, completion} = result when is_map(completion) ->
-          {result, {count + 1, Usage.merge(usage, Usage.normalize(completion[:usage]))}}
-
-        other ->
-          {other, {count + 1, usage}}
-      end
-    else
-      false -> {{:error, :invalid_compaction_request}, accounting}
-      {:error, _} = error -> {error, accounting}
-    end
-  end
-
-  defp reduction_model(_run, _request, accounting),
-    do: {{:error, :invalid_compaction_request}, accounting}
 
   defp apply_product(
          run,
@@ -289,11 +253,6 @@ defmodule Alto.Runner.Execution.Transcript do
        max_transcript_bytes: run.max_transcript_bytes
      }}
   end
-
-  defp take_compaction_model(%{model_requests: count, max_steps: limit}) when count >= limit,
-    do: {:error, {:model_step_limit, limit}}
-
-  defp take_compaction_model(run), do: Budget.take_model(run.budget)
 
   defp max_compactions(run), do: Keyword.get(run.compaction, :max_compactions, 1)
 

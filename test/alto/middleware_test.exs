@@ -6,28 +6,19 @@ defmodule Alto.MiddlewareTest do
   alias Alto.Loop
   alias Alto.Runtime
 
-  defmodule Trace do
-    @behaviour Alto.Middleware
-
-    @impl true
-    def call(event, _context, next, opts) do
-      test_pid = Keyword.fetch!(opts, :test_pid)
-      label = Keyword.fetch!(opts, :label)
-      send(test_pid, {:middleware, label, :before})
-      transition = next.(event)
-      send(test_pid, {:middleware, label, :after})
-      transition
-    end
-  end
-
   test "middleware enters in declaration order and unwinds in reverse" do
-    spec =
-      Alto.default_loop(
-        middleware: [
-          {Trace, test_pid: self(), label: :first},
-          {Trace, test_pid: self(), label: :second}
-        ]
-      )
+    owner = self()
+
+    trace = fn label ->
+      fn event, _context, next ->
+        send(owner, {:middleware, label, :before})
+        transition = next.(event)
+        send(owner, {:middleware, label, :after})
+        transition
+      end
+    end
+
+    spec = Alto.default_loop(middleware: Enum.map([:first, :second], trace))
 
     initial = Runtime.init(spec, "answer")
 

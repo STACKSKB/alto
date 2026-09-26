@@ -115,6 +115,20 @@ shape. Provider usage remains authoritative after a request completes.
 
 ## Hooks, commands, and clients
 
+Middleware is an ordered list of three-argument functions `(event, context, next)`.
+Call `next.(event)` to continue the chain and return an `Alto.Transition`.
+Use closures to bind options, or capture a reusable module function:
+
+```elixir
+middleware = fn event, context, next -> MyMiddleware.call(event, context, next, options) end
+loop = Alto.default_loop(middleware: [middleware])
+loop = Alto.Loop.after_event(loop, :step_settled, fn event, context -> effects(event, context) end)
+```
+
+`after_event/3` accepts a two-argument function returning ordered effects. Its
+effects precede the inner transition's effects; middleware still enters in list
+order and unwinds in reverse. Malformed trusted callbacks fail under supervision.
+
 Lifecycle hooks observe typed events and may record metrics or project state.
 They do not replace approval or execution boundaries. Command tools should use
 the configured command executor: sandboxed commands are appropriate for model
