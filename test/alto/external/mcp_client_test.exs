@@ -57,7 +57,22 @@ defmodule Alto.External.MCP.ClientTest do
               %{"jsonrpc" => "2.0", "id" => id, "result" => %{"content" => [%{"type" => "text", "text" => JSON.encode!(message["params"]["arguments"])}]}}
             _ -> nil
           end
-        if response, do: IO.puts(JSON.encode!(response))
+        if response do
+          encoded = JSON.encode!(response)
+          wire = if message["method"] in ["tools/list", "tools/call"], do: System.get_env("WIRE"), else: nil
+          case wire do
+            "lf" -> IO.binwrite(String.pad_trailing(encoded, 512) <> "\\n")
+            "crlf" -> IO.binwrite(String.pad_trailing(encoded, 512) <> "\\r\\n")
+            "batch" ->
+              notification = JSON.encode!(%{"jsonrpc" => "2.0", "method" => "notifications/message", "params" => %{}}) <> "\\n"
+              IO.binwrite(String.duplicate(notification, 20) <> encoded <> "\\n")
+            "oversized" -> IO.binwrite(String.pad_trailing(encoded, 513) <> "\\n")
+            "eof" ->
+              IO.binwrite(encoded)
+              System.halt(0)
+            _ -> IO.puts(encoded)
+          end
+        end
         {:cont, state}
     end)
     """)
@@ -105,6 +120,55 @@ defmodule Alto.External.MCP.ClientTest do
 
     assert {:ok, _result} =
              Client.call_tool(client, "echo", %{"hello" => "world"}, 5_000)
+  end
+
+  test "native line framing accepts exact payload limits with LF and CRLF", context do
+    for wire <- ["lf", "crlf"] do
+      client = wire_client!(context, wire)
+      assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client, 5_000)
+      Client.stop(client)
+    end
+  end
+
+  test "coalesced short notifications do not count against the per-message limit", context do
+    client = wire_client!(context, "batch")
+    assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client, 5_000)
+    Client.stop(client)
+  end
+
+  test "oversized frames fail every dispatched MCP request as uncertain", context do
+    client = wire_client!(context, "oversized", %{"SLOW" => "1"})
+    monitor = Process.monitor(client)
+    tasks = for _ <- 1..2, do: Task.async(fn -> Client.call_tool(client, "echo", %{}, 5_000) end)
+    assert eventually(fn -> map_size(:sys.get_state(client).pending) == 2 end)
+
+    for task <- tasks do
+      assert {:unknown, {:json_rpc_incomplete_line, 512}} = Task.await(task, 5_000)
+    end
+
+    assert_receive {:DOWN, ^monitor, :process, ^client, {:json_rpc_incomplete_line, 512}}, 5_000
+  end
+
+  test "EOF after a valid JSON payload without a newline cannot complete a request", context do
+    client = wire_client!(context, "eof")
+    monitor = Process.monitor(client)
+    assert {:error, reason} = Client.list_tools(client, 5_000)
+    assert reason in [{:json_rpc_incomplete_line, 512}, {:json_rpc_process_exit, 0}]
+    assert_receive {:DOWN, ^monitor, :process, ^client, ^reason}, 5_000
+  end
+
+  defp wire_client!(context, wire, env \\ %{}) do
+    assert {:ok, client} =
+             Client.ensure_started(
+               command: context.server,
+               cwd: context.root,
+               max_message_bytes: 512,
+               env: Map.put(env, "WIRE", wire),
+               startup_timeout: 5_000
+             )
+
+    on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
+    client
   end
 
   test "reports missing executables without hanging startup", %{root: root} do

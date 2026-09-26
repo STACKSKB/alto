@@ -47,7 +47,7 @@ defmodule Alto.Tools.Ripwire do
                "args" => args,
                "timeout_ms" => Keyword.get(opts, :timeout_ms, 60_000),
                "max_output_bytes" =>
-                 Keyword.get(opts, :max_output_bytes, min(64_000, Invocation.max_output_bytes()))
+                 Keyword.get(opts, :max_output_bytes, Invocation.default_output_bytes())
              },
              context,
              Keyword.take(opts, [:executor, :policy])
@@ -66,23 +66,16 @@ defmodule Alto.Tools.Ripwire do
   defp build_args(%{"action" => action}), do: {:error, {:unknown_ripwire_action, action}}
   defp build_args(_arguments), do: {:error, :ripwire_action_required}
 
-  defp action_flag("situ", nil), do: {:ok, "--situ"}
-  defp action_flag("test_gate", nil), do: {:ok, "--test-gate"}
-  defp action_flag("quality_delta", nil), do: {:ok, "--quality-delta"}
+  defp action_flag(action, nil) when action in ~w(situ test_gate quality_delta),
+    do: {:ok, "--" <> String.replace(action, "_", "-")}
 
   defp action_flag(action, query) when is_binary(query) and query != "" do
-    prefix =
-      case action do
-        "pack_task" -> "--pack-task="
-        "context" -> "--for="
-        "impact" -> "--impact="
-        "callers" -> "--callers="
-        "edit_check" -> "--edit-check="
-        "pr_context" -> "--pr-context="
-        _other -> nil
-      end
-
-    if prefix, do: {:ok, prefix <> query}, else: {:error, {:unexpected_ripwire_query, action}}
+    if action in ~w(situ test_gate quality_delta) do
+      {:error, {:unexpected_ripwire_query, action}}
+    else
+      name = if action == "context", do: "for", else: String.replace(action, "_", "-")
+      {:ok, "--" <> name <> "=" <> query}
+    end
   end
 
   defp action_flag(action, _query), do: {:error, {:ripwire_query_required, action}}

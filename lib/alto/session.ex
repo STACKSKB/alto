@@ -31,7 +31,6 @@ defmodule Alto.Session do
   """
 
   @version 1
-  @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @max_list_entries 100
   @max_task_preview 120
   @max_log_bytes 16_000_000
@@ -54,12 +53,7 @@ defmodule Alto.Session do
 
   @doc "Resolve the sessions directory, honouring an explicit override."
   @spec dir(keyword()) :: Path.t()
-  def dir(opts \\ []) do
-    case Keyword.get(opts, :session_dir) do
-      nil -> Path.join([Alto.Storage.state_home(), "alto", "sessions"])
-      path when is_binary(path) -> path
-    end
-  end
+  def dir(opts \\ []), do: Alto.Storage.dir("sessions", Keyword.get(opts, :session_dir))
 
   @doc "Generate a random session id without creating any records."
   @spec generate_id() :: session_id()
@@ -69,11 +63,9 @@ defmodule Alto.Session do
 
   @doc "Check a session id for directory traversal and shape."
   @spec validate_id(term()) :: :ok | {:error, term()}
-  def validate_id(id) when is_binary(id) do
-    if valid_id?(id), do: :ok, else: {:error, {:invalid_session_id, id}}
+  def validate_id(id) do
+    if Alto.Storage.valid_id?(id), do: :ok, else: {:error, {:invalid_session_id, id}}
   end
-
-  def validate_id(id), do: {:error, {:invalid_session_id, id}}
 
   @doc "Create a session for a task; returns its random id."
   @spec create(term(), map(), keyword()) :: {:ok, session_id()} | {:error, term()}
@@ -85,10 +77,7 @@ defmodule Alto.Session do
       |> Map.merge(%{task: task, subagent: false, session_owner: true})
       |> started_record()
 
-    case append(id, record, opts) do
-      :ok -> {:ok, id}
-      {:error, reason} -> {:error, reason}
-    end
+    with :ok <- append(id, record, opts), do: {:ok, id}
   end
 
   @doc "Append one record map to a session log."
@@ -178,25 +167,11 @@ defmodule Alto.Session do
   end
 
   @doc "Fetch the latest resumable transcript for a session."
-  @spec transcript(session_id(), keyword()) ::
-          {:ok,
-           %{
-             messages: [map()],
-             transcript_bytes: non_neg_integer(),
-             revision: pos_integer()
-           }}
-          | {:error, term()}
+  @spec transcript(session_id(), keyword()) :: {:ok, Conversation.snapshot()} | {:error, term()}
   def transcript(id, opts \\ []) do
     case Conversation.resume(id, opts) do
-      {:ok, snapshot} ->
-        {:ok,
-         Map.take(snapshot, [
-           :messages,
-           :transcript_bytes,
-           :revision,
-           :unsettled,
-           :context_observation
-         ])}
+      {:ok, _snapshot} = result ->
+        result
 
       {:error, :enoent} ->
         if File.exists?(log_path(dir(opts), id)) do
@@ -310,7 +285,7 @@ defmodule Alto.Session do
           entries
           |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
           |> Enum.map(&Path.rootname/1)
-          |> Enum.filter(&valid_id?/1)
+          |> Enum.filter(&Alto.Storage.valid_id?/1)
           |> Enum.map(fn id -> {id, mtime(dir(opts), id)} end)
           |> Enum.sort_by(&elem(&1, 1), :desc)
           |> Enum.take(@max_list_entries)
@@ -444,28 +419,26 @@ defmodule Alto.Session do
   defp event_run_id(run_id), do: {:error, {:invalid_event_run_id, run_id}}
 
   defp page_events(records, cursor, limit, run_id) do
+    records = Enum.filter(records, &(&1["type"] == "event"))
+    total = length(records)
+
     candidates =
       records
-      |> Enum.filter(&(&1["type"] == "event"))
       |> Enum.with_index(1)
-      |> Enum.filter(fn {record, ordinal} ->
-        ordinal > cursor and (is_nil(run_id) or record["run_id"] == run_id)
-      end)
+      |> Enum.drop(cursor)
+      |> Enum.filter(fn {record, _ordinal} -> is_nil(run_id) or record["run_id"] == run_id end)
 
     events =
-      candidates
-      |> Enum.take(limit)
-      |> Enum.map(fn {record, ordinal} -> Map.put(record, "ordinal", ordinal) end)
+      for {record, ordinal} <- Enum.take(candidates, limit),
+          do: Map.put(record, "ordinal", ordinal)
 
-    last_ordinal = List.last(events) && Map.fetch!(List.last(events), "ordinal")
+    last_cursor = Map.get(List.last(events, %{}), "ordinal", cursor)
     complete = length(candidates) <= limit
-    total = Enum.count(records, &(&1["type"] == "event"))
-    last_cursor = last_ordinal || cursor
 
     {:ok,
      %{
        events: events,
-       next_cursor: if(complete, do: nil, else: last_ordinal),
+       next_cursor: if(complete, do: nil, else: last_cursor),
        last_cursor: last_cursor,
        high_watermark: total,
        complete: complete,
@@ -478,8 +451,6 @@ defmodule Alto.Session do
 
   defp preview_task(task) when is_binary(task), do: String.slice(task, 0, @max_task_preview)
   defp preview_task(task), do: task |> inspect() |> String.slice(0, @max_task_preview)
-
-  defp valid_id?(id), do: is_binary(id) and Regex.match?(@id_pattern, id)
 
   defp branch_destination_available(id, opts) do
     root = dir(opts)
@@ -518,8 +489,7 @@ defmodule Alto.Session do
   defp decode_line(line, id, number) do
     case JSON.decode(line) do
       {:ok, record} when is_map(record) -> {:ok, record}
-      {:ok, _other} -> {:error, {:session_corrupt, id, number}}
-      {:error, _error} -> {:error, {:session_corrupt, id, number}}
+      _ -> {:error, {:session_corrupt, id, number}}
     end
   end
 
@@ -543,25 +513,21 @@ defmodule Alto.Session do
 
   defp summarize(id, opts) do
     with {:ok, records} <- read(id, opts) do
-      root? = fn record -> record["session_owner"] == true end
-
-      started = Enum.find(records, &(&1["type"] == "started" and root?.(&1)))
-      completed = Enum.filter(records, &(&1["type"] == "completed" and root?.(&1)))
+      started = for %{"type" => "started", "session_owner" => true} = r <- records, do: r
+      completed = for %{"type" => "completed", "session_owner" => true} = r <- records, do: r
+      first = List.first(started, %{})
 
       {:ok,
        %{
          id: id,
-         started_at_ms: started && started["at_ms"],
-         task: started && started["task"],
-         parent_session_id: started && started["parent_session_id"],
-         agent_identity: started && started["agent_identity"],
-         runs: Enum.count(records, &(&1["type"] == "started" and root?.(&1))),
+         started_at_ms: first["at_ms"],
+         task: first["task"],
+         parent_session_id: first["parent_session_id"],
+         agent_identity: first["agent_identity"],
+         runs: length(started),
          completed_runs: length(completed),
-         last_outcome: completed |> List.last() |> outcome_of()
+         last_outcome: List.last(completed, %{})["outcome"]
        }}
     end
   end
-
-  defp outcome_of(nil), do: nil
-  defp outcome_of(%{"outcome" => outcome}), do: outcome
 end

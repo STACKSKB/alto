@@ -50,7 +50,7 @@ defmodule Alto.Runner.Execution.Setup do
          :ok <- validate_directory(cwd),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
          :ok <- validate_session_dir(Keyword.get(opts, :session_dir)),
-         {:ok, tool_map, definitions} <- Alto.Tool.Registry.build(tools),
+         {:ok, tool_map, definitions} <- Alto.Tool.Registry.build(tools, child_limits),
          {:ok, definitions, model_exposure} <-
            Alto.Tool.Registry.expose(
              definitions,
@@ -352,26 +352,22 @@ defmodule Alto.Runner.Execution.Setup do
           cwd: run.tool_context.cwd
         })
 
-      case Session.append(run.session, record, session_dir_opt(run)) do
+      case Session.append(run.session, record, session_dir: run.session_dir) do
         :ok ->
           {:ok, run}
 
         {:error, reason} ->
           Logger.warning("alto: session not opened: #{inspect(reason, limit: 5)}")
-          {:ok, add_persistence_error(run, reason)}
+          {:ok, %{run | persistence_errors: [reason | run.persistence_errors]}}
       end
     else
       {:ok, run}
     end
   end
 
-  defp add_persistence_error(run, reason),
-    do: Map.update(run, :persistence_errors, [reason], &[reason | &1])
-
   defp generate_run_id,
-    do: "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    do: "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
-  defp session_dir_opt(run), do: [session_dir: run.session_dir]
   defp task_text(task) when is_binary(task), do: task
   defp task_text(task), do: inspect(task)
   defp provider_identity(nil), do: {nil, nil}

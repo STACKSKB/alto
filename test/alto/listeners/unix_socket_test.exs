@@ -23,7 +23,7 @@ defmodule Alto.Listeners.UnixSocketTest do
     end
   end
 
-  setup do
+  setup context do
     root = Path.join(System.tmp_dir!(), "alto-listener-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
@@ -52,7 +52,14 @@ defmodule Alto.Listeners.UnixSocketTest do
     end
 
     start_supervised!({Registry, name: registry, config_resolver: resolver, cwd: root})
-    start_supervised!({UnixSocket, registry: registry, path: path, name: UnixSocket})
+
+    start_supervised!(
+      {UnixSocket,
+       registry: registry,
+       path: path,
+       name: UnixSocket,
+       max_line_bytes: Map.get(context, :max_line_bytes, 1_048_576)}
+    )
 
     {:ok, socket} = :gen_tcp.connect({:local, path}, 0, [:binary, {:active, false}])
 
@@ -255,6 +262,30 @@ defmodule Alto.Listeners.UnixSocketTest do
 
     :gen_tcp.send(socket, String.duplicate("x", 1_048_577) <> "\n")
 
+    assert {:error, :closed} = :gen_tcp.recv(socket, 0, 2_000)
+  end
+
+  @tag max_line_bytes: 256
+  test "frames fragmented and coalesced commands at the exact bound", %{socket: socket} do
+    {_hello, buffer} = recv_json(socket, "")
+    command = JSON.encode!(%{"v" => 1, "type" => "ping", "id" => "boundary"})
+    line = String.pad_trailing(command, 255) <> "\r\n"
+    <<first::binary-size(100), rest::binary>> = line
+    assert :ok = :gen_tcp.send(socket, first)
+    assert {:error, :timeout} = :gen_tcp.recv(socket, 0, 50)
+    assert :ok = :gen_tcp.send(socket, [rest, "\n", command, "\n"])
+
+    {first, buffer} = recv_json(socket, buffer)
+    {second, _buffer} = recv_json(socket, buffer)
+    assert %{"type" => "error", "id" => "boundary", "code" => "unknown_type"} = first
+    assert second["id"] == "boundary"
+    assert second["code"] == "unknown_type"
+  end
+
+  @tag max_line_bytes: 256
+  test "closes oversized unterminated lines without dispatching fragments", %{socket: socket} do
+    {_hello, _buffer} = recv_json(socket, "")
+    assert :ok = :gen_tcp.send(socket, String.duplicate("x", 257))
     assert {:error, :closed} = :gen_tcp.recv(socket, 0, 2_000)
   end
 

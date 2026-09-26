@@ -44,9 +44,5 @@ defmodule Alto.Tools.RunCommand do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{}, _opts \\ []), do: Alto.Command.execute(prepared)
-
-  @impl true
-  def run(arguments, %Context{} = context, opts \\ []),
-    do: Alto.Command.run(arguments, context, opts)
+  def run(prepared, %Context{}, _opts \\ []), do: Alto.Command.execute(prepared)
 end

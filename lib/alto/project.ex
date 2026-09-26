@@ -49,17 +49,8 @@ defmodule Alto.Project do
     with true <- (is_integer(max_bytes) and max_bytes > 0) or {:error, :invalid_max_bytes},
          {:ok, path} <- Alto.Tools.Path.resolve(name, cwd),
          {:ok, %{type: :regular}} <- File.stat(path) do
-      File.open(path, [:read, :binary], fn io ->
-        case IO.binread(io, max_bytes + 4) do
-          :eof -> decode_bounded(path, "", max_bytes)
-          {:error, reason} -> {:error, reason}
-          content -> decode_bounded(path, content, max_bytes)
-        end
-      end)
-      |> case do
-        {:ok, result} -> result
-        error -> error
-      end
+      with {:ok, content} <- Alto.BoundedFile.range(path, 0, max_bytes + 4),
+           do: decode_bounded(path, content, max_bytes)
     else
       {:error, :enoent} -> :missing
       {:ok, _stat} -> {:error, :instructions_not_regular}

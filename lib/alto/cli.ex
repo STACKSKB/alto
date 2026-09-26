@@ -441,24 +441,15 @@ defmodule Alto.CLI do
     # construction even for a providerless configuration.
     transport_override? = Enum.any?([:base_url, :api_key_env], &Keyword.has_key?(options, &1))
 
-    cond do
-      transport_override? ->
-        configured_provider(options)
+    case {transport_override?, Keyword.fetch(configured, :provider),
+          Keyword.has_key?(options, :model)} do
+      {false, {:ok, nil}, false} ->
+        {:ok, nil, provider_timeout(options)}
 
-      Keyword.has_key?(configured, :provider) ->
-        case Keyword.fetch!(configured, :provider) do
-          nil ->
-            if Keyword.has_key?(options, :model) do
-              configured_provider(options)
-            else
-              {:ok, nil, provider_timeout(options)}
-            end
+      {false, {:ok, provider}, _} when not is_nil(provider) ->
+        {:ok, patch_model(provider, options), provider_timeout(options)}
 
-          provider ->
-            {:ok, patch_model(provider, options), provider_timeout(options)}
-        end
-
-      true ->
+      _ ->
         configured_provider(options)
     end
   end

@@ -21,7 +21,12 @@ defmodule Alto.Listeners.Connection do
   def wakeup_ms, do: @wakeup_ms
 
   def hello_lines(registry, max_line_bytes) do
-    case Protocol.hello(server_message_id(), Registry.run_ids(registry), max_line_bytes) do
+    case Protocol.envelope(
+           "hello",
+           server_message_id(),
+           %{runs: Registry.run_ids(registry), max_line_bytes: max_line_bytes},
+           max_line_bytes
+         ) do
       {:ok, line} -> [line]
       {:error, :overflow} -> []
     end
@@ -134,7 +139,7 @@ defmodule Alto.Listeners.Connection do
 
     case Registry.queue_claim(registry, count, by, budget) do
       {:ok, records} ->
-        case Protocol.ok(id, %{records: records}, max_line_bytes) do
+        case Protocol.envelope("ok", id, %{records: records}, max_line_bytes) do
           {:ok, line} ->
             [line]
 
@@ -156,8 +161,7 @@ defmodule Alto.Listeners.Connection do
 
   @doc "Encode a registry notification and request the next bounded delivery batch."
   def notification_lines(notification, registry, max_line_bytes) do
-    [kind | args] = Tuple.to_list(notification)
-    encoded = apply(Protocol, kind, [server_message_id() | args] ++ [max_line_bytes])
+    encoded = Protocol.notification(server_message_id(), notification, max_line_bytes)
 
     encoded =
       case encoded do
@@ -165,11 +169,9 @@ defmodule Alto.Listeners.Connection do
           encoded
 
         {:error, :overflow} ->
-          Protocol.overflow(
+          Protocol.notification(
             server_message_id(),
-            elem(notification, 1),
-            overflow_domain(notification),
-            nil,
+            {:overflow, elem(notification, 1), overflow_domain(notification), nil},
             max_line_bytes
           )
       end
@@ -181,7 +183,7 @@ defmodule Alto.Listeners.Connection do
   defp reply(id, :ok, max), do: reply(id, {:ok, %{}}, max)
 
   defp reply(id, {:ok, payload}, max) do
-    case Protocol.ok(id, payload, max) do
+    case Protocol.envelope("ok", id, payload, max) do
       {:ok, line} -> [line]
       {:error, :overflow} -> error_lines(id, "internal", :reply_overflow, max)
     end
@@ -189,7 +191,9 @@ defmodule Alto.Listeners.Connection do
 
   defp reply(id, {:error, reason}, max), do: error_lines(id, error_code(reason), reason, max)
 
-  defp error_lines(id, code, detail, max), do: lines(Protocol.error(id, code, detail, max))
+  defp error_lines(id, code, detail, max),
+    do: lines(Protocol.envelope("error", id, %{code: code, detail: detail}, max))
+
   defp lines({:ok, line}), do: [line]
 
   defp error_code(reason) when reason in [:unknown_run, :unknown_command],

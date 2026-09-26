@@ -475,7 +475,7 @@ defmodule Alto.TUI.Selection do
     # Keep immutable widget terms for paint, and export only the screen's text.
     # Exporting 48,000 cell maps just to start a drag causes a visible pause.
     widgets = Enum.map(widgets, fn {widget, rect} -> {freeze(widget), rect} end)
-    terminal = capture_terminal(max(width, 1), max(height, 1))
+    terminal = Alto.TUI.Viewport.test_terminal(:selection, max(width, 1), max(height, 1))
     # Clear stale filler cells left when a wide glyph moves between captures.
     :ok = ExRatatui.draw(terminal, [])
     painted = Alto.TUI.Viewport.widgets(widgets)
@@ -515,20 +515,6 @@ defmodule Alto.TUI.Selection do
       end)
 
     Enum.reverse(visible)
-  end
-
-  defp capture_terminal(width, height) do
-    key = {__MODULE__, :capture_terminal}
-
-    case Process.get(key) do
-      {^width, ^height, terminal} ->
-        terminal
-
-      _ ->
-        terminal = ExRatatui.init_test_terminal(width, height)
-        Process.put(key, {width, height, terminal})
-        terminal
-    end
   end
 
   @doc false

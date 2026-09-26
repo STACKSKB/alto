@@ -11,7 +11,12 @@ defmodule Alto.Runner.ChildSummaryTest do
       | output: "done",
         verdict: :completed,
         model_requests: 2,
-        usage: %{Usage.to_map(Usage.new()) | input_tokens: 7, requests: 1},
+        usage: %{
+          Usage.to_map(Usage.new())
+          | input_tokens: 7,
+            requests: 1,
+            context_window: 100_000
+        },
         persistence: {:degraded, [:transcript_write_failed]}
     }
 
@@ -24,6 +29,7 @@ defmodule Alto.Runner.ChildSummaryTest do
     refute Map.has_key?(public, :persistence)
     assert retained == live
     assert retained.usage.input_tokens == 7
+    assert retained.usage.context_window == 100_000
     assert retained.verdict == :completed
     assert retained.persistence_errors == [{:subagent, :transcript_write_failed}]
   end

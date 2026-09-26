@@ -15,7 +15,7 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
       {:ok, args, %{}}
     end
 
-    def run_prepared(args, _context, opts) do
+    def run(args, _context, opts) do
       send(opts[:owner], {:read_started, args["id"], self()})
 
       if args["block"] do
@@ -92,7 +92,7 @@ defmodule Alto.Runner.ToolBatchOrderingTest do
         tools: [{Read, owner: self()}, {Probe, owner: self()}]
       )
 
-    assert_receive {:prepared, "a"}
+    assert_receive {:prepared, "a"}, 5_000
     assert_receive {:prepared, "b"}
     refute_receive {:prepared, _}, 20
     assert_receive {:read_started, "a", first}

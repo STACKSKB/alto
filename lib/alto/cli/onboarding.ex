@@ -34,8 +34,6 @@ defmodule Alto.CLI.Onboarding do
       _other ->
         false
     end
-  rescue
-    _error -> false
   catch
     _kind, _reason -> false
   end

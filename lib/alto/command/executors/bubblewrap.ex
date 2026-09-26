@@ -53,12 +53,6 @@ defmodule Alto.Command.Executors.Bubblewrap do
           cwd: "/"
       }
 
-      sandbox = %{
-        backend: :bubblewrap,
-        network: network,
-        workspace: workspace_mode
-      }
-
       approval_details = %{
         backend: :bubblewrap,
         bubblewrap: bubblewrap,
@@ -70,6 +64,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
         environment_variables: environment |> Map.keys() |> Enum.sort()
       }
 
+      sandbox = Map.take(approval_details, [:backend, :network, :workspace])
       {:ok, %Execution{invocation: wrapped, sandbox: sandbox}, approval_details}
     end
   end
@@ -97,12 +92,8 @@ defmodule Alto.Command.Executors.Bubblewrap do
         expanded = Path.expand(path)
 
         case File.stat(expanded) do
-          {:ok, %{type: :regular, mode: mode}} ->
-            if Bitwise.band(mode, 0o111) != 0 do
-              {:ok, expanded}
-            else
-              {:error, {:bubblewrap_not_executable, path}}
-            end
+          {:ok, %{type: :regular, mode: mode}} when Bitwise.band(mode, 0o111) != 0 ->
+            {:ok, expanded}
 
           _other ->
             {:error, {:bubblewrap_not_executable, path}}

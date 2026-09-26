@@ -153,7 +153,7 @@ defmodule Alto.TUI.App do
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
     if overlay.kind in [:provider_form, :model_form] do
-      {:noreply, text_form_result(state, TextForm.paste(overlay, content))}
+      {:noreply, form_result(state, TextForm.paste(overlay, content))}
     else
       {:noreply, filter_overlay(state, overlay.filter <> content)}
     end
@@ -217,20 +217,14 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{code: "back_tab"}, state),
     do: {:noreply, State.focus_next(state, :previous)}
 
-  defp route_event(%Key{code: "c", modifiers: ["ctrl"]}, state) do
+  defp route_event(%Key{code: code, modifiers: modifiers}, state)
+       when code == "esc" or (code == "c" and modifiers == ["ctrl"]) do
     case active_run(state) do
       nil ->
-        {:stop, state}
+        {if(code == "c", do: :stop, else: :noreply), state}
 
       {_id, run} ->
         {:noreply, stop_active_run(state, run)}
-    end
-  end
-
-  defp route_event(%Key{code: "esc"}, state) do
-    case active_run(state) do
-      nil -> {:noreply, state}
-      {_id, run} -> {:noreply, stop_active_run(state, run)}
     end
   end
 
@@ -295,11 +289,6 @@ defmodule Alto.TUI.App do
   end
 
   def handle_info({:alto_approval_request, local_id, request, waiter}, state) do
-    local_id =
-      Enum.find_value(state.runs, local_id, fn {id, run} ->
-        if MapSet.member?(Map.get(run, :approval_ids, MapSet.new()), request.id), do: id
-      end)
-
     pending = %{
       local_id: local_id,
       request: request,
@@ -337,14 +326,14 @@ defmodule Alto.TUI.App do
 
   # Completion is a runner notification, independent of its implementation.
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
-    finish_runner_message(state, [ref: ref], result)
+    finish_runner_message(state, :ref, ref, result)
   end
 
   def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
-    finish_runner_message(state, [monitor: monitor], {:error, {:run_exited, reason}})
+    finish_runner_message(state, :monitor, monitor, {:error, {:run_exited, reason}})
   end
 
-  def handle_info(:prepare_backend, state), do: {:noreply, prepare_selected_backend(state)}
+  def handle_info(:prepare_backend, state), do: {:noreply, backend_action(state, :prepare)}
 
   def handle_info(message, state) do
     case Backend.message(state, message) do
@@ -353,8 +342,8 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp finish_runner_message(state, matcher, result) do
-    case find_run(state, matcher) do
+  defp finish_runner_message(state, key, value, result) do
+    case Enum.find(state.runs, fn {_id, run} -> run[key] == value end) do
       nil -> {:noreply, state, render?: false}
       {local_id, run} -> {:noreply, finish_runner_result(state, local_id, run, result)}
     end
@@ -406,14 +395,12 @@ defmodule Alto.TUI.App do
       ExRatatui.textarea_set_value(state.textarea, "")
 
       state
-      |> Map.update!(:input_routes, fn routes ->
-        route =
-          Map.get_lazy(routes, task_id, fn ->
-            %{selection: Map.take(state, @submission_selection)}
-          end)
-
-        Map.put(routes, task_id, route)
-      end)
+      |> Map.update!(
+        :input_routes,
+        &Map.put_new_lazy(&1, task_id, fn ->
+          %{selection: Map.take(state, @submission_selection)}
+        end)
+      )
       |> Map.put(:notice, input_notice(mode))
     else
       {:error, :follow_up_pending} ->
@@ -456,8 +443,6 @@ defmodule Alto.TUI.App do
         end
     end
   end
-
-  defp ensure_input_for_task(state, task), do: ensure_input(state, task["id"])
 
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
@@ -519,19 +504,14 @@ defmodule Alto.TUI.App do
     %{state | notice: "input pending · Enter sends"}
   end
 
-  def finish_queued(state, task_id, true) do
+  defp finish_queued(state, task_id, continue?) do
     if State.input_pending?(state, task_id) do
-      send(self(), {:alto_tui_send_input, task_id})
-      %{state | notice: state.notice <> " · input retained (Enter sends)"}
+      if continue?, do: send(self(), {:alto_tui_send_input, task_id})
+      notice = if continue?, do: "input retained", else: "queued message paused"
+      %{state | notice: state.notice <> " · #{notice} (Enter sends)"}
     else
       state
     end
-  end
-
-  def finish_queued(state, task_id, false) do
-    if State.input_pending?(state, task_id),
-      do: %{state | notice: state.notice <> " · queued message paused (Enter sends)"},
-      else: state
   end
 
   defp clear_input_route(state, task_id) do
@@ -543,12 +523,9 @@ defmodule Alto.TUI.App do
   defp stop_active_run(state, run) do
     cancel_run(run)
 
-    runs =
-      Map.new(state.runs, fn {id, candidate} ->
-        {id, if(candidate == run, do: Map.put(candidate, :phase, "cancelling"), else: candidate)}
-      end)
-
-    %{state | runs: runs, notice: "cancelling run · draft and queued message kept"}
+    state
+    |> update_run(run, phase: "cancelling")
+    |> Map.put(:notice, "cancelling run · draft and queued message kept")
   end
 
   defp submit_backend(state, prompt) do
@@ -570,7 +547,7 @@ defmodule Alto.TUI.App do
 
       true ->
         with {:ok, state, task} <- ensure_task(state, prompt),
-             {:ok, state} <- ensure_input_for_task(state, task),
+             {:ok, state} <- ensure_input(state, task["id"]),
              {:ok, run_options} <- run_options(state, profile),
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
           attach_run(
@@ -583,7 +560,6 @@ defmodule Alto.TUI.App do
               task_id: task["id"],
               ref: completion_ref,
               phase: "starting",
-              approval_ids: MapSet.new(),
               started_at_ms: System.system_time(:millisecond)
             },
             prompt,
@@ -616,8 +592,8 @@ defmodule Alto.TUI.App do
       |> Alto.Events.attach(&deliver_event(owner, local_id, &1))
       |> Keyword.update(
         :tool_context_metadata,
-        %{approval_sink: owner},
-        &Map.put(&1, :approval_sink, owner)
+        %{approval_sink: owner, approval_route: local_id},
+        &Map.merge(&1, %{approval_sink: owner, approval_route: local_id})
       )
 
     with {:ok, handle} <- do_start_task(task, prompt, run_options) do
@@ -833,15 +809,6 @@ defmodule Alto.TUI.App do
 
     run = if Map.get(run, :phase) == "cancelling", do: run, else: Map.put(run, :phase, phase)
 
-    run =
-      case event do
-        %Event{type: :approval_requested, data: %{request: request}} ->
-          Map.update(run, :approval_ids, MapSet.new([request.id]), &MapSet.put(&1, request.id))
-
-        _ ->
-          run
-      end
-
     state = put_in(state.runs[local_id], run)
 
     case event do
@@ -893,14 +860,11 @@ defmodule Alto.TUI.App do
 
   defp do_ingest_event(state, task_id, %Event{
          type: :context_compacted,
-         data: %{strategy: :handoff} = data
+         data: %{strategy: :handoff, artifact_path: path, next_step: next}
        }) do
-    files = data |> Map.get(:files, %{}) |> Map.values() |> Enum.join(" · ")
-    next = Map.get(data, :next_step, "")
-
     State.append_entry(state, task_id, %{
       kind: :system,
-      text: "handoff created\n#{files}\nnext: #{next}"
+      text: "handoff created\n#{path}\nnext: #{next}"
     })
   end
 
@@ -951,7 +915,7 @@ defmodule Alto.TUI.App do
       [] ->
         profile = State.selected_profile(state)
 
-        if profile && not Map.has_key?(state.models, profile.id) &&
+        if profile && not is_list(State.known_models(state, profile)) &&
              not MapSet.member?(state.model_loading, profile.id),
            do: {:load, profile},
            else: {:error, "This model does not advertise effort selection"}
@@ -1001,12 +965,12 @@ defmodule Alto.TUI.App do
         {:error, "choose a provider first"}
 
       profile ->
-        case Map.fetch(state.models, profile.id) do
-          {:ok, models} ->
+        case State.known_models(state, profile) do
+          models when is_list(models) ->
             items = Enum.map(models, &%{label: model_label(&1), value: model_id(&1)})
             {:ok, "models · type to filter", items, state.selected_model}
 
-          :error ->
+          _ ->
             if MapSet.member?(state.model_loading, profile.id),
               do: {:error, "models are already loading"},
               else: {:load, profile}
@@ -1040,11 +1004,11 @@ defmodule Alto.TUI.App do
   end
 
   defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, key),
-    do: workspace_form_result(state, WorkspaceForm.key(form, key))
+    do: form_result(state, WorkspaceForm.key(form, key))
 
   defp overlay_key(%{overlay: %{kind: kind} = form} = state, key)
        when kind in [:provider_form, :model_form],
-       do: text_form_result(state, TextForm.key(form, key))
+       do: form_result(state, TextForm.key(form, key))
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
 
@@ -1157,7 +1121,7 @@ defmodule Alto.TUI.App do
       end
 
     selected
-    |> prepare_selected_backend()
+    |> backend_action(:prepare)
     |> Map.merge(%{overlay: nil, notice: notice})
   end
 
@@ -1200,9 +1164,9 @@ defmodule Alto.TUI.App do
   defp activate_target(state, {:close_workspace, id}, _x), do: State.close_workspace(state, id)
 
   defp activate_target(state, {:rail_row, row}, _x) do
-    selected = state |> State.select_rail_row(row) |> prepare_selected_backend()
+    selected = state |> State.select_rail_row(row) |> backend_action(:prepare)
 
-    case Enum.at(State.rail_rows(state), row) do
+    case row do
       %{kind: :project} -> State.new_task(selected)
       _ -> %{selected | focus: :rail}
     end
@@ -1226,7 +1190,7 @@ defmodule Alto.TUI.App do
     {width, height} = state.dimensions
     rect = WorkspaceForm.rect(width, height)
 
-    workspace_form_result(
+    form_result(
       state,
       WorkspaceForm.click(state.overlay, row, x - rect.x - 1, rect.height)
     )
@@ -1299,7 +1263,7 @@ defmodule Alto.TUI.App do
     target = state.selected_task_id || state.selected_project_id
     current = Enum.find_index(rows, &(&1.id == target)) || 0
     index = (current + delta) |> max(0) |> min(max(length(rows) - 1, 0))
-    state |> State.select_rail_row(index) |> prepare_selected_backend()
+    state |> State.select_rail_row(Enum.at(rows, index)) |> backend_action(:prepare)
   end
 
   defp scroll_transcript(state, delta) do
@@ -1384,12 +1348,6 @@ defmodule Alto.TUI.App do
 
   defp cancel_run(_run), do: :ok
 
-  def find_run(state, matcher) do
-    Enum.find(state.runs, fn {_id, run} ->
-      Enum.all?(matcher, fn {key, value} -> run[key] == value end)
-    end)
-  end
-
   def drop_run(state, local_id) do
     case Map.get(state.runs, local_id) do
       %{monitor: monitor} -> Process.demonitor(monitor, [:flush])
@@ -1428,11 +1386,7 @@ defmodule Alto.TUI.App do
           %{label: "Enter an exact model ID…", value: {:enter_model, profile_id}}
         ]
 
-    message =
-      reason
-      |> human_error()
-      |> redact_secrets()
-      |> String.slice(0, 1_000)
+    message = human_error(reason)
 
     %{
       state
@@ -1504,32 +1458,6 @@ defmodule Alto.TUI.App do
     }
   end
 
-  defp workspace_form_result(state, :cancel), do: %{state | overlay: nil}
-  defp workspace_form_result(state, {:edit, form}), do: %{state | overlay: form}
-
-  defp workspace_form_result(state, {:create, path}) do
-    case Alto.Harness.Folders.create(path, state.overlay.base) do
-      {:ok, root} -> workspace_form_result(state, {:submit, root})
-      {:error, reason} -> put_in(state.overlay.error, Alto.Display.error(reason))
-    end
-  end
-
-  defp workspace_form_result(state, {:submit, path}) do
-    case State.open_workspace(state, path) do
-      {:ok, next} ->
-        %{next | overlay: nil}
-
-      {:error, {:project_not_directory, _}} ->
-        put_in(state.overlay.error, "Folder does not exist. Ctrl+N creates it.")
-
-      {:error, :invalid_workspace_path} ->
-        put_in(state.overlay.error, "Enter a folder path on one line.")
-
-      {:error, reason} ->
-        put_in(state.overlay.error, "Could not open workspace: #{Alto.Display.error(reason)}")
-    end
-  end
-
   defp open_model_form(state, profile_id) do
     %{
       state
@@ -1551,18 +1479,41 @@ defmodule Alto.TUI.App do
     }
   end
 
-  defp text_form_result(state, :cancel), do: %{state | overlay: nil}
-  defp text_form_result(state, {:edit, form}), do: %{state | overlay: form}
+  defp form_result(state, :cancel), do: %{state | overlay: nil}
+  defp form_result(state, {:edit, form}), do: %{state | overlay: form}
 
-  defp text_form_result(%{overlay: %{kind: :provider_form}} = state, :submit),
+  defp form_result(state, {:create, path}) do
+    case Alto.Harness.Folders.create(path, state.overlay.base) do
+      {:ok, root} -> form_result(state, {:submit, root})
+      {:error, reason} -> put_in(state.overlay.error, Alto.Display.error(reason))
+    end
+  end
+
+  defp form_result(state, {:submit, path}) do
+    case State.open_workspace(state, path) do
+      {:ok, next} ->
+        %{next | overlay: nil}
+
+      {:error, {:project_not_directory, _}} ->
+        put_in(state.overlay.error, "Folder does not exist. Ctrl+N creates it.")
+
+      {:error, :invalid_workspace_path} ->
+        put_in(state.overlay.error, "Enter a folder path on one line.")
+
+      {:error, reason} ->
+        put_in(state.overlay.error, "Could not open workspace: #{Alto.Display.error(reason)}")
+    end
+  end
+
+  defp form_result(%{overlay: %{kind: :provider_form}} = state, :submit),
     do: save_provider_form(state)
 
-  defp text_form_result(%{overlay: %{kind: :model_form} = form} = state, :submit) do
+  defp form_result(%{overlay: %{kind: :model_form} = form} = state, :submit) do
     model = form |> TextForm.value() |> String.trim()
 
     if model == "",
       do: put_in(state.overlay.error, "model ID is required"),
-      else: %{state | selected_model: model, overlay: nil, notice: "model: #{model}"}
+      else: apply_selection(state, :model, model)
   end
 
   defp save_provider_form(state) do
@@ -1601,7 +1552,7 @@ defmodule Alto.TUI.App do
 
   defp handle_overlay_click(%{overlay: %{kind: kind} = form} = state, row)
        when kind in [:provider_form, :model_form],
-       do: text_form_result(state, TextForm.click(form, row))
+       do: form_result(state, TextForm.click(form, row))
 
   defp handle_overlay_click(state, row),
     do: state |> put_overlay_index(row - overlay_list_offset(state.overlay)) |> select_overlay()
@@ -1617,7 +1568,7 @@ defmodule Alto.TUI.App do
         %{state | notice: "backend is not configured"}
 
       state.selected_backend == backend ->
-        select_backend_ui(%{state | overlay: nil})
+        backend_action(%{state | overlay: nil}, :selected)
 
       task_running?(state, state.selected_task_id) ->
         %{state | overlay: nil, notice: "finish or cancel this run before switching backend"}
@@ -1633,7 +1584,7 @@ defmodule Alto.TUI.App do
         state = persist_task_backend(state, task, backend)
         next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 
-        select_backend_ui(%{next | notice: "backend: #{backend}"})
+        backend_action(%{next | notice: "backend: #{backend}"}, :selected)
     end
   end
 
@@ -1647,15 +1598,8 @@ defmodule Alto.TUI.App do
   defp persist_task_backend(state, task, backend),
     do: State.update_task(state, task["id"], %{"backend" => Atom.to_string(backend)})
 
-  defp select_backend_ui(state) do
-    case Backend.ui(state, :selected) do
-      :pass -> state
-      next -> next
-    end
-  end
-
-  defp prepare_selected_backend(state) do
-    case Backend.ui(state, :prepare) do
+  defp backend_action(state, action) do
+    case Backend.ui(state, action) do
       :pass -> state
       next -> next
     end
@@ -1688,15 +1632,6 @@ defmodule Alto.TUI.App do
     do: "use an http:// or https:// URL"
 
   defp human_provider_error(reason), do: "could not save provider: #{human_error(reason)}"
-
-  def redact_secrets(text) do
-    text
-    |> String.replace(~r/(?i)(bearer\s+)[^\s\"',}\]]+/, "\\1[REDACTED]")
-    |> String.replace(
-      ~r/(?i)((?:api[_-]?key|token|secret)[^:]{0,8}:\s*)\"[^\"]*\"/,
-      "\\1\"[REDACTED]\""
-    )
-  end
 
   def model_id(%{id: id}), do: id
   def model_id(%{"id" => id}), do: id

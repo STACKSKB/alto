@@ -35,9 +35,14 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     %{root: root, context: %Context{session_id: "test", cwd: root}}
   end
 
+  defp prepared_run(tool, arguments, context, opts \\ []) do
+    with {:ok, prepared, _details} <- tool.prepare(arguments, context, opts),
+         do: tool.run(prepared, context, opts)
+  end
+
   test "reads and writes only bounded workspace paths", %{root: root, context: context} do
     assert {:ok, %{bytes_written: 6}} =
-             WriteFile.run(%{"path" => "sample.txt", "content" => "abcdef"}, context)
+             prepared_run(WriteFile, %{"path" => "sample.txt", "content" => "abcdef"}, context)
 
     assert {:ok, %{content: "bcd", truncated: true}} =
              ReadFile.run(%{"path" => "sample.txt", "offset" => 1, "limit" => 3}, context)
@@ -50,20 +55,24 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(Path.join(root, "sample.txt")) == "abcdef"
 
     assert {:error, {:path_outside_workspace, "../outside.txt"}} =
-             WriteFile.run(%{"path" => "../outside.txt", "content" => "no"}, context)
+             prepared_run(WriteFile, %{"path" => "../outside.txt", "content" => "no"}, context)
   end
 
   test "host-configured write limits apply during preparation and stay frozen", %{
     context: context
   } do
     assert {:error, {:content_too_large, 3}} =
-             WriteFile.run(%{"path" => "too.txt", "content" => "1234"}, context, max_bytes: 3)
+             prepared_run(WriteFile, %{"path" => "too.txt", "content" => "1234"}, context,
+               max_bytes: 3
+             )
 
     assert {:ok, prepared, _details} =
              WriteFile.prepare(%{"path" => "ok.txt", "content" => "1234"}, context, max_bytes: 4)
 
-    assert {:ok, %{bytes_written: 4}} = WriteFile.run_prepared(prepared, context, max_bytes: 1)
-    assert {:error, {:invalid_write_options, _}} = WriteFile.run(%{}, context, max_bytes: 0)
+    assert {:ok, %{bytes_written: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
+
+    assert {:error, {:invalid_write_options, _}} =
+             prepared_run(WriteFile, %{}, context, max_bytes: 0)
   end
 
   test "host-configured edit limits bound files, replacements, and edit counts", %{
@@ -73,21 +82,24 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(Path.join(root, "edit.txt"), "abcdef")
 
     assert {:error, {:file_too_large, 3}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "b"}]},
                context,
                max_file_bytes: 3
              )
 
     assert {:error, {:replacement_too_large, 1}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "long"}]},
                context,
                max_replacement_bytes: 1
              )
 
     assert {:error, {:too_many_edits, 1}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "edit.txt",
                  "edits" => [
@@ -100,7 +112,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert {:error, {:invalid_edit_options, _}} =
-             EditFile.run(%{}, context, max_input_bytes: 0)
+             prepared_run(EditFile, %{}, context, max_input_bytes: 0)
   end
 
   test "edit schema and runtime require the canonical edits list", %{context: context} do
@@ -109,7 +121,11 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert Map.keys(parameters.properties) |> Enum.sort() == [:edits, :path]
 
     assert {:error, :edits_must_be_nonempty_list} =
-             EditFile.run(%{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"}, context)
+             prepared_run(
+               EditFile,
+               %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
+               context
+             )
   end
 
   test "host-configured search limits skip large files and bound line output", %{
@@ -186,7 +202,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              ReadFile.run(%{"path" => "linkdir/passwd"}, context)
 
     assert {:error, {:path_outside_workspace, "chainedir/passwd"}} =
-             WriteFile.run(%{"path" => "chainedir/passwd", "content" => "no"}, context)
+             prepared_run(WriteFile, %{"path" => "chainedir/passwd", "content" => "no"}, context)
   end
 
   test "resolves an internal symlink to its confined target", %{root: root, context: context} do
@@ -321,7 +337,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.chmod!(path, 0o640)
 
     assert {:error, {:ambiguous_match, 2}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "one", "new_text" => "three"}]
@@ -332,7 +349,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "one two one\n"
 
     assert {:ok, %{replacements: 2}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [
@@ -366,7 +384,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert details.preview == %{content: "after\n", truncated: false}
     File.write!(path, "changed by another writer\n")
 
-    assert {:error, {:stale_file, "sample.txt"}} = EditFile.run_prepared(prepared, context)
+    assert {:error, {:stale_file, "sample.txt"}} = EditFile.run(prepared, context)
     assert File.read!(path) == "changed by another writer\n"
   end
 
@@ -394,14 +412,14 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     for {tool, arguments} <- changes do
       assert {:ok, prepared, _details} = tool.prepare(arguments, context)
       File.chmod!(first, 0o600)
-      assert {:error, {:stale_file, _path}} = tool.run_prepared(prepared, context)
+      assert {:error, {:stale_file, _path}} = tool.run(prepared, context)
       File.chmod!(first, 0o640)
 
       File.rm!(link)
       File.ln_s!("second.txt", link)
 
       assert {:error, {:prepared_path_changed, "link.txt"}} =
-               tool.run_prepared(prepared, context)
+               tool.run(prepared, context)
 
       assert File.read!(first) == "before"
       assert File.read!(second) == "before"
@@ -419,7 +437,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "a b a\n")
 
     assert {:ok, %{replacements: 3, bytes_before: 6, bytes_after: 6}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [
@@ -455,7 +474,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "aXYZ"
 
     assert {:ok, %{bytes_after: 6, replacements: 2}} =
-             EditFile.run(arguments, context, max_file_bytes: 6)
+             prepared_run(EditFile, arguments, context, max_file_bytes: 6)
 
     assert File.read!(path) == "123456"
   end
@@ -468,7 +487,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, "abcdef\n")
 
     assert {:error, :overlapping_edits} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [
@@ -480,7 +500,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert {:error, :text_not_found} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "abc def", "new_text" => "x"}]
@@ -500,7 +521,8 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, original)
 
     assert {:ok, %{replacements: 1}} =
-             EditFile.run(
+             prepared_run(
+               EditFile,
                %{
                  "path" => "sample.txt",
                  "edits" => [%{"old_text" => "two", "new_text" => "second"}]
@@ -600,7 +622,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.write!(path, :binary.copy("z", 1_000_001))
 
     assert {:error, {:file_too_large, 1_000_000}} =
-             EditFile.run_prepared(prepared, context)
+             EditFile.run(prepared, context)
   end
 
   test "prepared writes refuse a target created after approval", %{root: root, context: context} do
@@ -610,7 +632,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert details.preview == %{content: "approved\n", truncated: false}
     File.write!(Path.join(root, "new.txt"), "created by another writer\n")
 
-    assert {:error, {:stale_file, path}} = WriteFile.run_prepared(prepared, context)
+    assert {:error, {:stale_file, path}} = WriteFile.run(prepared, context)
     assert path == Path.join(root, "new.txt")
     assert File.read!(path) == "created by another writer\n"
   end
@@ -633,9 +655,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     refute Map.has_key?(prepared.original, :content)
 
     File.write!(path, "0123456789abcdeg")
-    assert {:error, {:stale_file, ^path}} = WriteFile.run_prepared(prepared, context)
+    assert {:error, {:stale_file, ^path}} = WriteFile.run(prepared, context)
     File.write!(path, original)
-    assert {:ok, %{bytes_written: 5, patch: nil}} = WriteFile.run_prepared(prepared, context)
+    assert {:ok, %{bytes_written: 5, patch: nil}} = WriteFile.run(prepared, context)
     assert File.read!(path) == "small"
   end
 
@@ -648,7 +670,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                diff_bytes: 0
              )
 
-    assert {:ok, %{patch: nil}} = WriteFile.run_prepared(write, context)
+    assert {:ok, %{patch: nil}} = WriteFile.run(write, context)
 
     assert {:ok, edit, %{patch: nil}} =
              EditFile.prepare(
@@ -660,7 +682,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                patch_bytes: 0
              )
 
-    assert {:ok, %{patch: nil}} = EditFile.run_prepared(edit, context)
+    assert {:ok, %{patch: nil}} = EditFile.run(edit, context)
     assert File.read!(path) == "done"
   end
 
@@ -669,7 +691,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     context: context
   } do
     assert {:ok, %{bytes_written: 3}} =
-             WriteFile.run(%{"path" => "a.txt", "content" => "abc"}, context)
+             prepared_run(WriteFile, %{"path" => "a.txt", "content" => "abc"}, context)
 
     assert {:ok, ["a.txt"]} = File.ls(root)
   end
@@ -680,7 +702,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     File.chmod!(path, 0o640)
 
     assert {:ok, %{bytes_written: 3}} =
-             WriteFile.run(%{"path" => "existing.txt", "content" => "new"}, context)
+             prepared_run(WriteFile, %{"path" => "existing.txt", "content" => "new"}, context)
 
     assert File.read!(path) == "new"
     assert {:ok, %{mode: mode}} = File.stat(path)
@@ -689,6 +711,6 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
   test "write_file rejects content that is not valid UTF-8", %{context: context} do
     assert {:error, :content_is_not_utf8} =
-             WriteFile.run(%{"path" => "x.bin", "content" => <<0xFF, 0xFE>>}, context)
+             prepared_run(WriteFile, %{"path" => "x.bin", "content" => <<0xFF, 0xFE>>}, context)
   end
 end

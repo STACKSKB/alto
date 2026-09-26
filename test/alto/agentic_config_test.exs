@@ -16,8 +16,8 @@ defmodule Alto.AgenticConfigTest do
     assert {:ok, config} = Alto.Config.load(Path.expand("../../alto.agentic.exs", __DIR__))
     opts = Alto.Config.run_options(config)
 
-    assert %{max_depth: 1, max_children: 4, max_concurrency: 2, sessions: :separate} =
-             opts[:loop].subagents
+    assert {:ok, %{max_depth: 1, max_children: 4, max_concurrency: 2, sessions: :separate}} =
+             Alto.Subagents.Policy.resolve(opts[:loop].subagents)
 
     assert :list_agent_models in opts[:model_tools]
     assert :spawn_agents in opts[:model_tools]

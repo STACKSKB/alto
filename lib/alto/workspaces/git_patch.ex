@@ -116,20 +116,17 @@ defmodule Alto.Workspaces.GitPatch do
   defp valid_path(_), do: {:error, :invalid_patch_path}
 
   defp snapshots(root, paths) do
-    Enum.reduce_while(paths, {:ok, [], 0}, fn path, {:ok, files, bytes} ->
+    Alto.Result.reduce(paths, {[], 0}, fn path, {files, bytes} ->
       with :ok <- valid_path(path),
            full <- Path.join(root, path),
            :ok <- Workspaces.safe_path(full),
            {:ok, state} <- snapshot(full, @max_file_bytes - bytes) do
-        {:cont,
-         {:ok, [%{"path" => path, "original" => state} | files],
-          bytes + Map.get(state, "bytes", 0)}}
-      else
-        error -> {:halt, error}
+        {:ok,
+         {[%{"path" => path, "original" => state} | files], bytes + Map.get(state, "bytes", 0)}}
       end
     end)
     |> case do
-      {:ok, files, _} -> {:ok, Enum.reverse(files)}
+      {:ok, {files, _}} -> {:ok, Enum.reverse(files)}
       error -> error
     end
   end
@@ -204,13 +201,9 @@ defmodule Alto.Workspaces.GitPatch do
   end
 
   defp sync_file(path) do
-    case File.open(path, [:read, :raw, :binary]) do
-      {:ok, io} ->
-        try do
-          :file.sync(io)
-        after
-          File.close(io)
-        end
+    case File.open(path, [:read, :raw, :binary], &:file.sync/1) do
+      {:ok, result} ->
+        result
 
       {:error, :enoent} ->
         :ok

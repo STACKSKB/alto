@@ -27,8 +27,7 @@ defmodule Alto.Queue do
   alias Alto.Persistence.Codec
   alias Alto.DurableLog
 
-  @version 7
-  @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+  @version 8
   @options [
     max_records: [type: :non_neg_integer, default: 10_000],
     max_completed: [type: :non_neg_integer, default: 10_000],
@@ -53,24 +52,8 @@ defmodule Alto.Queue do
                 completed_set: MapSet.new()
               ]
 
-  defmodule Record do
-    @enforce_keys [:id, :key, :payload, :revision, :at_ms, :generation_id]
-    defstruct [
-      :id,
-      :key,
-      :payload,
-      :revision,
-      :at_ms,
-      :generation_id,
-      :operation_key,
-      admission: :business,
-      status: :pending,
-      claim_id: nil,
-      claimed_by: nil,
-      lease_until_ms: nil,
-      not_before_ms: nil
-    ]
-  end
+  @record_fields Enum.sort(~w(id key payload revision at_ms generation_id operation_key
+                              admission status claim_id claimed_by lease_until_ms not_before_ms)a)
 
   ## Client API
 
@@ -110,20 +93,13 @@ defmodule Alto.Queue do
 
   @doc "Storage directory for queue logs, honouring an explicit override."
   @spec dir(keyword()) :: Path.t()
-  def dir(opts \\ []) do
-    case Keyword.get(opts, :dir) do
-      nil -> Path.join([Alto.Storage.state_home(), "alto", "queues"])
-      path when is_binary(path) -> path
-    end
-  end
+  def dir(opts \\ []), do: Alto.Storage.dir("queues", Keyword.get(opts, :dir))
 
   @doc "Check a queue id for directory traversal and shape."
   @spec validate_id(term()) :: :ok | {:error, term()}
-  def validate_id(id) when is_binary(id) do
-    if Regex.match?(@id_pattern, id), do: :ok, else: {:error, {:invalid_queue_id, id}}
+  def validate_id(id) do
+    if Alto.Storage.valid_id?(id), do: :ok, else: {:error, {:invalid_queue_id, id}}
   end
-
-  def validate_id(id), do: {:error, {:invalid_queue_id, id}}
 
   @doc """
   Idempotent upsert keyed by `key`. Pending records update in place
@@ -317,8 +293,8 @@ defmodule Alto.Queue do
 
   # The same native commands update live and replayed state. Encoding belongs
   # only at the storage boundary.
-  defp apply_command({:put, %Record{} = record}, state) do
-    with true <- Enum.sort(Map.keys(record)) == Enum.sort(Map.keys(Record.__struct__())),
+  defp apply_command({:put, record}, state) when is_map(record) do
+    with true <- Enum.sort(Map.keys(record)) == @record_fields,
          true <- is_binary(record.key) and is_integer(record.revision) and record.revision >= 1,
          true <-
            record.admission in [:business, :delivery, :recovery] and is_integer(record.at_ms),
@@ -335,7 +311,7 @@ defmodule Alto.Queue do
   defp apply_command({:lease, id, status, claim_id, by, until, due}, state) do
     with {:ok, record} <- fetch_record(state.records, id),
          :ok <- validate_due(due) do
-      next = %Record{
+      next = %{
         record
         | status: status,
           claim_id: claim_id,
@@ -359,7 +335,7 @@ defmodule Alto.Queue do
 
   defp apply_command(_, _), do: {:error, :bad_entry}
 
-  defp valid_lease?(%Record{
+  defp valid_lease?(%{
          status: :pending,
          claim_id: nil,
          claimed_by: nil,
@@ -367,7 +343,7 @@ defmodule Alto.Queue do
        }),
        do: true
 
-  defp valid_lease?(%Record{status: :claimed, claim_id: id, lease_until_ms: until}),
+  defp valid_lease?(%{status: :claimed, claim_id: id, lease_until_ms: until}),
     do: is_binary(id) and is_integer(until)
 
   defp valid_lease?(_), do: false
@@ -416,7 +392,7 @@ defmodule Alto.Queue do
       log =
         case operation do
           :ack -> {:drop, record.id}
-          :release -> lease_command(%Record{unclaim(record) | not_before_ms: due})
+          :release -> lease_command(%{unclaim(record) | not_before_ms: due})
         end
 
       commit(state, state, [log], :ok, true)
@@ -457,7 +433,6 @@ defmodule Alto.Queue do
     records =
       ordered_records(state)
       |> Enum.slice(cursor, limit)
-      |> Enum.map(&Map.from_struct/1)
 
     next_cursor =
       if cursor + length(records) < :gb_trees.size(state.records),
@@ -471,7 +446,7 @@ defmodule Alto.Queue do
     reply =
       case find_by_key(state, key) do
         nil -> {:error, :not_found}
-        record -> {:ok, Map.from_struct(record)}
+        record -> {:ok, record}
       end
 
     {:reply, reply, state}
@@ -515,7 +490,7 @@ defmodule Alto.Queue do
 
     candidates =
       Enum.map(pending, fn record ->
-        %Record{
+        %{
           record
           | status: :claimed,
             claim_id: fresh_claim_id(),
@@ -534,13 +509,13 @@ defmodule Alto.Queue do
       {:ok, claimed} ->
         logs = Enum.map(claimed, &lease_command/1)
 
-        commit(state, state, logs, {:ok, Enum.map(claimed, &Map.from_struct/1)}, true)
+        commit(state, state, logs, {:ok, claimed}, true)
     end
   end
 
   defp matches_selector?(_record, selector) when map_size(selector) == 0, do: true
 
-  defp matches_selector?(%Record{payload: payload}, selector) when is_map(payload) do
+  defp matches_selector?(%{payload: payload}, selector) when is_map(payload) do
     Enum.all?(selector, fn {key, value} -> Map.get(payload, key, :__missing__) === value end)
   end
 
@@ -597,7 +572,6 @@ defmodule Alto.Queue do
   defp wire_size(record) do
     size =
       record
-      |> Map.from_struct()
       |> Alto.Protocol.encode_term()
       |> JSON.encode!()
       |> byte_size()
@@ -613,7 +587,7 @@ defmodule Alto.Queue do
     now = now(state)
 
     Enum.reduce(ordered_records(state), state, fn
-      %Record{status: :claimed, lease_until_ms: until} = record, state
+      %{status: :claimed, lease_until_ms: until} = record, state
       when is_integer(until) and until <= now ->
         put_record(state, unclaim(record))
 
@@ -623,27 +597,22 @@ defmodule Alto.Queue do
   end
 
   defp unclaim(record),
-    do: %Record{record | status: :pending, claim_id: nil, claimed_by: nil, lease_until_ms: nil}
+    do: %{record | status: :pending, claim_id: nil, claimed_by: nil, lease_until_ms: nil}
 
   defp now(state), do: state.clock.()
 
-  defp due?(%Record{not_before_ms: nil}, _now), do: true
-  defp due?(%Record{not_before_ms: at}, now) when is_integer(at), do: at <= now
+  defp due?(%{not_before_ms: nil}, _now), do: true
+  defp due?(%{not_before_ms: at}, now) when is_integer(at), do: at <= now
 
-  defp schedule_at(state, opts) do
-    if Keyword.keyword?(opts) and
-         length(Keyword.keys(opts)) == MapSet.size(MapSet.new(Keyword.keys(opts))) and
-         Enum.all?(Keyword.keys(opts), &(&1 in [:not_before_ms, :delay_ms])) do
-      case {Keyword.get(opts, :not_before_ms), Keyword.get(opts, :delay_ms)} do
-        {nil, nil} -> {:ok, nil}
-        {at, nil} when is_integer(at) and at >= 0 -> {:ok, at}
-        {nil, delay} when is_integer(delay) and delay >= 0 -> {:ok, now(state) + delay}
-        _ -> {:error, {:invalid_schedule, opts}}
-      end
-    else
-      {:error, {:invalid_schedule, opts}}
-    end
-  end
+  defp schedule_at(_state, []), do: {:ok, nil}
+
+  defp schedule_at(_state, not_before_ms: at) when is_integer(at) and at >= 0,
+    do: {:ok, at}
+
+  defp schedule_at(state, delay_ms: delay) when is_integer(delay) and delay >= 0,
+    do: {:ok, now(state) + delay}
+
+  defp schedule_at(_state, opts), do: {:error, {:invalid_schedule, opts}}
 
   defp validate_due(nil), do: :ok
   defp validate_due(at) when is_integer(at) and at >= 0, do: :ok
@@ -704,13 +673,17 @@ defmodule Alto.Queue do
               if(mode == :delivery, do: key, else: "business-generation:" <> generation)
 
           {:ok,
-           %Record{
+           %{
              id: state.next_id,
              key: key,
              payload: payload,
              revision: 1,
              at_ms: now(state),
              admission: mode,
+             status: :pending,
+             claim_id: nil,
+             claimed_by: nil,
+             lease_until_ms: nil,
              generation_id: generation,
              operation_key: operation,
              not_before_ms: fields[:not_before_ms]
@@ -744,13 +717,9 @@ defmodule Alto.Queue do
   end
 
   defp find_by_claim(state, claim_id) do
-    Enum.find_value(ordered_records(state), fn record ->
+    Enum.find_value(ordered_records(state), :error, fn record ->
       if record.claim_id == claim_id, do: {:ok, record}
     end)
-    |> case do
-      nil -> :error
-      found -> found
-    end
   end
 
   defp find_by_key(state, key),
@@ -784,7 +753,7 @@ defmodule Alto.Queue do
 
   defp recovery_revision(opts), do: {:error, {:invalid_recovery_revision, opts}}
 
-  defp put_record(state, %Record{} = record),
+  defp put_record(state, record),
     do: %{state | records: :gb_trees.enter(record.id, record, state.records)}
 
   defp ordered_records(state), do: :gb_trees.values(state.records)

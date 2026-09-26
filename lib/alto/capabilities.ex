@@ -67,7 +67,7 @@ defmodule Alto.Capabilities do
 
   defp tool_execution(_), do: %{mode: :loop_defined}
 
-  defp subagents(%Alto.Subagents.Bounded{} = policy) do
+  defp subagents({Alto.Subagents, policy}) do
     %{
       enabled: policy.max_depth > 0,
       max_depth: policy.max_depth,
@@ -98,7 +98,7 @@ defmodule Alto.Capabilities do
     }
   end
 
-  defp context(%Alto.Context.Window{} = window),
+  defp context({Alto.Context.Window, window}),
     do: %{
       max_tokens: window.max_tokens,
       reserve_output: window.reserve_output,

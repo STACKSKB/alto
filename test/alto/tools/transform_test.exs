@@ -15,7 +15,7 @@ defmodule Alto.Tools.TransformTest do
       {:ok, {:prepared, arguments}, %{approved: arguments}}
     end
 
-    def run_prepared({:prepared, arguments}, _context, _opts) do
+    def run({:prepared, arguments}, _context, _opts) do
       {:ok, arguments}
     end
   end
@@ -27,14 +27,14 @@ defmodule Alto.Tools.TransformTest do
     def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
-  defmodule IncompleteTool do
-    def prepare(_, _, _), do: raise("must reject incomplete callbacks before preparation")
+  defmodule MissingRunTool do
+    def prepare(_, _, _), do: raise("must reject missing execution before preparation")
   end
 
-  test "transforms reject incomplete inner execution contracts before preparation" do
-    {_module, opts} = Transform.wrap(IncompleteTool, fn args, _ -> args end)
+  test "transforms reject inner tools without execution before preparing them" do
+    {_module, opts} = Transform.wrap(MissingRunTool, fn args, _ -> args end)
 
-    assert {:error, {:incomplete_tool_preparation_callbacks, IncompleteTool}} =
+    assert {:error, {:invalid_tool, MissingRunTool}} =
              Transform.prepare(%{}, context(), opts)
   end
 
@@ -123,7 +123,7 @@ defmodule Alto.Tools.TransformTest do
              Transform.prepare(%{"version" => 2}, context(), elem(spec, 1))
 
     assert {:ok, %{"version" => 1}} =
-             Transform.run_prepared(prepared_one, context(), elem(spec, 1))
+             Transform.run(prepared_one, context(), elem(spec, 1))
 
     raw_spec = Transform.wrap(RawTool, fn args, _context -> Map.put(args, "normalized", true) end)
 
@@ -131,7 +131,7 @@ defmodule Alto.Tools.TransformTest do
              Transform.prepare(%{"value" => 1}, context(), elem(raw_spec, 1))
 
     assert {:ok, %{"value" => 1, "normalized" => true}} =
-             Transform.run_prepared(raw_prepared, context(), elem(raw_spec, 1))
+             Transform.run(raw_prepared, context(), elem(raw_spec, 1))
   end
 
   test "protected-path composition blocks direct and symlink writes while preserving approvals" do
@@ -152,7 +152,7 @@ defmodule Alto.Tools.TransformTest do
     assert {:ok, prepared, _} =
              module.prepare(%{"path" => ".gitignore", "content" => "ignored"}, context, opts)
 
-    assert {:ok, _} = module.run_prepared(prepared, context, opts)
+    assert {:ok, _} = module.run(prepared, context, opts)
     assert File.read!(Path.join(root, ".gitignore")) == "ignored"
     assert File.read!(Path.join(root, ".git/config")) == "original"
     {module, opts} = Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [])
@@ -160,7 +160,7 @@ defmodule Alto.Tools.TransformTest do
     assert {:ok, prepared, _} =
              module.prepare(%{"path" => ".git/config", "content" => "explicit"}, context, opts)
 
-    assert {:ok, _} = module.run_prepared(prepared, context, opts)
+    assert {:ok, _} = module.run(prepared, context, opts)
     assert File.read!(Path.join(root, ".git/config")) == "explicit"
   end
 end

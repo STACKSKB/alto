@@ -39,7 +39,7 @@ defmodule Alto.Providers.Observe do
   @impl true
   def stream(request, sink, options) do
     {provider, observer, options} = unwrap(options)
-    observe(observer, request)
+    Alto.Events.notify(observer, request)
     provider.stream(request, sink, options)
   end
 
@@ -50,14 +50,5 @@ defmodule Alto.Providers.Observe do
       if rest == [], do: options, else: Keyword.put(options, :alto_request_observers, rest)
 
     {provider, observer, options}
-  end
-
-  defp observe(observer, request) do
-    observer.(request)
-    :ok
-  rescue
-    _ -> :ok
-  catch
-    _, _ -> :ok
   end
 end

@@ -28,25 +28,18 @@ defmodule Alto.Tool do
   @doc """
   Validate and resolve an invocation before approval without performing it.
 
-  A prepared tool returns an opaque value for `run_prepared` plus a map safe to
+  A prepared tool returns an opaque value for `run` plus a map safe to
   show to the approval policy. Preparation may inspect local state to
   resolve names and policy, but must not produce the external effect being
-  authorized. Implement `prepare` and `run_prepared` as a matching arity pair.
+  authorized. Without this callback, `run` receives the original arguments.
   """
   @callback prepare(arguments :: map(), Context.t(), keyword()) ::
               {:ok, prepared :: term(), approval_details()} | {:error, term()}
 
-  @doc "Execute exactly the opaque value returned by the matching `prepare` callback."
-  @callback run_prepared(prepared :: term(), Context.t(), keyword()) ::
-              result()
+  @doc "Execute the prepared value, or original arguments when preparation is omitted. Return `{:unknown, reason}` when dispatch occurred but commit cannot be established."
+  @callback run(value :: term(), Context.t(), keyword()) :: result()
 
-  @doc "Return `{:unknown, reason}` when dispatch occurred but commit cannot be established. Transport loss and timeouts are not participant declarations of non-commit."
-  @callback run(arguments :: map(), Context.t(), keyword()) :: result()
-
-  @optional_callbacks approval: 1,
-                      prepare: 3,
-                      run_prepared: 3,
-                      run: 3
+  @optional_callbacks approval: 1, prepare: 3
 
   @doc """
   Declare constant metadata while implementing schema and execution normally.
@@ -84,21 +77,22 @@ defmodule Alto.Tool do
     if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
   end
 
-  @doc "Validate the execution callbacks and select the preparation boundary."
-  def preparation(module) do
+  @doc "Prepare a tool input and validate its return contract without executing it."
+  def prepare(module, arguments, context, opts) do
     Code.ensure_loaded!(module)
 
-    case {function_exported?(module, :prepare, 3), function_exported?(module, :run_prepared, 3)} do
-      {true, true} ->
-        {:ok, :prepared}
+    with true <- function_exported?(module, :run, 3) or {:error, {:invalid_tool, module}} do
+      result =
+        if function_exported?(module, :prepare, 3),
+          do: module.prepare(arguments, context, opts),
+          else: {:ok, arguments, %{}}
 
-      {false, false} ->
-        if function_exported?(module, :run, 3),
-          do: {:ok, :none},
-          else: {:error, {:invalid_tool, module}}
-
-      _ ->
-        {:error, {:incomplete_tool_preparation_callbacks, module}}
+      case result do
+        {:ok, _value, details} when is_map(details) -> result
+        {:ok, _value, details} -> {:error, {:invalid_approval_details, details}}
+        {:error, _} -> result
+        other -> {:error, {:invalid_tool_prepare_return, other}}
+      end
     end
   end
 end

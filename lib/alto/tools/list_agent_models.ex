@@ -32,5 +32,5 @@ defmodule Alto.Tools.ListAgentModels do
   end
 
   @impl true
-  def run_prepared(_, _, _), do: {:error, :model_discovery_requires_execution_host}
+  def run(_, _, _), do: {:error, :model_discovery_requires_execution_host}
 end

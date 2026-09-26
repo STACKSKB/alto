@@ -19,7 +19,7 @@ defmodule Alto.Tools.Git do
       "args" => command_args(args, opts),
       "timeout_ms" => Keyword.get(opts, :timeout_ms, 30_000),
       "max_output_bytes" =>
-        Keyword.get(opts, :max_output_bytes, min(64_000, Invocation.max_output_bytes()))
+        Keyword.get(opts, :max_output_bytes, Invocation.default_output_bytes())
     }
 
     Command.prepare(command, context, Keyword.take(opts, [:executor, :policy]))
@@ -226,7 +226,7 @@ defmodule Alto.Tools.GitMutate do
   end
 
   @impl true
-  def run_prepared(prepared, %Context{}, _opts \\ []) do
+  def run(prepared, %Context{}, _opts \\ []) do
     case Command.execute(prepared) do
       {:ok, %{termination: :timeout}} ->
         {:unknown, :git_timeout}

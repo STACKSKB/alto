@@ -13,36 +13,30 @@ defmodule Alto.Runner.Execution.Tool do
   alias Alto.Runner.Execution.Call
 
   @doc "Prepare one invocation and return the opaque value and display-safe details."
-  def prepare(%{preparation: :none}, arguments, _caps), do: {:ok, arguments, %{}}
+  def prepare(%{module: module, opts: opts}, arguments, caps) do
+    if function_exported?(module, :prepare, 3) do
+      outcome =
+        Call.run(
+          fn -> Alto.Tool.prepare(module, arguments, caps.tool_context, opts) end,
+          Budget.timeout(caps.budget, caps.tool_timeout),
+          caps.cancel_ref
+        )
 
-  def prepare(tool, arguments, caps) do
-    context = caps.tool_context
+      case outcome do
+        {:ok, {:ok, prepared, details}} ->
+          bound_details(prepared, details, caps.max_approval_details_bytes)
 
-    outcome =
-      Call.run(
-        fn -> invoke_prepare(tool, arguments, context) end,
-        Budget.timeout(caps.budget, caps.tool_timeout),
-        caps.cancel_ref
-      )
+        {:ok, {:error, reason}} ->
+          {:error, reason}
 
-    case outcome do
-      {:ok, {:ok, prepared, details}} when is_map(details) ->
-        bound_details(prepared, details, caps.max_approval_details_bytes)
+        {:error, reason} ->
+          {:error, {:tool_prepare_process_failed, reason}}
 
-      {:ok, {:ok, _prepared, details}} ->
-        {:error, {:invalid_approval_details, details}}
-
-      {:ok, {:error, reason}} ->
-        {:error, reason}
-
-      {:ok, other} ->
-        {:error, {:invalid_tool_prepare_return, other}}
-
-      {:error, reason} ->
-        {:error, {:tool_prepare_process_failed, reason}}
-
-      {:cancelled, reason} ->
-        {:cancelled, reason}
+        {:cancelled, reason} ->
+          {:cancelled, reason}
+      end
+    else
+      {:ok, arguments, %{}}
     end
   end
 
@@ -100,15 +94,27 @@ defmodule Alto.Runner.Execution.Tool do
       else: {:error, {:tool_result_too_large, %{limit: limit, size: size}}}
   end
 
-  defp invoke_prepare(%{module: module, opts: opts}, arguments, context),
-    do: module.prepare(arguments, context, opts)
+  # Match sequential execution: a successful participant value is the bounded
+  # native result, rather than the surrounding outcome tuple.
+  def bound_result(outcome, limit) do
+    value =
+      case outcome do
+        {:ok, value} -> value
+        other -> other
+      end
+
+    case check_native_result(value, limit) do
+      :ok -> outcome
+      {:error, reason} -> {:unknown, reason}
+    end
+  end
 
   @doc "Invoke directly inside an already supervised, bounded worker."
-  def invoke_tool(%{module: module, opts: opts, preparation: :prepared}, prepared, context),
-    do: module.run_prepared(prepared, context, opts)
+  def invoke_tool(%{module: Alto.Tools.ListAgentModels, opts: opts}, prepared, caps),
+    do: Alto.Subagents.Models.list(prepared, caps, opts)
 
-  def invoke_tool(%{module: module, opts: opts}, arguments, context),
-    do: module.run(arguments, context, opts)
+  def invoke_tool(%{module: module, opts: opts}, arguments, caps),
+    do: module.run(arguments, caps.tool_context, opts)
 
   defp bound_details(prepared, details, limit) do
     if :erlang.external_size(details) <= limit,

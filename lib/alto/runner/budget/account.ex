@@ -23,15 +23,16 @@ defmodule Alto.Runner.Budget.Account do
   @doc "Create or reconnect an account. Reopening can tighten but never widen caps."
   def open(ledger, key, opts) do
     with {:ok, caps} <- limits(opts) do
-      initial =
-        Map.merge(caps, %{
-          "kind" => @kind,
-          "version" => 1,
-          "generation" => Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-        })
-
+      generation = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      initial = Map.merge(caps, %{"kind" => @kind, "version" => 2, "generation" => generation})
       deadline = Keyword.get(opts, :deadline, :infinity)
-      packet = Map.merge(initial, %{"effects_used" => 0, "model_requests_used" => 0})
+
+      packet =
+        Map.merge(caps, %{
+          "generation" => generation,
+          "effects_used" => 0,
+          "model_requests_used" => 0
+        })
 
       safe(fn ->
         with {:ok, entry} <-
@@ -196,7 +197,7 @@ defmodule Alto.Runner.Budget.Account do
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
     if Enum.sort(Map.keys(initial)) == Enum.sort(["kind", "version", "generation" | @limits]) and
-         initial["kind"] == @kind and initial["version"] == 1 and
+         initial["kind"] == @kind and initial["version"] == 2 and
          is_binary(initial["generation"]) and byte_size(initial["generation"]) == 32 and
          Enum.all?(@limits, &valid_cap?(initial[&1])),
        do: :ok,
@@ -206,10 +207,7 @@ defmodule Alto.Runner.Budget.Account do
   defp valid_initial(_), do: {:error, :invalid_budget_account}
 
   defp valid_packet(packet, initial) when is_map(packet) do
-    fields = ["kind", "version", "generation"]
-
-    if Enum.sort(Map.keys(packet)) == Enum.sort(fields ++ @limits ++ @counters) and
-         Map.take(packet, fields) == Map.take(initial, fields) and
+    if map_size(packet) == 5 and packet["generation"] == initial["generation"] and
          Enum.all?(@limits, &(valid_cap?(packet[&1]) and packet[&1] <= initial[&1])) and
          Enum.all?(Enum.zip(@counters, @limits), fn {counter, cap} ->
            is_integer(packet[counter]) and packet[counter] >= 0 and

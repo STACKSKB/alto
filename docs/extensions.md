@@ -61,7 +61,7 @@ tools = [
 ```
 
 The wrapped tool retains its name, schema, approval requirement, and execution
-mode. Prepared tools keep their own `prepare` and `run_prepared` callbacks. A
+mode. Prepared tools keep their own `prepare` and `run` callbacks. A
 run-only tool receives the transformed argument map through the wrapper's
 preparation boundary. Keep transforms deterministic and local; authorization
 should describe the value that will be executed.
@@ -166,9 +166,11 @@ budget. Search additionally accepts `max_entries`, `max_file_bytes`,
 MCP server options and `Alto.Tools.FFF.tools/1` accept an `executor:` using the same
 `Alto.Command.Executor` contract as command tools. Executors may implement the
 optional `open(prepared, transport_options)` callback, returning an
-`Alto.External.Process`. MCP owns framing, request deadlines, message limits and
-process lifetime. An executor without `open/2` fails closed; Alto never falls back
-to host execution. Client reuse includes the executor and its options in its key.
+`Alto.External.Process`. Forward transport options, including `:line` for bounded
+OTP line framing. MCP and Codex `max_message_bytes` limits count JSON payload bytes,
+excluding LF or CRLF. They reject oversized or unterminated frames before decoding.
+MCP owns request deadlines and process lifetime. An executor without `open/2`
+fails closed; Alto never falls back to host execution. Client reuse includes the executor and its options in its key.
 Existing custom executors implementing only `prepare/2` and `execute/1` continue
 to work for ordinary command tools.
 
@@ -215,7 +217,7 @@ its policy decision. Built-in implementations use the same callbacks as host cod
 | Configuration | Contract | Shipped implementation |
 | --- | --- | --- |
 | `loop.context` | `Alto.Context.Policy.check/3` | `Alto.Context.Window` |
-| `loop.subagents` | `Alto.Subagents.Policy.limits/1`, `admit/3` | `Alto.Subagents.Bounded` |
+| `loop.subagents` | `Alto.Subagents.Policy.limits/1`, `admit/3` | `Alto.Subagents` |
 | `compaction[:strategy]` | `Alto.Context.Reducer.compact/3` | `Reducers.Summary`, `Reducers.Handoff` |
 | `retry_policy` | `Alto.Retry.decide/3` | `Alto.Retry.Transient` |
 | `tool_presenter` | `Alto.ToolPresentation.summary/3` | `Alto.ToolDisplay` |

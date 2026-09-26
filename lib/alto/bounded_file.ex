@@ -93,12 +93,6 @@ defmodule Alto.BoundedFile do
   end
 
   defp with_file(path, fun) do
-    with {:ok, io} <- File.open(path, [:read, :binary, :raw]) do
-      try do
-        fun.(io)
-      after
-        File.close(io)
-      end
-    end
+    with {:ok, result} <- File.open(path, [:read, :binary, :raw], fun), do: result
   end
 end

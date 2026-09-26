@@ -12,34 +12,25 @@ defmodule Alto.Context.Estimator do
   calibrated for the selected provider, model, and request shape.
   """
 
-  @enforce_keys [:tokenizer]
-  defstruct tokenizer: nil,
-            provider_overhead: 0,
-            message_overhead: 0,
-            tool_overhead: 0,
-            model: nil,
-            model_overhead: %{}
-
-  @type tokenizer :: (binary() -> non_neg_integer())
-  @type t :: %__MODULE__{
-          tokenizer: tokenizer(),
-          provider_overhead: non_neg_integer(),
-          message_overhead: non_neg_integer(),
-          tool_overhead: non_neg_integer(),
-          model: term(),
-          model_overhead: map()
-        }
-
   @doc "Build a unary estimator suitable for `Alto.Context.Window.new/1`."
   @spec new(keyword()) :: (map() -> non_neg_integer())
   def new(opts \\ []) when is_list(opts) do
-    estimator = config(opts)
-    fn input -> estimate(input, estimator) end
+    config =
+      opts
+      |> NimbleOptions.validate!(
+        tokenizer: [type: {:fun, 1}, default: &:erlang.byte_size/1],
+        provider_overhead: [type: :non_neg_integer, default: 0],
+        message_overhead: [type: :non_neg_integer, default: 0],
+        tool_overhead: [type: :non_neg_integer, default: 0],
+        model: [type: :any, default: nil],
+        model_overhead: [type: {:map, :any, :non_neg_integer}, default: %{}]
+      )
+      |> Map.new()
+
+    fn input -> estimate(input, config) end
   end
 
-  @doc "Estimate a request using an estimator config or a unary tokenizer config."
-  @spec estimate(map(), t() | keyword()) :: non_neg_integer()
-  def estimate(input, %__MODULE__{} = config) when is_map(input) do
+  defp estimate(input, config) when is_map(input) do
     messages = Map.get(input, :messages, Map.get(input, "messages", []))
     tools = Map.get(input, :tools, Map.get(input, "tools", []))
 
@@ -58,39 +49,13 @@ defmodule Alto.Context.Estimator do
     end
   end
 
-  def estimate(input, opts) when is_map(input) and is_list(opts),
-    do: estimate(input, config(opts))
-
-  def estimate(_input, _config), do: raise(ArgumentError, "context input must be a map")
-
-  @doc "Build the config struct when callers need to inspect or reuse it."
-  @spec config(keyword()) :: t()
-  def config(opts \\ []) when is_list(opts) do
-    opts =
-      NimbleOptions.validate!(opts,
-        tokenizer: [type: {:fun, 1}, default: &default_tokenizer/1],
-        provider_overhead: [type: :non_neg_integer, default: 0],
-        message_overhead: [type: :non_neg_integer, default: 0],
-        tool_overhead: [type: :non_neg_integer, default: 0],
-        model: [type: :any, default: nil],
-        model_overhead: [type: {:map, :any, :non_neg_integer}, default: %{}]
-      )
-
-    struct!(__MODULE__, opts)
-  end
+  defp estimate(_input, _config), do: raise(ArgumentError, "context input must be a map")
 
   defp tokenize_entry(acc, entry, tokenizer, overhead) do
     tokens = tokenizer.(JSON.encode!(entry))
 
-    if non_negative_integer?(tokens),
+    if is_integer(tokens) and tokens >= 0,
       do: acc + tokens + overhead,
       else: raise(ArgumentError, "tokenizer must return a non-negative integer")
   end
-
-  # This conservative fallback keeps Window useful without an external
-  # tokenizer. A byte count is an upper bound only for the configured policy,
-  # not a claim about a provider's actual tokenization.
-  defp default_tokenizer(text), do: byte_size(text)
-
-  defp non_negative_integer?(value), do: is_integer(value) and value >= 0
 end

@@ -1,30 +1,13 @@
 defmodule Alto.Subagents do
-  @moduledoc "Constructors for subagent policies."
+  @moduledoc "Built-in bounded subagent policy."
+  @behaviour Alto.Subagents.Policy
 
-  defmodule Bounded do
-    @moduledoc false
-    @behaviour Alto.Subagents.Policy
-    @impl true
-    def limits(state), do: Map.from_struct(state)
-    @impl true
-    def admit(_state, _agents, _context), do: :ok
+  @impl true
+  def limits(state), do: state
+  @impl true
+  def admit(_state, _agents, _context), do: :ok
 
-    defstruct max_depth: 0,
-              max_children: 16,
-              max_concurrency: 1,
-              workspaces: nil,
-              sessions: :shared
-
-    @type t :: %__MODULE__{
-            max_depth: non_neg_integer(),
-            max_children: pos_integer(),
-            max_concurrency: pos_integer(),
-            workspaces: Alto.Workspaces.t() | nil,
-            sessions: :shared | :separate
-          }
-  end
-
-  @spec bounded(keyword()) :: Bounded.t()
+  @spec bounded(keyword()) :: {module(), map()}
   def bounded(opts \\ []) do
     opts =
       NimbleOptions.validate!(opts,
@@ -38,6 +21,6 @@ defmodule Alto.Subagents do
     if opts[:max_concurrency] > opts[:max_children],
       do: raise(ArgumentError, "max_concurrency cannot exceed max_children")
 
-    struct!(Bounded, opts)
+    {__MODULE__, Map.new(opts)}
   end
 end

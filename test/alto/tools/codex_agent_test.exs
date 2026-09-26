@@ -125,7 +125,9 @@ defmodule Alto.Tools.CodexAgentTest do
   end
 
   test "tool timeout interrupts the owned App Server", context do
-    assert {:error, _, result} = Alto.run(%{"task" => "hang"}, opts(context, tool_timeout: 500))
+    assert {:ok, handle} = Alto.start(%{"task" => "hang"}, opts(context, tool_timeout: 3_000))
+    wait_for(context.log, "turn/start")
+    assert {:error, _, result} = Alto.await(handle, 5_000)
     assert result.verdict == :unknown
     wait_for(context.log, "turn/interrupt")
   end

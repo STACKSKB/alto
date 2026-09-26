@@ -13,4 +13,6 @@ defmodule Alto.Tool.Options do
       {:error, {error_tag, opts}}
     end
   end
+
+  def validate!(opts, schema), do: opts |> NimbleOptions.validate!(schema) |> Map.new()
 end

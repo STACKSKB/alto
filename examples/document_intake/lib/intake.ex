@@ -17,8 +17,8 @@ defmodule DocumentIntake do
 
   @doc "Read an input document without allocating beyond the accepted source limit."
   def read_source(path) do
-    case bounded_read(path, @max_input_bytes) do
-      {:error, :candidate_too_large} -> {:error, {:input_too_large, @max_input_bytes}}
+    case Alto.BoundedFile.read(path, @max_input_bytes) do
+      {:error, {:too_large, _, _}} -> {:error, {:input_too_large, @max_input_bytes}}
       result -> result
     end
   end
@@ -32,7 +32,7 @@ defmodule DocumentIntake do
     else
       record = text |> candidate() |> resume_candidate(opts)
 
-      with :ok <- maybe_persist_candidate(record, opts),
+      with :ok <- maybe_persist(record, opts),
            {:ok, record} <- resolve_ambiguity(record, opts),
            :ok <- validate(record),
            :ok <- maybe_persist(record, opts) do
@@ -106,7 +106,7 @@ defmodule DocumentIntake do
   @doc "Load a persisted candidate by its source-derived identity."
   def load_candidate(identity, dir) when is_binary(identity) and is_binary(dir) do
     with :ok <- valid_identity(identity),
-         {:ok, body} <- bounded_read(candidate_path(dir, identity), @max_candidate_file_bytes),
+         {:ok, body} <- read_candidate(candidate_path(dir, identity)),
          {:ok, record} <- JSON.decode(body),
          :ok <- validate_candidate(record) do
       {:ok, record}
@@ -321,13 +321,6 @@ defmodule DocumentIntake do
     end
   end
 
-  defp maybe_persist_candidate(record, opts) do
-    case Keyword.get(opts, :state_dir) do
-      dir when is_binary(dir) -> persist_candidate(record, dir)
-      _ -> :ok
-    end
-  end
-
   defp maybe_persist(record, opts) do
     case Keyword.get(opts, :state_dir) do
       dir when is_binary(dir) -> persist_candidate(record, dir)
@@ -439,22 +432,10 @@ defmodule DocumentIntake do
     Alto.AtomicFile.write(path, JSON.encode!(record) <> "\n", mode: 0o600)
   end
 
-  defp bounded_read(path, max) do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, max + 1) do
-            {:error, reason} -> {:error, reason}
-            :eof -> {:ok, <<>>}
-            body when byte_size(body) > max -> {:error, :candidate_too_large}
-            body -> {:ok, body}
-          end
-
-        _ = File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
+  defp read_candidate(path) do
+    case Alto.BoundedFile.read(path, @max_candidate_file_bytes) do
+      {:error, {:too_large, _, _}} -> {:error, :candidate_too_large}
+      result -> result
     end
   end
 
@@ -468,7 +449,7 @@ defmodule DocumentIntake do
     |> Enum.find_value(:missing, fn name ->
       path = Path.join([dir, name, "document.json"])
 
-      with {:ok, body} <- bounded_read(path, @max_candidate_file_bytes),
+      with {:ok, body} <- read_candidate(path),
            {:ok, existing} <- JSON.decode(body),
            :ok <- validate(existing),
            true <- fingerprint(existing) == fingerprint(record) do

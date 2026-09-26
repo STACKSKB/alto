@@ -9,7 +9,6 @@ defmodule Alto.Runner.ToolBatch do
   alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
-    context = caps.tool_context
     limit = caps.max_tool_result_bytes
 
     tasks =
@@ -17,8 +16,8 @@ defmodule Alto.Runner.ToolBatch do
         task =
           Call.start(fn ->
             tool
-            |> Tool.invoke_tool(prepared, context)
-            |> bound_result(limit)
+            |> Tool.invoke_tool(prepared, caps)
+            |> Tool.bound_result(limit)
           end)
 
         {task,
@@ -71,21 +70,6 @@ defmodule Alto.Runner.ToolBatch do
 
   defp ordered(tasks, results, fallback),
     do: Enum.map(tasks, fn {task, _} -> Map.get(results, task.ref, fallback) end)
-
-  # Match sequential execution: a successful participant value is the bounded
-  # native result, rather than the surrounding outcome tuple.
-  defp bound_result(outcome, limit) do
-    value =
-      case outcome do
-        {:ok, value} -> value
-        other -> other
-      end
-
-    case Tool.check_native_result(value, limit) do
-      :ok -> outcome
-      {:error, reason} -> {:unknown, reason}
-    end
-  end
 
   # Cancellation is received selectively, so completed task messages can be
   # sitting earlier in the coordinator mailbox.  Preserve those decided

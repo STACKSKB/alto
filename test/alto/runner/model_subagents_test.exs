@@ -26,12 +26,16 @@ defmodule Alto.Runner.ModelSubagentsTest do
       send(opts[:owner], {:selected_model, opts[:model]})
       if opts[:api_key], do: send(opts[:owner], {:credential, opts[:api_key]})
 
-      {:ok,
-       %{
-         message: opts[:answer] || "child done",
-         tool_calls: [],
-         usage: %{input_tokens: 4, output_tokens: 2}
-       }}
+      if opts[:model] == opts[:fail_model] do
+        {:error, opts[:fail_reason]}
+      else
+        {:ok,
+         %{
+           message: opts[:answer] || "child done",
+           tool_calls: [],
+           usage: %{input_tokens: 4, output_tokens: 2}
+         }}
+      end
     end
   end
 
@@ -128,6 +132,91 @@ defmodule Alto.Runner.ModelSubagentsTest do
     assert_receive {:selected_model, "model-b"}
   end
 
+  test "a failed child keeps successful siblings in the provider reply" do
+    for {reason, expected} <- [
+          {{:http_error, 402, %{"message" => "payment required"}},
+           %{
+             "$tuple" => [
+               "model_request_failed",
+               %{"$tuple" => ["http_error", 402, %{"message" => "payment required"}]}
+             ]
+           }},
+          {:unavailable, %{"$tuple" => ["model_request_failed", "unavailable"]}},
+          {"provider offline", %{"$tuple" => ["model_request_failed", "provider offline"]}}
+        ] do
+      requests = [task("successful"), task("failed") |> Map.put("model", "model-b")]
+      calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
+
+      assert {:ok, result} =
+               Alto.run(
+                 "delegate",
+                 options(calls,
+                   provider_profiles: [
+                     %{
+                       id: "worker",
+                       provider:
+                         {Child, owner: self(), fail_model: "model-b", fail_reason: reason}
+                     }
+                   ]
+                 )
+               )
+
+      reply = Enum.find(result.messages, &(&1["tool_call_id"] == "spawn"))["content"]
+      assert %{"results" => [successful, failed]} = JSON.decode!(reply)
+      assert %{"id" => "successful", "status" => "ok", "output" => "child done"} = successful
+      assert is_binary(successful["run_id"])
+      assert successful["usage"]["total_tokens"] == 6
+      assert %{"id" => "failed", "status" => "error", "error" => ^expected} = failed
+      refute Map.has_key?(JSON.decode!(reply), "encoding_error")
+    end
+  end
+
+  test "spawn schema advertises the effective child limit" do
+    for max_children <- [1, 4, 12] do
+      calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
+
+      loop =
+        Alto.default_loop(
+          subagents: Alto.Subagents.bounded(max_depth: 1, max_children: max_children)
+        )
+
+      assert {:ok, _} = Alto.run("delegate", options(calls, loop: loop))
+      assert_receive {:request, request}
+      assert_receive {:request, _}
+      schema = Enum.find(request.tools, &(&1["function"]["name"] == "spawn_agents"))
+      assert schema["function"]["parameters"][:properties][:agents][:maxItems] == max_children
+    end
+  end
+
+  test "five children run when the configured limit is five" do
+    requests = Enum.map(1..5, &task("child-#{&1}"))
+    calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
+    loop = Alto.default_loop(subagents: Alto.Subagents.bounded(max_depth: 1, max_children: 5))
+
+    assert {:ok, result} = Alto.run("delegate", options(calls, loop: loop))
+    reply = Enum.find(result.messages, &(&1["tool_call_id"] == "spawn"))["content"]
+    assert %{"results" => results} = JSON.decode!(reply)
+    assert Enum.map(results, & &1["id"]) == Enum.map(requests, & &1["id"])
+    assert Enum.all?(results, &(&1["status"] == "ok"))
+    assert result.usage.total_tokens == 30
+    for _ <- 1..5, do: assert_receive({:child, _})
+  end
+
+  test "five children are rejected before dispatch when the configured limit is four" do
+    requests = Enum.map(1..5, &task("child-#{&1}"))
+    calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
+    loop = Alto.default_loop(subagents: Alto.Subagents.bounded(max_depth: 1, max_children: 4))
+
+    assert {:ok, result} = Alto.run("delegate", options(calls, loop: loop))
+
+    assert Enum.any?(
+             result.events,
+             &(&1.type == :tool_failed and &1.data.error == :max_children_exceeded)
+           )
+
+    refute_receive {:child, _}
+  end
+
   test "no-argument tools use the current provider when profiles are omitted" do
     request = task("child", "current_provider") |> Map.put("model", "child-model")
     calls = [call("spawn", "spawn_agents", %{"agents" => [request]})]
@@ -184,21 +273,32 @@ defmodule Alto.Runner.ModelSubagentsTest do
     assert_receive {:selected_model, "model-a"}
   end
 
-  test "oversized combined child results fail without reporting a successful tool result" do
+  test "oversized discovery and child results never report a successful tool result" do
     profiles = [
-      %{id: "worker", provider: {Child, owner: self(), answer: String.duplicate("x", 1_000)}}
+      %{
+        id: "worker",
+        provider: {Child, owner: self(), answer: String.duplicate("x", 1_000)},
+        models: [%{id: "model-a", name: String.duplicate("x", 1_000)}]
+      }
     ]
 
-    calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
+    for {name, arguments} <- [
+          {"list_agent_models", %{}},
+          {"spawn_agents", %{"agents" => [task()]}}
+        ] do
+      assert {:ok, result} =
+               Alto.run(
+                 "delegate",
+                 options([call(name, name, arguments)],
+                   provider_profiles: profiles,
+                   max_tool_result_bytes: 256
+                 )
+               )
 
-    assert {:ok, result} =
-             Alto.run(
-               "delegate",
-               options(calls, provider_profiles: profiles, max_tool_result_bytes: 256)
-             )
-
-    assert result.verdict == :unknown
-    assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.name == "spawn_agents"))
+      assert result.verdict == :unknown
+      assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.name == name))
+      refute Enum.any?(result.events, &(&1.type == :tool_completed and &1.data.name == name))
+    end
   end
 
   test "multiple delegation calls and duplicate call IDs each settle once" do

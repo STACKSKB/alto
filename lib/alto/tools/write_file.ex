@@ -16,7 +16,7 @@ defmodule Alto.Tools.WriteFile do
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
-    limits = validate_options!(opts)
+    limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
     Alto.Tool.object_schema(
       "Create or replace a UTF-8 file inside the workspace. Parent directories must exist.",
@@ -34,20 +34,14 @@ defmodule Alto.Tools.WriteFile do
 
   @impl true
   def prepare(arguments, %Context{} = context, opts \\ []) when is_list(opts) do
-    with {:ok, limits} <- validate_options(opts),
+    with {:ok, limits} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_write_options),
          do: prepare_write(arguments, context, limits)
   end
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts \\ []),
+  def run(prepared, %Context{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
-
-  @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
-    with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
-      run_prepared(prepared, context, opts)
-    end
-  end
 
   defp prepare_write(arguments, %Context{} = context, limits) when is_map(limits) do
     path = Map.get(arguments, "path")
@@ -89,16 +83,9 @@ defmodule Alto.Tools.WriteFile do
       }
 
       {:ok, prepared, details}
-    else
-      {:error, reason} -> {:error, reason}
     end
   end
 
   defp original_bytes(:missing), do: 0
   defp original_bytes(%{bytes: bytes}), do: bytes
-
-  defp validate_options(opts),
-    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_write_options)
-
-  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

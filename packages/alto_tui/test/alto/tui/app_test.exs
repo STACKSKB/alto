@@ -56,6 +56,28 @@ defmodule Alto.TUI.AppTest do
     def cancel(%{handle: handle}, reason, _opts), do: Alto.cancel(handle, reason)
   end
 
+  defmodule ApprovalTool do
+    use Alto.Tool, name: :approve_child, execution_mode: :exclusive, approval: :required
+    def schema(_opts), do: Alto.Tool.object_schema("Approve child", %{}, [])
+
+    def run(_, context, opts) do
+      send(opts[:owner], {:child_approved, context.agent_identity.path})
+      {:ok, :done}
+    end
+  end
+
+  defmodule ApprovalParent do
+    def init(_, _) do
+      child = %{id: "child", task: %{}, loop: Alto.rule_loop(steps: ["approve_child"])}
+      Alto.Transition.continue(nil, [Alto.Effect.spawn_agents(%{agents: [child]})])
+    end
+
+    def handle_event(%{type: :subagents_completed}, state, _),
+      do: Alto.Transition.stop(state, :done)
+
+    def handle_event(_, state, _), do: Alto.Transition.continue(state)
+  end
+
   defmodule ControllableCodexClient do
     use GenServer
 
@@ -665,7 +687,7 @@ defmodule Alto.TUI.AppTest do
              State.current_entries(state)
   end
 
-  test "canonical handoff compaction event marks context ready and shows artifacts", context do
+  test "canonical handoff compaction event marks context ready and shows the artifact", context do
     state = state!(context)
 
     state = %{
@@ -677,8 +699,7 @@ defmodule Alto.TUI.AppTest do
     event =
       Alto.Event.durable(:context_compacted, %{
         strategy: :handoff,
-        files: %{design: "/tmp/DESIGN.md", pointers: "/tmp/POINTERS.md"},
-        directory: "/tmp/handoff",
+        artifact_path: "/tmp/handoff.json",
         next_step: "Continue from the saved design."
       })
 
@@ -688,15 +709,54 @@ defmodule Alto.TUI.AppTest do
 
     assert [%{kind: :system, text: text}] = State.current_entries(state)
     assert text =~ "handoff created"
-    assert text =~ "/tmp/DESIGN.md"
-    assert text =~ "/tmp/POINTERS.md"
+    assert text =~ "/tmp/handoff.json"
     assert text =~ "Continue from the saved design."
+  end
+
+  test "Codex context limits follow each task through selection and completion", context do
+    state = state!(context)
+    state = %{state | runs: %{}, selected_task_id: "first"}
+
+    state =
+      Enum.reduce([{"first", 100_000}, {"second", 200_000}], state, fn {task, window}, state ->
+        run = %{kind: :codex, task_id: task, thread_id: task, turn_id: task}
+        state = App.attach_run(state, task, run, "hello", "starting")
+
+        params = %{
+          "threadId" => task,
+          "turnId" => task,
+          "tokenUsage" => %{
+            "modelContextWindow" => window,
+            "total" => %{"inputTokens" => 1_000},
+            "last" => %{"inputTokens" => 1_000}
+          }
+        }
+
+        {:noreply, state} =
+          App.handle_info(
+            {:codex_notification, state.backend_state[Codex].client, "thread/tokenUsage/updated",
+             params},
+            state
+          )
+
+        state
+      end)
+
+    for {task, expected} <- [{"first", 100_000}, {"second", 200_000}] do
+      selected = %{state | selected_task_id: task}
+      assert State.current_usage(selected).context_window == expected
+      completed = App.finish_run(selected, task, "completed", notice: "done")
+      refute Map.has_key?(completed.runs, task)
+      assert State.current_usage(completed).context_window == expected
+    end
+
+    assert State.current_usage(%{state | selected_task_id: "restored"}).context_window == nil
   end
 
   test "buffered Codex events retain run identity through phase changes and completion",
        context do
     state = state!(context)
-    run = %{kind: :codex, task_id: "task", thread_id: "thread", turn_id: nil, status: :starting}
+    run = %{kind: :codex, task_id: "task", thread_id: "thread", turn_id: nil}
     state = App.attach_run(%{state | selected_task_id: "task"}, "run", run, "hello", "starting")
     params = %{"threadId" => "thread", "turnId" => "turn", "delta" => "Thinking"}
 
@@ -786,7 +846,8 @@ defmodule Alto.TUI.AppTest do
   test "effort selector loads a cold model catalog without visiting model selection first",
        context do
     state = state!(context)
-    state = %{state | models: %{}, leader?: true}
+    profiles = Enum.map(state.profiles, &%{&1 | models: :discover})
+    state = %{state | profiles: profiles, models: %{}, leader?: true}
     {:noreply, loading} = App.handle_event(%Key{code: "r"}, state)
     assert loading.overlay.kind == :effort
     assert MapSet.member?(loading.model_loading, state.selected_provider_id)
@@ -796,6 +857,20 @@ defmodule Alto.TUI.AppTest do
       App.handle_info({:alto_models_loaded, state.selected_provider_id, result}, loading)
 
     assert Enum.map(loaded.overlay.items, & &1.value) == [:default, "low", "high"]
+  end
+
+  test "embedded models open immediately while a fetched empty catalog remains authoritative",
+       context do
+    state = %{state!(context) | models: %{}}
+    opened = App.open_overlay(state, :model)
+
+    assert Enum.map(opened.overlay.items, & &1.value) == ["test/model"]
+    assert opened.model_loading == MapSet.new()
+
+    empty = %{state | models: %{state.selected_provider_id => []}}
+    opened = App.open_overlay(empty, :model)
+    assert opened.overlay.items == []
+    assert opened.model_loading == MapSet.new()
   end
 
   test "ordinary selection excludes chrome and placeholders but includes content", context do
@@ -978,6 +1053,39 @@ defmodule Alto.TUI.AppTest do
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
     assert_receive {:custom_start, Alto.Approvals.DenyAll}, 2_000
     eventually(fn -> user_state(app).notice == "run completed" end)
+  end
+
+  test "child approvals route to the UI run without retaining approval event IDs", context do
+    config =
+      Alto.Test.TUI.config(
+        provider: nil,
+        tools: [{ApprovalTool, owner: self()}],
+        loop: Alto.loop(ApprovalParent, subagents: Alto.Subagents.bounded(max_depth: 1)),
+        session_dir: Path.join(context.root, "sessions")
+      )
+
+    app =
+      start_app!(context,
+        config: config,
+        credentials_path: context.credentials,
+        test_mode: {120, 36}
+      )
+
+    ExRatatui.textarea_set_value(user_state(app).textarea, "delegate")
+    Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
+    eventually(fn -> user_state(app).pending_approvals != [] end)
+
+    state = user_state(app)
+    [local_id] = Map.keys(state.runs)
+    [approval] = state.pending_approvals
+    assert approval.local_id == local_id
+    refute approval.request.run_id == local_id
+    refute_received {:child_approved, _}
+
+    Runtime.inject_event(app, %Key{code: "f8", kind: "press"})
+    assert_receive {:child_approved, ["child"]}, 2_000
+    eventually(fn -> user_state(app).runs == %{} end)
+    assert user_state(app).pending_approvals == []
   end
 
   test "display text and inactive task caches are bounded", context do

@@ -14,7 +14,7 @@ defmodule Alto.Consumer do
 
   A handler returns:
 
-      handler.(payload, %{key: key, claim_id: id, attempt: n}) ::
+      handler.(payload, %{operation_key: key, claim_id: id, attempt: n}) ::
         :done | {:done, evidence} | {:failed, reason} |
         {:retry, reason} | {:park, reason} | {:run, runner_result} |
         {:outcome, outcome_class, evidence}
@@ -199,7 +199,6 @@ defmodule Alto.Consumer do
       Alto.Runner.Execution.Call.run(
         fn ->
           state.handler.(payload, %{
-            key: op,
             operation_key: op,
             claim_id: claim_id,
             attempt: attempt_n

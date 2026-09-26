@@ -9,7 +9,6 @@ defmodule Alto.Providers.Anthropic.Stream do
             block_order: [],
             usage: nil,
             stop_reason: nil,
-            stop_sequence: nil,
             message_started?: false,
             message_stopped?: false,
             error: nil
@@ -54,7 +53,6 @@ defmodule Alto.Providers.Anthropic.Stream do
         message_started?: true,
         message_stopped?: true,
         stop_reason: reason,
-        stop_sequence: response["stop_sequence"],
         usage: response["usage"]
       })
 
@@ -117,7 +115,6 @@ defmodule Alto.Providers.Anthropic.Stream do
     %{
       state
       | stop_reason: delta["stop_reason"] || state.stop_reason,
-        stop_sequence: delta["stop_sequence"] || state.stop_sequence,
         usage: usage
     }
   end
@@ -210,14 +207,11 @@ defmodule Alto.Providers.Anthropic.Stream do
           do: %{block | chunks: [text | block.chunks]},
           else: Map.update!(block, field, &(&1 <> text))
 
-      update_block(state, index, updated)
+      %{state | blocks: Map.put(state.blocks, index, updated)}
     else
       _ -> %{state | error: :unsupported_anthropic_content}
     end
   end
-
-  defp update_block(state, index, block),
-    do: %{state | blocks: Map.put(state.blocks, index, block)}
 
   defp emit_block(%{"type" => "text", "text" => text}, sink) when text != "" do
     sink.(Event.live(:model_delta, %{text: text}))
@@ -238,9 +232,6 @@ defmodule Alto.Providers.Anthropic.Stream do
   defp valid_final_response(%__MODULE__{stop_reason: reason}) when reason in @valid_stop_reasons,
     do: :ok
 
-  defp valid_final_response(%__MODULE__{stop_reason: nil}),
-    do: {:error, {:incomplete_model_response, nil}}
-
   defp valid_final_response(%__MODULE__{stop_reason: reason}),
     do: {:error, {:incomplete_model_response, reason}}
 
@@ -258,15 +249,11 @@ defmodule Alto.Providers.Anthropic.Stream do
 
   defp finalize_block(%{"type" => "redacted_thinking"} = block), do: {:ok, block}
 
-  defp finalize_block(
-         %{"type" => "tool_use", "id" => id, "input" => input, chunks: chunks} = block
-       ) do
-    json =
-      if chunks == [],
-        do: JSON.encode!(input),
-        else: chunks |> Enum.reverse() |> IO.iodata_to_binary()
+  defp finalize_block(%{"type" => "tool_use", chunks: []} = block),
+    do: {:ok, Map.delete(block, :chunks)}
 
-    case JSON.decode(json) do
+  defp finalize_block(%{"type" => "tool_use", "id" => id, chunks: chunks} = block) do
+    case chunks |> Enum.reverse() |> IO.iodata_to_binary() |> JSON.decode() do
       {:ok, value} when is_map(value) ->
         {:ok, block |> Map.delete(:chunks) |> Map.put("input", value)}
 

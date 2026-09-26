@@ -57,7 +57,7 @@ defmodule Alto.Command.Policies.Unrestricted do
       Enum.any?(args, &String.contains?(&1, <<0>>)) ->
         {:error, :argument_contains_nul}
 
-      Enum.sum(Enum.map(args, &byte_size/1)) > Invocation.max_argument_bytes() ->
+      IO.iodata_length(args) > Invocation.max_argument_bytes() ->
         {:error, {:arguments_too_large, Invocation.max_argument_bytes()}}
 
       true ->

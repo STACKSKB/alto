@@ -103,7 +103,7 @@ defmodule Alto.Tools.ExternalToolsTest do
              )
 
     assert {:error, {:git_failed, 2, "bad branch\n"}} =
-             GitMutate.run_prepared(prepared, context)
+             GitMutate.run(prepared, context)
 
     timeout = {:ok, %{exit_status: nil, termination: :timeout, output: ""}}
 
@@ -114,7 +114,7 @@ defmodule Alto.Tools.ExternalToolsTest do
                executor: {ResultExecutor, result: timeout}
              )
 
-    assert {:unknown, :git_timeout} = GitMutate.run_prepared(prepared, context)
+    assert {:unknown, :git_timeout} = GitMutate.run(prepared, context)
   end
 
   test "Ripwire adapter invokes the configured external binary, not an internal implementation",

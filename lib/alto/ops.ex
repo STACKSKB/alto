@@ -50,7 +50,7 @@ defmodule Alto.Ops do
           source: String.t(),
           operation: String.t(),
           operation_key: String.t(),
-          record_id: String.t() | nil,
+          record_id: pos_integer() | nil,
           claim_id: String.t() | nil,
           claimed_by: term(),
           lease_until_ms: integer() | nil,
@@ -131,7 +131,27 @@ defmodule Alto.Ops do
     with {:ok, records} <- snapshot_pages(queue, 0, []) do
       {:ok,
        Enum.map(records, fn record ->
-         base = %{
+         stale =
+           if record.status == :claimed,
+             do: record.lease_until_ms <= System.system_time(:millisecond)
+
+         {status, reason, recovery} =
+           case record.status do
+             :pending ->
+               {:accepted, "pending; awaiting claim",
+                "claim via queue_claim, then handle under the ledger recovery table"}
+
+             :claimed ->
+               reason =
+                 if stale,
+                   do: "lease expired; re-claimable, current owner is stale",
+                   else: "claimed under lease"
+
+               {:claimed, reason,
+                "await outcome; on expiry the next claim reconciles via the ledger"}
+           end
+
+         %{
            key: record.key,
            source: source_of(record.key),
            operation: record.key,
@@ -141,42 +161,16 @@ defmodule Alto.Ops do
            safe_to_retry: false,
            generation_id: record.generation_id,
            operation_revision: nil,
-           recovery_available: false
+           recovery_available: false,
+           status: status,
+           claim_id: record.claim_id,
+           claimed_by: record.claimed_by,
+           lease_until_ms: record.lease_until_ms,
+           stale: stale,
+           reason: reason,
+           recovery: recovery,
+           attempt_id: record.claim_id
          }
-
-         case record.status do
-           :pending ->
-             Map.merge(base, %{
-               status: :accepted,
-               claim_id: nil,
-               claimed_by: nil,
-               lease_until_ms: nil,
-               stale: nil,
-               reason: "pending; awaiting claim",
-               recovery: "claim via queue_claim, then handle under the ledger recovery table",
-               attempt_id: nil
-             })
-
-           :claimed ->
-             stale? =
-               is_integer(record.lease_until_ms) and
-                 record.lease_until_ms <= System.system_time(:millisecond)
-
-             Map.merge(base, %{
-               status: :claimed,
-               claim_id: record.claim_id,
-               claimed_by: record.claimed_by,
-               lease_until_ms: record.lease_until_ms,
-               stale: stale?,
-               reason:
-                 if(stale?,
-                   do: "lease expired; re-claimable, current owner is stale",
-                   else: "claimed under lease"
-                 ),
-               recovery: "await outcome; on expiry the next claim reconciles via the ledger",
-               attempt_id: record.claim_id
-             })
-         end
        end)}
     end
   end

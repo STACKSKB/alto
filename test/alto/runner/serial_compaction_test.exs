@@ -425,8 +425,9 @@ defmodule Alto.Runner.SerialCompactionTest do
     refute_received {:handoff_event, %Event{type: :model_reasoning_delta}}
     assert data.strategy == :handoff
     assert data.next_step == "Return the final answer."
-    assert File.read!(data.files.design) == "Keep the runtime bounded.\n"
-    assert File.read!(data.files.pointers) == "lib/alto/runner/serial.ex\n"
+    artifact = JSON.decode!(File.read!(data.artifact_path))
+    assert artifact["design"] == "Keep the runtime bounded."
+    assert artifact["pointers"] == "lib/alto/runner/serial.ex"
     assert Enum.any?(result.messages, &String.contains?(&1["content"] || "", "# Next step"))
 
     assert {:ok, records} = Session.read(result.session_id, session_dir: dir)

@@ -24,7 +24,7 @@ defmodule Alto.Runner.CheckpointTest do
       {:ok, %{value: value}, %{value: value, prepared_by: self()}}
     end
 
-    def run_prepared(prepared, context, _opts) do
+    def run(prepared, context, _opts) do
       File.write!(Path.join(context.cwd, "guarded"), prepared.value, [:append])
       {:ok, prepared.value}
     end

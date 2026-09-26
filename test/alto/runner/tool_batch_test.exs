@@ -10,7 +10,7 @@ defmodule Alto.Runner.ToolBatchTest do
       if args["reject"], do: {:error, :bad_input}, else: {:ok, args, %{}}
     end
 
-    def run_prepared(args, _context, opts) do
+    def run(args, _context, opts) do
       send(opts[:test_pid], {:started, args["value"], self()})
 
       if args["block"],

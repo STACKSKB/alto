@@ -118,7 +118,7 @@ defmodule Alto.Runner.AgentIdentityTest do
     def execution_mode(_opts), do: :exclusive
     def prepare(_arguments, context, _opts), do: {:ok, :prepared, context.agent_identity}
 
-    def run_prepared(identity, context, _opts) do
+    def run(identity, context, _opts) do
       send(context.metadata.owner, {:checkpoint_identity, context.agent_identity})
       {:ok, identity}
     end

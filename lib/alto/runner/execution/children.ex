@@ -89,8 +89,6 @@ defmodule Alto.Runner.Execution.Children do
          do: {:ok, specs, journal, run}
   end
 
-  def prepare_resources(specs, run), do: prepare_subagent_workspaces(specs, run)
-
   @doc "Execute an already prepared batch; callers may persist its parent first."
   def run_prepared_children(specs, concurrency, journal, run) do
     {status, outcomes} =
@@ -139,11 +137,7 @@ defmodule Alto.Runner.Execution.Children do
   defp validate_child_summary(id, %{id: id, status: status} = data)
        when status in [:ok, :error, :cancelled] do
     if Map.has_key?(data, :usage) do
-      usage = data.usage
-      fields = Map.keys(Usage.to_map(Usage.new()))
-
-      with true <- is_map(usage) and Enum.sort(Map.keys(usage)) == Enum.sort(fields),
-           true <- Enum.all?(usage, fn {_, value} -> is_integer(value) and value >= 0 end),
+      with true <- Usage.valid?(data.usage),
            true <-
              data[:outcome] in [
                :empty,
@@ -266,27 +260,24 @@ defmodule Alto.Runner.Execution.Children do
   defp finish_child_journal(nil, _outcomes), do: :ok
 
   defp finish_child_journal(journal, outcomes) do
-    skipped =
-      Enum.reduce_while(outcomes, :ok, fn
-        {id, {:error, {:not_started, _}} = outcome}, :ok ->
-          case Continuation.skip(journal, id, child_summary(id, outcome)) do
-            {:ok, _} -> {:cont, :ok}
-            error -> {:halt, error}
-          end
+    with {:ok, _} <-
+           Alto.Result.reduce(outcomes, nil, fn
+             {id, {:error, {:not_started, _}} = outcome}, _ ->
+               Continuation.skip(journal, id, child_summary(id, outcome))
 
-        _, :ok ->
-          {:cont, :ok}
-      end)
-
-    with :ok <- skipped, {:ok, _} <- Continuation.join(journal), do: :ok
+             _, last ->
+               {:ok, last}
+           end),
+         {:ok, _} <- Continuation.join(journal),
+         do: :ok
   end
 
   def with_journal(data, nil), do: data
   def with_journal(data, journal), do: Map.put(data, :journal, Continuation.identity(journal))
 
-  defp prepare_subagent_workspaces(specs, %{workspaces: nil}), do: {:ok, specs}
+  def prepare_resources(specs, %{workspaces: nil}), do: {:ok, specs}
 
-  defp prepare_subagent_workspaces(specs, run) do
+  def prepare_resources(specs, run) do
     with {:ok, snapshot} <-
            Alto.Runner.Execution.Workspace.call(
              fn -> Alto.Workspaces.prepare(run.workspaces, run.tool_context.cwd) end,
@@ -483,14 +474,16 @@ defmodule Alto.Runner.Execution.Children do
     opts =
       opts
       |> Keyword.delete(:workspace_assignment)
-      |> Keyword.put(:checkpoint, {entry.checkpoint, decision})
-      |> Keyword.put(:child_resume, entry.identity)
-      |> Keyword.put(:subagent_ticket, ticket)
-      |> Keyword.put(:session, entry.checkpoint["session_id"])
-      |> Keyword.put(:resume_snapshot, binding.resume_snapshot)
-      |> Keyword.put(:cwd, binding.cwd)
-      |> Keyword.put(:agent_depth, binding.agent_depth)
-      |> Keyword.put(:parent_expires_at_ms, binding.expires_at_ms)
+      |> Keyword.merge(
+        checkpoint: {entry.checkpoint, decision},
+        child_resume: entry.identity,
+        subagent_ticket: ticket,
+        session: entry.checkpoint["session_id"],
+        resume_snapshot: binding.resume_snapshot,
+        cwd: binding.cwd,
+        agent_depth: binding.agent_depth,
+        parent_expires_at_ms: binding.expires_at_ms
+      )
 
     case entry.workspace do
       nil ->
@@ -543,17 +536,9 @@ defmodule Alto.Runner.Execution.Children do
   def child_summary(id, {:error, reason}), do: %{id: id, status: :error, error: reason}
 
   defp child_fields(id, result) do
-    %{
-      id: id,
-      output: result.output,
-      model_requests: result.model_requests,
-      usage: result.usage,
-      outcome: result.verdict,
-      persistence: result.persistence,
-      run_id: result.run_id,
-      session_id: result.session_id,
-      workspace: result.workspace
-    }
+    result
+    |> Map.take(~w(output model_requests usage persistence run_id session_id workspace)a)
+    |> Map.merge(%{id: id, outcome: result.verdict})
   end
 
   def merge_child_summary(run, %{error: {:run_process_failed, _}}),
@@ -564,16 +549,13 @@ defmodule Alto.Runner.Execution.Children do
     run = %{run | usage: Usage.merge(run.usage, struct(Usage, usage))}
 
     Enum.reduce(
-      persistence_errors(summary),
+      Result.persistence_errors(summary),
       run,
       &Events.add_persistence_error(&2, {:subagent, &1})
     )
   end
 
   def merge_child_summary(run, _summary), do: run
-
-  defp persistence_errors(%{persistence: {:degraded, errors}}), do: errors
-  defp persistence_errors(_), do: []
 
   defp validate_subagent_tools(:inherit, _run), do: :ok
 

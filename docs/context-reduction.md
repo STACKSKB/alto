@@ -63,6 +63,11 @@ Keeping message structure and schemas improves the opportunity for prefix reuse;
 provider caching rules and changed tool-choice settings still affect actual hits.
 Summaries remain lossy; durable history and handoff artifacts retain the original evidence.
 
+The handoff reducer publishes one immutable JSON artifact containing `design`,
+`pointers`, `handoff`, and `next_step`. Its path appears in the replacement context
+and the `context_compacted` event's `artifact_path` field. Publication is atomic;
+concurrent attempts at the same session/artifact ID cannot overwrite each other.
+
 Use `Alto.Context.Estimator` with a configured tokenizer and provider/model
 framing costs when available. The default byte estimator remains conservative;
 admission estimates and authoritative provider usage are separate measurements.

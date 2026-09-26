@@ -24,8 +24,6 @@ defmodule Alto.Listeners.UnixSocket do
   alias Alto.FrontEnd.Registry
   alias Alto.Listeners.Connection
 
-  @default_max_line_bytes 1_048_576
-
   ## Client API
 
   @doc """
@@ -49,7 +47,7 @@ defmodule Alto.Listeners.UnixSocket do
 
     registry = Keyword.fetch!(opts, :registry)
     path = opts |> Keyword.fetch!(:path) |> Path.expand()
-    max_line_bytes = Keyword.get(opts, :max_line_bytes, @default_max_line_bytes)
+    max_line_bytes = Keyword.get(opts, :max_line_bytes, Connection.default_max_line_bytes())
 
     with :ok <- prepare_socket_path(path),
          {:ok, listen_socket} <-
@@ -58,6 +56,9 @@ defmodule Alto.Listeners.UnixSocket do
              {:ip, {:local, to_charlist(path)}},
              {:backlog, 8},
              {:active, false},
+             {:packet, :line},
+             {:packet_size, max_line_bytes + 1},
+             {:buffer, max_line_bytes + 1},
              {:exit_on_close, true}
            ]),
          :ok <- File.chmod(path, 0o600) do
@@ -67,8 +68,7 @@ defmodule Alto.Listeners.UnixSocket do
        %{
          path: path,
          listen_socket: listen_socket,
-         acceptor: acceptor,
-         max_line_bytes: max_line_bytes
+         acceptor: acceptor
        }}
     else
       {:error, reason} ->
@@ -154,7 +154,7 @@ defmodule Alto.Listeners.UnixSocket do
 
   ## Client process
   ##
-  ## NDJSON framing (line splitting and the size bound) lives here; command
+  ## OTP frames NDJSON lines; command
   ## dispatch and notification encoding are shared with the WebSocket
   ## transport through `Alto.Listeners.Connection`.
 
@@ -164,28 +164,23 @@ defmodule Alto.Listeners.UnixSocket do
     :inet.setopts(socket, active: :once)
     Registry.pull(registry, self(), Connection.pull_batch())
     Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
-    client_loop(socket, registry, max_line_bytes, "")
+    client_loop(socket, registry, max_line_bytes)
   end
 
-  defp client_loop(socket, registry, max_line_bytes, buffer) do
+  defp client_loop(socket, registry, max_line_bytes) do
     send_line = fn line -> :gen_tcp.send(socket, line) end
 
     receive do
-      {:tcp, ^socket, data} ->
-        case take_lines(buffer <> data, max_line_bytes, []) do
-          {:ok, buffer, lines} ->
-            Enum.each(lines, fn line ->
-              Enum.each(Connection.command_lines(line, registry, max_line_bytes), send_line)
-            end)
-
-            :inet.setopts(socket, active: :once)
-            client_loop(socket, registry, max_line_bytes, buffer)
-
-          :line_too_large ->
-            # Closing, not truncating: the sender violated the announced
-            # bound and the stream may carry approval decisions.
-            Registry.detach(registry, self())
-            :gen_tcp.close(socket)
+      {:tcp, ^socket, line} ->
+        # Line mode truncates at the configured buffer bound. Never dispatch a fragment.
+        if byte_size(line) <= max_line_bytes + 1 and String.ends_with?(line, "\n") do
+          line = line |> String.trim_trailing("\n") |> String.trim_trailing("\r")
+          Enum.each(Connection.command_lines(line, registry, max_line_bytes), send_line)
+          :inet.setopts(socket, active: :once)
+          client_loop(socket, registry, max_line_bytes)
+        else
+          Registry.detach(registry, self())
+          :gen_tcp.close(socket)
         end
 
       {:tcp_closed, ^socket} ->
@@ -204,7 +199,7 @@ defmodule Alto.Listeners.UnixSocket do
         # must not wait forever for the next notification to re-trigger.
         Registry.pull(registry, self(), Connection.pull_batch())
         Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
-        client_loop(socket, registry, max_line_bytes, buffer)
+        client_loop(socket, registry, max_line_bytes)
 
       {:alto_notification, notification} ->
         Enum.each(
@@ -212,25 +207,7 @@ defmodule Alto.Listeners.UnixSocket do
           send_line
         )
 
-        client_loop(socket, registry, max_line_bytes, buffer)
-    end
-  end
-
-  defp take_lines(buffer, max_line_bytes, lines) do
-    case :binary.split(buffer, "\n") do
-      [line, rest] ->
-        if byte_size(line) > max_line_bytes do
-          :line_too_large
-        else
-          take_lines(rest, max_line_bytes, [String.trim_trailing(line, "\r") | lines])
-        end
-
-      [incomplete] ->
-        if byte_size(incomplete) > max_line_bytes do
-          :line_too_large
-        else
-          {:ok, incomplete, Enum.reverse(lines)}
-        end
+        client_loop(socket, registry, max_line_bytes)
     end
   end
 end

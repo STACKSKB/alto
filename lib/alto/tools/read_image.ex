@@ -72,8 +72,7 @@ defmodule Alto.Tools.ReadImage do
              requested_width,
              requested_height,
              config
-           ),
-         :ok <- validate_encoded_size(data, config.max_encoded_bytes) do
+           ) do
       {:ok,
        Content.new([
          Content.image(media_type, Base.encode64(data), width, height)
@@ -108,10 +107,8 @@ defmodule Alto.Tools.ReadImage do
   defp valid_optional_dimension?(dimension),
     do: is_integer(dimension) and dimension > 0 and dimension <= @hard_max_dimension
 
-  defp raw_limit(max_encoded_bytes), do: div(max_encoded_bytes, 4) * 3
-
   defp read_bounded(path, max_encoded_bytes) do
-    limit = raw_limit(max_encoded_bytes)
+    limit = div(max_encoded_bytes, 4) * 3
 
     case BoundedFile.snapshot(path, limit) do
       {:ok, %{content: data}} when is_binary(data) -> {:ok, data}

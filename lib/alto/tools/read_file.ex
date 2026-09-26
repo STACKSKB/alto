@@ -14,7 +14,7 @@ defmodule Alto.Tools.ReadFile do
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
-    limits = validate_options!(opts)
+    limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
     Alto.Tool.object_schema(
       "Read a bounded byte range from a file inside the workspace.",
@@ -40,7 +40,8 @@ defmodule Alto.Tools.ReadFile do
     path = Map.get(arguments, "path")
     offset = Map.get(arguments, "offset", 0)
 
-    with {:ok, limits} <- validate_options(opts),
+    with {:ok, limits} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_read_file_options),
          limit <- Map.get(arguments, "limit", limits.max_bytes),
          :ok <- valid_range(offset, limit, limits.max_bytes),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
@@ -74,9 +75,4 @@ defmodule Alto.Tools.ReadFile do
        do: :ok
 
   defp valid_range(offset, limit, _max_bytes), do: {:error, {:invalid_range, offset, limit}}
-
-  defp validate_options(opts),
-    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_read_file_options)
-
-  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

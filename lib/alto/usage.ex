@@ -14,6 +14,7 @@ defmodule Alto.Usage do
             cached_input_tokens: 0,
             last_input_tokens: 0,
             last_cached_input_tokens: 0,
+            context_window: nil,
             requests: 0
 
   @type t :: %__MODULE__{
@@ -23,12 +24,25 @@ defmodule Alto.Usage do
           cached_input_tokens: non_neg_integer(),
           last_input_tokens: non_neg_integer(),
           last_cached_input_tokens: non_neg_integer(),
+          context_window: non_neg_integer() | nil,
           requests: non_neg_integer()
         }
 
   @doc "Return zeroed accounting."
   @spec new() :: t()
   def new, do: %__MODULE__{}
+
+  def valid?(%__MODULE__{} = usage), do: valid?(to_map(usage))
+
+  def valid?(usage) when is_map(usage) do
+    Enum.sort(Map.keys(usage)) == Enum.sort(Map.keys(to_map(new()))) and
+      Enum.all?(usage, fn
+        {:context_window, nil} -> true
+        {_, value} -> is_integer(value) and value >= 0
+      end)
+  end
+
+  def valid?(_), do: false
 
   @doc "Normalize one provider response usage object."
   @spec normalize(map() | nil | term()) :: t()
@@ -76,18 +90,16 @@ defmodule Alto.Usage do
   @doc "Add token accounting across requests."
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = left, %__MODULE__{} = right) do
+    latest = if right.requests > 0, do: right, else: left
+
     %__MODULE__{
       input_tokens: left.input_tokens + right.input_tokens,
       output_tokens: left.output_tokens + right.output_tokens,
       total_tokens: left.total_tokens + right.total_tokens,
       cached_input_tokens: left.cached_input_tokens + right.cached_input_tokens,
-      last_input_tokens:
-        if(right.requests > 0, do: right.last_input_tokens, else: left.last_input_tokens),
-      last_cached_input_tokens:
-        if(right.requests > 0,
-          do: right.last_cached_input_tokens,
-          else: left.last_cached_input_tokens
-        ),
+      last_input_tokens: latest.last_input_tokens,
+      last_cached_input_tokens: latest.last_cached_input_tokens,
+      context_window: latest.context_window,
       requests: left.requests + right.requests
     }
   end
@@ -135,16 +147,18 @@ defmodule Alto.Usage do
       cached_input_tokens: cached_input_tokens,
       last_input_tokens: last_input_tokens,
       last_cached_input_tokens: last_cached_input_tokens,
+      context_window: integer(map, ~w(context_window), nil),
       requests: integer(map, ~w(requests))
     }
   end
 
   @doc "Project an authoritative Codex App Server thread/tokenUsage snapshot."
   @spec from_codex(map()) :: t()
-  def from_codex(%{total: total, last: last}) when is_map(total) and is_map(last),
-    do: from_codex(%{"total" => total, "last" => last})
+  def from_codex(%{total: total, last: last} = usage) when is_map(total) and is_map(last),
+    do: usage |> normalize_keys() |> from_codex()
 
-  def from_codex(%{"total" => total, "last" => last}) when is_map(total) and is_map(last) do
+  def from_codex(%{"total" => total, "last" => last} = usage)
+      when is_map(total) and is_map(last) do
     total = normalize_keys(total)
     last = normalize_keys(last)
     input = integer(total, ~w(inputTokens))
@@ -160,6 +174,7 @@ defmodule Alto.Usage do
       cached_input_tokens: cached,
       last_input_tokens: last_input,
       last_cached_input_tokens: last_cached,
+      context_window: integer(usage, ~w(modelContextWindow), nil),
       # tokenUsage is a cumulative snapshot; it does not identify a request count.
       requests: 0
     }

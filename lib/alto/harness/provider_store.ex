@@ -23,12 +23,11 @@ defmodule Alto.Harness.ProviderStore do
       configured_ids = MapSet.new(decorated, & &1.id)
 
       added =
-        records
-        |> Enum.flat_map(fn {id, record} -> saved_profile(id, record) end)
-        |> Enum.reject(&MapSet.member?(configured_ids, &1.id))
-        |> Enum.sort_by(&String.downcase(&1.label))
+        for {id, %{"type" => @kind} = record} <- records,
+            not MapSet.member?(configured_ids, id),
+            do: profile(id, record)
 
-      {:ok, decorated ++ added}
+      {:ok, decorated ++ Enum.sort_by(added, &String.downcase(&1.label))}
     end
   end
 
@@ -86,9 +85,6 @@ defmodule Alto.Harness.ProviderStore do
 
     {module, options}
   end
-
-  defp saved_profile(id, %{"type" => @kind} = record), do: [profile(id, record)]
-  defp saved_profile(_id, _record), do: []
 
   defp profile(id, record) do
     %ProviderProfile{

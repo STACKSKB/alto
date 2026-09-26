@@ -323,14 +323,21 @@ defmodule Alto.WorkspacesTest do
 
   test "state inside the source and symlinked state paths are rejected", %{
     manager: m,
-    source: source
+    source: source,
+    snapshot: s
   } do
     assert {:error, :workspace_state_inside_source} =
              Workspaces.prepare(%{m | root: Path.join(source, "state")}, source)
 
+    assert {:error, :workspace_state_inside_source} =
+             Workspaces.create(%{m | root: Path.join(source, "state")}, s, owner("inside"))
+
     link = m.root <> "-link"
     File.ln_s!(source, link)
     assert {:error, :workspace_path_symlink} = Workspaces.prepare(%{m | root: link}, source)
+
+    assert {:error, :workspace_path_symlink} =
+             Workspaces.create(m, %{s | source: link}, owner("symlink"))
   end
 
   test "a non-Git backend can provide the optional integration lifecycle", %{

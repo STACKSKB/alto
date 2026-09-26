@@ -123,8 +123,6 @@ defmodule Alto.Subagents.Continuation do
           {:ok, batch, snapshot}
         end
       end)
-    else
-      {:error, _} = error -> error
     end
   end
 
@@ -634,11 +632,9 @@ defmodule Alto.Subagents.Continuation do
   defp retireable?(%{phase: :children, packet: %{"join" => join}}), do: is_map(join)
   defp retireable?(_), do: false
 
-  defp valid_key(key) when is_binary(key) and byte_size(key) in 1..256 do
-    if String.valid?(key), do: :ok, else: {:error, :invalid_batch_key}
+  defp valid_key(key) do
+    if valid_id?(key), do: :ok, else: {:error, :invalid_batch_key}
   end
-
-  defp valid_key(_), do: {:error, :invalid_batch_key}
 
   defp valid_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
   defp valid_revision(_), do: {:error, :invalid_approval_revision}

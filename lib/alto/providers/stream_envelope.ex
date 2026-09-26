@@ -15,19 +15,29 @@ defmodule Alto.Providers.StreamEnvelope do
       error_bytes: 0
     }
 
+    with {:ok, status, state} <-
+           request(
+             config,
+             headers,
+             [method: :post, body: JSON.encode!(body)],
+             initial,
+             &consume(&1, &2, &3, config, decoder, sink)
+           ) do
+      result(state, status, decoder, sink)
+    end
+  end
+
+  def request(config, headers, options, initial, consume) do
     into = fn {:data, data}, {request, response} ->
       current = Req.Response.get_private(response, @state_key, initial)
-      next = consume(current, response.status, data, config, decoder, sink)
+      next = consume.(current, response.status, data)
       response = Req.Response.put_private(response, @state_key, next)
       if next.error, do: {:halt, {request, response}}, else: {:cont, {request, response}}
     end
 
-    case Req.post(
-           HTTPOptions.request_options(config, headers, body: JSON.encode!(body), into: into)
-         ) do
+    case Req.request(HTTPOptions.request_options(config, headers, [into: into] ++ options)) do
       {:ok, response} ->
-        state = Req.Response.get_private(response, @state_key, initial)
-        result(state, response.status, decoder, sink)
+        {:ok, response.status, Req.Response.get_private(response, @state_key, initial)}
 
       {:error, reason} ->
         {:error, {:transport_error, reason}}

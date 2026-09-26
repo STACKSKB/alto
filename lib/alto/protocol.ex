@@ -18,7 +18,6 @@ defmodule Alto.Protocol do
   buffers accordingly.
   """
 
-  alias Alto.Approval.Request, as: ApprovalRequest
   alias Alto.Event
 
   @version 1
@@ -140,97 +139,58 @@ defmodule Alto.Protocol do
 
   ## Server → client encoding
 
-  @spec hello(String.t(), [String.t()], pos_integer()) :: {:ok, iodata()} | {:error, :overflow}
-  def hello(id, run_ids, max_line_bytes) do
-    encode(
-      %{"type" => "hello", "id" => id, "runs" => run_ids, "max_line_bytes" => max_line_bytes},
-      max_line_bytes
-    )
-  end
-
-  @spec event(String.t(), String.t(), non_neg_integer() | nil, Event.t(), pos_integer()) ::
+  @doc "Encode one bounded server envelope from its type, correlation id, and payload."
+  @spec envelope(String.t(), String.t() | nil, map(), pos_integer()) ::
           {:ok, iodata()} | {:error, :overflow}
-  def event(id, run_id, seq, %Event{} = event, max_line_bytes) do
-    encode(
-      event_object(seq, event)
-      |> Map.merge(%{"type" => "event", "id" => id, "run_id" => run_id}),
-      max_line_bytes
-    )
+  def envelope(type, id, payload, max_line_bytes) do
+    payload = encode_term(payload) |> Map.merge(%{"type" => type, "id" => id})
+    encode(payload, max_line_bytes)
   end
 
-  @spec attached(
-          String.t(),
-          String.t(),
-          boolean(),
-          non_neg_integer() | nil,
-          [
-            {non_neg_integer(), Event.t()}
-          ],
-          pos_integer()
-        ) :: {:ok, iodata()} | {:error, :overflow}
-  def attached(id, run_id, gap, head_seq, replay, max_line_bytes) do
-    encode(
+  @doc "Encode one registry notification with its domain wire shape."
+  def notification(id, {:event, run_id, seq, %Event{} = event}, max) do
+    envelope("event", id, Map.put(event_object(seq, event), "run_id", run_id), max)
+  end
+
+  def notification(id, {:attached, run_id, gap, head_seq, replay}, max) do
+    envelope(
+      "attached",
+      id,
       %{
-        "type" => "attached",
-        "id" => id,
-        "run_id" => run_id,
-        "gap" => gap,
-        "head_seq" => head_seq,
-        "events" => Enum.map(replay, fn {seq, event} -> event_object(seq, event) end)
+        run_id: run_id,
+        gap: gap,
+        head_seq: head_seq,
+        events: Enum.map(replay, fn {seq, event} -> event_object(seq, event) end)
       },
-      max_line_bytes
+      max
     )
   end
 
-  @spec approval_request(String.t(), String.t(), ApprovalRequest.t(), pos_integer()) ::
-          {:ok, iodata()} | {:error, :overflow}
-  def approval_request(id, run_id, %ApprovalRequest{} = request, max_line_bytes) do
-    encode(
-      %{
-        "type" => "approval_request",
-        "id" => id,
-        "run_id" => run_id,
-        "request" => encode_term(request)
-      },
-      max_line_bytes
-    )
-  end
+  def notification(id, {:approval_request, run_id, request}, max),
+    do: envelope("approval_request", id, %{run_id: run_id, request: request}, max)
 
-  @spec approval_resolved(String.t(), String.t(), ApprovalRequest.t(), term(), pos_integer()) ::
-          {:ok, iodata()} | {:error, :overflow}
-  def approval_resolved(id, run_id, %ApprovalRequest{} = request, decision, max_line_bytes) do
-    encode(
-      %{
-        "type" => "approval_resolved",
-        "id" => id,
-        "run_id" => run_id,
-        "request" => encode_term(request),
-        "decision" => encode_term(decision)
-      },
-      max_line_bytes
-    )
-  end
+  def notification(id, {:approval_resolved, run_id, request, decision}, max),
+    do:
+      envelope(
+        "approval_resolved",
+        id,
+        %{run_id: run_id, request: request, decision: decision},
+        max
+      )
 
-  @spec result(
-          String.t(),
-          String.t(),
-          :ok | {:error, term()} | {:cancelled, term()},
-          term(),
-          non_neg_integer(),
-          pos_integer()
-        ) :: {:ok, iodata()} | {:error, :overflow}
-  def result(id, run_id, outcome, output, model_requests, max_line_bytes) do
+  def notification(id, {:overflow, run_id, domain, last_seq}, max),
+    do: envelope("overflow", id, %{run_id: run_id, domain: domain, last_seq: last_seq}, max)
+
+  def notification(id, {:result, run_id, outcome, output, model_requests}, max) do
     {outcome_name, reason_field} =
       case outcome do
         :ok -> {"ok", %{}}
-        {:error, reason} -> {"error", %{"reason" => encode_term(reason)}}
-        {:cancelled, reason} -> {"cancelled", %{"reason" => encode_term(reason)}}
+        {:error, reason} -> {"error", %{"reason" => reason}}
+        {:cancelled, reason} -> {"cancelled", %{"reason" => reason}}
       end
 
     payload =
       %{
-        "type" => "result",
-        "id" => id,
         "run_id" => run_id,
         "outcome" => outcome_name,
         "model_requests" => model_requests
@@ -238,35 +198,7 @@ defmodule Alto.Protocol do
       |> Map.merge(reason_field)
       |> maybe_put("output", output)
 
-    encode(payload, max_line_bytes)
-  end
-
-  @spec overflow(String.t(), String.t(), :durable | :live, non_neg_integer() | nil, pos_integer()) ::
-          {:ok, iodata()} | {:error, :overflow}
-  def overflow(id, run_id, domain, last_seq, max_line_bytes) when domain in [:durable, :live] do
-    encode(
-      %{
-        "type" => "overflow",
-        "id" => id,
-        "run_id" => run_id,
-        "domain" => Atom.to_string(domain),
-        "last_seq" => last_seq
-      },
-      max_line_bytes
-    )
-  end
-
-  @spec error(String.t() | nil, String.t(), term(), pos_integer()) :: {:ok, iodata()}
-  def error(id, code, detail, max_line_bytes) do
-    encode(
-      %{"type" => "error", "id" => id, "code" => code, "detail" => encode_term(detail)},
-      max_line_bytes
-    )
-  end
-
-  @spec ok(String.t() | nil, map(), pos_integer()) :: {:ok, iodata()} | {:error, :overflow}
-  def ok(id, payload, max_line_bytes) do
-    encode(Map.merge(encode_term(payload), %{"type" => "ok", "id" => id}), max_line_bytes)
+    envelope("result", id, payload, max)
   end
 
   defp event_object(seq, %Event{} = event) do
@@ -274,7 +206,7 @@ defmodule Alto.Protocol do
       "seq" => seq,
       "domain" => Atom.to_string(event.domain),
       "at_ms" => event.at_ms,
-      "event" => %{"type" => Atom.to_string(event.type), "data" => encode_term(event.data)}
+      "event" => %{"type" => Atom.to_string(event.type), "data" => event.data}
     }
   end
 
@@ -289,7 +221,7 @@ defmodule Alto.Protocol do
   end
 
   defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, encode_term(value))
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   ## Client → server decoding
 

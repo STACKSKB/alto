@@ -242,6 +242,10 @@ defmodule Alto.Display do
       ~r/(?i)(x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)(\s*[:=]\s*)[^\s"',}\]]+/,
       "\\1\\2[REDACTED]"
     )
+    |> String.replace(
+      ~r/(?i)((?:api[_-]?key|token|secret)[^:]{0,8}:\s*)\"[^\"]*\"/,
+      "\\1\"[REDACTED]\""
+    )
   end
 
   defp bound(text, limit), do: Alto.Text.truncate(text, limit, "…")

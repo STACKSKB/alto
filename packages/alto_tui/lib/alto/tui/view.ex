@@ -21,7 +21,7 @@ defmodule Alto.TUI.View do
 
     []
     |> add_rail(state, layout.rail)
-    |> add(transcript_widget(state), layout.transcript)
+    |> add(transcript_widget(state, layout.transcript), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
     |> add(status_widget(state, width), layout.status)
@@ -145,17 +145,18 @@ defmodule Alto.TUI.View do
 
       PaneLayout.contains?(layout.rail, x, y) ->
         inner_height = max(layout.rail.height - 3, 0)
-        selected = selected_rail_index(state, State.rail_rows(state)) || 0
+        rows = State.rail_rows(state)
+        selected = selected_rail_index(state, rows) || 0
         offset = max(selected - inner_height + 1, 0)
         row = y - layout.rail.y - 2
 
         if row >= 0 and row < inner_height do
-          case Enum.at(State.rail_rows(state), row + offset) do
+          case Enum.at(rows, row + offset) do
             %{kind: :project, id: id} when x == layout.rail.x + layout.rail.width - 2 ->
               {:close_workspace, id}
 
-            _ ->
-              {:rail_row, row + offset}
+            rail_row ->
+              {:rail_row, rail_row}
           end
         else
           :none
@@ -221,6 +222,9 @@ defmodule Alto.TUI.View do
   defp add_rail(widgets, _state, nil), do: widgets
 
   defp add_rail(widgets, state, rect) do
+    rows = State.rail_rows(state)
+    selected = selected_rail_index(state, rows)
+
     inner = %Rect{
       x: rect.x + 1,
       y: rect.y + 2,
@@ -233,13 +237,12 @@ defmodule Alto.TUI.View do
         {block(" workspaces ", state.focus == :rail), rect},
         {%Paragraph{text: "+ New workspace · ^G W", style: style(fg: @accent, bg: @panel)},
          %{inner | y: rect.y + 1, height: 1}},
-        {rail_widget(state), %{inner | width: max(inner.width - 2, 0)}}
-      ] ++ close_workspace_buttons(state, rect, inner)
+        {rail_widget(rows, selected), %{inner | width: max(inner.width - 2, 0)}}
+      ] ++ close_workspace_buttons(rows, selected, rect, inner)
   end
 
-  defp close_workspace_buttons(state, rect, inner) do
-    rows = State.rail_rows(state)
-    offset = max((selected_rail_index(state, rows) || 0) - inner.height + 1, 0)
+  defp close_workspace_buttons(rows, selected, rect, inner) do
+    offset = max((selected || 0) - inner.height + 1, 0)
 
     rows
     |> Enum.drop(offset)
@@ -257,12 +260,10 @@ defmodule Alto.TUI.View do
     end)
   end
 
-  defp rail_widget(state) do
-    rows = State.rail_rows(state)
-
+  defp rail_widget(rows, selected) do
     %List{
       items: Enum.map(rows, & &1.label),
-      selected: selected_rail_index(state, rows),
+      selected: selected,
       highlight_symbol: "› ",
       highlight_style: style(fg: @accent, bg: @panel_alt, modifiers: [:bold]),
       style: style(fg: :gray, bg: @panel),
@@ -270,8 +271,10 @@ defmodule Alto.TUI.View do
     }
   end
 
-  defp transcript_widget(state) do
+  defp transcript_widget(state, rect) do
     text = transcript_text(state)
+    bottom = transcript_bottom(text, rect)
+    scroll = if state.transcript_follow?, do: bottom, else: min(state.transcript_scroll, bottom)
 
     task_title =
       case State.selected_task(state) do
@@ -287,7 +290,7 @@ defmodule Alto.TUI.View do
     %Paragraph{
       text: text,
       wrap: is_binary(text),
-      scroll: {transcript_scroll(state), 0},
+      scroll: {scroll, 0},
       style: style(fg: :white),
       block: block(title, state.focus == :transcript)
     }
@@ -356,11 +359,11 @@ defmodule Alto.TUI.View do
   def transcript_bottom_scroll(state) do
     {width, height} = state.dimensions
     transcript = layout(state, width, height).transcript
-    inner_width = max(transcript.width - 2, 1)
-    inner_height = max(transcript.height - 2, 1)
-
-    Alto.TUI.Viewport.bottom(transcript_text(state), inner_width, inner_height)
+    transcript_bottom(transcript_text(state), transcript)
   end
+
+  defp transcript_bottom(text, rect),
+    do: Alto.TUI.Viewport.bottom(text, max(rect.width - 2, 1), max(rect.height - 2, 1))
 
   defp transcript_text(state) do
     case State.visible_entries(state) do
@@ -374,12 +377,6 @@ defmodule Alto.TUI.View do
         Alto.TUI.Transcript.render(entries, max(rect.width - 2, 1))
     end
   end
-
-  defp transcript_scroll(%{transcript_follow?: true} = state),
-    do: transcript_bottom_scroll(state)
-
-  defp transcript_scroll(state),
-    do: min(state.transcript_scroll, transcript_bottom_scroll(state))
 
   @doc "Largest useful context offset, including the approval button rows."
   def details_bottom_scroll(state) do
@@ -396,6 +393,7 @@ defmodule Alto.TUI.View do
 
   defp details_widget(state, details) do
     {title, text} = details_content(state, details.presentation)
+    bottom = Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
 
     title =
       if details.presentation == :drawer,
@@ -405,7 +403,7 @@ defmodule Alto.TUI.View do
     %Paragraph{
       text: text,
       wrap: true,
-      scroll: {min(state.details_scroll, details_bottom_scroll(state)), 0},
+      scroll: {min(state.details_scroll, bottom), 0},
       style: style(fg: :gray, bg: @panel),
       block: block(title, state.focus == :details)
     }
@@ -805,15 +803,15 @@ defmodule Alto.TUI.View do
   defp compact(n), do: Integer.to_string(n)
 
   defp context_consumption(state, usage) do
-    case Alto.TUI.Backend.ui(state, :context_window) do
-      :pass -> native_context_consumption(state, usage)
-      context -> context_percent(usage, context)
-    end
-  end
-
-  defp native_context_consumption(state, usage) do
     model = State.model_metadata(state) || %{}
-    context_percent(usage, model[:context_length] || model["context_length"])
+
+    context =
+      case Alto.TUI.Backend.ui(state, :context_window) do
+        :pass -> model[:context_length] || model["context_length"]
+        value -> value
+      end
+
+    context_percent(usage, usage.context_window || context)
   end
 
   defp context_percent(usage, context) when is_integer(context) and context > 0 do

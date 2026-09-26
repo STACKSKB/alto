@@ -40,7 +40,7 @@ defmodule Alto.Tools.CodexAgent do
   def prepare(_, _, _), do: {:error, :invalid_agent_task}
 
   @impl true
-  def run_prepared(%{task: task, model: model}, context, opts) do
+  def run(%{task: task, model: model}, context, opts) do
     with_client(context, opts, fn client, guardian ->
       with :ok <- Client.subscribe(client),
            {:ok, turn} <-
@@ -67,26 +67,7 @@ defmodule Alto.Tools.CodexAgent do
 
   @doc false
   def models(context, opts),
-    do: with_client(context, opts, fn client, _ -> models(client, nil, [], 100) end)
-
-  defp models(_client, _cursor, _entries, 0), do: {:error, :codex_model_page_limit}
-
-  defp models(client, cursor, entries, remaining) do
-    with {:ok, %{"data" => models} = result} <-
-           Client.request(client, "model/list", %{
-             "limit" => 100,
-             "cursor" => cursor,
-             "includeHidden" => false
-           }) do
-      entries =
-        entries ++ Enum.map(models, &%{id: &1["model"] || &1["id"], name: &1["displayName"]})
-
-      case result["nextCursor"] do
-        nil -> {:ok, entries}
-        next -> models(client, next, entries, remaining - 1)
-      end
-    end
-  end
+    do: with_client(context, opts, fn client, _ -> Backend.models(client) end)
 
   defp with_client(context, opts, fun) do
     client_opts =

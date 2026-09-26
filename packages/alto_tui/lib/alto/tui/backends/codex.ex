@@ -31,7 +31,6 @@ defmodule Alto.TUI.Backends.Codex do
       account: nil,
       models: [],
       rate_limits: nil,
-      context_window: nil,
       history_loading: MapSet.new(),
       pending_messages: []
     }
@@ -45,7 +44,6 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   def ui(:provider_label, state, _options), do: CodexBackend.account_label(data(state).account)
-  def ui(:context_window, state, _options), do: data(state).context_window
 
   def ui(:quota_label, state, _options) do
     case CodexBackend.primary_rate_limit(data(state).rate_limits) do
@@ -69,7 +67,6 @@ defmodule Alto.TUI.Backends.Codex do
 
   def ui({:message, message}, state, _options), do: handle_info(message, state)
   def ui({:submit, prompt}, state, _options), do: submit_codex(state, prompt)
-  def ui(:model, state, _options), do: backend_model(state)
   def ui(:selected, state, _options), do: ensure_codex(state, true)
 
   def ui(:prepare, state, _options) do
@@ -207,12 +204,8 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp handle_info({:codex_history_loaded, task_id, result}, state) do
-    codex = %{
-      data(state)
-      | history_loading: MapSet.delete(data(state).history_loading, task_id)
-    }
-
-    state = put_data(state, codex)
+    state =
+      update_in(state.backend_state[__MODULE__].history_loading, &MapSet.delete(&1, task_id))
 
     case result do
       {:ok, entries} ->
@@ -234,7 +227,6 @@ defmodule Alto.TUI.Backends.Codex do
           Host.update_run(state, local_id,
             thread_id: thread_id,
             turn_id: turn_id,
-            status: :running,
             phase: "waiting for model"
           )
 
@@ -244,8 +236,8 @@ defmodule Alto.TUI.Backends.Codex do
         state = %{state | notice: "Codex working…"}
         {:noreply, replay_codex_messages(state, run)}
 
-      {run, {:error, reason}} ->
-        {:noreply, fail_codex_start(state, local_id, run, reason)}
+      {_run, {:error, reason}} ->
+        {:noreply, fail_codex_start(state, local_id, reason)}
     end
   end
 
@@ -315,7 +307,6 @@ defmodule Alto.TUI.Backends.Codex do
       task_id: task["id"],
       thread_id: task["conversation_id"],
       turn_id: nil,
-      status: :starting,
       phase: "waiting for Codex connection",
       approval_level: state.approval_level,
       started_at_ms: System.system_time(:millisecond)
@@ -344,10 +335,7 @@ defmodule Alto.TUI.Backends.Codex do
         send(owner, {:codex_history_loaded, task_id, CodexBackend.history(client, thread_id)})
       end)
 
-      put_in(
-        state.backend_state[__MODULE__].history_loading,
-        MapSet.put(data(state).history_loading, task_id)
-      )
+      update_in(state.backend_state[__MODULE__].history_loading, &MapSet.put(&1, task_id))
     else
       state
     end
@@ -499,7 +487,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp codex_error_overlay(state, reason) do
-    message = reason |> Host.human_error() |> Host.redact_secrets() |> String.slice(0, 500)
+    message = reason |> Host.human_error() |> String.slice(0, 500)
 
     items =
       [
@@ -572,7 +560,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp maybe_buffer_codex_event(state, method, params) do
-    if Enum.any?(state.runs, fn {_id, run} -> run.kind == :codex and run.status == :starting end) do
+    if Enum.any?(state.runs, fn {_id, run} -> run.kind == :codex and is_nil(run.turn_id) end) do
       buffer_codex_message(state, {:notification, method, params})
     else
       state
@@ -636,12 +624,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
-    state
-    |> State.put_usage(run.task_id, Alto.Usage.from_codex(usage))
-    |> put_in(
-      [Access.key!(:backend_state), Access.key!(__MODULE__), Access.key!(:context_window)],
-      usage["modelContextWindow"]
-    )
+    State.put_usage(state, run.task_id, Alto.Usage.from_codex(usage))
   end
 
   defp apply_codex_run_event(state, run, "item/started", %{"item" => item}) do
@@ -684,7 +667,19 @@ defmodule Alto.TUI.Backends.Codex do
   defp apply_codex_run_event(state, run, "turn/completed", %{"turn" => turn}) do
     status = Map.get(turn, "status")
     error = get_in(turn, ["error", "message"])
-    finish_codex_run(state, run, status, error)
+    completed? = status == "completed"
+    catalog_status = if completed?, do: "completed", else: "failed"
+
+    state
+    |> Host.finish_run(run.local_id, catalog_status,
+      entry:
+        if(completed?,
+          do: nil,
+          else: %{kind: :error, text: error || "Codex turn #{status || "failed"}"}
+        ),
+      notice: if(completed?, do: "Codex run completed", else: "Codex run failed")
+    )
+    |> refresh_limits_after_turn()
   end
 
   defp apply_codex_run_event(state, run, "error", params) do
@@ -700,23 +695,6 @@ defmodule Alto.TUI.Backends.Codex do
       else: Host.update_run(state, run, phase: phase)
   end
 
-  defp finish_codex_run(state, run, status, error) do
-    completed? = status == "completed"
-    catalog_status = if completed?, do: "completed", else: "failed"
-
-    state
-    |> Host.finish_run(run.local_id, catalog_status,
-      entry:
-        if(completed?,
-          do: nil,
-          else: %{kind: :error, text: error || "Codex turn #{status || "failed"}"}
-        ),
-      notice: if(completed?, do: "Codex run completed", else: "Codex run failed"),
-      continue?: completed?
-    )
-    |> refresh_limits_after_turn()
-  end
-
   defp refresh_limits_after_turn(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
     async_send(:codex_limits_refreshed, fn -> CodexClient.rate_limits(client) end)
@@ -726,11 +704,10 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_limits_after_turn(state), do: state
 
-  defp fail_codex_start(state, local_id, _run, reason) do
+  defp fail_codex_start(state, local_id, reason) do
     Host.finish_run(state, local_id, "failed",
       entry: %{kind: :error, text: "Codex could not start: #{Host.human_error(reason)}"},
-      notice: "Codex run failed to start",
-      continue?: false
+      notice: "Codex run failed to start"
     )
   end
 
@@ -739,7 +716,7 @@ defmodule Alto.TUI.Backends.Codex do
     case find_codex_run(state, params) do
       nil ->
         if Enum.any?(state.runs, fn {_run_id, run} ->
-             run.kind == :codex and run.status == :starting
+             run.kind == :codex and is_nil(run.turn_id)
            end) do
           buffer_codex_message(state, {:request, id, method, params})
         else

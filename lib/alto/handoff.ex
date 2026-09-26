@@ -4,7 +4,7 @@ defmodule Alto.Handoff do
 
   A handoff is deliberately not a prose summary. It separates the design
   constraints, concrete code pointers, current state, and one next action so a
-  later run can inspect or replace each part independently. Artifacts live with
+  later run can inspect each part independently. Artifacts live with
   the session state rather than in the repository: context management must not
   dirty the user's working tree.
   """
@@ -12,12 +12,7 @@ defmodule Alto.Handoff do
   alias Alto.Session
   alias Alto.AtomicFile
 
-  @files %{
-    design: "the design contract",
-    pointers: "POINTERS.md",
-    handoff: "HANDOFF.md",
-    next_step: "NEXT_STEP.md"
-  }
+  @fields ~w(design pointers handoff next_step)a
 
   @type artifact :: %{
           design: String.t(),
@@ -88,9 +83,9 @@ defmodule Alto.Handoff do
     |> String.trim()
   end
 
-  @doc "Atomically publish all handoff files under the session state directory."
+  @doc "Atomically publish one immutable JSON artifact under the session state directory."
   @spec persist(String.t(), String.t(), artifact(), keyword()) ::
-          {:ok, %{directory: Path.t(), files: %{atom() => Path.t()}}} | {:error, term()}
+          {:ok, Path.t()} | {:error, term()}
   def persist(session_id, run_id, artifact, opts \\ []) do
     with :ok <- Session.validate_id(session_id),
          :ok <- Session.validate_id(run_id),
@@ -102,8 +97,19 @@ defmodule Alto.Handoff do
         end)
         |> Path.expand()
 
-      final_dir = Path.join([root, session_id, run_id])
-      publish(final_dir, artifact)
+      path = Path.join([root, session_id, run_id <> ".json"])
+
+      with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path)),
+           :ok <-
+             Alto.Storage.with_lock(path <> ".lock", fn ->
+               if File.exists?(path),
+                 do: {:error, :handoff_already_exists},
+                 else: AtomicFile.write(path, JSON.encode!(artifact) <> "\n", mode: 0o600)
+             end) do
+        {:ok, path}
+      else
+        {:error, reason} -> {:error, {:handoff_write_failed, reason}}
+      end
     end
   end
 
@@ -115,7 +121,7 @@ defmodule Alto.Handoff do
   end
 
   defp validate_fields(fields) when is_map(fields) do
-    Alto.Result.reduce(@files, %{}, fn {key, _filename}, artifact ->
+    Alto.Result.reduce(@fields, %{}, fn key, artifact ->
       value = Map.get(fields, key, Map.get(fields, Atom.to_string(key)))
 
       if is_binary(value) and value != "" and String.valid?(value) do
@@ -131,48 +137,5 @@ defmodule Alto.Handoff do
   defp validate_rendered_size(artifact, max_bytes) do
     size = byte_size(render(artifact))
     if size <= max_bytes, do: :ok, else: {:error, {:handoff_render_too_large, size, max_bytes}}
-  end
-
-  defp publish(final_dir, artifact) do
-    parent = Path.dirname(final_dir)
-    temp_dir = final_dir <> ".tmp-" <> random_suffix()
-
-    with :ok <- Alto.Storage.ensure_private_dir(parent),
-         :ok <- Alto.Storage.ensure_private_dir(temp_dir),
-         :ok <- write_artifacts(temp_dir, artifact),
-         :ok <- rename_publish(temp_dir, final_dir) do
-      {:ok,
-       %{
-         directory: final_dir,
-         files: Map.new(@files, fn {key, filename} -> {key, Path.join(final_dir, filename)} end)
-       }}
-    else
-      {:error, reason} ->
-        File.rm_rf(temp_dir)
-        {:error, {:handoff_write_failed, reason}}
-    end
-  end
-
-  defp write_artifacts(directory, artifact) do
-    Enum.reduce_while(@files, :ok, fn {key, filename}, :ok ->
-      content = Map.fetch!(artifact, key) <> "\n"
-
-      case AtomicFile.write(Path.join(directory, filename), content, mode: 0o600) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp rename_publish(temp_dir, final_dir) do
-    case File.rename(temp_dir, final_dir) do
-      :ok -> :ok
-      {:error, :eexist} -> {:error, :handoff_already_exists}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp random_suffix do
-    Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
   end
 end

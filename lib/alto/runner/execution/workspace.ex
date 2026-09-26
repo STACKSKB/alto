@@ -13,46 +13,32 @@ defmodule Alto.Runner.Execution.Workspace do
              budget,
              timeout,
              cancel_ref
-           ),
-         {:ok, outcome, worked} <-
-           Alto.Workspaces.use(manager, ready.id, ready.revision, fn workspace ->
-             execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
-           end) do
-      finish(outcome, worked, opts, manager)
-    else
-      {:error, reason, outcome} ->
-        workspace_failure(outcome, nil, reason)
-
-      {:error, reason} ->
-        {:error, {:workspace_failed, reason},
-         %{Alto.Runner.Result.empty() | verdict: :unknown, agent_identity: identity}}
+           ) do
+      Alto.Workspaces.use(manager, ready.id, ready.revision, fn workspace ->
+        execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
+      end)
     end
-  end
-
-  @doc "Reuse an existing worked workspace without preparing or creating it again."
-  def resume(task, opts, manager, id, revision, execute) do
-    Alto.Workspaces.resume(manager, id, revision, fn workspace ->
-      execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
-    end)
-    |> finish_resume(opts, manager)
+    |> finish_work(opts, manager, identity)
   end
 
   @doc "Admit an already validated checkpoint before activating its retained workspace."
   def resume_checkpoint(opts, manager, id, revision, admit, execute) do
     Alto.Workspaces.resume(manager, id, revision, admit, execute)
-    |> finish_resume(opts, manager)
+    |> finish_work(opts, manager, nil)
   end
 
-  defp finish_resume({:ok, outcome, worked}, opts, manager),
+  defp finish_work({:ok, outcome, worked}, opts, manager, _identity),
     do: finish(outcome, worked, opts, manager)
 
-  defp finish_resume({:error, {:checkpoint_admission_failed, _}} = error, _, _), do: error
+  defp finish_work({:error, {:checkpoint_admission_failed, _}} = error, _, _, nil), do: error
 
-  defp finish_resume({:error, reason, outcome}, _, _),
+  defp finish_work({:error, reason, outcome}, _, _, _),
     do: workspace_failure(outcome, nil, reason)
 
-  defp finish_resume({:error, reason}, _, _),
-    do: {:error, {:workspace_failed, reason}, %{Alto.Runner.Result.empty() | verdict: :unknown}}
+  defp finish_work({:error, reason}, _, _, identity),
+    do:
+      {:error, {:workspace_failed, reason},
+       %{Alto.Runner.Result.empty() | verdict: :unknown, agent_identity: identity}}
 
   defp finish({:error, :approval_suspended, _} = outcome, worked, _opts, _manager),
     do: attach_workspace(outcome, worked)

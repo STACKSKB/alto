@@ -24,7 +24,7 @@ defmodule Alto.Tools.EditFile do
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
-    limits = validate_options!(opts)
+    limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
     edit = %{
       type: "object",
@@ -64,22 +64,16 @@ defmodule Alto.Tools.EditFile do
 
   def prepare(arguments, %Context{} = context, opts)
       when is_map(arguments) and is_list(opts) do
-    with {:ok, limits} <- validate_options(opts),
+    with {:ok, limits} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_edit_options),
          do: prepare_edit(arguments, context, limits)
   end
 
   def prepare(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   @impl true
-  def run_prepared(prepared, %Context{} = context, _opts \\ []),
+  def run(prepared, %Context{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
-
-  @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
-    with {:ok, prepared, _details} <- prepare(arguments, context, opts) do
-      run_prepared(prepared, context, opts)
-    end
-  end
 
   defp prepare_edit(arguments, %Context{} = context, limits) when is_map(arguments) do
     path = Map.get(arguments, "path")
@@ -227,9 +221,4 @@ defmodule Alto.Tools.EditFile do
       {:ok, Enum.reverse([tail | chunks])}
     end
   end
-
-  defp validate_options(opts),
-    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_edit_options)
-
-  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

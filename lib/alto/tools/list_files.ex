@@ -10,7 +10,7 @@ defmodule Alto.Tools.ListFiles do
 
   @impl true
   def schema(opts \\ []) when is_list(opts) do
-    limits = validate_options!(opts)
+    limits = Alto.Tool.Options.validate!(opts, @options_schema)
 
     Alto.Tool.object_schema(
       "List one directory inside the workspace (non-recursive and bounded).",
@@ -28,7 +28,8 @@ defmodule Alto.Tools.ListFiles do
   def run(arguments, %Context{} = context, opts \\ []) do
     path = Map.get(arguments, "path", ".")
 
-    with {:ok, limits} <- validate_options(opts),
+    with {:ok, limits} <-
+           Alto.Tool.Options.validate(opts, @options_schema, :invalid_list_files_options),
          {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, names} <- File.ls(resolved) do
       sorted = Enum.sort(names)
@@ -49,9 +50,4 @@ defmodule Alto.Tools.ListFiles do
       {:error, _reason} -> :unknown
     end
   end
-
-  defp validate_options(opts),
-    do: Alto.Tool.Options.validate(opts, @options_schema, :invalid_list_files_options)
-
-  defp validate_options!(opts), do: Map.new(NimbleOptions.validate!(opts, @options_schema))
 end

@@ -325,7 +325,6 @@ defmodule Alto.ConsumerTest do
     {:ok, _} = Queue.put(q, "customer-42", %{version: 1})
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
     assert_receive {:context, context}
-    assert context.key == context.operation_key
     assert context.operation_key =~ "business-generation:gen-"
     refute context.operation_key == "customer-42"
   end

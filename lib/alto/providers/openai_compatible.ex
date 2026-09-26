@@ -17,7 +17,6 @@ defmodule Alto.Providers.OpenAICompatible do
   @config_schema HTTPOptions.stream_schema()
   @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
                    [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
-  @models_state_key :alto_openai_compatible_models
 
   @impl true
   def describe(opts) do
@@ -35,7 +34,14 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, status, state} <- models_request(config) do
+         {:ok, status, state} <-
+           StreamEnvelope.request(
+             config,
+             config.headers,
+             [method: :get, params: config.query],
+             %{chunks: [], bytes: 0, error: nil, limit: config.max_response_bytes},
+             &consume_models_chunk/3
+           ) do
       models_result(status, state)
     end
   rescue
@@ -112,11 +118,7 @@ defmodule Alto.Providers.OpenAICompatible do
 
           true ->
             text =
-              content.blocks
-              |> Enum.flat_map(fn
-                %{"type" => "text", "text" => text} -> [text]
-                %{"type" => "image"} -> []
-              end)
+              for(%{"type" => "text", "text" => text} <- content.blocks, do: text)
               |> Enum.join("\n")
               |> append_attachment_marker(message["tool_call_id"], images)
 
@@ -175,28 +177,6 @@ defmodule Alto.Providers.OpenAICompatible do
     }
   end
 
-  defp models_request(config) do
-    state = %{chunks: [], bytes: 0, error: nil, limit: config.max_response_bytes}
-
-    into = fn {:data, data}, {req, response} ->
-      current = Req.Response.get_private(response, @models_state_key, state)
-      next = consume_models_chunk(current, response.status, data)
-      response = Req.Response.put_private(response, @models_state_key, next)
-
-      if next.error, do: {:halt, {req, response}}, else: {:cont, {req, response}}
-    end
-
-    case Req.get(
-           HTTPOptions.request_options(config, config.headers, params: config.query, into: into)
-         ) do
-      {:ok, response} ->
-        {:ok, response.status, Req.Response.get_private(response, @models_state_key, state)}
-
-      {:error, error} ->
-        {:error, {:transport_error, error}}
-    end
-  end
-
   defp models_result(status, state) when status in 200..299 do
     with nil <- state.error,
          body <- state.chunks |> Enum.reverse() |> IO.iodata_to_binary(),
@@ -235,26 +215,16 @@ defmodule Alto.Providers.OpenAICompatible do
         normalized = %{
           id: id,
           name: string_value(model["name"], id),
-          supported_parameters: string_list(model["supported_parameters"])
+          supported_parameters: string_list(model["supported_parameters"]),
+          reasoning: if(is_map(model["reasoning"]), do: model["reasoning"]),
+          efforts:
+            if(is_list(model["supported_reasoning_efforts"]),
+              do: model["supported_reasoning_efforts"]
+            ),
+          context_length: positive_value(model["context_length"])
         }
 
-        normalized =
-          if is_map(model["reasoning"]),
-            do: Map.put(normalized, :reasoning, model["reasoning"]),
-            else: normalized
-
-        normalized =
-          if is_list(model["supported_reasoning_efforts"]),
-            do: Map.put(normalized, :efforts, model["supported_reasoning_efforts"]),
-            else: normalized
-
-        normalized =
-          case positive_value(model["context_length"]) do
-            nil -> normalized
-            context_length -> Map.put(normalized, :context_length, context_length)
-          end
-
-        [normalized]
+        [Map.reject(normalized, fn {_key, value} -> is_nil(value) end)]
 
       _other ->
         []

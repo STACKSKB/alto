@@ -27,27 +27,36 @@ defmodule Alto.Context.EstimatorTest do
     assert estimator.(input) == expected
   end
 
-  test "works directly as a Window estimator and keeps provider usage separate" do
+  test "Window applies tokenizer estimates at the input budget boundary" do
     policy =
       Alto.Context.Window.new(
-        max_tokens: 100,
+        max_tokens: 34,
         reserve_output: 10,
         estimator: Estimator.new(tokenizer: fn _text -> 20 end, provider_overhead: 4)
       )
 
     assert {:ok, budget} =
-             Alto.Context.Window.check(
+             Alto.Context.Policy.check(
                policy,
                %{messages: [%{"role" => "user", "content" => "hello"}], tools: []},
                %{context_window: 100}
              )
 
-    assert budget.input_tokens == 90
+    assert budget.input_tokens == 24
+
+    assert {:error, {:context_limit, %{input_upper_bound: 44, budget: 24}}} =
+             Alto.Context.Policy.check(
+               policy,
+               %{messages: [%{"content" => "hello"}, %{"content" => "again"}], tools: []},
+               %{context_window: 100}
+             )
   end
 
   test "rejects tokenizer results that cannot form a bound" do
+    estimator = Estimator.new(tokenizer: fn _ -> :unknown end)
+
     assert_raise ArgumentError, ~r/tokenizer must return a non-negative integer/, fn ->
-      Estimator.estimate(%{messages: [%{"x" => 1}], tools: []}, tokenizer: fn _ -> :unknown end)
+      estimator.(%{messages: [%{"x" => 1}], tools: []})
     end
   end
 end

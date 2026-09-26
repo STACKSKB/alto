@@ -4,8 +4,7 @@ defmodule Alto.DurableLog do
   @doc "Open a private durable log before replay, under the caller's storage lock."
   def open(dir, path) do
     with :ok <- Alto.Storage.ensure_private_dir(dir, owned: true),
-         :ok <- Alto.Storage.ensure_private_file(path),
-         do: ensure(path)
+         do: Alto.Storage.ensure_private_file(path)
   end
 
   @doc "Replay validated lines and repair a torn tail only after the domain decoder succeeds."
@@ -27,11 +26,6 @@ defmodule Alto.DurableLog do
       {:error, reason} ->
         {:read_error, reason}
     end
-  end
-
-  @doc false
-  def ensure(path) do
-    if File.exists?(path), do: :ok, else: append(path, "")
   end
 
   @doc false

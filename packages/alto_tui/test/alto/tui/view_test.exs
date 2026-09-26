@@ -122,6 +122,27 @@ defmodule Alto.TUI.ViewTest do
     assert TextForm.click(state.overlay, rects["  [ Cancel ]"].y - popup_y - 1) == :cancel
   end
 
+  test "context percentage uses the selected task's usage limit" do
+    state = %{base_state(%{}) | overlay: nil}
+
+    state =
+      Enum.reduce([{"first", 100_000}, {"second", 200_000}], state, fn {task, limit}, state ->
+        State.put_usage(state, task, %Alto.Usage{last_input_tokens: 1_000, context_window: limit})
+      end)
+
+    for {task, expected} <- [{"first", "1.0%"}, {"second", "0.5%"}, {"restored", "—"}] do
+      state = %{state | selected_task_id: task}
+      layout = View.layout(state, 120, 36)
+
+      {status, _} =
+        Enum.find(View.widgets(state, frame()), fn {widget, rect} ->
+          rect == layout.status and match?(%Paragraph{}, widget)
+        end)
+
+      assert status.text =~ "ctx #{expected}"
+    end
+  end
+
   defp base_state(overlay) do
     kind = Map.get(overlay, :kind, :provider_form)
     provider? = kind == :provider_form

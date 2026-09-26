@@ -257,18 +257,6 @@ defmodule Alto.Examples.RepositoryMaintenanceTest do
     assert File.exists?(Path.join(checkout, "README.md"))
   end
 
-  test "bounded report reads reject oversized input before decoding" do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-maintenance-report-#{System.unique_integer([:positive])}.json"
-      )
-
-    on_exit(fn -> File.rm(path) end)
-    File.write!(path, String.duplicate("x", 64_001))
-    assert {:error, :file_too_large} = RepositoryMaintenance.Workflow.read_bounded(path, 64_000)
-  end
-
   test "state symlinks into the repository are rejected" do
     repo =
       Path.join(

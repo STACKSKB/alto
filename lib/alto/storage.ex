@@ -1,6 +1,12 @@
 defmodule Alto.Storage do
   @moduledoc false
 
+  @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+
+  def valid_id?(id), do: is_binary(id) and Regex.match?(@id_pattern, id)
+  def dir(name, nil), do: Path.join([state_home(), "alto", name])
+  def dir(_name, path) when is_binary(path), do: path
+
   @doc "Resolve the storage root; callers may override their own directory explicitly."
   def state_home do
     case System.get_env("ALTO_STATE_HOME") do

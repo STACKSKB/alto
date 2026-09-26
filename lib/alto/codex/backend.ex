@@ -35,14 +35,25 @@ defmodule Alto.Codex.Backend do
 
   @doc "Fetch model and quota information after ChatGPT authentication."
   def refresh(client) do
-    with {:ok, model_result} <- Client.models(client),
+    with {:ok, models} <- models(client),
          {:ok, limits} <- Client.rate_limits(client) do
-      models =
-        model_result
-        |> Map.get("data", [])
-        |> Enum.map(&normalize_model/1)
-
       {:ok, %{models: models, rate_limits: limits}}
+    end
+  end
+
+  @doc "Read the bounded, paginated model catalog for UI and delegated agents."
+  def models(client), do: model_pages(client, nil, [], 100)
+
+  defp model_pages(_client, _cursor, _pages, 0), do: {:error, :codex_model_page_limit}
+
+  defp model_pages(client, cursor, pages, remaining) do
+    with {:ok, %{"data" => models} = result} <- Client.models(client, cursor) do
+      pages = [Enum.map(models, &normalize_model/1) | pages]
+
+      case result["nextCursor"] do
+        nil -> {:ok, pages |> Enum.reverse() |> List.flatten()}
+        next -> model_pages(client, next, pages, remaining - 1)
+      end
     end
   end
 
@@ -124,20 +135,15 @@ defmodule Alto.Codex.Backend do
   def sandbox_policy(:read_only), do: %{"type" => "readOnly", "networkAccess" => false}
   def sandbox_policy(:full_access), do: %{"type" => "dangerFullAccess"}
 
-  defp ensure_thread(client, thread_id, cwd, model, approval) when is_binary(thread_id) do
-    params = thread_params(cwd, model, approval) |> Map.put("threadId", thread_id)
+  defp ensure_thread(client, thread_id, cwd, model, approval) do
+    params = thread_params(cwd, model, approval)
 
-    case Client.resume_thread(client, params) do
-      {:ok, result} -> extract_thread_id(result)
-      {:error, reason} -> {:error, reason}
-    end
-  end
+    result =
+      if is_binary(thread_id),
+        do: Client.resume_thread(client, Map.put(params, "threadId", thread_id)),
+        else: Client.start_thread(client, params)
 
-  defp ensure_thread(client, _thread_id, cwd, model, approval) do
-    case Client.start_thread(client, thread_params(cwd, model, approval)) do
-      {:ok, result} -> extract_thread_id(result)
-      {:error, reason} -> {:error, reason}
-    end
+    with {:ok, result} <- result, do: extract_thread_id(result)
   end
 
   defp thread_params(cwd, model, approval) do

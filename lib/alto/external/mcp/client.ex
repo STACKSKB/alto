@@ -162,6 +162,7 @@ defmodule Alto.External.MCP.Client do
              ) do
         Alto.Command.open(prepared,
           env: Keyword.fetch!(opts, :env),
+          line: Keyword.fetch!(opts, :max_message_bytes),
           startup_timeout: Keyword.fetch!(opts, :startup_timeout)
         )
       end
@@ -204,17 +205,17 @@ defmodule Alto.External.MCP.Client do
           {:ok, JSONRPC.ready(state)}
 
         {:error, reason} ->
-          {:error, reason, JSONRPC.fail_waiters(state, reason)}
+          {:error, reason, state}
       end
     else
       reason = {:mcp_initialize_protocol_mismatch, expected, result["protocolVersion"]}
-      {:error, {:mcp_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
+      {:error, {:mcp_initialize_failed, reason}, state}
     end
   end
 
   defp settle_response(:initialize, message, state) do
     reason = response_error(message)
-    {:error, {:mcp_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
+    {:error, {:mcp_initialize_failed, reason}, state}
   end
 
   defp settle_response({:list_tools, from}, %{"result" => %{"tools" => tools}}, state)

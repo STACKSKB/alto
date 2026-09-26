@@ -12,7 +12,7 @@ defmodule Alto.Tools.SpawnAgents do
         agents: %{
           type: "array",
           minItems: 1,
-          maxItems: 64,
+          maxItems: Keyword.get(opts, :max_children, 64),
           items: %{
             type: "object",
             additionalProperties: false,
@@ -49,5 +49,5 @@ defmodule Alto.Tools.SpawnAgents do
   defp request(_), do: {:error, :invalid_agent_request}
 
   @impl true
-  def run_prepared(_, _, _), do: {:error, :delegation_requires_execution_host}
+  def run(_, _, _), do: {:error, :delegation_requires_execution_host}
 end

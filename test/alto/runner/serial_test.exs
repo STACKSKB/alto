@@ -200,7 +200,7 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def run_prepared(prepared, _context, opts) do
+    def run(prepared, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:prepared_executed, prepared})
       {:ok, %{echo: prepared.value}}
     end
@@ -225,8 +225,8 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def run_prepared(_prepared, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), :forbidden_run_prepared)
+    def run(_prepared, _context, opts) do
+      send(Keyword.fetch!(opts, :test_pid), :forbidden_run)
       {:ok, %{echo: "unreachable"}}
     end
   end
@@ -250,42 +250,20 @@ defmodule Alto.Runner.SerialTest do
     end
 
     @impl true
-    def run_prepared(_prepared, _context, opts) do
-      send(Keyword.fetch!(opts, :test_pid), :forbidden_run_prepared)
+    def run(_prepared, _context, opts) do
+      send(Keyword.fetch!(opts, :test_pid), :forbidden_run)
       {:ok, %{echo: "unreachable"}}
     end
   end
 
-  defmodule OnlyPrepareTool do
-    @behaviour Alto.Tool
-
-    @impl true
+  defmodule MissingRunTool do
     def name(_opts), do: :echo
 
-    @impl true
     def schema(_opts), do: EchoTool.schema([])
 
-    @impl true
     def execution_mode(_opts), do: :parallel
 
-    @impl true
     def prepare(_arguments, _context, _opts), do: {:ok, %{}, %{}}
-  end
-
-  defmodule OnlyRunPreparedTool do
-    @behaviour Alto.Tool
-
-    @impl true
-    def name(_opts), do: :echo
-
-    @impl true
-    def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def run_prepared(_prepared, _context, _opts), do: {:ok, %{echo: "unreachable"}}
   end
 
   test "executes one model/tool/model cycle in strict order" do
@@ -521,7 +499,7 @@ defmodule Alto.Runner.SerialTest do
       assert_prepare_failure(result, expected_failure)
       refute_receive {:approval_decision, _request}
       refute_receive {:event, %Event{type: :approval_requested}}
-      refute_receive :forbidden_run_prepared
+      refute_receive :forbidden_run
     end
   end
 
@@ -627,19 +605,17 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:DOWN, ^monitor, :process, ^prepare_pid, _reason}
   end
 
-  test "tools implementing only one callback of a prepare/run_prepared pair are rejected" do
+  test "tools without a run callback are rejected" do
     parent = self()
 
-    for module <- [OnlyPrepareTool, OnlyRunPreparedTool] do
-      assert {:error, {:incomplete_tool_preparation_callbacks, ^module}, result} =
-               Alto.run("construct",
-                 provider: {ToolThenAnswerProvider, test_pid: parent},
-                 tools: [module]
-               )
+    assert {:error, {:invalid_tool, MissingRunTool}, result} =
+             Alto.run("construct",
+               provider: {ToolThenAnswerProvider, test_pid: parent},
+               tools: [MissingRunTool]
+             )
 
-      assert result.model_requests == 0
-      assert result.events == []
-    end
+    assert result.model_requests == 0
+    assert result.events == []
 
     refute_receive {:provider_request, _request}
   end
@@ -675,7 +651,8 @@ defmodule Alto.Runner.SerialTest do
              )
 
     assert result.output == "finished"
-    assert enum_has_tool_failure?(result, "encoding_error")
+    reply = Enum.find(result.messages, &(&1["role"] == "tool"))
+    assert JSON.decode!(reply["content"]) == %{"value" => "x"}
   end
 
   test ":auto project instructions reach the system prompt from the workspace" do

@@ -1,26 +1,24 @@
 defmodule Alto.Context.WindowTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Context.Window
+  alias Alto.Context.{Policy, Window}
 
-  test "caps the requested window at the model limit and reserves output" do
-    policy = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
+  test "admission applies the smaller model or user cap before reserving output" do
+    policy =
+      Window.new(max_tokens: 200_000, reserve_output: 16_000, estimator: fn _ -> 120_000 end)
 
-    assert Window.resolve(policy, 128_000) == %{
-             context_window: 128_000,
-             input_tokens: 112_000,
-             reserve_output: 16_000
-           }
-  end
+    request = %{messages: [], tools: []}
 
-  test "uses a lower user cap when the model supports more" do
-    policy = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
+    assert {:error, {:context_limit, %{input_upper_bound: 120_000, budget: 112_000}}} =
+             Policy.check(policy, request, %{context_window: 128_000})
 
-    assert Window.resolve(policy, 1_000_000).context_window == 200_000
+    assert {:ok, %{context_window: 200_000, input_tokens: 184_000, reserve_output: 16_000}} =
+             Policy.check(policy, request, %{context_window: 1_000_000})
   end
 
   test "observed prefix counts prevent premature compaction but edits invalidate the observation" do
-    policy = Window.new(max_tokens: 1100, compact_at: 0.75, usage_estimation: true)
+    options = [max_tokens: 1100, compact_at: 0.75]
+    policy = Window.new(options ++ [usage_estimation: true])
 
     messages = [
       %{"role" => "system", "content" => String.duplicate("static ", 100)},
@@ -31,21 +29,21 @@ defmodule Alto.Context.WindowTest do
     observation = %{messages: messages, tools: tools, input_tokens: 200}
     suffix = %{"role" => "assistant", "content" => String.duplicate("word ", 30)}
     request = %{messages: messages ++ [suffix], tools: tools, context_observation: observation}
-    assert {:ok, budget} = Window.check(policy, request, %{})
+    assert {:ok, budget} = Policy.check(policy, request, %{})
     refute Map.get(budget, :pressure, false)
 
     assert {:ok, %{pressure: true}} =
-             Window.check(%{policy | usage_estimation: false}, request, %{})
+             Policy.check(Window.new(options), request, %{})
 
     assert {:ok, %{pressure: true}} =
-             Window.check(
+             Policy.check(
                policy,
                %{request | tools: tools ++ [%{"function" => %{"name" => "edit"}}]},
                %{}
              )
 
     assert {:ok, %{pressure: true}} =
-             Window.check(
+             Policy.check(
                policy,
                %{
                  request

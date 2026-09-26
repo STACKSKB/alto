@@ -27,45 +27,48 @@ defmodule Alto.Codex.AppServer.Client do
   @doc "Receive App Server notifications and server requests in the calling process."
   @spec subscribe(pid(), pid()) :: :ok | {:error, term()}
   def subscribe(client, subscriber \\ self()) when is_pid(subscriber) do
-    GenServer.call(client, {:subscribe, subscriber})
-  catch
-    :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
+    call(client, {:subscribe, subscriber})
   end
 
   @doc "Issue a supported App Server JSON-RPC request."
   @spec request(pid(), String.t(), map(), timeout()) :: {:ok, map()} | {:error, term()}
   def request(client, method, params \\ %{}, timeout \\ @default_turn_timeout)
       when is_binary(method) and is_map(params) do
-    GenServer.call(
+    call(
       client,
       {:request, method, params, JSONRPC.deadline(timeout)},
       JSONRPC.call_timeout(timeout)
     )
-  catch
-    :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
   end
 
   @doc "Reply to a server-initiated request such as an approval prompt."
   @spec respond(pid(), String.t() | integer(), map()) :: :ok | {:error, term()}
   def respond(client, id, result) when (is_binary(id) or is_integer(id)) and is_map(result) do
-    GenServer.call(client, {:respond, id, result})
-  catch
-    :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
+    call(client, {:respond, id, result})
   end
 
   @doc "Reject a server-initiated request that Alto cannot safely service."
   @spec reject(pid(), String.t() | integer(), integer(), String.t()) :: :ok | {:error, term()}
   def reject(client, id, code \\ -32601, message \\ "unsupported by Alto")
       when (is_binary(id) or is_integer(id)) and is_integer(code) and is_binary(message) do
-    GenServer.call(client, {:reject, id, code, message})
+    call(client, {:reject, id, code, message})
+  end
+
+  defp call(client, message, timeout \\ 5_000) do
+    GenServer.call(client, message, timeout)
   catch
     :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
   end
 
   def account(client), do: request(client, "account/read", %{"refreshToken" => false})
 
-  def models(client),
-    do: request(client, "model/list", %{"limit" => 100, "includeHidden" => false})
+  def models(client, cursor \\ nil),
+    do:
+      request(client, "model/list", %{
+        "limit" => 100,
+        "includeHidden" => false,
+        "cursor" => cursor
+      })
 
   def rate_limits(client), do: request(client, "account/rateLimits/read")
 
@@ -225,6 +228,7 @@ defmodule Alto.Codex.AppServer.Client do
     case ExternalProcess.open(command, Keyword.fetch!(opts, :args),
            cwd: Keyword.fetch!(opts, :cwd),
            env: Keyword.fetch!(opts, :env),
+           line: Keyword.fetch!(opts, :max_message_bytes),
            startup_timeout: Keyword.fetch!(opts, :startup_timeout)
          ) do
       {:ok, _process} = ok -> ok
@@ -281,18 +285,18 @@ defmodule Alto.Codex.AppServer.Client do
         {:ok, JSONRPC.ready(state)}
 
       {:error, reason} ->
-        {:error, reason, JSONRPC.fail_waiters(state, reason)}
+        {:error, reason, state}
     end
   end
 
   defp settle_response(:initialize, %{"result" => result}, state) do
     reason = {:invalid_codex_app_server_initialize_result, result}
-    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, state}
   end
 
   defp settle_response(:initialize, message, state) do
     reason = response_error(message)
-    {:error, {:codex_app_server_initialize_failed, reason}, JSONRPC.fail_waiters(state, reason)}
+    {:error, {:codex_app_server_initialize_failed, reason}, state}
   end
 
   defp settle_response({:request, from, _method}, %{"result" => result}, state) do

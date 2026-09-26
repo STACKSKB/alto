@@ -45,7 +45,8 @@ defmodule Alto.ProtocolTest do
       durable = Event.durable(:tool_completed, %{call_id: "call-1", name: "echo"})
       live = Event.live(:model_delta, %{text: "he"})
 
-      assert {:ok, line} = Protocol.event("s-2", "run-41", 7, durable, @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.notification("s-2", {:event, "run-41", 7, durable}, @max_line_bytes)
 
       assert %{
                "type" => "event",
@@ -62,7 +63,9 @@ defmodule Alto.ProtocolTest do
 
       assert is_integer(at_ms)
 
-      assert {:ok, line} = Protocol.event("s-3", "run-41", nil, live, @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.notification("s-3", {:event, "run-41", nil, live}, @max_line_bytes)
+
       assert %{"seq" => nil, "domain" => "live"} = envelope = decode_line(line)
       assert envelope["event"]["type"] == "model_delta"
     end
@@ -73,7 +76,12 @@ defmodule Alto.ProtocolTest do
         {2, Event.durable(:step_settled, %{step: 1, outcome: :completed})}
       ]
 
-      assert {:ok, line} = Protocol.attached("c-3", "run-41", false, 2, replay, @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.notification(
+                 "c-3",
+                 {:attached, "run-41", false, 2, replay},
+                 @max_line_bytes
+               )
 
       assert %{
                "type" => "attached",
@@ -99,7 +107,13 @@ defmodule Alto.ProtocolTest do
         details: %{backend: :unsandboxed, isolation: :none}
       }
 
-      assert {:ok, line} = Protocol.approval_request("s-5", "run-41", request, @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.envelope(
+                 "approval_request",
+                 "s-5",
+                 %{run_id: "run-41", request: request},
+                 @max_line_bytes
+               )
 
       assert %{
                "type" => "approval_request",
@@ -115,11 +129,10 @@ defmodule Alto.ProtocolTest do
              } = decode_line(line)
 
       assert {:ok, line} =
-               Protocol.approval_resolved(
+               Protocol.envelope(
+                 "approval_resolved",
                  "s-6",
-                 "run-41",
-                 request,
-                 {:denied, :user},
+                 %{run_id: "run-41", request: request, decision: {:denied, :user}},
                  @max_line_bytes
                )
 
@@ -128,7 +141,12 @@ defmodule Alto.ProtocolTest do
     end
 
     test "result covers all three outcomes and omits a nil output" do
-      assert {:ok, line} = Protocol.result("s-9", "run-41", :ok, "finished", 3, @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.notification(
+                 "s-9",
+                 {:result, "run-41", :ok, "finished", 3},
+                 @max_line_bytes
+               )
 
       assert decode_line(line) == %{
                "v" => 1,
@@ -141,7 +159,11 @@ defmodule Alto.ProtocolTest do
              }
 
       assert {:ok, line} =
-               Protocol.result("s-10", "run-41", {:error, :loop_stalled}, nil, 1, @max_line_bytes)
+               Protocol.notification(
+                 "s-10",
+                 {:result, "run-41", {:error, :loop_stalled}, nil, 1},
+                 @max_line_bytes
+               )
 
       envelope = decode_line(line)
       assert envelope["outcome"] == "error"
@@ -149,20 +171,32 @@ defmodule Alto.ProtocolTest do
       refute Map.has_key?(envelope, "output")
 
       assert {:ok, line} =
-               Protocol.result("s-11", "run-41", {:cancelled, :user}, nil, 2, @max_line_bytes)
+               Protocol.notification(
+                 "s-11",
+                 {:result, "run-41", {:cancelled, :user}, nil, 2},
+                 @max_line_bytes
+               )
 
       assert %{"outcome" => "cancelled", "reason" => "user"} = decode_line(line)
     end
 
     test "error envelopes can omit a client id" do
-      assert {:ok, line} = Protocol.error(nil, "invalid", "no id", @max_line_bytes)
+      assert {:ok, line} =
+               Protocol.envelope(
+                 "error",
+                 nil,
+                 %{code: "invalid", detail: "no id"},
+                 @max_line_bytes
+               )
+
       assert %{"id" => nil} = decode_line(line)
     end
 
     test "an envelope over the line bound overflows instead of truncating" do
       big = Event.durable(:tool_completed, %{output: String.duplicate("x", 2_000_000)})
 
-      assert {:error, :overflow} = Protocol.event("s-2", "run-41", 1, big, @max_line_bytes)
+      assert {:error, :overflow} =
+               Protocol.notification("s-2", {:event, "run-41", 1, big}, @max_line_bytes)
     end
   end
 

@@ -7,10 +7,8 @@ defmodule Alto.Ingress.IdentityHeader do
   def extract(headers, opts) when is_list(headers) and is_list(opts) do
     case Keyword.get(opts, :header, "x-delivery-id") do
       header when is_binary(header) and header != "" and byte_size(header) <= 256 ->
-        values =
-          headers
-          |> Enum.filter(fn {key, _value} -> String.downcase(key) == String.downcase(header) end)
-          |> Enum.map(&elem(&1, 1))
+        header = String.downcase(header)
+        values = for {key, value} <- headers, String.downcase(key) == header, do: value
 
         case values do
           [id] when is_binary(id) and id != "" and byte_size(id) <= @max_identity_bytes ->

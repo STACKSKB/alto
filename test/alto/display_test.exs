@@ -16,7 +16,9 @@ defmodule Alto.DisplayTest do
           {"Bearer opaque", "opaque"},
           {"Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"},
           {"x-api-key: opaque", "opaque"},
-          {"?api_key=opaque", "opaque"}
+          {"?api_key=opaque", "opaque"},
+          {~s|Server said: {"api_key": "opaque", "status": "failed"}|, "opaque"},
+          {~s|Server said: token: "opaque"|, "opaque"}
         ] do
       text = Display.error(secret)
       assert text =~ "[REDACTED]"

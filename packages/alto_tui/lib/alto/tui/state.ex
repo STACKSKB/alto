@@ -113,7 +113,6 @@ defmodule Alto.TUI.State do
         selected_project_id: selected_project["id"],
         selected_task_id: selected_task && selected_task["id"],
         profiles: profiles,
-        models: initial_models(profiles),
         selected_provider_id: profile && profile.id,
         type_to_compose?: Keyword.get(tui_options, :type_to_compose, true),
         narrow_context: Keyword.get(tui_options, :narrow_context, :adaptive),
@@ -162,13 +161,15 @@ defmodule Alto.TUI.State do
   end
 
   @doc "Whether a native task has accepted input waiting for delivery."
-  def input_pending?(%__MODULE__{} = state, task_id) do
+  def input_pending?(%__MODULE__{} = state, task_id), do: pending_input(state, task_id) != []
+
+  defp pending_input(state, task_id) do
     case Map.get(state.inputs, task_id) do
-      nil -> false
-      input -> Alto.Input.list(input) != []
+      nil -> []
+      input -> Alto.Input.list(input)
     end
   catch
-    :exit, _ -> false
+    :exit, _ -> []
   end
 
   def model_metadata(state) do
@@ -176,7 +177,7 @@ defmodule Alto.TUI.State do
       case Alto.TUI.Backend.ui(state, :models) do
         :pass ->
           profile = selected_profile(state)
-          Map.get(state.models, state.selected_provider_id, (profile && profile.models) || [])
+          profile && known_models(state, profile)
 
         models ->
           models
@@ -185,6 +186,9 @@ defmodule Alto.TUI.State do
     if is_list(models),
       do: Enum.find(models, fn model -> (model[:id] || model["id"]) == state.selected_model end)
   end
+
+  @doc "Models already fetched or embedded in a provider profile."
+  def known_models(state, profile), do: Map.get(state.models, profile.id, profile.models)
 
   def effort_choices(state), do: Alto.Reasoning.efforts(model_metadata(state))
 
@@ -290,13 +294,9 @@ defmodule Alto.TUI.State do
   end
 
   @doc "Select a rail row and lazily hydrate its persisted transcript."
-  def select_rail_row(%__MODULE__{} = state, index) when is_integer(index) do
-    case Enum.at(rail_rows(state), index) do
-      %{kind: :project, id: id} -> select_project(state, id)
-      %{kind: :task, id: id} -> select_task(state, id)
-      _ -> state
-    end
-  end
+  def select_rail_row(state, %{kind: :project, id: id}), do: select_project(state, id)
+  def select_rail_row(state, %{kind: :task, id: id}), do: select_task(state, id)
+  def select_rail_row(state, _row), do: state
 
   def select_project(%__MODULE__{} = state, id) do
     case Enum.find(state.projects, &(&1["id"] == id)) do
@@ -378,18 +378,10 @@ defmodule Alto.TUI.State do
   end
 
   defp pending_entries(state) do
-    pending =
-      case Map.get(state.inputs, state.selected_task_id) do
-        nil -> []
-        input -> Alto.Input.list(input)
-      end
-
-    Enum.map(pending, fn entry ->
+    Enum.map(pending_input(state, state.selected_task_id), fn entry ->
       label = if entry.mode == :steer, do: "Steering message: ", else: "Queued message: "
       %{kind: :system, text: label <> entry.text}
     end)
-  catch
-    :exit, _ -> []
   end
 
   def put_entries(%__MODULE__{} = state, task_id, entries),
@@ -671,13 +663,6 @@ defmodule Alto.TUI.State do
     inactive = Enum.reject(cached, &MapSet.member?(keep, &1))
     drop = Enum.take(Enum.sort(inactive), max(length(cached) - @max_cached_tasks, 0))
     %{state | entries: Map.drop(state.entries, drop), usage: Map.drop(state.usage, drop)}
-  end
-
-  defp initial_models(profiles) do
-    Map.new(profiles, fn profile ->
-      {profile.id, if(is_list(profile.models), do: profile.models, else: [])}
-    end)
-    |> Map.reject(fn {_id, models} -> models == [] end)
   end
 
   def sync_backend(state, task) when is_map(task), do: sync_backend(state, task_backend(task))

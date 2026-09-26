@@ -130,7 +130,7 @@ defmodule Alto.Runner.ChildContinuationTest do
       {:ok, %{id: id, value: File.read!(Path.join(context.cwd, "input"))}, %{id: id}}
     end
 
-    def run_prepared(%{id: id, value: value}, context, _opts) do
+    def run(%{id: id, value: value}, context, _opts) do
       if observer = :persistent_term.get({__MODULE__, :observer}, nil) do
         send(observer, {:executing, self()})
 
@@ -354,9 +354,9 @@ defmodule Alto.Runner.ChildContinuationTest do
       )
 
     loop = options[:loop]
-
-    options =
-      Keyword.put(options, :loop, %{loop | subagents: %{loop.subagents | workspaces: manager}})
+    {policy, limits} = loop.subagents
+    loop = %{loop | subagents: {policy, %{limits | workspaces: manager}}}
+    options = Keyword.put(options, :loop, loop)
 
     assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent("one")]}, options)
     {identity, batch} = journal(context, parked)
@@ -408,9 +408,9 @@ defmodule Alto.Runner.ChildContinuationTest do
       )
 
     loop = options[:loop]
-
-    options =
-      Keyword.put(options, :loop, %{loop | subagents: %{loop.subagents | workspaces: manager}})
+    {policy, limits} = loop.subagents
+    loop = %{loop | subagents: {policy, %{limits | workspaces: manager}}}
+    options = Keyword.put(options, :loop, loop)
 
     agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
     assert {:error, {:children_pending, _}, parked} = Alto.run(%{agents: [agent]}, options)

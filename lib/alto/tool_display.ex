@@ -8,15 +8,15 @@ defmodule Alto.ToolDisplay do
   def summary(name, arguments) do
     args = decode(arguments)
     name = to_string(name || "tool")
-    target = first(args, ~w(path file_path pattern query))
+    target = first(args, ~w(path file_path pattern query)a)
 
     parts =
       case name do
         git when git in ["git_inspect", "git_mutate"] ->
-          ["git", get(args, "action"), get(args, "ref"), target, get(args, "branch")]
+          ["git", get(args, :action), get(args, :ref), target, get(args, :branch)]
 
         "run_command" ->
-          [first(args, ~w(program command)) || name | List.wrap(get(args, "args"))]
+          [first(args, ~w(program command)a) || name | List.wrap(get(args, :args))]
 
         _ ->
           [name, target, range(args)]
@@ -30,8 +30,8 @@ defmodule Alto.ToolDisplay do
   end
 
   def entry(type, data) do
-    name = get(data, "name") || "tool"
-    title = get(data, "summary") || summary(name, get(data, "arguments"))
+    name = get(data, :name) || "tool"
+    title = get(data, :summary) || summary(name, get(data, :arguments))
     output = Map.get(data, :value, Map.get(data, "value"))
 
     case to_string(type) do
@@ -39,7 +39,7 @@ defmodule Alto.ToolDisplay do
         %{kind: :tool, text: title <> " …"}
 
       "tool_failed" ->
-        %{kind: :error, text: title <> " failed", detail: Alto.Display.error(get(data, "error"))}
+        %{kind: :error, text: title <> " failed", detail: Alto.Display.error(get(data, :error))}
 
       _ ->
         completed(name, title, output)
@@ -52,28 +52,28 @@ defmodule Alto.ToolDisplay do
   # Read results remain intact in the model/session; the terminal shows metadata.
   defp result_detail(name, value) when name in ["read_file", :read_file] do
     value = decode(value)
-    content = get(value, "content")
+    content = get(value, :content)
     size = if is_binary(content), do: byte_size(content), else: nil
 
     label =
-      if get(value, "encoding") == "base64",
+      if get(value, :encoding) == "base64",
         do: "Binary file read",
         else: if(size, do: "#{size} bytes read", else: "File read")
 
-    label <> if(get(value, "truncated"), do: " · more available", else: "")
+    label <> if(get(value, :truncated), do: " · more available", else: "")
   end
 
   defp result_detail(_, value), do: detail(value)
 
   def detail(value) do
     value = decode(value)
-    patch = get(value, "patch")
-    output = first(value, ~w(output content))
+    patch = get(value, :patch)
+    output = first(value, ~w(output content)a)
 
     cond do
       is_map(patch) ->
-        Alto.Display.text(get(patch, "content") || "", limit: 20_000) <>
-          if(get(patch, "truncated"), do: "\n[diff shortened]", else: "")
+        Alto.Display.text(get(patch, :content) || "", limit: 20_000) <>
+          if(get(patch, :truncated), do: "\n[diff shortened]", else: "")
 
       is_binary(output) ->
         Alto.Display.text(output, limit: 20_000)
@@ -116,7 +116,7 @@ defmodule Alto.ToolDisplay do
   defp transcript_entry(_, calls), do: {[], calls}
 
   defp range(args) do
-    first = first(args, ~w(offset line_start))
+    first = first(args, ~w(offset line_start)a)
     if first, do: "(from #{first})"
   end
 
@@ -131,12 +131,8 @@ defmodule Alto.ToolDisplay do
 
   defp decode(value), do: value
 
-  defp get(map, key) when is_map(map) do
-    Map.get(map, key) ||
-      Enum.find_value(Map.to_list(map), fn {k, v} ->
-        if is_atom(k) and Atom.to_string(k) == key, do: v
-      end)
-  end
+  defp get(map, key) when is_map(map),
+    do: Map.get(map, Atom.to_string(key)) || Map.get(map, key)
 
   defp get(_, _), do: nil
 end

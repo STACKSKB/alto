@@ -33,22 +33,14 @@ defmodule Alto.AtomicFile do
     before_rename = Keyword.get(opts, :before_rename, fn -> :ok end)
 
     result =
-      case File.open(temp, [:write, :binary, :raw, :exclusive]) do
-        {:ok, io} ->
-          write_result =
-            write_sync_close(io, content, fn -> maybe_chmod(temp, mode) end)
-
-          with :ok <- write_result,
-               :ok <- before_rename.(),
-               :ok <- File.rename(temp, path) do
-            case sync_directory(Path.dirname(path)) do
-              :ok -> :ok
-              {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
-            end
-          end
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, io} <- File.open(temp, [:write, :binary, :raw, :exclusive]),
+           :ok <- write_sync_close(io, content, fn -> maybe_chmod(temp, mode) end),
+           :ok <- before_rename.(),
+           :ok <- File.rename(temp, path) do
+        case sync_directory(Path.dirname(path)) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
+        end
       end
 
     if result != :ok, do: File.rm(temp)

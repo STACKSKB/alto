@@ -39,20 +39,6 @@ defmodule Alto.Listeners.Webhook do
     full: {503, "inbox full"}
   }
 
-  defmodule Endpoint do
-    @moduledoc false
-    @enforce_keys [:path, :verify, :identity, :on_event]
-    defstruct [
-      :path,
-      :verify,
-      :identity,
-      :on_event,
-      source: nil,
-      max_body_bytes: 262_144,
-      delivery_ids: []
-    ]
-  end
-
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
@@ -77,7 +63,12 @@ defmodule Alto.Listeners.Webhook do
              http_options: [log_protocol_errors: false, log_client_closures: false]
            ),
          {:ok, {_address, actual_port}} <- ThousandIsland.listener_info(bandit) do
-      {:ok, %{bandit: bandit, port: actual_port, endpoints: endpoints}}
+      {:ok,
+       %{
+         bandit: bandit,
+         port: actual_port,
+         deliveries: Map.new(endpoints, fn {path, _} -> {path, []} end)
+       }}
     else
       {:error, reason} -> {:stop, {:webhook_listener_failed, reason}}
       :error -> {:stop, {:webhook_listener_failed, :listener_info_unavailable}}
@@ -88,25 +79,19 @@ defmodule Alto.Listeners.Webhook do
   def handle_call(:bound_port, _from, state), do: {:reply, state.port, state}
 
   def handle_call({:claim_delivery, path, delivery_id}, _from, state) do
-    endpoint = Map.fetch!(state.endpoints, path)
+    ids = Map.fetch!(state.deliveries, path)
 
-    if delivery_id in endpoint.delivery_ids do
+    if delivery_id in ids do
       {:reply, :duplicate, state}
     else
-      endpoint = %{
-        endpoint
-        | delivery_ids:
-            Enum.take([delivery_id | endpoint.delivery_ids], @default_max_delivery_ids)
-      }
-
-      {:reply, :new, put_in(state.endpoints[path], endpoint)}
+      ids = Enum.take([delivery_id | ids], @default_max_delivery_ids)
+      {:reply, :new, put_in(state.deliveries[path], ids)}
     end
   end
 
   def handle_call({:release_delivery, path, delivery_id}, _from, state) do
-    endpoint = Map.fetch!(state.endpoints, path)
-    endpoint = %{endpoint | delivery_ids: List.delete(endpoint.delivery_ids, delivery_id)}
-    {:reply, :ok, put_in(state.endpoints[path], endpoint)}
+    ids = List.delete(Map.fetch!(state.deliveries, path), delivery_id)
+    {:reply, :ok, put_in(state.deliveries[path], ids)}
   end
 
   @impl true
@@ -119,14 +104,14 @@ defmodule Alto.Listeners.Webhook do
   def handle_http(conn, opts) do
     endpoints = Keyword.fetch!(opts, :endpoints)
 
-    case route(endpoints, conn.method, conn.request_path) do
-      {:ok, endpoint} -> serve_endpoint(conn, endpoint, opts)
-      {:error, :method} -> respond(conn, 405, "method not allowed")
-      {:error, :not_found} -> respond(conn, 404, "not found")
+    case {Map.fetch(endpoints, conn.request_path), conn.method} do
+      {{:ok, endpoint}, "POST"} -> serve_endpoint(conn, endpoint, opts)
+      {{:ok, _}, _} -> respond(conn, 405, "method not allowed")
+      {:error, _} -> respond(conn, 404, "not found")
     end
   end
 
-  defp serve_endpoint(conn, %Endpoint{} = endpoint, opts) do
+  defp serve_endpoint(conn, endpoint, opts) do
     with {:ok, body, conn} <- read_body(conn, endpoint.max_body_bytes),
          :ok <- verify(endpoint, conn, body),
          {:ok, delivery_id} <- identity(endpoint, conn) do
@@ -144,7 +129,7 @@ defmodule Alto.Listeners.Webhook do
 
   defp dispatch(
          conn,
-         %Endpoint{on_event: {:start_run, config}} = endpoint,
+         %{on_event: {:start_run, config}} = endpoint,
          delivery_id,
          body,
          opts
@@ -171,7 +156,7 @@ defmodule Alto.Listeners.Webhook do
 
   defp dispatch(
          conn,
-         %Endpoint{on_event: {:enqueue, {backend, backend_opts}}} = endpoint,
+         %{on_event: {:enqueue, {backend, backend_opts}}} = endpoint,
          delivery_id,
          body,
          _opts
@@ -243,11 +228,11 @@ defmodule Alto.Listeners.Webhook do
     end
   end
 
-  defp verify(%Endpoint{verify: verifier}, conn, body) do
+  defp verify(%{verify: verifier}, conn, body) do
     normalize_verifier_result(invoke_callback(verifier, :verify, [body, conn.req_headers]))
   end
 
-  defp identity(%Endpoint{identity: extractor}, conn),
+  defp identity(%{identity: extractor}, conn),
     do: normalize_identity_result(invoke_callback(extractor, :extract, [conn.req_headers]))
 
   defp invoke_callback({module, opts}, callback, args) when is_atom(module),
@@ -274,17 +259,6 @@ defmodule Alto.Listeners.Webhook do
     |> Plug.Conn.send_resp(status, body)
   end
 
-  defp route(endpoints, "POST", path) do
-    case Map.fetch(endpoints, path) do
-      {:ok, endpoint} -> {:ok, endpoint}
-      :error -> {:error, :not_found}
-    end
-  end
-
-  defp route(endpoints, _method, path) do
-    if Map.has_key?(endpoints, path), do: {:error, :method}, else: {:error, :not_found}
-  end
-
   defp build_endpoints(specs) when is_list(specs) and specs != [] do
     with {:ok, endpoints} <- Alto.Result.traverse(specs, &build_endpoint/1) do
       case endpoints |> Enum.map(& &1.path) |> duplicate_value() do
@@ -305,7 +279,7 @@ defmodule Alto.Listeners.Webhook do
            max_body_bytes(Map.get(spec, :max_body_bytes, @default_max_body_bytes)),
          {:ok, source} <- endpoint_source(Map.get(spec, :source, path)) do
       {:ok,
-       %Endpoint{
+       %{
          path: path,
          verify: verify,
          identity: identity,
@@ -374,7 +348,7 @@ defmodule Alto.Listeners.Webhook do
   defp max_body_bytes(value) when is_integer(value) and value >= 0, do: {:ok, value}
   defp max_body_bytes(_value), do: {:error, :invalid_max_body_bytes}
 
-  defp log_rejected(%Endpoint{path: path}, detail) do
+  defp log_rejected(%{path: path}, detail) do
     IO.puts(:stderr, "alto webhook: #{path} rejected — #{detail}")
   end
 

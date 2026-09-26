@@ -29,6 +29,7 @@ defmodule Alto.Runner.SerialUsageTest do
              cached_input_tokens: 500,
              last_input_tokens: 800,
              last_cached_input_tokens: 500,
+             context_window: nil,
              requests: 1
            }
 

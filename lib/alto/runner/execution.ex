@@ -102,8 +102,6 @@ defmodule Alto.Runner.Execution do
   end
 
   defp run_with_options(task, opts) do
-    opts = Keyword.put_new_lazy(opts, :session_id, &generate_run_id/0)
-
     opts =
       case Keyword.get(opts, :checkpoint) do
         {%{"session_id" => session}, _decision} -> Keyword.put(opts, :session, session)
@@ -503,8 +501,6 @@ defmodule Alto.Runner.Execution do
     )
   end
 
-  # Model requests are a model-specific effect: a generic provider-less run
-  # fails closed if its loop policy requests one.
   defp interpret(%Effect{kind: :request_model}, %{provider: nil} = run),
     do: {:error, :provider_required, run}
 
@@ -901,10 +897,7 @@ defmodule Alto.Runner.Execution do
   defp dispatch_tool_jobs(jobs, run) do
     ready = Enum.filter(jobs, &Map.has_key?(&1, :prepared))
 
-    with :continue <- Call.cancellation(run.cancel_ref),
-         {:ok, run} <- History.dispatch(run, Enum.map(ready, & &1.op_id)) do
-      Enum.each(ready, &notify_tool_started(&1, run))
-
+    with {:ok, run} <- begin_tool_jobs(ready, run) do
       response = Alto.Runner.ToolBatch.run(Enum.map(ready, &{&1.tool, &1.prepared}), run)
 
       {outcomes, stopped} =
@@ -917,9 +910,6 @@ defmodule Alto.Runner.Execution do
       indexed = Map.new(Enum.zip(Enum.map(ready, & &1.op_id), outcomes))
       outcomes = Enum.map(jobs, &Map.get(indexed, &1.op_id, {:rejected, &1[:error]}))
       finish_tool_jobs(jobs, outcomes, run, stopped)
-    else
-      {:cancelled, reason} -> {:cancelled, reason, run}
-      error -> error
     end
   end
 
@@ -1000,6 +990,17 @@ defmodule Alto.Runner.Execution do
     end
   end
 
+  defp begin_tool_jobs(jobs, run) do
+    with :continue <- Call.cancellation(run.cancel_ref),
+         {:ok, run} <- History.dispatch(run, Enum.map(jobs, & &1.op_id)) do
+      Enum.each(jobs, &notify_tool_started(&1, run))
+      {:ok, run}
+    else
+      {:cancelled, reason} -> {:cancelled, reason, run}
+      error -> error
+    end
+  end
+
   defp notify_tool_started(job, run) do
     Alto.Events.notify(
       run.event_sink,
@@ -1013,52 +1014,15 @@ defmodule Alto.Runner.Execution do
     )
   end
 
-  defp dispatch_tool_job(%{tool: %{module: Alto.Tools.ListAgentModels, opts: opts}} = job, run) do
-    with :continue <- Call.cancellation(run.cancel_ref),
-         {:ok, run} <- History.dispatch(run, [job.op_id]) do
-      notify_tool_started(job, run)
-
-      case Call.run(
-             fn -> Alto.Subagents.Models.list(job.prepared, run, opts) end,
-             Budget.timeout(run.budget, run.tool_timeout),
-             run.cancel_ref
-           ) do
-        {:ok, {:ok, value}} ->
-          outcome =
-            case Alto.Runner.Execution.Tool.check_native_result(value, run.max_tool_result_bytes) do
-              :ok -> {:ok, value}
-              {:error, reason} -> {:error, reason}
-            end
-
-          finish_tool_job(job, {:ok, outcome}, run)
-
-        {:cancelled, reason} ->
-          {:cancelled, reason, run}
-
-        other ->
-          finish_tool_job(job, other, run)
-      end
-    else
-      {:cancelled, reason} -> {:cancelled, reason, run}
-      other -> other
-    end
-  end
-
   defp dispatch_tool_job(%{tool: %{module: Alto.Tools.SpawnAgents}} = job, run) do
     with {:ok, specs, concurrency} <- Children.validate_batch(job.prepared, run),
-         :continue <- Call.cancellation(run.cancel_ref),
-         {:ok, run} <- History.dispatch(run, [job.op_id]) do
-      notify_tool_started(job, run)
-
+         {:ok, run} <- begin_tool_jobs([job], run) do
       case spawn_agents(specs, concurrency, run) do
         {:ok, results, journal, next} ->
           value = Children.with_journal(%{results: results}, journal)
 
           outcome =
-            case Alto.Runner.Execution.Tool.check_native_result(value, next.max_tool_result_bytes) do
-              :ok -> {:ok, value}
-              {:error, reason} -> {:unknown, reason}
-            end
+            Alto.Runner.Execution.Tool.bound_result({:ok, value}, next.max_tool_result_bytes)
 
           finish_tool_job(job, {:ok, outcome}, next)
 
@@ -1070,8 +1034,7 @@ defmodule Alto.Runner.Execution do
       end
     else
       {:error, reason} -> finish_tool_job(job, {:rejected, reason}, run)
-      {:cancelled, reason} -> {:cancelled, reason, run}
-      {:error, reason, next} -> {:error, reason, next}
+      other -> other
     end
   end
 
@@ -1266,17 +1229,10 @@ defmodule Alto.Runner.Execution do
   defp normalize_session_opt(:new), do: {:ok, Session.generate_id()}
 
   defp normalize_session_opt(id) when is_binary(id) do
-    case Session.validate_id(id) do
-      :ok -> {:ok, id}
-      {:error, reason} -> {:error, reason}
-    end
+    with :ok <- Session.validate_id(id), do: {:ok, id}
   end
 
   defp normalize_session_opt(other), do: {:error, {:invalid_session_option, other}}
-
-  defp generate_run_id do
-    "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
-  end
 
   defp tool_summary(run, name, arguments) do
     present(
@@ -1316,10 +1272,10 @@ defmodule Alto.Runner.Execution do
     encoded = if is_binary(value), do: value, else: JSON.encode!(value)
     bound_tool_result(encoded, limit)
   rescue
-    # A non-encodable tool result stays a bounded tool message; letting it
-    # grow unbounded would trip the transcript limit and fail the whole run.
-    error ->
-      %{encoding_error: Exception.message(error), value: Alto.Protocol.encode_term(value)}
+    # Normalize unsupported terms without replacing the surrounding result shape.
+    _error ->
+      value
+      |> Alto.Protocol.encode_term()
       |> JSON.encode!()
       |> bound_tool_result(limit)
   end
@@ -1360,10 +1316,12 @@ defmodule Alto.Runner.Execution do
     }
 
   defp result(run, output, disposition) do
+    messages = Enum.reverse(run.messages_rev)
+
     %Result{
       output: output,
       loop_state: run.loop_state,
-      messages: Enum.reverse(run.messages_rev),
+      messages: messages,
       events: Enum.reverse(run.events_rev),
       events_dropped: run.events_dropped,
       verdict: final_verdict(run.verdict, disposition),
@@ -1374,10 +1332,7 @@ defmodule Alto.Runner.Execution do
       agent_identity: run.tool_context.agent_identity,
       transcript_revision: run.transcript_revision,
       context_observation:
-        Alto.Context.Observation.dump(
-          Map.get(run, :context_observation),
-          Enum.reverse(run.messages_rev)
-        ),
+        Alto.Context.Observation.dump(Map.get(run, :context_observation), messages),
       resolved_operations: Map.get(run, :resolved_operations, []),
       transcript_persisted:
         Map.get(run, :history_digest) ==

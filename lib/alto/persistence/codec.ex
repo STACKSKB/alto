@@ -41,7 +41,9 @@ defmodule Alto.Persistence.Codec do
     validate = Keyword.get(opts, :validate, &portable?(&1, 0))
 
     with true <- valid_limit?(max_bytes),
-         {:ok, binary} <- decode_base64(encoded, max_bytes),
+         # Base64 expands by 4/3; reject oversized input before ETF decoding.
+         true <- byte_size(encoded) <= div(max_bytes * 4, 3) + 8,
+         {:ok, binary} <- Base.decode64(encoded),
          <<131, tag, _::binary>> = binary,
          true <- tag != 80,
          true <- byte_size(binary) <= max_bytes,
@@ -58,19 +60,6 @@ defmodule Alto.Persistence.Codec do
   end
 
   def decode(_, _), do: {:error, :invalid_data}
-
-  defp decode_base64(encoded, max_bytes) do
-    # Base64 expands by 4/3. Reject oversized input before allocating ETF
-    # validation work, while allowing the small padding variation.
-    if byte_size(encoded) <= div(max_bytes * 4, 3) + 8 do
-      case Base.decode64(encoded) do
-        {:ok, binary} -> {:ok, binary}
-        :error -> {:error, :invalid_data}
-      end
-    else
-      {:error, :invalid_data}
-    end
-  end
 
   defp portable?(_, depth) when depth > @max_depth, do: false
   defp portable?(value, _) when is_atom(value) or is_binary(value) or is_number(value), do: true

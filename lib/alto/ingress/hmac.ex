@@ -12,7 +12,7 @@ defmodule Alto.Ingress.HMAC do
          {:ok, prefix} <- prefix(opts),
          {:ok, signature} <- single_header(headers, header) do
       expected = prefix <> encode(:crypto.mac(:hmac, :sha256, secret, body), encoding)
-      secure_compare(signature, expected)
+      if Plug.Crypto.secure_compare(signature, expected), do: :ok, else: {:error, :bad_signature}
     end
   end
 
@@ -53,10 +53,7 @@ defmodule Alto.Ingress.HMAC do
   defp encode(digest, :hex), do: Base.encode16(digest, case: :lower)
 
   defp single_header(headers, name) do
-    values =
-      headers
-      |> Enum.filter(fn {key, _value} -> String.downcase(key) == name end)
-      |> Enum.map(&elem(&1, 1))
+    values = for {key, value} <- headers, String.downcase(key) == name, do: value
 
     case values do
       [value] when is_binary(value) and byte_size(value) <= 512 -> {:ok, value}
@@ -65,10 +62,4 @@ defmodule Alto.Ingress.HMAC do
       _many -> {:error, :duplicate_signature}
     end
   end
-
-  defp secure_compare(left, right) when byte_size(left) == byte_size(right) do
-    if Plug.Crypto.secure_compare(left, right), do: :ok, else: {:error, :bad_signature}
-  end
-
-  defp secure_compare(_left, _right), do: {:error, :bad_signature}
 end

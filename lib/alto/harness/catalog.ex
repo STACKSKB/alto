@@ -94,7 +94,7 @@ defmodule Alto.Harness.Catalog do
               append(catalog, "projects", @max_projects, :project_capacity, fn ->
                 %{
                   "id" => id("project"),
-                  "name" => bounded_string(name, @max_title_bytes),
+                  "name" => Alto.Text.prefix(name, @max_title_bytes),
                   "root" => expanded,
                   "created_at_ms" => now,
                   "last_opened_at_ms" => now
@@ -137,7 +137,7 @@ defmodule Alto.Harness.Catalog do
             %{
               "id" => id("task"),
               "project_id" => project_id,
-              "title" => bounded_string(title, @max_title_bytes),
+              "title" => Alto.Text.prefix(title, @max_title_bytes),
               "status" => "active",
               "backend" => backend,
               "conversation_id" => Keyword.get(opts, :conversation_id),
@@ -334,8 +334,6 @@ defmodule Alto.Harness.Catalog do
     do: is_binary(value) and byte_size(value) <= max and String.valid?(value)
 
   defp valid_text?(value), do: is_binary(value) and value != "" and String.valid?(value)
-
-  defp bounded_string(value, max) when is_binary(value), do: Alto.Text.prefix(value, max)
 
   defp check_catalog_size(encoded) do
     if byte_size(encoded) <= @max_catalog_bytes do

@@ -58,7 +58,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _ctx, _opts),
+    def run(%{value: value, token: token}, _ctx, _opts),
       do: {:ok, %{stamped: value, token: token}}
   end
 
@@ -186,6 +186,9 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
     assert first_req.run_id == first
     assert second_req.run_id == second
     assert String.starts_with?(first_req.id, first <> ":op-")
+
+    assert {:error, :already_pending} =
+             Registry.request_approval(registry, second, first_req, self())
 
     assert :ok = Registry.approval_response(registry, first_req.id, :approve)
 

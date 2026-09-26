@@ -10,26 +10,6 @@ defmodule RepositoryMaintenance.Workflow do
   @max_patch_bytes 1_000_000
   @max_manifest_bytes 128_000
 
-  @doc "Read a bounded binary file before callers decode or process it."
-  def read_bounded(path, max) when is_binary(path) and is_integer(max) and max >= 0 do
-    case File.open(path, [:read, :binary, :raw]) do
-      {:ok, io} ->
-        result =
-          case IO.binread(io, max + 1) do
-            {:error, reason} -> {:error, reason}
-            :eof -> {:ok, <<>>}
-            body when byte_size(body) > max -> {:error, :file_too_large}
-            body -> {:ok, body}
-          end
-
-        _ = File.close(io)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   def validate_report(
         %{"source" => source, "delivery_id" => id, "commit" => commit, "failure" => failure} =
           report
@@ -127,12 +107,12 @@ defmodule RepositoryMaintenance.Workflow do
   @doc "Apply only a reviewed manifest whose hash and base still match."
   def apply_reviewed(repo, manifest_path, expected_hash) do
     with :ok <- safe_artifact_path(repo, manifest_path),
-         {:ok, manifest_json} <- read_bounded(manifest_path, @max_manifest_bytes),
+         {:ok, manifest_json} <- Alto.BoundedFile.read(manifest_path, @max_manifest_bytes),
          true <- hash(manifest_json) == expected_hash or {:error, :manifest_hash_mismatch},
          {:ok, manifest} <- JSON.decode(manifest_json),
          :ok <- verify_manifest(manifest),
          :ok <- safe_artifact_path(repo, manifest["patch_path"]),
-         {:ok, patch} <- read_bounded(manifest["patch_path"], @max_patch_bytes),
+         {:ok, patch} <- Alto.BoundedFile.read(manifest["patch_path"], @max_patch_bytes),
          true <- byte_size(patch) <= @max_patch_bytes or {:error, :patch_too_large},
          true <- hash(patch) == manifest["patch_sha256"] or {:error, :patch_hash_mismatch},
          {:ok, head} <- git(repo, ["rev-parse", "HEAD"]),
@@ -288,7 +268,7 @@ defmodule RepositoryMaintenance.Workflow do
          true <- valid_hex?(sha, 64),
          true <- valid_hex?(base, 7..64),
          true <- valid_hex?(tree, 40),
-         {:ok, patch} <- read_bounded(path, @max_patch_bytes),
+         {:ok, patch} <- Alto.BoundedFile.read(path, @max_patch_bytes),
          true <- hash(patch) == sha or {:error, :patch_hash_mismatch},
          do: :ok
   end
@@ -438,9 +418,9 @@ defmodule RepositoryMaintenance.Workflow do
       {:error, :eexist} ->
         _ = File.rm_rf(tmp)
 
-        with {:ok, ^diff} <- read_bounded(patch_path, @max_patch_bytes),
-             {:ok, _existing_test_output} <- read_bounded(test_path, 64_000),
-             {:ok, existing_json} <- read_bounded(manifest_path, @max_manifest_bytes),
+        with {:ok, ^diff} <- Alto.BoundedFile.read(patch_path, @max_patch_bytes),
+             {:ok, _existing_test_output} <- Alto.BoundedFile.read(test_path, 64_000),
+             {:ok, existing_json} <- Alto.BoundedFile.read(manifest_path, @max_manifest_bytes),
              {:ok, existing} <- JSON.decode(existing_json),
              true <- same_patch_manifest?(existing, manifest) do
           {:ok, Map.put(existing, "manifest_path", manifest_path)}

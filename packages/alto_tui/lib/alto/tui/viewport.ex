@@ -107,20 +107,23 @@ defmodule Alto.TUI.Viewport do
       end)
 
     height = min(256, length(String.split(text, "\n")) + div(2 * byte_size(text), width) + 3)
-    key = {__MODULE__, :terminal}
-
-    terminal =
-      case Process.get(key) do
-        {^width, ^height, terminal} ->
-          terminal
-
-        _ ->
-          terminal = ExRatatui.init_test_terminal(width, height)
-          Process.put(key, {width, height, terminal})
-          terminal
-      end
-
+    terminal = test_terminal(:wrap, width, height)
     wrap_page(terminal, text <> "\n" <> marker, marker, width, height, 0, [])
+  end
+
+  @doc false
+  def test_terminal(owner, width, height) do
+    key = {__MODULE__, :terminal, owner}
+
+    case Process.get(key) do
+      {^width, ^height, terminal} ->
+        terminal
+
+      _ ->
+        terminal = ExRatatui.init_test_terminal(width, height)
+        Process.put(key, {width, height, terminal})
+        terminal
+    end
   end
 
   defp flatten_rows(pages, width) do

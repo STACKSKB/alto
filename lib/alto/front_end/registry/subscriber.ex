@@ -1,11 +1,10 @@
 defmodule Alto.FrontEnd.Registry.Subscriber do
   @moduledoc "Bounded subscriber buffering and delivery transitions, independent of registry ownership."
 
-  @enforce_keys [:pid, :monitor, :runs, :domains, :max_buffer_messages]
+  @enforce_keys [:monitor, :run_id, :domains, :max_buffer_messages]
   defstruct [
-    :pid,
     :monitor,
-    :runs,
+    :run_id,
     :domains,
     :max_buffer_messages,
     buffer: {[], []},
@@ -17,8 +16,8 @@ defmodule Alto.FrontEnd.Registry.Subscriber do
     closed?: false
   ]
 
-  def interested?(%__MODULE__{runs: runs, domains: domains}, run_id, domain) do
-    (runs == :all or MapSet.member?(runs, run_id)) and
+  def interested?(%__MODULE__{run_id: selected, domains: domains}, run_id, domain) do
+    (is_nil(selected) or selected == run_id) and
       (domain == :approval or domain == :result or MapSet.member?(domains, domain))
   end
 

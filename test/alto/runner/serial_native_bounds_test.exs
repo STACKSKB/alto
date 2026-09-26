@@ -238,7 +238,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
              )
 
     failed = Enum.find(result.events, &(&1.type == :tool_failed))
-    assert {:ok, line} = Protocol.event("s-1", "run-1", 1, failed, 1_048_576)
+    assert {:ok, line} = Protocol.notification("s-1", {:event, "run-1", 1, failed}, 1_048_576)
     assert IO.iodata_length(line) < 5_000
   end
 

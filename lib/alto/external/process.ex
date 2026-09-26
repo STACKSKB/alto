@@ -49,7 +49,9 @@ defmodule Alto.External.Process do
         {:args, port_args},
         {:cd, Keyword.get(opts, :cwd, File.cwd!())},
         {:env, encode_env(Keyword.get(opts, :env, %{}))}
-      ] ++ if(Keyword.get(opts, :stderr_to_stdout, false), do: [:stderr_to_stdout], else: [])
+      ] ++
+        Keyword.take(opts, [:line]) ++
+        if(Keyword.get(opts, :stderr_to_stdout, false), do: [:stderr_to_stdout], else: [])
 
     port =
       Port.open(
@@ -151,6 +153,13 @@ defmodule Alto.External.Process do
 
     receive do
       {^port, {:data, data}} ->
+        data =
+          case data do
+            {:eol, line} -> line <> "\n"
+            {:noeol, line} -> line
+            bytes -> bytes
+          end
+
         value = prefix <> data
 
         cond do

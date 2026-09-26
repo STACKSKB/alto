@@ -16,7 +16,7 @@ case System.argv() do
     )
 
   [repo, report_path] ->
-    case RepositoryMaintenance.Workflow.read_bounded(report_path, 64_000) do
+    case Alto.BoundedFile.read(report_path, 64_000) do
       {:ok, body} ->
         case JSON.decode(body) do
           {:ok, report} when is_map(report) ->
@@ -55,7 +55,7 @@ case System.argv() do
             System.halt(1)
         end
 
-      {:error, :file_too_large} ->
+      {:error, {:too_large, _, _}} ->
         IO.puts(:stderr, "report exceeds the 64000 byte limit")
         System.halt(1)
 

@@ -397,7 +397,8 @@ defmodule Alto.Runner.Checkpoint do
       is_integer(saved.transcript_revision) and saved.transcript_revision >= 0 and
       is_integer(saved.model_requests) and saved.model_requests >= 0 and
       is_integer(saved.op_seq) and saved.op_seq >= 0 and
-      valid_usage?(saved.usage) and is_list(saved.persistence_errors) and
+      is_struct(saved.usage, Alto.Usage) and Alto.Usage.valid?(saved.usage) and
+      is_list(saved.persistence_errors) and
       valid_compaction_state?(saved) and valid_history_state?(saved) and
       valid_pending_calls?(saved.pending_provider_calls) and
       (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
@@ -414,11 +415,6 @@ defmodule Alto.Runner.Checkpoint do
     is_list(saved.resolved_operations) and length(saved.resolved_operations) <= 256 and
       Enum.all?(saved.resolved_operations, &(is_binary(&1) and byte_size(&1) in 1..512))
   end
-
-  defp valid_usage?(%Alto.Usage{} = usage),
-    do: Enum.all?(Map.from_struct(usage), fn {_, value} -> is_integer(value) and value >= 0 end)
-
-  defp valid_usage?(_), do: false
 
   defp valid_pending_calls?(calls) when is_map(calls) do
     Enum.all?(calls, fn
@@ -488,8 +484,7 @@ defmodule Alto.Runner.Checkpoint do
   defp fingerprint_data_for(run) do
     tools =
       Enum.map(run.tools, fn {name, tool} ->
-        {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.approval,
-         tool.preparation}
+        {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.approval}
       end)
       |> Enum.sort()
 

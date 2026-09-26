@@ -536,8 +536,16 @@ defmodule Alto.QueueTest do
     test "invalid scheduling options return errors and keep queue alive", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
 
-      assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, unknown: 1)
-      assert {:error, {:invalid_schedule, _}} = Queue.put(name, "bad", %{}, [:delay_ms])
+      for opts <- [
+            [unknown: 1],
+            [:delay_ms],
+            [delay_ms: -1],
+            [not_before_ms: nil],
+            [delay_ms: 0, delay_ms: 0],
+            [delay_ms: 0, not_before_ms: 1]
+          ] do
+        assert {:error, {:invalid_schedule, ^opts}} = Queue.put(name, "bad", %{}, opts)
+      end
 
       assert {:ok, _} = Queue.put(name, "good", %{})
       assert {:ok, [%{key: "good"}]} = Queue.claim(name)

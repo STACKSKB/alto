@@ -43,7 +43,7 @@ defmodule Alto.AtomicFileTest do
            }, "edited"}
         ] do
       assert {:ok, prepared, _details} = tool.prepare(arguments, context)
-      assert {:unknown, {:directory_sync_failed, 42, _}} = tool.run_prepared(prepared, context)
+      assert {:unknown, {:directory_sync_failed, 42, _}} = tool.run(prepared, context)
       assert File.read!(path) == expected
       assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
     end

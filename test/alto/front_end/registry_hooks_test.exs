@@ -165,7 +165,8 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
 
   test "ok replies keep envelope correlation fields authoritative" do
     assert {:ok, line} =
-             Protocol.ok(
+             Protocol.envelope(
+               "ok",
                "c-7",
                %{"id" => "spoof", "type" => "spoof", "v" => 99, "value" => true},
                1_024

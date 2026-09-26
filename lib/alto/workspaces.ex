@@ -46,14 +46,15 @@ defmodule Alto.Workspaces do
          {:ok, metadata} <- manager.backend.snapshot(source, manager.backend_options),
          :ok <- json_map(metadata) do
       {:ok, %Snapshot{source: source, metadata: metadata}}
-    else
-      {:error, _} = error -> error
     end
   end
 
   @doc "Create once for an execution-tree identity. Retain incomplete attempts for review."
-  def create(%__MODULE__{} = manager, snapshot, identity) do
-    with {:ok, %Snapshot{source: source, metadata: metadata}} <- normalize_snapshot(snapshot),
+  def create(%__MODULE__{} = manager, %Snapshot{source: source, metadata: metadata}, identity)
+      when is_binary(source) and is_map(metadata) do
+    source = Path.expand(source)
+
+    with :ok <- json_map(metadata),
          :ok <- valid_identity(identity),
          :ok <- separate_root(manager.root, source) do
       id = workspace_id(identity)
@@ -84,6 +85,8 @@ defmodule Alto.Workspaces do
       end)
     end
   end
+
+  def create(%__MODULE__{}, _snapshot, _identity), do: {:error, :invalid_workspace_snapshot}
 
   @doc "Read one consistent ledger status/revision without changing resource state."
   def get(%__MODULE__{} = manager, id) do
@@ -444,21 +447,6 @@ defmodule Alto.Workspaces do
 
   defp separate_root(_, _), do: {:error, :invalid_workspace_source}
 
-  defp normalize_snapshot(%Snapshot{source: source, metadata: metadata})
-       when is_binary(source) and is_map(metadata) do
-    with :ok <- json_map(metadata), :ok <- separate_root_for_snapshot(source) do
-      {:ok, %Snapshot{source: Path.expand(source), metadata: metadata}}
-    end
-  end
-
-  defp normalize_snapshot(_), do: {:error, :invalid_workspace_snapshot}
-
-  defp separate_root_for_snapshot(source) do
-    if Path.expand(source) == source and source != "" and safe_path(source) == :ok,
-      do: :ok,
-      else: {:error, :invalid_workspace_source}
-  end
-
   defp integration_supported(%__MODULE__{backend: backend}) do
     callbacks = [prepare_apply: 4, verify_apply: 4, apply: 4]
 
@@ -481,23 +469,20 @@ defmodule Alto.Workspaces do
 
   @doc false
   def safe_path(path) when is_binary(path) do
-    path
-    |> Path.expand()
-    |> Path.split()
-    |> Enum.reduce_while({:ok, ""}, fn part, {:ok, prefix} ->
-      next = if prefix == "" and part == "/", do: "/", else: Path.join(prefix, part)
+    parts = path |> Path.expand() |> Path.split()
 
-      case File.lstat(next) do
-        {:ok, %{type: :symlink}} -> {:halt, {:error, :workspace_path_symlink}}
-        {:ok, _} -> {:cont, {:ok, next}}
-        {:error, :enoent} -> {:cont, {:ok, next}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, _} -> :ok
-      error -> error
-    end
+    with {:ok, _} <-
+           Alto.Result.reduce(parts, "", fn part, prefix ->
+             next = if prefix == "" and part == "/", do: "/", else: Path.join(prefix, part)
+
+             case File.lstat(next) do
+               {:ok, %{type: :symlink}} -> {:error, :workspace_path_symlink}
+               {:ok, _} -> {:ok, next}
+               {:error, :enoent} -> {:ok, next}
+               {:error, reason} -> {:error, reason}
+             end
+           end),
+         do: :ok
   end
 
   defp valid_identity(identity) do

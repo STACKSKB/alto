@@ -85,4 +85,21 @@ defmodule Alto.UsageTest do
     assert usage.last_cached_input_tokens == 0
     assert usage.requests == 0
   end
+
+  test "context limits survive Codex normalization, serialization and additive updates" do
+    usage =
+      Usage.from_codex(%{
+        total: %{inputTokens: 100},
+        last: %{inputTokens: 100},
+        modelContextWindow: 200_000
+      })
+
+    assert usage.context_window == 200_000
+    assert Usage.from_map(Usage.to_map(usage)).context_window == 200_000
+    native = %Usage{requests: 1, last_input_tokens: 50, context_window: 100_000}
+    merged = Usage.merge(native, usage)
+    assert merged.last_input_tokens == 50
+    assert merged.context_window == 100_000
+    assert Usage.merge(native, Usage.normalize(%{input_tokens: 25})).context_window == nil
+  end
 end

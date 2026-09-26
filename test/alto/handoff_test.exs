@@ -23,13 +23,17 @@ defmodule Alto.HandoffTest do
 
     assert Handoff.render(artifact) =~ "# Next step\nRun the focused rollover tests."
 
-    assert {:ok, published} =
-             Handoff.persist("sess-test", "run-test", artifact, session_dir: root)
+    results =
+      1..2
+      |> Task.async_stream(fn _ ->
+        Handoff.persist("sess-test", "run-test", artifact, session_dir: root)
+      end)
+      |> Enum.map(fn {:ok, result} -> result end)
 
-    assert File.read!(published.files.design) == "Keep effects host-owned.\n"
-    assert File.read!(published.files.pointers) == "lib/alto/runner/serial.ex:1100\n"
-    assert File.read!(published.files.handoff) == "The rollover contract is implemented.\n"
-    assert File.read!(published.files.next_step) == "Run the focused rollover tests.\n"
+    assert [{:ok, path}] = Enum.filter(results, &match?({:ok, _}, &1))
+    assert {:error, {:handoff_write_failed, :handoff_already_exists}} in results
+    assert JSON.decode!(File.read!(path)) == JSON.decode!(payload)
+    assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o600
   end
 
   test "rejects prose, incomplete objects, and oversized payloads" do

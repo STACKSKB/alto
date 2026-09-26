@@ -13,9 +13,8 @@ defmodule Alto.Tools.Transform do
   the opaque prepared value, so approval and execution cannot cause a second
   transform or resolve a different value after approval.
 
-  Native prepared tools keep their own `prepare`/`run_prepared` boundary. A
-  native tool that only implements `run` is prepared by this wrapper and its
-  transformed arguments are passed to `run_prepared` unchanged.
+  Prepared tools keep their own `prepare`/`run` boundary. Tools without
+  preparation receive the transformed arguments through `run` unchanged.
   """
   @behaviour Alto.Tool
 
@@ -44,20 +43,21 @@ defmodule Alto.Tools.Transform do
 
   @impl true
   def prepare(arguments, context, opts) when is_map(arguments) do
+    {module, inner_opts} = inner_tool(opts)
+
     with {:ok, transformed} <- transform(arguments, context, opts),
-         {:ok, prepared, details} <- prepare_inner(transformed, context, opts) do
-      {:ok, prepared, approval_details(details, transformed)}
+         {:ok, prepared, details} <- Alto.Tool.prepare(module, transformed, context, inner_opts) do
+      {:ok, {__MODULE__, prepared}, Map.put(details, "alto_transformed_arguments", transformed)}
     end
   end
 
   @impl true
-  def run_prepared({__MODULE__, callback, value}, context, opts)
-      when callback in [:run, :run_prepared] do
+  def run({__MODULE__, value}, context, opts) do
     {module, inner_opts} = inner_tool(opts)
-    apply(module, callback, [value, context, inner_opts])
+    module.run(value, context, inner_opts)
   end
 
-  def run_prepared(_other, _context, _opts), do: {:error, :invalid_transformed_prepared}
+  def run(_other, _context, _opts), do: {:error, :invalid_transformed_prepared}
 
   defp callback(opts, callback) do
     {module, inner_opts} = inner_tool(opts)
@@ -72,35 +72,6 @@ defmodule Alto.Tools.Transform do
       {:error, _reason} = error -> error
       transformed when is_map(transformed) -> {:ok, transformed}
       other -> {:error, {:invalid_transform_return, other}}
-    end
-  end
-
-  defp approval_details(details, transformed) when is_map(details),
-    do: Map.put(details, "alto_transformed_arguments", transformed)
-
-  defp approval_details(details, _transformed), do: details
-
-  defp prepare_inner(arguments, context, opts) do
-    {module, inner_opts} = inner_tool(opts)
-
-    case Alto.Tool.preparation(module) do
-      {:ok, :prepared} ->
-        case module.prepare(arguments, context, inner_opts) do
-          {:ok, prepared, details} ->
-            {:ok, {__MODULE__, :run_prepared, prepared}, details}
-
-          {:error, _reason} = error ->
-            error
-
-          other ->
-            {:error, {:invalid_tool_prepare_return, other}}
-        end
-
-      {:ok, :none} ->
-        {:ok, {__MODULE__, :run, arguments}, %{}}
-
-      {:error, _} = error ->
-        error
     end
   end
 

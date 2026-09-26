@@ -74,7 +74,7 @@ defmodule Alto.Runner.ParentCheckpointTest do
 
   test "round trip preserves parent state and tail without an approval request", context do
     %{run: run, pending: pending, opts: opts} = context
-    run = %{run | compaction_count: 2}
+    run = %{run | compaction_count: 2, usage: %{run.usage | context_window: 200_000}}
     tail = [Effect.request_model(%{context_message: "integrate"})]
     assert :ok = Budget.take(run.budget)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
@@ -240,6 +240,8 @@ defmodule Alto.Runner.ParentCheckpointTest do
           put_in(saved, [:binding, :store], %{}),
           put_in(saved, [:binding, :authority, :max_steps], -1),
           put_in(saved, [:run, :usage], %{run.usage | input_tokens: -1}),
+          put_in(saved, [:run, :usage], %{run.usage | context_window: "invalid"}),
+          put_in(saved, [:run, :usage], %{run.usage | input_tokens: nil}),
           put_in(saved, [:run, :agent_identity], %{root_run_id: "root", path: ["child"]})
         ] do
       {:ok, encoded} = Checkpoint.encode(changed)

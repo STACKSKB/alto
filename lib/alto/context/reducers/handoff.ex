@@ -14,7 +14,7 @@ defmodule Alto.Context.Reducers.Handoff do
     with {:ok, completion} <- model.(request),
          message when is_binary(message) <- completion[:message],
          {:ok, artifact} <- Alto.Handoff.decode(message, input.max_handoff_bytes),
-         {:ok, published} <-
+         {:ok, path} <-
            Alto.Handoff.persist(
              input.session,
              input.artifact_id,
@@ -27,14 +27,13 @@ defmodule Alto.Context.Reducers.Handoff do
         strategy: :handoff,
         source_bytes: byte_size(input.text),
         handoff_bytes: byte_size(rendered),
-        directory: published.directory,
-        files: published.files,
+        artifact_path: path,
         next_step: artifact.next_step
       }
 
       {:ok,
        %{
-         content: "[alto handoff: artifacts at #{published.directory}]\n\n" <> rendered,
+         content: "[alto handoff: artifact at #{path}]\n\n" <> rendered,
          data: data
        }}
     else

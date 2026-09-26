@@ -15,7 +15,6 @@ defmodule Alto.OperationLog do
   alias Alto.Persistence.Codec
   alias Alto.DurableLog
 
-  @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @max_key_bytes 256
   @limits [
     max_ops: [type: :non_neg_integer, default: 10_000],
@@ -64,12 +63,7 @@ defmodule Alto.OperationLog do
   end
 
   @spec dir(keyword()) :: Path.t()
-  def dir(opts \\ []) do
-    case Keyword.get(opts, :dir) do
-      nil -> Path.join([Alto.Storage.state_home(), "alto", "operation_logs"])
-      path when is_binary(path) -> path
-    end
-  end
+  def dir(opts \\ []), do: Alto.Storage.dir("operation_logs", Keyword.get(opts, :dir))
 
   @spec record_intent(GenServer.server(), op_key(), binary(), binary() | nil, map() | nil) ::
           :ok | {:error, term()}
@@ -81,12 +75,12 @@ defmodule Alto.OperationLog do
         recovery \\ nil,
         timeout \\ 5_000
       ) do
-    call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
+    GenServer.call(server, {:intent, op_key, tool, inbox_key, recovery}, timeout)
   end
 
   @doc "Create a retained checkpoint atomically if absent; an existing record is unchanged."
   def retain(server \\ __MODULE__, op_key, tool, recovery, attempt, checkpoint, timeout \\ 5_000) do
-    call(server, {:retain, op_key, tool, recovery, attempt, checkpoint}, timeout)
+    GenServer.call(server, {:retain, op_key, tool, recovery, attempt, checkpoint}, timeout)
   end
 
   @doc "Retire an internal checkpoint at an exact revision in one durable write."
@@ -99,17 +93,21 @@ defmodule Alto.OperationLog do
         evidence,
         timeout \\ 5_000
       ) do
-    call(server, {:retire_checkpoint, op_key, revision, decision, attempt, evidence}, timeout)
+    GenServer.call(
+      server,
+      {:retire_checkpoint, op_key, revision, decision, attempt, evidence},
+      timeout
+    )
   end
 
   @spec record_attempt(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_attempt(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
-    call(server, {:attempt, op_key, attempt_id}, timeout)
+    GenServer.call(server, {:attempt, op_key, attempt_id}, timeout)
   end
 
   @spec record_release(GenServer.server(), op_key(), String.t()) :: :ok | {:error, term()}
   def record_release(server \\ __MODULE__, op_key, attempt_id, timeout \\ 5_000) do
-    call(server, {:release, op_key, attempt_id}, timeout)
+    GenServer.call(server, {:release, op_key, attempt_id}, timeout)
   end
 
   @spec record_outcome(
@@ -128,11 +126,11 @@ defmodule Alto.OperationLog do
         evidence \\ %{},
         timeout \\ 5_000
       ) do
-    call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
+    GenServer.call(server, {:outcome, op_key, attempt_id, class, evidence}, timeout)
   end
 
   def record_checkpoint(server \\ __MODULE__, op_key, attempt_id, checkpoint, timeout \\ 5_000) do
-    call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
+    GenServer.call(server, {:checkpoint, op_key, attempt_id, checkpoint}, timeout)
   end
 
   def update_checkpoint(
@@ -142,7 +140,7 @@ defmodule Alto.OperationLog do
         checkpoint,
         timeout \\ 5_000
       ) do
-    call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
+    GenServer.call(server, {:checkpoint_update, op_key, expected_revision, checkpoint}, timeout)
   end
 
   def resume_checkpoint(
@@ -152,45 +150,45 @@ defmodule Alto.OperationLog do
         decision,
         timeout \\ 5_000
       ) do
-    call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
+    GenServer.call(server, {:resume_checkpoint, op_key, expected_revision, decision}, timeout)
   end
 
   @spec status(GenServer.server(), op_key()) :: status()
   def status(server \\ __MODULE__, op_key) do
-    call(server, {:status, op_key})
+    GenServer.call(server, {:status, op_key})
   end
 
   @spec attempts(GenServer.server(), op_key()) :: non_neg_integer()
   def attempts(server \\ __MODULE__, op_key) do
-    call(server, {:attempts, op_key})
+    GenServer.call(server, {:attempts, op_key})
   end
 
   @spec reject_intended(GenServer.server(), op_key(), pos_integer(), map()) ::
           :ok | {:error, term()}
   def reject_intended(server \\ __MODULE__, op_key, expected_revision, evidence \\ %{}) do
-    call(server, {:reject_intended, op_key, expected_revision, evidence})
+    GenServer.call(server, {:reject_intended, op_key, expected_revision, evidence})
   end
 
   @doc "Bounded canonical operation views, oldest first."
   @spec entries(GenServer.server(), :all | :open | :parked, timeout()) :: [map()]
   def entries(server \\ __MODULE__, filter \\ :all, timeout \\ 5_000)
       when filter in [:all, :open, :parked] do
-    call(server, {:entries, filter}, timeout)
+    GenServer.call(server, {:entries, filter}, timeout)
   end
 
   @spec recovery(GenServer.server(), op_key()) :: {:ok, map()} | {:error, :not_found}
   def recovery(server \\ __MODULE__, op_key, timeout \\ 5_000) do
-    call(server, {:recovery, op_key}, timeout)
+    GenServer.call(server, {:recovery, op_key}, timeout)
   end
 
   def identity(server \\ __MODULE__, timeout \\ 5_000) do
-    call(server, :identity, timeout)
+    GenServer.call(server, :identity, timeout)
   end
 
   @spec reconcile(GenServer.server(), op_key(), pos_integer(), atom(), map()) ::
           {:ok, map()} | {:error, term()}
   def reconcile(server \\ __MODULE__, op_key, expected_revision, resolution, evidence \\ %{}) do
-    call(server, {:reconcile, op_key, expected_revision, resolution, evidence})
+    GenServer.call(server, {:reconcile, op_key, expected_revision, resolution, evidence})
   end
 
   @spec scrub(map()) :: map()
@@ -301,10 +299,6 @@ defmodule Alto.OperationLog do
 
   ## Internals
 
-  defp call(server, request, timeout \\ 5_000) do
-    GenServer.call(server, request, timeout)
-  end
-
   defp read_status(state, op_key) do
     case Map.fetch(state.ops, op_key) do
       :error -> :no_intent
@@ -324,19 +318,16 @@ defmodule Alto.OperationLog do
     do: {:decided, class, evidence}
 
   defp ensure_room(state) do
-    cond do
-      map_size(state.ops) < state.max_ops ->
-        {:ok, state}
+    if map_size(state.ops) < state.max_ops do
+      {:ok, state}
+    else
+      case Enum.find(state.order, &evictable?(Map.fetch!(state.ops, &1))) do
+        nil ->
+          {:error, :ledger_full}
 
-      true ->
-        case Enum.find(state.order, &evictable?(Map.fetch!(state.ops, &1))) do
-          nil ->
-            {:error, :ledger_full}
-
-          key ->
-            {:ok,
-             %{state | ops: Map.delete(state.ops, key), order: List.delete(state.order, key)}}
-        end
+        key ->
+          {:ok, %{state | ops: Map.delete(state.ops, key), order: List.delete(state.order, key)}}
+      end
     end
   end
 
@@ -427,33 +418,27 @@ defmodule Alto.OperationLog do
 
   defp validate_key(key), do: {:error, {:invalid_op_key, key}}
 
-  defp validate_tool(tool, state) when is_binary(tool) and tool != "" do
-    if byte_size(tool) <= state.max_identifier_bytes,
-      do: :ok,
-      else: {:error, {:identifier_too_large, :tool, state.max_identifier_bytes}}
-  end
-
-  defp validate_tool(tool, _state), do: {:error, {:invalid_tool, tool}}
+  defp validate_tool(tool, state),
+    do: validate_identifier(tool, :tool, state.max_identifier_bytes, :invalid_tool)
 
   defp validate_inbox(nil, _state), do: :ok
 
-  defp validate_inbox(key, state) when is_binary(key) do
+  defp validate_inbox(key, state) do
     with :ok <- validate_key(key) do
-      if byte_size(key) <= state.max_identifier_bytes,
-        do: :ok,
-        else: {:error, {:identifier_too_large, :inbox, state.max_identifier_bytes}}
+      validate_identifier(key, :inbox, state.max_identifier_bytes, :invalid_op_key)
     end
   end
 
-  defp validate_inbox(key, _state), do: {:error, {:invalid_op_key, key}}
+  defp validate_attempt(id, state),
+    do: validate_identifier(id, :attempt, state.max_identifier_bytes, :invalid_attempt)
 
-  defp validate_attempt(id, state) when is_binary(id) and id != "" do
-    if byte_size(id) <= state.max_identifier_bytes,
-      do: :ok,
-      else: {:error, {:identifier_too_large, :attempt, state.max_identifier_bytes}}
+  defp validate_identifier(value, kind, max, invalid) do
+    cond do
+      not is_binary(value) or value == "" -> {:error, {invalid, value}}
+      byte_size(value) > max -> {:error, {:identifier_too_large, kind, max}}
+      true -> :ok
+    end
   end
-
-  defp validate_attempt(id, _state), do: {:error, {:invalid_attempt, id}}
 
   defp validate_revision(revision) when is_integer(revision) and revision >= 1, do: :ok
   defp validate_revision(revision), do: {:error, {:invalid_revision, revision}}
@@ -485,7 +470,7 @@ defmodule Alto.OperationLog do
   defp validate_checkpoint(_value, _state), do: {:error, :invalid_checkpoint}
 
   defp validate_id!(id) do
-    if is_binary(id) and Regex.match?(@id_pattern, id) do
+    if Alto.Storage.valid_id?(id) do
       :ok
     else
       raise ArgumentError, "invalid operation log id: #{inspect(id)}"
@@ -669,32 +654,26 @@ defmodule Alto.OperationLog do
          do: checkpoint_transition(record, attempt, checkpoint)
   end
 
-  defp log_apply(record, {:checkpoint_update, _op, expected_revision, checkpoint}, state) do
+  defp log_apply(record, {action, _op, expected_revision, value}, state)
+       when action in [:checkpoint_update, :resume_checkpoint] do
     with :ok <- validate_revision(expected_revision),
-         :ok <- validate_checkpoint(checkpoint, state),
+         :ok <- validate_checkpoint(value, state),
          :ok <- expect_revision(record, expected_revision) do
-      if record.phase == :checkpointed do
-        {:ok, %{record | checkpoint: checkpoint}}
-      else
-        {:error, :not_checkpointed}
-      end
-    end
-  end
+      case {record.phase, action} do
+        {:checkpointed, :checkpoint_update} ->
+          {:ok, %{record | checkpoint: value}}
 
-  defp log_apply(record, {:resume_checkpoint, _op, expected_revision, decision}, state) do
-    with :ok <- validate_revision(expected_revision),
-         :ok <- validate_checkpoint(decision, state),
-         :ok <- expect_revision(record, expected_revision) do
-      if record.phase == :checkpointed do
-        {:ok,
-         %{
-           record
-           | checkpoint_decision: decision,
-             phase: :intended,
-             checkpoint_grant_revision: record.revision + 1
-         }}
-      else
-        {:error, :not_checkpointed}
+        {:checkpointed, :resume_checkpoint} ->
+          {:ok,
+           %{
+             record
+             | checkpoint_decision: value,
+               phase: :intended,
+               checkpoint_grant_revision: record.revision + 1
+           }}
+
+        _ ->
+          {:error, :not_checkpointed}
       end
     end
   end

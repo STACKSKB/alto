@@ -23,7 +23,6 @@ defmodule Alto.External.JSONRPC do
       %{
         opts: opts,
         process: nil,
-        buffer: "",
         phase: :starting,
         next_id: 1,
         pending: %{},
@@ -114,15 +113,17 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  def ready(state) do
+  def ready(state), do: finish_startup(state, :ready, {:ok, self()})
+
+  defp finish_startup(state, phase, reply) do
     cancel_timer(state.initialize_timer)
 
     Enum.each(state.ready_waiters, fn {from, monitor} ->
       demonitor(elem(from, 0), monitor)
-      GenServer.reply(from, {:ok, self()})
+      GenServer.reply(from, reply)
     end)
 
-    %{state | phase: :ready, ready_waiters: [], initialize_timer: nil}
+    %{state | phase: phase, ready_waiters: [], initialize_timer: nil}
   end
 
   def arm_startup_timeout(state) do
@@ -143,8 +144,15 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  defp transport_event({port, {:data, data}}, %{process: %{port: port}} = state, handler),
-    do: ingest(state, data, :json_rpc_message_limit, &consume_lines(&1, handler))
+  defp transport_event({port, {:data, {:eol, line}}}, %{process: %{port: port}} = state, handler),
+    do: decode_line(String.trim_trailing(line, "\r"), state, handler)
+
+  defp transport_event({port, {:data, {:noeol, _}}}, %{process: %{port: port}} = state, _),
+    do:
+      {:error, {:json_rpc_incomplete_line, Keyword.fetch!(state.opts, :max_message_bytes)}, state}
+
+  defp transport_event({port, {:data, _}}, %{process: %{port: port}} = state, _),
+    do: {:error, :json_rpc_unframed_data, state}
 
   defp transport_event({port, {:exit_status, status}}, %{process: %{port: port}} = state, _),
     do: {:error, {:json_rpc_process_exit, status}, state}
@@ -157,24 +165,9 @@ defmodule Alto.External.JSONRPC do
 
   defp transport_event(_, state, _), do: {:ok, state}
 
-  def ingest(state, data, limit_error, consume)
-      when is_binary(data) and is_function(consume, 1) do
-    buffer = state.buffer <> data
-    limit = Keyword.fetch!(state.opts, :max_message_bytes)
-
-    if byte_size(buffer) > limit,
-      do: {:error, {limit_error, limit}, state},
-      else: consume.(%{state | buffer: buffer})
-  end
-
   def close(%{process: nil}), do: :ok
 
-  def close(%{process: process}) do
-    ExternalProcess.close(process)
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
+  def close(%{process: process}), do: ExternalProcess.close(process)
 
   def request(state, method, params, reply, owner, timeout, limit_error) do
     limit = Keyword.fetch!(state.opts, :max_pending_requests)
@@ -201,22 +194,6 @@ defmodule Alto.External.JSONRPC do
 
           {:ok, %{state | next_id: id + 1, pending: Map.put(state.pending, id, pending)}}
         end
-    end
-  end
-
-  def consume_lines(state, handle_message) do
-    case :binary.split(state.buffer, "\n") do
-      [_rest] ->
-        {:ok, state}
-
-      [line, rest] ->
-        with {:ok, state} <-
-               decode_line(
-                 String.trim_trailing(line, "\r"),
-                 %{state | buffer: rest},
-                 handle_message
-               ),
-             do: consume_lines(state, handle_message)
     end
   end
 
@@ -281,17 +258,8 @@ defmodule Alto.External.JSONRPC do
   def cancel_timer(nil), do: :ok
   def cancel_timer(timer), do: Process.cancel_timer(timer)
 
-  def fail_waiters(state, reason) do
-    Enum.each(state.ready_waiters, fn {from, monitor} ->
-      demonitor(elem(from, 0), monitor)
-      GenServer.reply(from, {:error, reason})
-    end)
-
-    %{state | ready_waiters: [], phase: {:failed, reason}}
-  end
-
   def fail_all(state, reason, reply_error) do
-    state = fail_waiters(state, reason)
+    state = finish_startup(state, {:failed, reason}, {:error, reason})
 
     Enum.each(state.pending, fn {_id, entry} ->
       release(entry)
@@ -311,11 +279,11 @@ defmodule Alto.External.JSONRPC do
 
   def send_payload(state, payload) do
     max_bytes = Keyword.fetch!(state.opts, :max_message_bytes)
-    data = JSON.encode!(payload) <> "\n"
+    data = JSON.encode!(payload)
 
     cond do
       byte_size(data) > max_bytes -> {:error, {:json_rpc_message_limit, max_bytes}}
-      Port.command(state.process.port, data, [:nosuspend]) -> :ok
+      Port.command(state.process.port, [data, "\n"], [:nosuspend]) -> :ok
       true -> {:error, :transport_busy}
     end
   rescue

@@ -36,7 +36,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
             started_ms,
             started_ms + invocation.timeout_ms,
             invocation.max_output_bytes,
-            %{head: <<>>, tail: <<>>, seen: 0, utf8: :valid, pending: <<>>}
+            %{head: <<>>, tail: <<>>, seen: 0, pending: <<>>}
           )
         after
           ExternalProcess.close(process)
@@ -67,29 +67,26 @@ defmodule Alto.Command.Executors.Unsandboxed do
 
   defp retain(capture, data, limit) do
     seen = capture.seen + byte_size(data)
-    head_limit = limit
-    tail_limit = limit
 
     head =
-      if byte_size(capture.head) < head_limit do
-        take = min(head_limit - byte_size(capture.head), byte_size(data))
+      if byte_size(capture.head) < limit do
+        take = min(limit - byte_size(capture.head), byte_size(data))
         capture.head <> binary_part(data, 0, take)
       else
         capture.head
       end
 
-    tail = keep_tail(capture.tail, data, tail_limit)
-    {utf8, pending} = update_utf8(capture.utf8, capture.pending, data)
-    %{capture | head: head, tail: tail, seen: seen, utf8: utf8, pending: pending}
+    tail = keep_tail(capture.tail, data, limit)
+    %{capture | head: head, tail: tail, seen: seen, pending: update_utf8(capture.pending, data)}
   end
 
-  defp update_utf8(:invalid, _pending, _data), do: {:invalid, <<>>}
+  defp update_utf8(:invalid, _data), do: :invalid
 
-  defp update_utf8(status, pending, data) when status in [:valid, :incomplete] do
+  defp update_utf8(pending, data) do
     case :unicode.characters_to_binary(pending <> data) do
-      binary when is_binary(binary) -> {:valid, <<>>}
-      {:incomplete, _valid, rest} -> {:incomplete, rest}
-      {:error, _valid, _rest} -> {:invalid, <<>>}
+      binary when is_binary(binary) -> <<>>
+      {:incomplete, _valid, rest} -> rest
+      {:error, _valid, _rest} -> :invalid
     end
   end
 
@@ -105,7 +102,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
 
   defp result(capture, exit_status, started_ms, termination, limit) do
     truncated? = capture.seen > limit
-    output = captured_output(capture, limit, truncated?, capture.utf8)
+    output = captured_output(capture, limit, truncated?)
 
     base = %{
       exit_status: exit_status,
@@ -115,7 +112,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
       duration_ms: max(System.monotonic_time(:millisecond) - started_ms, 0)
     }
 
-    if capture.utf8 != :invalid and String.valid?(output) do
+    if capture.pending != :invalid and String.valid?(output) do
       Map.put(base, :output, output)
     else
       base
@@ -124,10 +121,10 @@ defmodule Alto.Command.Executors.Unsandboxed do
     end
   end
 
-  defp captured_output(_capture, 0, _truncated, _utf8), do: <<>>
-  defp captured_output(capture, _limit, false, _utf8), do: capture.head
+  defp captured_output(_capture, 0, _truncated), do: <<>>
+  defp captured_output(capture, _limit, false), do: capture.head
 
-  defp captured_output(capture, limit, true, utf8) do
+  defp captured_output(capture, limit, true) do
     marker =
       if byte_size("\n… output truncated …\n") < limit, do: "\n… output truncated …\n", else: ""
 
@@ -147,21 +144,14 @@ defmodule Alto.Command.Executors.Unsandboxed do
             min(byte_size(capture.tail), tail_limit)
           )
 
-    if utf8 == :invalid,
+    if capture.pending == :invalid,
       do: head <> marker <> tail,
-      else: repair_text_boundaries(head, marker, tail)
+      else: Alto.Text.prefix(head, byte_size(head)) <> marker <> repair_tail(tail)
   end
 
-  defp repair_text_boundaries(head, marker, tail) do
-    repair_fragment(head, :head) <> marker <> repair_fragment(tail, :tail)
-  end
+  defp repair_tail(<<byte, rest::binary>>) when byte in 0x80..0xBF,
+    do: repair_tail(rest)
 
-  defp repair_fragment(fragment, :head),
-    do: Alto.Text.prefix(fragment, byte_size(fragment))
-
-  defp repair_fragment(<<byte, rest::binary>>, :tail) when byte in 0x80..0xBF,
-    do: repair_fragment(rest, :tail)
-
-  defp repair_fragment(fragment, :tail),
+  defp repair_tail(fragment),
     do: Alto.Text.prefix(fragment, byte_size(fragment))
 end

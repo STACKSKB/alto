@@ -13,7 +13,7 @@ defmodule Alto.Runner.DurableBudgetTest do
       {:ok, %{value: File.read!(Path.join(context.cwd, "input"))}, %{action: "record"}}
     end
 
-    def run_prepared(prepared, context, _opts) do
+    def run(prepared, context, _opts) do
       File.write!(Path.join(context.cwd, "output"), prepared.value, [:append])
       {:ok, prepared.value}
     end

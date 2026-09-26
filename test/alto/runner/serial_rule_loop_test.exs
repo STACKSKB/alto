@@ -80,7 +80,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     def execution_mode(_opts), do: :exclusive
 
     # Approval/0 omitted: defaults to :required, so the prepared invocation
-    # crosses the approval boundary before run_prepared consumes it.
+    # crosses the approval boundary before run consumes it.
     @impl true
     def prepare(%{"value" => value}, _context, _opts) do
       token = "prep-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
@@ -88,7 +88,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     end
 
     @impl true
-    def run_prepared(%{value: value, token: token}, _context, _opts) do
+    def run(%{value: value, token: token}, _context, _opts) do
       {:ok, %{stamped: value, token: token}}
     end
   end
@@ -379,7 +379,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
                       details: %{stamped_with: "frozen", token: token}
                     }}
 
-    # run_prepared consumed exactly the frozen value prepare returned: the
+    # run consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.
     assert %{stamped: "frozen", token: ^token} = result.output
   end

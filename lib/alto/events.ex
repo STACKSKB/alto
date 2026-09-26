@@ -9,14 +9,10 @@ defmodule Alto.Events do
     Keyword.put(options, :event_sink, combine([host_sink, Keyword.get(options, :event_sink)]))
   end
 
-  @doc "Safely notify a live event sink."
-  def notify(nil, _event), do: :ok
-
+  @doc "Safely notify an observer."
   def notify(sink, event) when is_function(sink, 1) do
     sink.(event)
     :ok
-  rescue
-    _ -> :ok
   catch
     _, _ -> :ok
   end

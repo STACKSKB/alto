@@ -28,6 +28,11 @@ defmodule Alto.Tools.RunCommandTest do
     %{root: root, context: %Context{session_id: "test", cwd: root}}
   end
 
+  defp prepared_run(tool, arguments, context, opts \\ []) do
+    with {:ok, prepared, _details} <- tool.prepare(arguments, context, opts),
+         do: tool.run(prepared, context, opts)
+  end
+
   test "runs one executable directly and captures its exit", %{context: context} do
     assert {:ok,
             %{
@@ -37,7 +42,11 @@ defmodule Alto.Tools.RunCommandTest do
               truncated: false,
               timed_out: false
             }} =
-             RunCommand.run(%{"program" => "printf", "args" => ["%s", "hello"]}, context)
+             prepared_run(
+               RunCommand,
+               %{"program" => "printf", "args" => ["%s", "hello"]},
+               context
+             )
   end
 
   test "drains after the output limit while retaining bounded head and tail", %{context: context} do
@@ -48,7 +57,8 @@ defmodule Alto.Tools.RunCommandTest do
               termination: :exit,
               truncated: true
             }} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{"program" => "printf", "args" => ["abcdef"], "max_output_bytes" => 3},
                context
              )
@@ -56,7 +66,8 @@ defmodule Alto.Tools.RunCommandTest do
 
   test "retains the final diagnostic tail after a capped command exits", %{context: context} do
     assert {:ok, result} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{
                  "program" => "sh",
                  "args" => ["-c", "printf 'head-output'; printf 'final-error' >&2; exit 7"],
@@ -76,7 +87,8 @@ defmodule Alto.Tools.RunCommandTest do
     content = "START" <> String.duplicate("😀", 100) <> "END"
 
     assert {:ok, result} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{"program" => "printf", "args" => ["%s", content], "max_output_bytes" => 64},
                context
              )
@@ -90,7 +102,8 @@ defmodule Alto.Tools.RunCommandTest do
 
   test "keeps split UTF-8 output as text at a capture edge", %{context: context} do
     assert {:ok, result} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{
                  "program" => "sh",
                  "args" => [
@@ -110,7 +123,8 @@ defmodule Alto.Tools.RunCommandTest do
 
   test "encodes genuinely binary output instead of forcing UTF-8", %{context: context} do
     assert {:ok, result} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{"program" => "sh", "args" => ["-c", "printf '\\377\\376'"]},
                context
              )
@@ -128,7 +142,8 @@ defmodule Alto.Tools.RunCommandTest do
               termination: :timeout,
               timed_out: true
             }} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{"program" => "sleep", "args" => ["5"], "timeout_ms" => 100},
                context
              )
@@ -136,7 +151,7 @@ defmodule Alto.Tools.RunCommandTest do
 
   test "does not invoke a shell to resolve command syntax", %{context: context} do
     assert {:error, {:executable_not_found, "printf hello"}} =
-             RunCommand.run(%{"program" => "printf hello"}, context)
+             prepared_run(RunCommand, %{"program" => "printf hello"}, context)
   end
 
   @tag skip: @trampoline_skip
@@ -144,7 +159,8 @@ defmodule Alto.Tools.RunCommandTest do
     marker = Path.join(root, "orphaned")
 
     assert {:ok, %{exit_status: 0}} =
-             RunCommand.run(
+             prepared_run(
+               RunCommand,
                %{
                  "program" => "sh",
                  "args" => ["-c", "(sleep 0.2; touch orphaned) >/dev/null 2>&1 &"]
@@ -167,7 +183,8 @@ defmodule Alto.Tools.RunCommandTest do
     caller =
       spawn(fn ->
         result =
-          RunCommand.run(
+          prepared_run(
+            RunCommand,
             %{"program" => "sh", "args" => ["-c", "echo $$ > #{pidfile}; exec sleep 300"]},
             context
           )
@@ -203,14 +220,14 @@ defmodule Alto.Tools.RunCommandTest do
 
     script = """
     {:ok, _} = Application.ensure_all_started(:logger)
+    context = %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
 
-    result =
-      Alto.Tools.RunCommand.run(
-        %{"program" => "sleep", "args" => ["1"], "timeout_ms" => 10},
-        %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
+    {:ok, prepared, _details} =
+      Alto.Tools.RunCommand.prepare(
+        %{"program" => "sleep", "args" => ["1"], "timeout_ms" => 10}, context
       )
 
-    IO.inspect(result, limit: :infinity)
+    IO.inspect(Alto.Tools.RunCommand.run(prepared, context), limit: :infinity)
     """
 
     {output, status} =
@@ -263,14 +280,14 @@ defmodule Alto.Tools.RunCommandTest do
 
     script = """
     {:ok, _} = Application.ensure_all_started(:logger)
+    context = %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
 
-    result =
-      Alto.Tools.RunCommand.run(
-        %{"program" => "printf", "args" => ["%s", "slow"], "timeout_ms" => 10_000},
-        %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
+    {:ok, prepared, _details} =
+      Alto.Tools.RunCommand.prepare(
+        %{"program" => "printf", "args" => ["%s", "slow"], "timeout_ms" => 10_000}, context
       )
 
-    IO.inspect(result, limit: :infinity)
+    IO.inspect(Alto.Tools.RunCommand.run(prepared, context), limit: :infinity)
     """
 
     {output, status} =

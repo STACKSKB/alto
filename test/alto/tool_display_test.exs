@@ -29,7 +29,8 @@ defmodule Alto.ToolDisplayTest do
     context = %Alto.Tool.Context{cwd: root, session_id: "diff-test"}
 
     assert {:ok, result} =
-             Alto.Tools.EditFile.run(
+             run_tool(
+               Alto.Tools.EditFile,
                %{
                  "path" => "a.txt",
                  "edits" => [%{"old_text" => "before", "new_text" => "after"}]
@@ -43,14 +44,23 @@ defmodule Alto.ToolDisplayTest do
     refute detail =~ "\\n"
 
     assert {:ok, result} =
-             Alto.Tools.WriteFile.run(%{"path" => "a.txt", "content" => "replaced\n"}, context)
+             run_tool(
+               Alto.Tools.WriteFile,
+               %{"path" => "a.txt", "content" => "replaced\n"},
+               context
+             )
 
     assert ToolDisplay.detail(result) =~ "-after\n+replaced"
 
     assert {:ok, result} =
-             Alto.Tools.WriteFile.run(%{"path" => "new.txt", "content" => "new\n"}, context)
+             run_tool(Alto.Tools.WriteFile, %{"path" => "new.txt", "content" => "new\n"}, context)
 
     assert ToolDisplay.detail(result) =~ "+new"
+  end
+
+  defp run_tool(tool, arguments, context) do
+    with {:ok, prepared, _details} <- tool.prepare(arguments, context, []),
+         do: tool.run(prepared, context, [])
   end
 
   test "restored history pairs parallel tool results with their own filenames" do

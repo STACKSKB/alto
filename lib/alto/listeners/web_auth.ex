@@ -32,8 +32,6 @@ defmodule Alto.Listeners.WebAuth do
 
   def allowed?(conn, {module, opts}) do
     module.authorize(conn, opts) == :ok
-  rescue
-    _ -> false
   catch
     _, _ -> false
   end
@@ -41,21 +39,16 @@ defmodule Alto.Listeners.WebAuth do
   def authorize(conn, opts) do
     expected = Keyword.fetch!(opts, :token)
 
-    candidates =
-      Enum.flat_map(Plug.Conn.get_req_header(conn, "authorization"), fn
-        "Bearer " <> token -> [token]
-        _ -> []
-      end) ++
-        (Plug.Conn.get_req_header(conn, "sec-websocket-protocol")
-         |> Enum.flat_map(&String.split(&1, ","))
-         |> Enum.flat_map(fn value ->
-           case String.trim(value) do
-             "alto-auth." <> token -> [token]
-             _ -> []
-           end
-         end))
+    bearer_tokens =
+      for "Bearer " <> token <- Plug.Conn.get_req_header(conn, "authorization"), do: token
 
-    case candidates do
+    protocol_tokens =
+      for header <- Plug.Conn.get_req_header(conn, "sec-websocket-protocol"),
+          value <- String.split(header, ","),
+          "alto-auth." <> token <- [String.trim(value)],
+          do: token
+
+    case bearer_tokens ++ protocol_tokens do
       [token] ->
         if Plug.Crypto.secure_compare(token, expected), do: :ok, else: {:error, :unauthorized}
 

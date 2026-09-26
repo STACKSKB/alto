@@ -21,10 +21,10 @@ defmodule Alto.Approvals.Socket do
   end
 
   def decide(%Alto.Approval.Request{id: id} = request, context, _opts) do
-    case request_approval(approval_registry(context),
-           session_id: context.session_id,
-           request: request
-         ) do
+    registry =
+      Map.get(Map.get(context, :metadata, %{}), :front_end_registry, Alto.FrontEnd.Registry)
+
+    case Alto.FrontEnd.Registry.request_approval(registry, context.session_id, request, self()) do
       :ok ->
         receive do
           {:alto_approval_decision, ^id, decision} -> decision
@@ -33,19 +33,7 @@ defmodule Alto.Approvals.Socket do
       {:error, reason} ->
         {:deny, {:approval_unavailable, reason}}
     end
-  end
-
-  # Runs started through the registry carry its process in the tool context;
-  # standalone use falls back to the default registered name.
-  defp approval_registry(context) do
-    context
-    |> Map.get(:metadata, %{})
-    |> Map.get(:front_end_registry, Alto.FrontEnd.Registry)
-  end
-
-  defp request_approval(registry, session_id: session_id, request: request) do
-    Alto.FrontEnd.Registry.request_approval(registry, session_id, request, self())
   catch
-    :exit, reason -> {:error, {:registry_exit, reason}}
+    :exit, reason -> {:deny, {:approval_unavailable, {:registry_exit, reason}}}
   end
 end

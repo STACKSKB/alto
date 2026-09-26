@@ -8,7 +8,10 @@ defmodule Alto.Command.Executor do
 
   @callback execute(execution :: term()) :: {:ok, map()} | {:error, term()}
 
-  @doc "Open a retained stdio process. The caller owns protocol framing and lifetime bounds."
+  @doc """
+  Open a retained stdio process, forwarding transport options to `Alto.External.Process`.
+  `:line` selects bounded OTP line framing; omitting it keeps raw byte output.
+  """
   @callback open(execution :: term(), keyword()) ::
               {:ok, Alto.External.Process.t()} | {:error, term()}
   @optional_callbacks open: 2

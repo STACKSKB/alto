@@ -75,9 +75,7 @@ defmodule Alto.Config do
 
   @doc "Build a configuration from options accepted by `Alto.run/2`."
   @spec new(keyword()) :: t()
-  def new(run_options \\ [])
-
-  def new(run_options) do
+  def new(run_options \\ []) do
     validate_unique!(run_options, "Alto")
     validate_unique!(Keyword.get(run_options, :tui, []), "Alto TUI")
     %__MODULE__{run_options: NimbleOptions.validate!(run_options, @schema)}
