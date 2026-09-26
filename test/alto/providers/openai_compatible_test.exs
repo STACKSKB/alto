@@ -46,6 +46,8 @@ defmodule Alto.Providers.OpenAICompatibleTest do
                )
 
       assert_receive {:http_request, wire}
+      assert wire.url.host == "openrouter.ai"
+      assert wire.url.path == "/api/v1/chat/completions"
       body = JSON.decode!(wire.body)
       assert body["session_id"] == "session-1"
       assert body["cache_control"] == %{"type" => "ephemeral"}
@@ -63,12 +65,6 @@ defmodule Alto.Providers.OpenAICompatibleTest do
     body = JSON.decode!(wire.body)
     refute Map.has_key?(body, "cache_control")
     refute Map.has_key?(body, "session_id")
-  end
-
-  test "defaults to OpenRouter" do
-    assert OpenAICompatible.describe([]).base_url == "https://openrouter.ai/api/v1"
-    assert OpenAICompatible.describe([]).vision == false
-    assert OpenAICompatible.describe(supports_images: true).vision == true
   end
 
   test "sends typed image tool results as vision content only when explicitly enabled" do

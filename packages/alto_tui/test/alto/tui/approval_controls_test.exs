@@ -91,7 +91,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
 
   test "keeps drawer controls pinned while details scrolls and accepts a narrow click", context do
     state = pending_state(context, {80, 24})
-    assert state.details_drawer_open?
+    assert state.details_return_focus
     assert state.details_drawer_auto_opened?
     assert state.focus == :details
     scrolled = %{state | details_scroll: 100}
@@ -104,7 +104,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), scrolled)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
-    refute decided.details_drawer_open?
+    refute decided.details_return_focus
     assert decided.focus == :composer
   end
 
@@ -265,7 +265,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
       |> Alto.Test.TUI.config()
 
     state = pending_state(context, {80, 24}, config)
-    refute state.details_drawer_open?
+    refute state.details_return_focus
     assert state.focus == :composer
     {buffer, _terminal} = render(state, 80, 24)
     assert buffer =~ "D:REQ"

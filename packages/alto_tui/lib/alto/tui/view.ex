@@ -180,7 +180,7 @@ defmodule Alto.TUI.View do
   end
 
   @doc "Rectangle used by narrow context, or nil when the persistent pane is active."
-  def context_overlay_rect(%State{details_drawer_open?: false}, _width, _height), do: nil
+  def context_overlay_rect(%State{details_return_focus: nil}, _width, _height), do: nil
 
   def context_overlay_rect(%State{}, width, height) when width <= 0 or height <= 1, do: nil
 
@@ -832,7 +832,7 @@ defmodule Alto.TUI.View do
   defp entry_mode_label(_state), do: "PROSE"
 
   defp context_label(%{pending_approvals: [_ | _]}), do: "REQ"
-  defp context_label(%{details_drawer_open?: true}), do: "OPEN"
+  defp context_label(%{details_return_focus: focus}) when not is_nil(focus), do: "OPEN"
   defp context_label(%{details_visible?: true}), do: "CTX"
   defp context_label(_state), do: "OFF"
 
@@ -844,7 +844,7 @@ defmodule Alto.TUI.View do
   defp mini_entry_label(_state), do: "P"
 
   defp mini_context_label(%{pending_approvals: [_ | _]}), do: "!"
-  defp mini_context_label(%{details_drawer_open?: true}), do: "O"
+  defp mini_context_label(%{details_return_focus: focus}) when not is_nil(focus), do: "O"
   defp mini_context_label(%{details_visible?: true}), do: "C"
   defp mini_context_label(_state), do: "X"
 

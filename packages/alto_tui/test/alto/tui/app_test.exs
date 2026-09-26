@@ -1311,7 +1311,7 @@ defmodule Alto.TUI.AppTest do
              App.handle_event(%ExRatatui.Event.Resize{width: 80, height: 24}, state)
 
     assert resized.focus == :details
-    assert resized.details_drawer_open?
+    assert resized.details_return_focus
     assert State.visible_focuses(resized) == [:details]
 
     assert {:noreply, leader} =
@@ -1355,7 +1355,6 @@ defmodule Alto.TUI.AppTest do
         drawer
       )
 
-    assert drawer.details_drawer_open?
     assert drawer.details_return_focus == :composer
     assert drawer.focus == :details
 
@@ -1374,7 +1373,7 @@ defmodule Alto.TUI.AppTest do
 
     {:noreply, closed} = App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 10}, closed)
 
-    refute closed.details_drawer_open?
+    refute closed.details_return_focus
     assert closed.focus == :composer
 
     fullscreen = %{drawer | dimensions: {60, 24}}

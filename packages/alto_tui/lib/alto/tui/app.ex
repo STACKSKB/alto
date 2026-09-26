@@ -159,7 +159,7 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp route_event(%Paste{}, %{details_drawer_open?: true} = state),
+  defp route_event(%Paste{}, %{details_return_focus: focus} = state) when not is_nil(focus),
     do: {:noreply, state, render?: false}
 
   defp route_event(%Paste{content: content}, %{type_to_compose?: true} = state) do
@@ -176,8 +176,9 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{} = key, %{overlay: overlay} = state) when not is_nil(overlay),
     do: {:noreply, overlay_key(state, key)}
 
-  defp route_event(%Key{code: "esc"}, %{details_drawer_open?: true} = state),
-    do: {:noreply, State.close_details_drawer(state)}
+  defp route_event(%Key{code: "esc"}, %{details_return_focus: focus} = state)
+       when not is_nil(focus),
+       do: {:noreply, State.close_details_drawer(state)}
 
   defp route_event(%Key{code: "g", modifiers: ["ctrl"]}, state) do
     {:noreply, %{state | leader?: not state.leader?, notice: nil}}
@@ -240,7 +241,7 @@ defmodule Alto.TUI.App do
 
   defp route_event(
          %Key{} = key,
-         %{type_to_compose?: true, details_drawer_open?: false} = state
+         %{type_to_compose?: true, details_return_focus: nil} = state
        ) do
     if printable_key?(key) do
       forward_textarea(%{state | focus: :composer}, key)
@@ -1231,7 +1232,7 @@ defmodule Alto.TUI.App do
     state = %{state | leader?: false}
 
     cond do
-      state.details_drawer_open? ->
+      state.details_return_focus ->
         State.close_details_drawer(state)
 
       State.details_pane_visible?(state) ->
@@ -1289,7 +1290,7 @@ defmodule Alto.TUI.App do
     if rest == [] and next.details_drawer_auto_opened? do
       State.close_details_drawer(next)
     else
-      %{next | focus: if(next.details_drawer_open?, do: :details, else: :composer)}
+      %{next | focus: if(next.details_return_focus, do: :details, else: :composer)}
     end
   end
 
@@ -1304,7 +1305,7 @@ defmodule Alto.TUI.App do
       not next.approval_auto_open? ->
         State.ensure_visible_focus(next)
 
-      State.details_pane_visible?(next) or next.details_drawer_open? ->
+      State.details_pane_visible?(next) or next.details_return_focus ->
         %{next | focus: :details}
 
       true ->

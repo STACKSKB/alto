@@ -48,7 +48,6 @@ defmodule Alto.TUI.State do
     focus: :composer,
     leader?: false,
     details_visible?: true,
-    details_drawer_open?: false,
     details_drawer_auto_opened?: false,
     details_return_focus: nil,
     rail_visible?: true,
@@ -493,7 +492,6 @@ defmodule Alto.TUI.State do
     %{
       state
       | details_visible?: true,
-        details_drawer_open?: true,
         details_drawer_auto_opened?: auto_opened?,
         details_return_focus: return_focus || :composer,
         focus: :details
@@ -504,8 +502,7 @@ defmodule Alto.TUI.State do
   def close_details_drawer(%__MODULE__{} = state) do
     state = %{
       state
-      | details_drawer_open?: false,
-        details_drawer_auto_opened?: false,
+      | details_drawer_auto_opened?: false,
         focus: state.details_return_focus || :composer,
         details_return_focus: nil
     }
@@ -516,16 +513,15 @@ defmodule Alto.TUI.State do
   @doc "Keep actively focused context visible while crossing responsive breakpoints."
   def reconcile_responsive_focus(%__MODULE__{} = state) do
     cond do
-      details_pane_visible?(state) and state.details_drawer_open? ->
+      details_pane_visible?(state) and state.details_return_focus ->
         %{
           state
-          | details_drawer_open?: false,
-            details_drawer_auto_opened?: false,
+          | details_drawer_auto_opened?: false,
             details_return_focus: nil
         }
 
       not details_pane_visible?(state) and state.focus == :details and
-          not state.details_drawer_open? ->
+          is_nil(state.details_return_focus) ->
         open_details_drawer(state)
 
       true ->
@@ -539,7 +535,7 @@ defmodule Alto.TUI.State do
 
   @doc "Focus targets rendered at the state's current terminal dimensions."
   def visible_focuses(%__MODULE__{} = state) do
-    if state.details_drawer_open? do
+    if state.details_return_focus do
       [:details]
     else
       layout = responsive_layout(state)

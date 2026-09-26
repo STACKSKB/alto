@@ -798,7 +798,7 @@ defmodule Alto.TUI.Backends.Codex do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, Tuple.append(prefix, fun.()))
+      send(owner, Tuple.insert_at(prefix, tuple_size(prefix), fun.()))
     end)
   end
 

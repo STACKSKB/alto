@@ -648,8 +648,28 @@ defmodule Alto.OperationLog do
 
   defp log_apply(record, {:checkpoint, _op, attempt, checkpoint}, state) do
     with :ok <- validate_attempt(attempt, state),
-         :ok <- validate_checkpoint(checkpoint, state),
-         do: checkpoint_transition(record, attempt, checkpoint)
+         :ok <- validate_checkpoint(checkpoint, state) do
+      cond do
+        match?({:decided, _, _, _}, record.phase) ->
+          {:error, :already_decided}
+
+        record.phase == :checkpointed ->
+          {:error, :checkpoint_active}
+
+        attempt != current_attempt(record) or record.phase != :dispatched ->
+          {:error, :stale_attempt}
+
+        true ->
+          {:ok,
+           %{
+             record
+             | checkpoint: checkpoint,
+               phase: :checkpointed,
+               checkpoint_decision: nil,
+               checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
+           }}
+      end
+    end
   end
 
   defp log_apply(record, {action, _op, expected_revision, value}, state)
@@ -725,29 +745,6 @@ defmodule Alto.OperationLog do
   end
 
   defp log_apply(_record, _command, _state), do: {:error, :bad_entry}
-
-  defp checkpoint_transition(record, attempt, checkpoint) do
-    cond do
-      match?({:decided, _, _, _}, record.phase) ->
-        {:error, :already_decided}
-
-      record.phase == :checkpointed ->
-        {:error, :checkpoint_active}
-
-      attempt != current_attempt(record) or record.phase != :dispatched ->
-        {:error, :stale_attempt}
-
-      true ->
-        {:ok,
-         %{
-           record
-           | checkpoint: checkpoint,
-             phase: :checkpointed,
-             checkpoint_decision: nil,
-             checkpointed_attempts: Enum.uniq(record.checkpointed_attempts ++ [attempt])
-         }}
-    end
-  end
 
   defp outcome_class(class)
        when class in [
