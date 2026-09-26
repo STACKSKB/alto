@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,490 lines**, a **17.6% reduction**, with **5,032 lines remaining**.
+Current: **33,462 lines**, a **17.7% reduction**, with **5,004 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,14 +53,19 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-The latest cleanup removes **67 net production lines** across twelve modules:
+Clipboard reads and writes now reuse supervised invocation, removing both local
+task-wait/shutdown paths and **28 implementation lines**. Private stdin files,
+desktop helper selection, timeout handling and OSC 52 fallback are retained;
+all 144 TUI tests pass. No source documentation was removed in this pass.
+
+The preceding cleanup removed **67 net production lines** across twelve modules:
 69 implementation lines removed, with two net documentation/typespec lines added.
 Supervised calls return callback values directly and share failure/cancellation
 tags, removing repeated unwrapping across execution, consumers and front ends.
 Cancellation still preserves completed siblings and bypasses false tool-result
 commitments; mutation uncertainty remains classified at dispatch boundaries.
 
-The preceding cleanup removed 65 net production lines: 54 implementation lines
+The canonical-record cleanup removed 65 net production lines: 54 implementation lines
 and 11 lines from the now string-keyed snapshot typespec. Conversation storage,
 revision reads, forks and resume now share the same JSON-shaped record instead
 of carrying paired storage/public representations. Provider profiles normalize
@@ -80,6 +85,10 @@ composition and canonical state. The “Analyze code duplication” findings hav
 been checked against callers; reject extractions that add adapters without
 removing implementation. Recent CLI/menu/selection reviews found no substantial
 remaining duplication; merely wrapping their distinct flows is not progress.
+Provider response/state prototypes were discarded: after formatting, they
+removed only five lines while adding a reconstruction step. Workspace lifecycle
+and listener audits likewise found no large duplicate flow beyond the existing
+shared storage, HTTP and connection mechanisms.
 
 Preserve append-before-dispatch durability, single-use grants, bounded retention,
 frozen approval values, and the distinction between rejection and uncertain

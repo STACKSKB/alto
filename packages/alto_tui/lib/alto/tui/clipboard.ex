@@ -47,28 +47,12 @@ defmodule Alto.TUI.Clipboard do
       File.write!(path, text)
       File.chmod!(path, 0o600)
 
-      task =
-        Task.async(fn ->
-          try do
-            # Redirect output too: X11 owners may fork to retain the selection.
-            case System.cmd("/bin/sh", [
-                   "-c",
-                   ~s(exec "$@" < "$0" > /dev/null 2>&1),
-                   path,
-                   program | args
-                 ]) do
-              {_, 0} -> :ok
-              _ -> {:error, :unavailable}
-            end
-          rescue
-            _ -> {:error, :unavailable}
-          end
-        end)
-
-      case Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} -> result
-        _ -> {:error, :unavailable}
-      end
+      # Redirect output too: X11 owners may fork to retain the selection.
+      with {:ok, _} <-
+             command(
+               {"/bin/sh", ["-c", ~s(exec "$@" < "$0" > /dev/null 2>&1), path, program | args]}
+             ),
+           do: :ok
     rescue
       _ -> {:error, :unavailable}
     after
@@ -91,30 +75,18 @@ defmodule Alto.TUI.Clipboard do
   end
 
   @doc "Read the local desktop clipboard when a supported helper is installed."
-  def read do
-    command = desktop_command(:read)
+  def read, do: command(desktop_command(:read))
 
-    if command do
-      task =
-        Task.async(fn ->
-          {program, args} = command
+  defp command(nil), do: {:error, :unavailable}
 
-          try do
-            case System.cmd(program, args, stderr_to_stdout: true) do
-              {text, 0} -> {:ok, text}
-              _ -> {:error, :unavailable}
-            end
-          rescue
-            _ -> {:error, :unavailable}
-          end
-        end)
-
-      case Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} -> result
-        _ -> {:error, :unavailable}
-      end
-    else
-      {:error, :unavailable}
+  defp command({program, args}) do
+    case Alto.Runner.Execution.Call.run(
+           fn -> System.cmd(program, args, stderr_to_stdout: true) end,
+           1_000,
+           nil
+         ) do
+      {text, 0} -> {:ok, text}
+      _ -> {:error, :unavailable}
     end
   end
 
