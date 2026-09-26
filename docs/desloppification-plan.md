@@ -12,7 +12,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,555 lines (17.5% below the original)**. **5,097 lines
+The current count is **33,518 lines (17.6% below the original)**. **5,060 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -28,6 +28,14 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Catalog and credentials share bounded JSON snapshot reads and the locked
+  reread/update/atomic-replacement workflow in Storage. Their domain validators
+  and credential permission checks remain separate. Storage errors now use
+  `snapshot_*` tags, including in TUI catalog recovery; formats are unchanged.
+  Write limits include the trailing newline so a successful snapshot fits the
+  reader's bound. Command capture retains one bounded first/last buffer instead
+  of parallel head and tail state, retaining UTF-8 repairs and binary output.
+  Together these remove 37 formatted production lines.
 - Tool result bounding also classifies participant results. Serial, parallel and
   agent tools share one outcome commit path for transcript, history and events;
   the nested worker-result adapters and summary postprocessor are removed.
@@ -222,7 +230,13 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,070 core tests and
+The shared snapshot workflow passes 45 credential/catalog/provider/onboarding
+tests and all 142 TUI tests. Command capture passes 30 command and sandbox
+tests, including repeated clipping before the final diagnostic tail. The
+snapshot boundary regression checks exact-size rereading and rejects a changed
+document one byte over the limit without replacing the prior file.
+
+The preceding tool/workspace simplification passed **1,070 core tests and
 142 TUI tests**.
 The canonical tool outcomes and workspace resource lifecycle pass both full
 suites. Existing tests cover bounds, cancellation, sibling outcome retention,

@@ -6,8 +6,6 @@ defmodule Alto.Credentials do
   atomically replaced with mode `0600` and bounded before decoding.
   """
 
-  alias Alto.AtomicFile
-
   @version 1
   @max_bytes 64_000
 
@@ -27,12 +25,8 @@ defmodule Alto.Credentials do
   def load(path \\ default_path()) when is_binary(path) do
     expanded = Path.expand(path)
 
-    case Alto.BoundedFile.read(expanded, @max_bytes) do
-      {:ok, content} -> decode(expanded, content)
-      {:error, {:too_large, _size, _max}} -> {:error, {:credentials_too_large, @max_bytes}}
-      {:error, :enoent} -> {:ok, %__MODULE__{path: expanded, providers: %{}}}
-      {:error, reason} -> {:error, {:credentials_read_failed, expanded, reason}}
-    end
+    with {:ok, document} <- read(expanded),
+         do: {:ok, %__MODULE__{path: expanded, providers: document["providers"]}}
   end
 
   @doc "Fetch a saved provider value such as `api_key` or `model`."
@@ -52,37 +46,32 @@ defmodule Alto.Credentials do
     with :ok <- validate_values(values) do
       path = Path.expand(credentials.path)
 
-      Alto.Storage.with_lock(path <> ".lock", fn ->
-        with {:ok, latest} <- load(path),
-             updated = %{
-               latest
-               | providers: Map.update(latest.providers, provider, values, &Map.merge(&1, values))
-             },
-             :ok <- persist(updated) do
-          {:ok, updated}
-        end
+      Alto.Storage.update_json(path, @max_bytes, fn -> read(path) end, fn document ->
+        updated =
+          update_in(
+            document["providers"],
+            &Map.update(&1, provider, values, fn prior -> Map.merge(prior, values) end)
+          )
+
+        {:ok, updated, %__MODULE__{path: path, providers: updated["providers"]}}
       end)
     end
   end
 
   def put(_credentials, _provider, _values), do: {:error, :invalid_credentials_update}
 
-  defp decode(path, content) do
-    with {:ok, providers} <- decode_providers(content),
-         :ok <- private_mode?(path) do
-      {:ok, %__MODULE__{path: path, providers: providers}}
+  defp read(path) do
+    case Alto.Storage.read_json(path, @max_bytes, nil, &valid_document?/1) do
+      {:ok, nil} -> {:ok, %{"version" => @version, "providers" => %{}}}
+      {:ok, document} -> with :ok <- private_mode?(path), do: {:ok, document}
+      error -> error
     end
   end
 
-  defp decode_providers(content) do
-    with {:ok, %{"version" => @version, "providers" => providers}} <- JSON.decode(content),
-         true <- valid_providers?(providers) do
-      {:ok, providers}
-    else
-      {:error, error} -> {:error, {:invalid_credentials_json, error}}
-      _other -> {:error, :invalid_credentials_file}
-    end
-  end
+  defp valid_document?(%{"version" => @version, "providers" => providers}),
+    do: valid_providers?(providers)
+
+  defp valid_document?(_), do: false
 
   # A store that group or other can read is refused rather than trusted;
   # running setup again rewrites it with mode 0600.
@@ -90,22 +79,7 @@ defmodule Alto.Credentials do
     case File.stat(path) do
       {:ok, %{mode: mode}} when Bitwise.band(mode, 0o077) == 0 -> :ok
       {:ok, %{mode: _mode}} -> {:error, {:credentials_mode, path}}
-      {:error, reason} -> {:error, {:credentials_read_failed, path, reason}}
-    end
-  end
-
-  defp persist(%__MODULE__{} = credentials) do
-    content = JSON.encode!(%{"version" => @version, "providers" => credentials.providers})
-
-    if byte_size(content) > @max_bytes do
-      {:error, {:credentials_too_large, @max_bytes}}
-    else
-      with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(credentials.path), owned: true),
-           :ok <- AtomicFile.write(credentials.path, content <> "\n", mode: 0o600) do
-        :ok
-      else
-        {:error, reason} -> {:error, {:credentials_write_failed, credentials.path, reason}}
-      end
+      {:error, reason} -> {:error, {:snapshot_read_failed, path, reason}}
     end
   end
 

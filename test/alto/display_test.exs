@@ -58,8 +58,8 @@ defmodule Alto.DisplayTest do
       refute text =~ "=>"
     end
 
-    assert Display.error({:catalog_write_failed, :eacces}) ==
-             "Catalog write failed: Permission denied"
+    assert Display.error({:snapshot_write_failed, "/state/catalog.json", :eacces}) ==
+             "Snapshot write failed: /state/catalog.json\nPermission denied"
 
     assert Display.error({:model_discovery_not_supported, Alto.Providers.OpenAICompatible}) =~
              "does not support model discovery"

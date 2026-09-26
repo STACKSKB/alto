@@ -36,7 +36,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
             started_ms,
             started_ms + invocation.timeout_ms,
             invocation.max_output_bytes,
-            %{head: <<>>, tail: <<>>, seen: 0, pending: <<>>}
+            %{bytes: <<>>, seen: 0, pending: <<>>}
           )
         after
           ExternalProcess.close(process)
@@ -66,18 +66,21 @@ defmodule Alto.Command.Executors.Unsandboxed do
   end
 
   defp retain(capture, data, limit) do
-    seen = capture.seen + byte_size(data)
+    bytes = capture.bytes <> data
 
-    head =
-      if byte_size(capture.head) < limit do
-        take = min(limit - byte_size(capture.head), byte_size(data))
-        capture.head <> binary_part(data, 0, take)
-      else
-        capture.head
-      end
+    # One buffer retains the first and last limit bytes, including their overlap
+    # until the stream exceeds twice the limit. Every middle byte can be discarded.
+    bytes =
+      if byte_size(bytes) <= 2 * limit,
+        do: bytes,
+        else: binary_part(bytes, 0, limit) <> binary_part(bytes, byte_size(bytes) - limit, limit)
 
-    tail = keep_tail(capture.tail, data, limit)
-    %{capture | head: head, tail: tail, seen: seen, pending: update_utf8(capture.pending, data)}
+    %{
+      capture
+      | bytes: bytes,
+        seen: capture.seen + byte_size(data),
+        pending: update_utf8(capture.pending, data)
+    }
   end
 
   defp update_utf8(:invalid, _data), do: :invalid
@@ -88,16 +91,6 @@ defmodule Alto.Command.Executors.Unsandboxed do
       {:incomplete, _valid, rest} -> rest
       {:error, _valid, _rest} -> :invalid
     end
-  end
-
-  defp keep_tail(_old, _data, 0), do: <<>>
-
-  defp keep_tail(old, data, limit) do
-    combined = old <> data
-
-    if byte_size(combined) <= limit,
-      do: combined,
-      else: :binary.copy(binary_part(combined, byte_size(combined) - limit, limit))
   end
 
   defp result(capture, exit_status, started_ms, termination, limit) do
@@ -122,7 +115,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
   end
 
   defp captured_output(_capture, 0, _truncated), do: <<>>
-  defp captured_output(capture, _limit, false), do: capture.head
+  defp captured_output(capture, _limit, false), do: capture.bytes
 
   defp captured_output(capture, limit, true) do
     marker =
@@ -132,17 +125,8 @@ defmodule Alto.Command.Executors.Unsandboxed do
     # Tiny caps cannot fit an elision marker; preserve the diagnostic tail.
     tail_limit = if marker == "", do: available, else: div(available + 1, 2)
     head_limit = available - tail_limit
-    head = binary_part(capture.head, 0, min(byte_size(capture.head), head_limit))
-
-    tail =
-      if tail_limit == 0,
-        do: <<>>,
-        else:
-          binary_part(
-            capture.tail,
-            max(byte_size(capture.tail) - tail_limit, 0),
-            min(byte_size(capture.tail), tail_limit)
-          )
+    head = binary_part(capture.bytes, 0, head_limit)
+    tail = binary_part(capture.bytes, byte_size(capture.bytes) - tail_limit, tail_limit)
 
     if capture.pending == :invalid,
       do: head <> marker <> tail,

@@ -40,9 +40,9 @@ defmodule Alto.TUI do
 
     detail =
       case reason do
-        {:catalog_invalid, _} -> "unsupported version or structure"
-        {:catalog_invalid_json, _, _} -> "invalid JSON"
-        {:catalog_too_large, _, _} -> "file exceeds the catalog size limit"
+        {:invalid_snapshot, _} -> "unsupported version or structure"
+        {:invalid_snapshot_json, _, _} -> "invalid JSON"
+        {:snapshot_too_large, _, _, _} -> "file exceeds the catalog size limit"
       end
 
     IO.write(output, "Warning: catalog #{path} is invalid (#{detail}).\n")

@@ -70,7 +70,10 @@ defmodule Alto.Tools.RunCommandTest do
                RunCommand,
                %{
                  "program" => "sh",
-                 "args" => ["-c", "printf 'head-output'; printf 'final-error' >&2; exit 7"],
+                 "args" => [
+                   "-c",
+                   "printf 'head-output'; printf '%0256d' 0; sleep 0.01; printf 'final-error' >&2; exit 7"
+                 ],
                  "max_output_bytes" => 12
                },
                context

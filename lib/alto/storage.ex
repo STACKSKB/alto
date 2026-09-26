@@ -21,6 +21,61 @@ defmodule Alto.Storage do
     end
   end
 
+  @doc "Read a bounded JSON snapshot, using the supplied domain validator."
+  def read_json(path, max_bytes, empty, valid?) do
+    case Alto.BoundedFile.read(path, max_bytes) do
+      {:ok, encoded} ->
+        case JSON.decode(encoded) do
+          {:ok, value} ->
+            if valid?.(value), do: {:ok, value}, else: {:error, {:invalid_snapshot, path}}
+
+          {:error, error} ->
+            {:error, {:invalid_snapshot_json, path, error}}
+        end
+
+      {:error, :enoent} ->
+        {:ok, empty}
+
+      {:error, {:too_large, size, _}} ->
+        {:error, {:snapshot_too_large, path, size, max_bytes}}
+
+      {:error, reason} ->
+        {:error, {:snapshot_read_failed, path, reason}}
+    end
+  end
+
+  @doc "Reread and transform a snapshot under its file lock, publishing only after durable replacement."
+  def update_json(path, max_bytes, read, change) do
+    with_lock(path <> ".lock", fn ->
+      with {:ok, current} <- read.(),
+           {:ok, next, result} <- change.(current),
+           :ok <- write_json(path, next, max_bytes),
+           do: {:ok, result}
+    end)
+  end
+
+  @doc "Publish a bounded JSON snapshot with private permissions and atomic replacement."
+  def write_json(path, value, max_bytes) do
+    with {:ok, encoded} <- encode_json(path, value) do
+      if byte_size(encoded) > max_bytes do
+        {:error, {:snapshot_too_large, path, byte_size(encoded), max_bytes}}
+      else
+        with :ok <- ensure_private_dir(Path.dirname(path), owned: true),
+             :ok <- Alto.AtomicFile.write(path, encoded, mode: 0o600) do
+          :ok
+        else
+          {:error, reason} -> {:error, {:snapshot_write_failed, path, reason}}
+        end
+      end
+    end
+  end
+
+  defp encode_json(path, value) do
+    {:ok, JSON.encode!(value) <> "\n"}
+  rescue
+    error -> {:error, {:snapshot_encode_failed, path, Exception.message(error)}}
+  end
+
   @default_lock_timeout 5_000
   @ready "__alto_lock_ready__\n"
 

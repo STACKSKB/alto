@@ -43,15 +43,15 @@ defmodule Alto.CredentialsTest do
 
   test "rejects malformed and oversized files", %{path: path} do
     File.write!(path, "not json")
-    assert {:error, {:invalid_credentials_json, _error}} = Credentials.load(path)
+    assert {:error, {:invalid_snapshot_json, ^path, _error}} = Credentials.load(path)
 
     for values <- [%{"" => "key"}, %{"api_key" => ""}, %{"api_key" => false}] do
       File.write!(path, JSON.encode!(%{"version" => 1, "providers" => %{"provider" => values}}))
-      assert {:error, :invalid_credentials_file} = Credentials.load(path)
+      assert {:error, {:invalid_snapshot, ^path}} = Credentials.load(path)
     end
 
     File.write!(path, String.duplicate("x", 64_001))
-    assert {:error, {:credentials_too_large, 64_000}} = Credentials.load(path)
+    assert {:error, {:snapshot_too_large, ^path, 64_001, 64_000}} = Credentials.load(path)
   end
 
   test "refuses a well-formed store that group or other can read", %{path: path} do

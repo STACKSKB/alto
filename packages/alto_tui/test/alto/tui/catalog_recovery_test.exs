@@ -70,7 +70,7 @@ defmodule Alto.TUI.CatalogRecoveryTest do
       JSON.encode!(%{"version" => 2, "projects" => [], "tasks" => [%{"title" => 42}]})
     )
 
-    assert {:error, {:catalog_invalid, ^path}} = Catalog.read(path: path)
+    assert {:error, {:invalid_snapshot, ^path}} = Catalog.read(path: path)
 
     {:ok, input} = StringIO.open("yes\n")
     {:ok, output} = StringIO.open("")

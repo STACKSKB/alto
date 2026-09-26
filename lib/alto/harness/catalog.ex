@@ -10,7 +10,6 @@ defmodule Alto.Harness.Catalog do
   """
 
   alias Alto.Session
-  alias Alto.AtomicFile
 
   @version 2
   @statuses ~w(active waiting completed failed archived)
@@ -36,25 +35,13 @@ defmodule Alto.Harness.Catalog do
   def read(opts \\ []) do
     path = Keyword.get(opts, :path, default_path(opts)) |> Path.expand()
 
-    case Alto.BoundedFile.read(path, @max_catalog_bytes) do
-      {:ok, encoded} ->
-        decode(encoded, path)
-
-      {:error, {:too_large, size, _max}} ->
-        {:error, {:catalog_too_large, size, @max_catalog_bytes}}
-
-      {:error, :enoent} ->
-        {:ok, empty()}
-
-      {:error, reason} ->
-        {:error, {:catalog_read_failed, reason}}
-    end
+    Alto.Storage.read_json(path, @max_catalog_bytes, empty(), &valid_catalog?/1)
   end
 
   @doc "Whether a read failure describes catalog data that can be replaced."
-  def invalid_data?({:catalog_invalid, _path}), do: true
-  def invalid_data?({:catalog_invalid_json, _path, _detail}), do: true
-  def invalid_data?({:catalog_too_large, _size, _limit}), do: true
+  def invalid_data?({:invalid_snapshot, _path}), do: true
+  def invalid_data?({:invalid_snapshot_json, _path, _detail}), do: true
+  def invalid_data?({:snapshot_too_large, _path, _size, _limit}), do: true
   def invalid_data?(_reason), do: false
 
   @doc "Replace an invalid catalog with an empty one after caller confirmation."
@@ -67,7 +54,9 @@ defmodule Alto.Harness.Catalog do
           :ok
 
         {:error, reason} ->
-          if invalid_data?(reason), do: persist(path, empty()), else: {:error, reason}
+          if invalid_data?(reason),
+            do: Alto.Storage.write_json(path, empty(), @max_catalog_bytes),
+            else: {:error, reason}
       end
     end)
   end
@@ -213,52 +202,21 @@ defmodule Alto.Harness.Catalog do
   defp transact(opts, fun) do
     path = Keyword.get(opts, :path, default_path(opts)) |> Path.expand()
 
-    Alto.Storage.with_lock(path <> ".lock", fn ->
-      with {:ok, catalog} <- read(Keyword.put(opts, :path, path)),
-           {:ok, next, result} <- fun.(catalog),
-           :ok <- persist(path, next) do
-        {:ok, result}
-      end
-    end)
+    Alto.Storage.update_json(
+      path,
+      @max_catalog_bytes,
+      fn -> read(Keyword.put(opts, :path, path)) end,
+      fun
+    )
   end
 
-  defp persist(path, catalog) do
-    with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
-         {:ok, encoded} <- encode(catalog),
-         :ok <- check_catalog_size(encoded),
-         :ok <- AtomicFile.write(path, encoded <> "\n", mode: 0o600) do
-      :ok
-    else
-      {:error, reason} -> {:error, {:catalog_write_failed, reason}}
-    end
-  end
-
-  defp encode(catalog) do
-    {:ok, JSON.encode!(catalog)}
-  rescue
-    error -> {:error, {:catalog_encode_failed, Exception.message(error)}}
-  end
-
-  defp decode(encoded, path) do
-    case JSON.decode(encoded) do
-      {:ok, %{"version" => @version, "projects" => projects, "tasks" => tasks} = catalog}
-      when is_list(projects) and is_list(tasks) ->
-        if valid_catalog?(projects, tasks),
-          do: {:ok, catalog},
-          else: {:error, {:catalog_invalid, path}}
-
-      {:ok, _other} ->
-        {:error, {:catalog_invalid, path}}
-
-      {:error, error} ->
-        {:error, {:catalog_invalid_json, path, Exception.message(error)}}
-    end
-  end
-
-  defp valid_catalog?(projects, tasks) do
+  defp valid_catalog?(%{"version" => @version, "projects" => projects, "tasks" => tasks})
+       when is_list(projects) and is_list(tasks) do
     length(projects) <= @max_projects and length(tasks) <= @max_tasks and
       Enum.all?(projects, &valid_project?/1) and Enum.all?(tasks, &valid_task?/1)
   end
+
+  defp valid_catalog?(_), do: false
 
   defp valid_project?(project) when is_map(project) do
     valid_fields?(project, ~w(id name root), ~w(created_at_ms last_opened_at_ms)) and
@@ -326,14 +284,6 @@ defmodule Alto.Harness.Catalog do
     do: is_binary(value) and byte_size(value) <= max and String.valid?(value)
 
   defp valid_text?(value), do: is_binary(value) and value != "" and String.valid?(value)
-
-  defp check_catalog_size(encoded) do
-    if byte_size(encoded) <= @max_catalog_bytes do
-      :ok
-    else
-      {:error, {:catalog_too_large, byte_size(encoded), @max_catalog_bytes}}
-    end
-  end
 
   defp id(prefix) do
     prefix <> "-" <> Base.encode32(:crypto.strong_rand_bytes(9), case: :lower, padding: false)

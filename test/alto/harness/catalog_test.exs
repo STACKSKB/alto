@@ -11,6 +11,26 @@ defmodule Alto.Harness.CatalogTest do
     %{root: root, opts: [path: path]}
   end
 
+  test "snapshot limits include the newline and rejected writes preserve the file", %{opts: opts} do
+    path = opts[:path]
+    value = %{"version" => 2, "projects" => [], "tasks" => []}
+    encoded = JSON.encode!(value) <> "\n"
+    limit = byte_size(encoded)
+
+    assert :ok = Alto.Storage.write_json(path, value, limit)
+    assert File.read!(path) == encoded
+    assert {:ok, ^value} = Alto.Storage.read_json(path, limit, nil, &is_map/1)
+
+    oversized = Map.put(value, "version", 22)
+    oversized_size = limit + 1
+
+    assert {:error, {:snapshot_too_large, ^path, ^oversized_size, ^limit}} =
+             Alto.Storage.write_json(path, oversized, limit)
+
+    assert File.read!(path) == encoded
+    assert {:ok, ^value} = Catalog.read(opts)
+  end
+
   test "registers projects and persists independently switchable tasks", %{root: root, opts: opts} do
     first_root = Path.join(root, "first")
     second_root = Path.join(root, "second")
@@ -131,8 +151,8 @@ defmodule Alto.Harness.CatalogTest do
     malformed = Map.put(catalog, "tasks", [Map.delete(task, "conversation_id")])
     File.write!(path, JSON.encode!(malformed))
 
-    assert {:error, {:catalog_invalid, ^path}} = Catalog.read(opts)
-    assert {:error, {:catalog_invalid, ^path}} = Catalog.create_task(project["id"], "New", opts)
+    assert {:error, {:invalid_snapshot, ^path}} = Catalog.read(opts)
+    assert {:error, {:invalid_snapshot, ^path}} = Catalog.create_task(project["id"], "New", opts)
     assert :ok = Catalog.replace_invalid(opts)
     assert {:ok, %{"projects" => [], "tasks" => []}} = Catalog.read(opts)
   end
