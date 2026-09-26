@@ -25,8 +25,15 @@ defmodule Alto.Runner.Execution.Children do
 
   @inherited_options ~w(provider_profiles credentials_path provider_retries retry_policy tool_presenter checkpoint_version
                         parent_expires_at_ms approval continuation_store
-                        max_approval_details_bytes max_tool_result_bytes max_transcript_bytes
-                        max_events session_dir)a
+                        session_dir)a ++
+                       (Alto.Config.authority_fields() --
+                          [
+                            :max_steps,
+                            :max_agent_depth,
+                            :provider_timeout,
+                            :tool_timeout,
+                            :approval_timeout
+                          ])
 
   defp validate_spawn(data) when is_map(data) and not is_struct(data) do
     with true <- Enum.all?(Map.keys(data), &is_atom/1),

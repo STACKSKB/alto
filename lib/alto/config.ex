@@ -7,50 +7,61 @@ defmodule Alto.Config do
   loop, provider, tools, prompt, approval policy, and bounded runner options.
   """
 
-  @allowed_options [
-    :runner,
-    :runner_options,
-    :input,
-    :messaging,
-    :messaging_transport,
-    :loop,
-    :provider,
-    :provider_profiles,
-    :credentials_path,
-    :tools,
-    :model_tools,
-    :approval,
-    :checkpoint_version,
-    :continuation_store,
-    :prompt,
-    :project_instructions,
-    :max_steps,
-    :max_effects,
-    :budget_account,
-    :max_model_requests,
-    :run_timeout,
-    :provider_timeout,
-    :tool_timeout,
-    :approval_timeout,
-    :max_approval_details_bytes,
-    :max_tool_result_bytes,
-    :max_transcript_bytes,
-    :max_conversation_bytes,
-    :max_events,
-    :listeners,
-    :queue,
-    :runs,
-    :sessions,
-    :session_history,
-    :session_dir,
-    :compaction,
-    :provider_retries,
-    :retry_policy,
-    :event_sink,
-    :tool_presenter,
-    :tui,
-    :tui_backends
+  @authority_limits [
+    max_steps: [type: :pos_integer, default: 32],
+    provider_timeout: [type: :pos_integer, default: 125_000],
+    tool_timeout: [type: :pos_integer, default: 125_000],
+    approval_timeout: [type: :pos_integer, default: 300_000],
+    max_approval_details_bytes: [type: :pos_integer, default: 64_000],
+    max_tool_result_bytes: [type: :pos_integer, default: 64_000],
+    max_transcript_bytes: [type: :pos_integer, default: 8_000_000],
+    max_events: [type: :pos_integer, default: 1_000]
   ]
+  @execution_limits @authority_limits ++
+                      [
+                        provider_retries: [type: :non_neg_integer, default: 0],
+                        agent_depth: [type: :non_neg_integer, default: 0],
+                        resume_snapshot: [type: :boolean, default: true],
+                        session_history: [
+                          type: {:in, [:completed, :settled]},
+                          default: :completed
+                        ],
+                        max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
+                      ]
+
+  @allowed_options [
+                     :runner,
+                     :runner_options,
+                     :input,
+                     :messaging,
+                     :messaging_transport,
+                     :loop,
+                     :provider,
+                     :provider_profiles,
+                     :credentials_path,
+                     :tools,
+                     :model_tools,
+                     :approval,
+                     :checkpoint_version,
+                     :continuation_store,
+                     :prompt,
+                     :project_instructions,
+                     :max_effects,
+                     :budget_account,
+                     :max_model_requests,
+                     :run_timeout,
+                     :listeners,
+                     :queue,
+                     :runs,
+                     :sessions,
+                     :session_dir,
+                     :compaction,
+                     :retry_policy,
+                     :event_sink,
+                     :tool_presenter,
+                     :tui,
+                     :tui_backends
+                   ] ++ (Keyword.keys(@execution_limits) -- [:agent_depth, :resume_snapshot])
 
   @tui_options [
     type_to_compose: [type: :boolean],
@@ -74,6 +85,11 @@ defmodule Alto.Config do
   defstruct [:run_options]
 
   @type t :: %__MODULE__{run_options: keyword()}
+
+  @doc false
+  def execution_limits, do: @execution_limits
+  @doc false
+  def authority_fields, do: Keyword.keys(@authority_limits) ++ [:max_agent_depth]
 
   @doc "Build a configuration from options accepted by `Alto.run/2`."
   @spec new(keyword()) :: t()

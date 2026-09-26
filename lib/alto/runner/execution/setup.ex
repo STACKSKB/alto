@@ -5,21 +5,7 @@ defmodule Alto.Runner.Execution.Setup do
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
 
-  @limits_options [
-    max_steps: [type: :pos_integer, default: 32],
-    provider_timeout: [type: :pos_integer, default: 125_000],
-    tool_timeout: [type: :pos_integer, default: 125_000],
-    approval_timeout: [type: :pos_integer, default: 300_000],
-    max_approval_details_bytes: [type: :pos_integer, default: 64_000],
-    max_tool_result_bytes: [type: :pos_integer, default: 64_000],
-    max_transcript_bytes: [type: :pos_integer, default: 8_000_000],
-    max_events: [type: :pos_integer, default: 1_000],
-    provider_retries: [type: :non_neg_integer, default: 0],
-    agent_depth: [type: :non_neg_integer, default: 0],
-    resume_snapshot: [type: :boolean, default: true],
-    session_history: [type: {:in, [:completed, :settled]}, default: :completed],
-    max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
-  ]
+  @limits_options Alto.Config.execution_limits()
   @limits_schema NimbleOptions.new!(@limits_options)
 
   @option_fields ~w(provider_profiles credentials_path input messaging async_agents

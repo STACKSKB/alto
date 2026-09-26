@@ -81,17 +81,7 @@ defmodule Alto.Runner.Checkpoint do
   def restore(_, _, _, _), do: {:error, :invalid_checkpoint}
 
   @parent_fields @fields ++ [:persistence_errors]
-  @authority_fields [
-    :max_steps,
-    :max_agent_depth,
-    :max_tool_result_bytes,
-    :max_transcript_bytes,
-    :max_approval_details_bytes,
-    :max_events,
-    :provider_timeout,
-    :tool_timeout,
-    :approval_timeout
-  ]
+  @authority_fields Alto.Config.authority_fields()
   @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget session_id transcript_revision expires_at_ms messaging_id)
 
   @doc """

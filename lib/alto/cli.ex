@@ -259,7 +259,27 @@ defmodule Alto.CLI do
       |> Config.run_options()
       |> Keyword.get(:listeners, [{UnixSocket, []}, {WebServer, []}])
 
-    specs = specs |> fill_listener_defaults() |> apply_listener_flags(options)
+    defaults = %{
+      UnixSocket => [path: default_socket_path()],
+      WebServer => [port: @default_serve_port],
+      Webhook => [port: @default_webhook_port]
+    }
+
+    overrides =
+      for {module, key, value} <- [
+            {UnixSocket, :path, options[:socket]},
+            {WebServer, :port, options[:port]}
+          ],
+          not is_nil(value),
+          do: {module, [{key, value}]}
+
+    specs =
+      Enum.map(specs, fn {module, opts} ->
+        opts = Keyword.merge(Map.get(defaults, module, []), opts)
+        {module, Keyword.merge(opts, Keyword.get(overrides, module, []))}
+      end)
+
+    specs = specs ++ Enum.reject(overrides, &List.keymember?(specs, elem(&1, 0), 0))
 
     with :ok <- validate_listener_ports(specs) do
       {:ok, specs}
@@ -276,34 +296,6 @@ defmodule Alto.CLI do
       :ok
     else
       {:error, "invalid listener port: want 0-65535"}
-    end
-  end
-
-  defp fill_listener_defaults(specs) do
-    Enum.map(specs, fn
-      {UnixSocket, opts} -> {UnixSocket, Keyword.put_new(opts, :path, default_socket_path())}
-      {WebServer, opts} -> {WebServer, Keyword.put_new(opts, :port, @default_serve_port)}
-      {Webhook, opts} -> {Webhook, Keyword.put_new(opts, :port, @default_webhook_port)}
-      other -> other
-    end)
-  end
-
-  defp apply_listener_flags(specs, options) do
-    specs
-    |> override_listener(UnixSocket, :path, Keyword.get(options, :socket))
-    |> override_listener(WebServer, :port, Keyword.get(options, :port))
-  end
-
-  defp override_listener(specs, _module, _key, nil), do: specs
-
-  defp override_listener(specs, module, key, value) do
-    if Enum.any?(specs, &match?({^module, _}, &1)) do
-      Enum.map(specs, fn
-        {^module, opts} -> {module, Keyword.put(opts, key, value)}
-        other -> other
-      end)
-    else
-      specs ++ [{module, [{key, value}]}]
     end
   end
 

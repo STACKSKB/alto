@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,046 lines (16.3% below the original)**. **5,588 lines
+The current count is **34,037 lines (16.3% below the original)**. **5,579 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -27,6 +27,11 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Execution limits have one definition in Config, supplying Setup's schema,
+  Config's accepted keys, checkpoint authority fields, and child inheritance.
+  Child-specific narrowing and checkpoint validation remain explicit.
+- CLI listener assembly applies defaults and overrides in one mapping pass,
+  then appends requested listeners missing from the configured list.
 - Decoded protocol commands share `{kind, id, args}` and a fixed allowlist
   forwards direct registry calls. Runs/sessions share response assembly.
 - Subscriber delivery uses one `Enum.map_reduce` for notifications, released
