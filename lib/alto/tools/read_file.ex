@@ -10,12 +10,11 @@ defmodule Alto.Tools.ReadFile do
   # expanded. Leave enough headroom for the runner's default native result
   # bound instead of advertising a content limit that can be rejected after
   # the read has already completed.
-  @options_schema [max_bytes: [type: :pos_integer, default: 47_000]]
+  @impl true
+  def options, do: %{max_bytes: 47_000}
 
   @impl true
   def arguments(opts) do
-    limits = Alto.Tool.Options.validate!(opts, @options_schema)
-
     {"Read a bounded byte range from a file inside the workspace.",
      [
        path: [
@@ -29,8 +28,8 @@ defmodule Alto.Tools.ReadFile do
          doc: "Byte offset from the start of the file."
        ],
        limit: [
-         type: {:in, 1..limits.max_bytes},
-         default: limits.max_bytes,
+         type: {:in, 1..opts.max_bytes},
+         default: opts.max_bytes,
          doc: "Maximum bytes to read."
        ]
      ]}

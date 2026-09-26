@@ -495,12 +495,13 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:DOWN, ^monitor, :process, ^approval_pid, _reason}
   end
 
+  @tag capture_log: true
   test "prepare failures reject every invalid preparation result before approval" do
     cases = [
       {"prepare error", "fail prepare", {:error, :boom}, [], "boom"},
-      {"malformed return", "bad return", :not_a_valid_return, [], "invalid_tool_prepare_return"},
+      {"malformed return", "bad return", :not_a_valid_return, [], :participant_failed},
       {"non-map details", "bad details", {:ok, %{value: "prepared"}, "not-a-map"}, [],
-       "invalid_approval_details"},
+       :participant_failed},
       {"oversized details", "large details",
        {:ok, %{value: "prepared"}, %{summary: String.duplicate("x", 1_024)}},
        [max_approval_details_bytes: 64], {:approval_details_limit, 64}}
@@ -549,11 +550,12 @@ defmodule Alto.Runner.SerialTest do
            )
   end
 
-  defp assert_prepare_failure(result, "invalid_tool_prepare_return"),
-    do: assert(enum_has_tool_failure?(result, "invalid_tool_prepare_return"))
-
-  defp assert_prepare_failure(result, "invalid_approval_details"),
-    do: assert(enum_has_tool_failure?(result, "invalid_approval_details"))
+  defp assert_prepare_failure(result, :participant_failed) do
+    assert Enum.any?(result.events, fn event ->
+             event.type == :tool_failed and
+               match?({:participant_failed, _}, event.data[:error])
+           end)
+  end
 
   defp assert_prepare_failure(result, {:approval_details_limit, 64}) do
     assert Enum.any?(
@@ -717,12 +719,6 @@ defmodule Alto.Runner.SerialTest do
     assert system["content"] =~ "Prefer exact edits in this repository."
   end
 
-  test "rejects invalid project instruction options" do
-    assert %Alto.Runner.Result{status: :error, reason: {:invalid_project_instructions, 5}} =
-             _result =
-             Alto.run("answer", provider: AnswerProvider, project_instructions: 5)
-  end
-
   test "duplicate model tool call ids settle after every invocation reports" do
     parent = self()
 
@@ -753,11 +749,6 @@ defmodule Alto.Runner.SerialTest do
     assert length(result.events) == 2
     assert result.events_dropped == 3
     assert Enum.any?(result.events, &(&1.type == :step_settled))
-  end
-
-  defp enum_has_tool_failure?(result, needle) do
-    Enum.any?(result.events, &(&1.type == :tool_failed and inspect(&1.data[:error]) =~ needle)) or
-      Enum.any?(result.messages, &(&1["role"] == "tool" and &1["content"] =~ needle))
   end
 
   test "a step_settled hook may run a tool before the next model request" do
@@ -867,5 +858,16 @@ defmodule Alto.Runner.SerialTest do
              result.events,
              &(&1.type == :tool_completed and &1.data.call_id == "hook-echo")
            )
+  end
+
+  @tag capture_log: true
+  test "malformed trusted configuration terminates an asynchronous run" do
+    assert {:ok, handle} = Alto.start("unused", loop: :malformed)
+
+    assert %Alto.Runner.Result{
+             status: :error,
+             reason: {:run_process_failed, _},
+             verdict: :unknown
+           } = Alto.await(handle, 1_000)
   end
 end

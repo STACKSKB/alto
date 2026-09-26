@@ -130,6 +130,11 @@ provider-specific setup outside the core execution contract.
 
 ## Composable isolation and protected paths
 
+Command `:policy` and `:executor` options use `{module, keyword_options}`. These
+are trusted host callbacks: contract violations raise; policy rejection and
+execution failures return errors. Command preparation resolves the requested
+program and freezes its invocation before approval.
+
 The library keeps executor selection explicit. `Alto.Command` still defaults to
 `Unsandboxed` for trusted host workflows; the CLI requires `--allow-command` for
 that authority. `--sandbox-command` and the shipped coding profile select
@@ -173,11 +178,17 @@ tools: [
 ]
 ```
 
-NimbleOptions validates these host options. Model arguments remain subject to the
-host's ceilings. Prepared writes and edits retain the validated limits with the
+File tools merge trusted host overrides with their default option maps once
+at registration or standalone preparation. Model arguments remain subject to the
+host's ceilings. Prepared writes and edits retain these limits with the
 approved operation. Larger tool limits may also require a larger runner result
 budget. Search additionally accepts `max_entries`, `max_file_bytes`,
-`max_query_bytes`, and `excluded_directories`; existing defaults are unchanged.
+`max_query_bytes`, and `excluded_directories`; directory exclusions are a `MapSet`.
+Search backends and image processors use `{module, keyword_options}` tuples.
+
+Custom tools can implement `options/0` to supply a default map. Their callbacks
+receive the merged map; tools without it receive their configured keywords.
+Use `Alto.Tool.prepare/4` or `Alto.Tool.run/4` for standalone invocations.
 
 ## Retained subprocesses
 

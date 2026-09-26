@@ -27,17 +27,6 @@ defmodule Alto.Tools.TransformTest do
     def run(arguments, _context, _opts), do: {:ok, arguments}
   end
 
-  defmodule MissingRunTool do
-    def prepare(_, _, _), do: raise("must reject missing execution before preparation")
-  end
-
-  test "transforms reject inner tools without execution before preparing them" do
-    {_module, opts} = Transform.wrap(MissingRunTool, fn args, _ -> args end)
-
-    assert {:error, {:invalid_tool, MissingRunTool}} =
-             Transform.prepare(%{}, context(), opts)
-  end
-
   defmodule CaptureApproval do
     @behaviour Alto.Approval
 

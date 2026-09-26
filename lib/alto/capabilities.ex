@@ -87,7 +87,7 @@ defmodule Alto.Capabilities do
         module -> {module, []}
       end
 
-    Code.ensure_loaded!(module)
+    opts = Alto.Tool.configure(module, opts)
 
     %{
       name: to_string(module.name(opts)),

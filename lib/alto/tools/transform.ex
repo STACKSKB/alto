@@ -23,8 +23,15 @@ defmodule Alto.Tools.Transform do
 
   @doc "Return a configured wrapper specification for a tool module or spec."
   @spec wrap(Alto.Tool.spec(), transform()) :: t()
-  def wrap(tool, transform) when is_function(transform, 2),
-    do: {__MODULE__, [tool: tool, transform: transform]}
+  def wrap(tool, transform) when is_function(transform, 2) do
+    {module, opts} =
+      case tool do
+        {module, opts} -> {module, opts}
+        module -> {module, []}
+      end
+
+    {__MODULE__, [tool: {module, Alto.Tool.configure(module, opts)}, transform: transform]}
+  end
 
   @impl true
   def name(opts), do: callback(opts, :name)
@@ -75,9 +82,5 @@ defmodule Alto.Tools.Transform do
     end
   end
 
-  defp inner_tool(opts), do: normalize(Keyword.fetch!(opts, :tool))
-
-  defp normalize({module, opts}) when is_atom(module) and is_list(opts), do: {module, opts}
-  defp normalize(module) when is_atom(module), do: {module, []}
-  defp normalize(other), do: raise(ArgumentError, "invalid wrapped tool #{inspect(other)}")
+  defp inner_tool(opts), do: Keyword.fetch!(opts, :tool)
 end

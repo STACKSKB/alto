@@ -22,11 +22,6 @@ defmodule Alto.Tools.ReadImageTest do
     %{root: root, context: %Context{session_id: "test", cwd: root}}
   end
 
-  test "rejects malformed host options before reading a file", %{context: context} do
-    assert {:error, {:invalid_image_options, :invalid}} =
-             Alto.Tool.run(ReadImage, %{"path" => "missing.png"}, context, :invalid)
-  end
-
   test "reads PNG bytes into typed image content", %{root: root, context: context} do
     png = png(320, 200)
     File.write!(Path.join(root, "image.png"), png)

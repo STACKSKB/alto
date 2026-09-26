@@ -21,7 +21,7 @@ defmodule Alto.Tools.FileLimitsTest do
              )
   end
 
-  test "list_files uses the host entry limit and rejects malformed options", %{
+  test "list_files uses the host entry limit", %{
     root: root,
     context: context
   } do
@@ -36,9 +36,6 @@ defmodule Alto.Tools.FileLimitsTest do
              Alto.Tool.run(ListFiles, %{}, context, max_entries: 5)
 
     assert length(entries) == 3
-
-    assert {:error, %NimbleOptions.ValidationError{key: :max_entries}} =
-             Alto.Tool.run(ListFiles, %{}, context, max_entries: 0)
   end
 
   test "read_file defaults to and enforces the host byte ceiling", %{root: root, context: context} do
@@ -56,8 +53,5 @@ defmodule Alto.Tools.FileLimitsTest do
              Alto.Tool.run(ReadFile, %{"path" => "sample.txt", "limit" => 6}, context,
                max_bytes: 6
              )
-
-    assert {:error, %NimbleOptions.ValidationError{key: :max_bytes}} =
-             Alto.Tool.run(ReadFile, %{"path" => "sample.txt"}, context, max_bytes: 0)
   end
 end

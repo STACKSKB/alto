@@ -20,63 +20,6 @@ defmodule Alto.CommandTest do
     end
   end
 
-  # Callback-incomplete modules deliberately omit the @behaviour declaration so
-  # the compiler does not reject them at compile time; the runtime contract
-  # check in Alto.Command is what these tests exercise.
-  defmodule NoPolicyCallbacks do
-  end
-
-  defmodule MalformedPolicyReturn do
-    @behaviour Alto.Command.Policy
-
-    @impl true
-    def prepare(_arguments, _context, _opts), do: {:ok, :not_an_invocation}
-  end
-
-  defmodule RawPolicyReturn do
-    @behaviour Alto.Command.Policy
-
-    @impl true
-    def prepare(_arguments, _context, _opts), do: :plain_return
-  end
-
-  defmodule NoExecutorCallbacks do
-  end
-
-  defmodule NoExecutorExecute do
-    def prepare(_invocation, _opts), do: {:ok, :execution, %{}}
-  end
-
-  defmodule RawExecutorReturn do
-    @behaviour Alto.Command.Executor
-
-    @impl true
-    def prepare(_invocation, _opts), do: :raw_return
-
-    @impl true
-    def execute(_execution), do: {:ok, %{}}
-  end
-
-  defmodule TwoTupleExecutorReturn do
-    @behaviour Alto.Command.Executor
-
-    @impl true
-    def prepare(_invocation, _opts), do: {:ok, :execution}
-
-    @impl true
-    def execute(_execution), do: {:ok, %{}}
-  end
-
-  defmodule NonMapExecutorDetails do
-    @behaviour Alto.Command.Executor
-
-    @impl true
-    def prepare(_invocation, _opts), do: {:ok, :execution, "not-a-map"}
-
-    @impl true
-    def execute(_execution), do: {:ok, %{}}
-  end
-
   setup do
     context = %Context{session_id: "test", cwd: File.cwd!()}
     %{context: context}
@@ -168,56 +111,6 @@ defmodule Alto.CommandTest do
              )
 
     refute_receive {:execute, _invocation}
-  end
-
-  test "rejects nonexistent or callback-incomplete policy modules", %{context: context} do
-    for {spec, module} <- [
-          {Alto.Command.Policies.NotFound, Alto.Command.Policies.NotFound},
-          {NoPolicyCallbacks, NoPolicyCallbacks},
-          {{NoPolicyCallbacks, []}, NoPolicyCallbacks}
-        ] do
-      assert {:error, {:invalid_capability, Alto.Command.Policy, {^module, []}}} =
-               Alto.Command.prepare(%{"program" => "printf"}, context, policy: spec)
-    end
-  end
-
-  test "rejects nonexistent or callback-incomplete executor modules", %{context: context} do
-    for {spec, module} <- [
-          {Alto.Command.Executors.NotFound, Alto.Command.Executors.NotFound},
-          {NoExecutorCallbacks, NoExecutorCallbacks},
-          {NoExecutorExecute, NoExecutorExecute},
-          {{NoExecutorCallbacks, []}, NoExecutorCallbacks}
-        ] do
-      assert {:error, {:invalid_capability, Alto.Command.Executor, {^module, []}}} =
-               Alto.Command.prepare(%{"program" => "printf"}, context, executor: spec)
-    end
-  end
-
-  test "rejects policies that return malformed success values", %{context: context} do
-    assert {:error, {:invalid_command_invocation, :not_an_invocation}} =
-             Alto.Command.prepare(%{"program" => "printf"}, context,
-               policy: MalformedPolicyReturn
-             )
-
-    assert {:error, {:invalid_command_policy_return, :plain_return}} =
-             Alto.Command.prepare(%{"program" => "printf"}, context, policy: RawPolicyReturn)
-  end
-
-  test "rejects executors that return malformed preparation values", %{context: context} do
-    assert {:error, {:invalid_command_executor_return, :raw_return}} =
-             Alto.Command.prepare(%{"program" => "printf"}, context, executor: RawExecutorReturn)
-
-    assert {:error, {:invalid_command_executor_return, {:ok, :execution}}} =
-             Alto.Command.prepare(%{"program" => "printf"}, context,
-               executor: TwoTupleExecutorReturn
-             )
-  end
-
-  test "rejects executor preparation details that are not a map", %{context: context} do
-    assert {:error, {:invalid_executor_approval_details, "not-a-map"}} =
-             Alto.Command.prepare(%{"program" => "printf"}, context,
-               executor: NonMapExecutorDetails
-             )
   end
 
   defp write_executable(path, output) do

@@ -5,6 +5,14 @@
 `runner_options:` carries trusted host-specific configuration. Both are
 inherited by child runs. A runner owns scheduling and its private handle.
 
+Host configuration is trusted Elixir: `loop:` is an `Alto.Loop.Spec`, supplied
+`budget:` values are `Alto.Runner.Budget` structs, project instruction options
+are `nil`, `:auto`, or keywords, and compaction is `false`, `true`, or keywords.
+Directory options are binary paths or `nil`. Malformed host configuration can
+raise during synchronous execution; an asynchronous run reports the worker
+failure through its normal completion outcome. Numeric execution bounds,
+workspace authority, participant failures, and durable data remain validated.
+
 Every host implements `run/2`, `start/2`, `await/2`, `cancel/2`, `terminate/2`,
 and `subscribe/2`. The public dispatcher wraps private handles in the opaque
 `Alto.Runner.Handle`. Completed runs return `Alto.Runner.Result` directly,

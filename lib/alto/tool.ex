@@ -6,12 +6,15 @@ defmodule Alto.Tool do
   @type execution_mode :: :parallel | :exclusive
   @type approval_requirement :: :never | :required
   @type approval_details :: map()
+  @type options :: keyword() | map()
   @type spec :: module() | {module(), keyword()}
   @type result :: {:ok, term()} | {:error, term()} | {:unknown, term()}
 
-  @callback name(keyword()) :: atom()
-  @callback schema(keyword()) :: map()
-  @callback execution_mode(keyword()) :: execution_mode()
+  @doc "Trusted defaults for tools receiving canonical map options. Host overrides are merged before registration or standalone execution."
+  @callback options() :: map()
+  @callback name(options()) :: atom()
+  @callback schema(options()) :: map()
+  @callback execution_mode(options()) :: execution_mode()
 
   @doc """
   Declare how this tool is treated by the approval boundary.
@@ -23,7 +26,7 @@ defmodule Alto.Tool do
   therefore the trust boundary for any `:never` tool, so reserve `:never` for
   tools that are genuinely side-effect-free.
   """
-  @callback approval(keyword()) :: approval_requirement()
+  @callback approval(options()) :: approval_requirement()
 
   @doc """
   Validate and resolve an invocation before approval without performing it.
@@ -33,15 +36,15 @@ defmodule Alto.Tool do
   resolve names and policy, but must not produce the external effect being
   authorized. Without this callback, `run` receives arguments with contract defaults.
   """
-  @callback prepare(arguments :: map(), Context.t(), keyword()) ::
+  @callback prepare(arguments :: map(), Context.t(), options()) ::
               {:ok, prepared :: term(), approval_details()} | {:error, term()}
 
   @doc "Execute the prepared value, or validated arguments when preparation is omitted. Return `{:unknown, reason}` when dispatch occurred but commit cannot be established."
-  @callback run(value :: term(), Context.t(), keyword()) :: result()
+  @callback run(value :: term(), Context.t(), options()) :: result()
 
   @doc "Optional built-in argument contract. Tools opting in validate at `Alto.Tool.prepare/4`; their prepare/run functions are callbacks receiving validated or frozen input."
-  @callback arguments(keyword()) :: {String.t(), keyword()}
-  @optional_callbacks approval: 1, prepare: 3, arguments: 1
+  @callback arguments(options()) :: {String.t(), keyword()}
+  @optional_callbacks approval: 1, prepare: 3, arguments: 1, options: 0
 
   @doc """
   Declare constant metadata while implementing schema and execution normally.
@@ -58,7 +61,8 @@ defmodule Alto.Tool do
       if Keyword.get(opts, :arguments, false) do
         quote do
           @impl true
-          def schema(opts \\ []), do: Alto.Tool.Arguments.schema(arguments(opts))
+          def schema(opts \\ []),
+            do: Alto.Tool.Arguments.schema(arguments(Alto.Tool.configure(__MODULE__, opts)))
         end
       end
 
@@ -84,6 +88,16 @@ defmodule Alto.Tool do
     %{description: description, parameters: parameters}
   end
 
+  def configure(_module, opts) when is_map(opts), do: opts
+
+  def configure(module, opts) do
+    Code.ensure_loaded!(module)
+
+    if function_exported?(module, :options, 0),
+      do: Map.merge(module.options(), Map.new(opts)),
+      else: opts
+  end
+
   def requirement(module, opts) do
     if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
   end
@@ -91,9 +105,9 @@ defmodule Alto.Tool do
   @doc "Prepare a tool input and validate its return contract without executing it."
   def prepare(module, arguments, context, opts \\ []) do
     Code.ensure_loaded!(module)
+    opts = configure(module, opts)
 
-    with true <- function_exported?(module, :run, 3) or {:error, {:invalid_tool, module}},
-         {:ok, arguments} <- validate_arguments(module, arguments, opts) do
+    with {:ok, arguments} <- validate_arguments(module, arguments, opts) do
       result =
         if function_exported?(module, :prepare, 3),
           do: module.prepare(arguments, context, opts),
@@ -101,15 +115,15 @@ defmodule Alto.Tool do
 
       case result do
         {:ok, _value, details} when is_map(details) -> result
-        {:ok, _value, details} -> {:error, {:invalid_approval_details, details}}
         {:error, _} -> result
-        other -> {:error, {:invalid_tool_prepare_return, other}}
       end
     end
   end
 
   @doc "Prepare and execute in the caller. Runner hosts separately supply approval, supervision, and cancellation."
   def run(module, arguments, context, opts \\ []) do
+    opts = configure(module, opts)
+
     with {:ok, prepared, _details} <- prepare(module, arguments, context, opts),
          do: module.run(prepared, context, opts)
   end

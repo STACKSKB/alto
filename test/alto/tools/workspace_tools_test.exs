@@ -71,9 +71,6 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert {:ok, %{bytes_after: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
-
-    assert {:error, %NimbleOptions.ValidationError{key: :max_bytes}} =
-             Alto.Tool.run(WriteFile, %{}, context, max_bytes: 0)
   end
 
   test "host-configured edit limits bound files, replacements, and edit counts", %{
@@ -111,9 +108,6 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                context,
                max_edits: 1
              )
-
-    assert {:error, %NimbleOptions.ValidationError{key: :max_input_bytes}} =
-             Alto.Tool.run(EditFile, %{}, context, max_input_bytes: 0)
   end
 
   test "runtime rejects the legacy single-edit shape", %{context: context} do
@@ -322,12 +316,6 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              )
 
     assert [%{matches: [%{path: "index"}]}] = run.output
-  end
-
-  test "search rejects invalid backends before invocation", %{context: context} do
-    assert_raise ArgumentError, fn ->
-      Alto.Tool.run(SearchFiles, %{"query" => "needle"}, context, backend: String)
-    end
   end
 
   test "edits one unique match atomically and preserves file mode", %{

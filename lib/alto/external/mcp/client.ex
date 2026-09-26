@@ -90,7 +90,7 @@ defmodule Alto.External.MCP.Client do
     args: [type: {:list, :string}, default: []],
     cwd: [type: :string],
     env: [type: {:map, :any, :any}, default: %{}],
-    executor: [type: :any, default: Alto.Command.Executors.Unsandboxed],
+    executor: [type: :any, default: {Alto.Command.Executors.Unsandboxed, []}],
     protocol_version: [type: :any, default: @protocol_version],
     startup_timeout: [type: :pos_integer, default: @default_timeout],
     request_timeout: [type: :pos_integer, default: @default_timeout],

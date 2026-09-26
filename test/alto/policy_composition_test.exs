@@ -138,9 +138,4 @@ defmodule Alto.PolicyCompositionTest do
   test "invalid custom subagent policy is rejected" do
     assert {:error, :invalid_subagent_policy} = Alto.Subagents.Policy.validate({String, []})
   end
-
-  test "malformed compaction lists return configuration errors before schema validation" do
-    assert %Alto.Runner.Result{status: :error, reason: {:invalid_compaction, [:invalid]}} =
-             Alto.run("hello", provider: Provider, compaction: [:invalid])
-  end
 end

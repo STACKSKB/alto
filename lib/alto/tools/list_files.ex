@@ -6,12 +6,11 @@ defmodule Alto.Tools.ListFiles do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @options_schema [max_entries: [type: :pos_integer, default: 500]]
+  @impl true
+  def options, do: %{max_entries: 500}
 
   @impl true
-  def arguments(opts) do
-    _ = Alto.Tool.Options.validate!(opts, @options_schema)
-
+  def arguments(_opts) do
     {"List one directory inside the workspace (non-recursive and bounded).",
      [path: [type: :string, default: ".", doc: "Directory path; defaults to the workspace root."]]}
   end
@@ -20,19 +19,17 @@ defmodule Alto.Tools.ListFiles do
   def run(arguments, %Context{} = context, opts \\ []) do
     path = arguments["path"]
 
-    with {:ok, limits} <-
-           Alto.Tool.Options.validate(opts, @options_schema, :invalid_list_files_options),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+    with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, names} <- File.ls(resolved) do
       sorted = Enum.sort(names)
-      selected = Enum.take(sorted, limits.max_entries)
+      selected = Enum.take(sorted, opts.max_entries)
 
       entries =
         Enum.map(selected, fn name ->
           %{name: name, type: entry_type(Path.join(resolved, name))}
         end)
 
-      {:ok, %{path: path, entries: entries, truncated: length(sorted) > limits.max_entries}}
+      {:ok, %{path: path, entries: entries, truncated: length(sorted) > opts.max_entries}}
     end
   end
 

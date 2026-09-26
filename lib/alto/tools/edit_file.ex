@@ -17,19 +17,19 @@ defmodule Alto.Tools.EditFile do
   @max_edit_input_bytes @max_file_bytes + @max_replacement_bytes
   @preview_bytes 4_096
   @patch_bytes 16_384
-  @options_schema [
-    max_file_bytes: [type: :pos_integer, default: @max_file_bytes],
-    max_replacement_bytes: [type: :pos_integer, default: @max_replacement_bytes],
-    max_edits: [type: :pos_integer, default: 100],
-    max_input_bytes: [type: :pos_integer, default: @max_edit_input_bytes],
-    preview_bytes: [type: :non_neg_integer, default: @preview_bytes],
-    patch_bytes: [type: :non_neg_integer, default: @patch_bytes]
-  ]
+  @impl true
+  def options,
+    do: %{
+      max_file_bytes: @max_file_bytes,
+      max_replacement_bytes: @max_replacement_bytes,
+      max_edits: 100,
+      max_input_bytes: @max_edit_input_bytes,
+      preview_bytes: @preview_bytes,
+      patch_bytes: @patch_bytes
+    }
 
   @impl true
   def arguments(opts) do
-    limits = Alto.Tool.Options.validate!(opts, @options_schema)
-
     {"Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
      [
        path: [type: :string, required: true],
@@ -38,11 +38,11 @@ defmodule Alto.Tools.EditFile do
            Arguments.list(
              Arguments.object(
                old_text: [type: Arguments.text(1, :infinity), required: true],
-               new_text: [type: Arguments.text(0, limits.max_replacement_bytes), required: true],
+               new_text: [type: Arguments.text(0, opts.max_replacement_bytes), required: true],
                replace_all: [type: :boolean, default: false]
              ),
              1,
-             limits.max_edits
+             opts.max_edits
            ),
          required: true
        ]
@@ -53,22 +53,20 @@ defmodule Alto.Tools.EditFile do
   def prepare(arguments, context, opts \\ [])
 
   def prepare(arguments, %Context{} = context, opts)
-      when is_map(arguments) and is_list(opts) do
-    with {:ok, limits} <-
-           Alto.Tool.Options.validate(opts, @options_schema, :invalid_edit_options),
-         edits = arguments["edits"],
+      when is_map(arguments) do
+    with edits = arguments["edits"],
          true <-
            Enum.sum(Enum.map(edits, &(byte_size(&1["old_text"]) + byte_size(&1["new_text"])))) <=
-             limits.max_input_bytes or
-             {:error, {:edit_input_too_large, limits.max_input_bytes}} do
+             opts.max_input_bytes or
+             {:error, {:edit_input_too_large, opts.max_input_bytes}} do
       FileChange.prepare(
         :edit_file,
         Map.get(arguments, "path"),
         context,
-        {limits.max_file_bytes, limits.patch_bytes, limits.preview_bytes},
+        {opts.max_file_bytes, opts.patch_bytes, opts.preview_bytes},
         fn content ->
           with :ok <- validate_utf8(content),
-               {:ok, updated, replacements} <- apply_edits(content, edits, limits.max_file_bytes),
+               {:ok, updated, replacements} <- apply_edits(content, edits, opts.max_file_bytes),
                do: {:ok, updated, %{replacements: replacements}}
         end
       )

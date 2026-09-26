@@ -138,10 +138,6 @@ defmodule Alto.Runner.SerialSessionTest do
     assert %Alto.Runner.Result{status: :error, reason: {:invalid_session_option, 42}} =
              _result =
              Alto.run("task", provider_opts() ++ [session: 42, session_dir: dir])
-
-    assert %Alto.Runner.Result{status: :error, reason: {:invalid_session_dir, 42}} =
-             _result =
-             Alto.run("task", provider_opts() ++ [session_dir: 42])
   end
 
   test "an explicit session id names its own log", %{dir: dir} do

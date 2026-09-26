@@ -1,5 +1,5 @@
 defmodule Alto.Runner.Execution.Setup do
-  @moduledoc "Build validated execution capabilities from trusted run options."
+  @moduledoc "Build execution capabilities from trusted run options."
   alias Alto.{Session, Usage}
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
@@ -13,7 +13,7 @@ defmodule Alto.Runner.Execution.Setup do
                     session_dir retry_policy tool_presenter)a
 
   def open(task, opts) do
-    spec = Keyword.get(opts, :loop, Alto.default_loop())
+    %Alto.Loop.Spec{} = spec = Keyword.get(opts, :loop, Alto.default_loop())
 
     provider = normalize_provider(Keyword.get(opts, :provider))
 
@@ -27,11 +27,10 @@ defmodule Alto.Runner.Execution.Setup do
       )
 
     with {:ok, limits} <- limits(opts),
-         :ok <- validate_spec(spec),
          :ok <- Alto.Context.Policy.validate(spec.context),
          :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
          :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
-         {:ok, budget} <- resolve_budget(opts),
+         {:ok, budget} <- resolve_budget(opts[:budget], opts),
          {:ok, child_limits} <-
            resolve_child_policy(
              spec.subagents,
@@ -43,7 +42,6 @@ defmodule Alto.Runner.Execution.Setup do
          {:ok, approval} <- approval,
          :ok <- validate_directory(cwd),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
-         :ok <- validate_session_dir(Keyword.get(opts, :session_dir)),
          {:ok, tool_map, definitions} <- Alto.Tool.Registry.build(tools, child_limits),
          {:ok, definitions, model_exposure} <-
            Alto.Tool.Registry.expose(
@@ -160,13 +158,8 @@ defmodule Alto.Runner.Execution.Setup do
     )
   end
 
-  defp resolve_budget(opts) do
-    case Keyword.get(opts, :budget) do
-      nil -> Budget.new(opts)
-      %Budget{} = budget -> {:ok, budget}
-      other -> {:error, {:invalid_budget, other}}
-    end
-  end
+  defp resolve_budget(nil, opts), do: Budget.new(opts)
+  defp resolve_budget(%Budget{} = budget, _opts), do: {:ok, budget}
 
   defp resume_revision(opts) do
     case {Keyword.fetch(opts, :parent_transcript_revision), Keyword.get(opts, :checkpoint),
@@ -211,8 +204,20 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp fresh_transcript(task, opts, cwd, tools, _provider, max_transcript_bytes) do
-    with {:ok, project_instructions} <- resolve_project_instructions(opts, cwd),
-         {:ok, prompt} <- resolve_system_prompt(opts, cwd, tools, project_instructions) do
+    instructions =
+      case opts[:project_instructions] do
+        nil -> {:ok, nil}
+        :auto -> Alto.Project.load(cwd)
+        options when is_list(options) -> Alto.Project.load(cwd, options)
+      end
+
+    with {:ok, instructions} <- instructions,
+         {:ok, prompt} <-
+           Alto.Prompt.build(opts[:prompt], %{
+             cwd: cwd,
+             tools: tools,
+             project_instructions: instructions
+           }) do
       history = if prompt, do: [%{"role" => "system", "content" => prompt}], else: []
       prepend_task(task, history, max_transcript_bytes)
     end
@@ -233,36 +238,6 @@ defmodule Alto.Runner.Execution.Setup do
 
   defp resume_history(other), do: {:error, {:invalid_resume, other}}
 
-  # `:auto` resolves bounded workspace text for model-backed runs.
-  defp resolve_project_instructions(opts, cwd) do
-    case Keyword.get(opts, :project_instructions) do
-      nil ->
-        {:ok, nil}
-
-      :auto ->
-        Alto.Project.load(cwd)
-
-      options when is_list(options) ->
-        if Keyword.keyword?(options),
-          do: Alto.Project.load(cwd, options),
-          else: {:error, {:invalid_project_instructions, options}}
-
-      other ->
-        {:error, {:invalid_project_instructions, other}}
-    end
-  end
-
-  defp resolve_system_prompt(opts, cwd, tools, project_instructions) do
-    Alto.Prompt.build(Keyword.get(opts, :prompt), %{
-      cwd: cwd,
-      tools: tools,
-      project_instructions: project_instructions
-    })
-  end
-
-  defp validate_spec(%Alto.Loop.Spec{}), do: :ok
-  defp validate_spec(other), do: {:error, {:invalid_loop, other}}
-
   defp validate_directory(path) do
     if File.dir?(path), do: :ok, else: {:error, {:invalid_cwd, path}}
   end
@@ -276,33 +251,18 @@ defmodule Alto.Runner.Execution.Setup do
     request_mode: [type: {:in, [:transcript, :isolated]}, default: :transcript],
     max_summary_bytes: [type: :pos_integer, default: 8_000],
     max_handoff_bytes: [type: :pos_integer, default: 24_000],
-    artifact_dir: [type: :any, default: nil]
+    artifact_dir: [type: {:or, [:string, nil]}, default: nil]
   ]
 
   defp normalize_compaction(false), do: {:ok, false}
   defp normalize_compaction(true), do: normalize_compaction([])
 
-  defp normalize_compaction(opts) when is_list(opts) do
-    with true <- Keyword.keyword?(opts),
-         {:ok, normalized} <- NimbleOptions.validate(opts, @compaction_schema),
-         {:ok, strategy} <- Alto.Context.Reducer.resolve(normalized[:strategy]),
-         :ok <- validate_artifact_dir(normalized[:artifact_dir]) do
-      {:ok, Keyword.put(normalized, :strategy, strategy)}
-    else
-      false -> {:error, {:invalid_compaction, opts}}
-      {:error, reason} -> {:error, {:invalid_compaction, reason}}
-    end
+  defp normalize_compaction(opts) do
+    normalized = NimbleOptions.validate!(opts, @compaction_schema)
+
+    with {:ok, strategy} <- Alto.Context.Reducer.resolve(normalized[:strategy]),
+         do: {:ok, Keyword.put(normalized, :strategy, strategy)}
   end
-
-  defp normalize_compaction(other), do: {:error, {:invalid_compaction, other}}
-
-  defp validate_artifact_dir(nil), do: :ok
-  defp validate_artifact_dir(path) when is_binary(path) and path != "", do: :ok
-  defp validate_artifact_dir(path), do: {:error, {:invalid_artifact_dir, path}}
-
-  defp validate_session_dir(nil), do: :ok
-  defp validate_session_dir(dir) when is_binary(dir), do: :ok
-  defp validate_session_dir(other), do: {:error, {:invalid_session_dir, other}}
 
   defp persist_start(run, opts, task) do
     errors =

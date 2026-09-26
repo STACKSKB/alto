@@ -9,19 +9,16 @@ defmodule Alto.Tools.ReadImage do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @hard_max_encoded_bytes 8_000_000
   @hard_max_dimension 16_384
-  @hard_max_pixels 40_000_000
 
-  @options_schema [
-    max_encoded_bytes: [
-      type: {:in, 1..@hard_max_encoded_bytes},
-      default: 1_000_000
-    ],
-    max_dimension: [type: {:in, 1..@hard_max_dimension}, default: 8_192],
-    max_pixels: [type: {:in, 1..@hard_max_pixels}, default: 20_000_000],
-    processor: [type: :any, default: nil]
-  ]
+  @impl true
+  def options,
+    do: %{
+      max_encoded_bytes: 1_000_000,
+      max_dimension: 8_192,
+      max_pixels: 20_000_000,
+      processor: nil
+    }
 
   @impl true
   def arguments(_opts) do
@@ -41,11 +38,10 @@ defmodule Alto.Tools.ReadImage do
     requested_width = Map.get(arguments, "max_width")
     requested_height = Map.get(arguments, "max_height")
 
-    with {:ok, config} <- config(opts),
-         {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, source} <- read_bounded(resolved, config.max_encoded_bytes),
+    with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
+         {:ok, source} <- read_bounded(resolved, opts.max_encoded_bytes),
          {:ok, media_type, width, height} <- Metadata.inspect(source),
-         :ok <- validate_dimensions(width, height, config),
+         :ok <- validate_dimensions(width, height, opts),
          {:ok, data, media_type, width, height} <-
            maybe_resize(
              source,
@@ -54,7 +50,7 @@ defmodule Alto.Tools.ReadImage do
              height,
              requested_width,
              requested_height,
-             config
+             opts
            ) do
       {:ok,
        Content.new([
@@ -66,18 +62,6 @@ defmodule Alto.Tools.ReadImage do
   end
 
   def run(_arguments, _context, _opts), do: {:error, :image_arguments_must_be_object}
-
-  defp config(opts) do
-    with {:ok, config} <-
-           Alto.Tool.Options.validate(opts, @options_schema, :invalid_image_options),
-         {:ok, processor} <- normalize_processor(config.processor) do
-      {:ok, %{config | processor: processor}}
-    end
-  end
-
-  defp normalize_processor(nil), do: {:ok, nil}
-
-  defp normalize_processor(spec), do: Alto.Capabilities.resolve(spec, Alto.Image.Processor)
 
   defp read_bounded(path, max_encoded_bytes) do
     limit = div(max_encoded_bytes, 4) * 3

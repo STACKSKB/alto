@@ -6,6 +6,7 @@ defmodule Alto.Tool.Registry do
   def build(modules, child_limits) when is_list(modules) do
     Alto.Result.reduce(modules, {%{}, []}, fn tool_spec, {tools, definitions} ->
       with {:ok, {module, tool_opts}} <- Alto.Capabilities.resolve(tool_spec, Alto.Tool),
+           tool_opts = Alto.Tool.configure(module, tool_opts),
            name when is_atom(name) <- module.name(tool_opts),
            schema when is_map(schema) <-
              module.schema(schema_opts(module, tool_opts, child_limits)),

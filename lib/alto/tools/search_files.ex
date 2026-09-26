@@ -8,27 +8,24 @@ defmodule Alto.Tools.SearchFiles do
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
-  @options_schema [
-    backend: [type: :any, default: __MODULE__],
-    max_query_bytes: [type: :pos_integer, default: 1_024],
-    max_files: [type: :pos_integer, default: 2_000],
-    max_entries: [type: :pos_integer, default: 10_000],
-    max_file_bytes: [type: :pos_integer, default: 1_000_000],
-    max_matches: [type: :pos_integer, default: 100],
-    max_line_graphemes: [type: :pos_integer, default: 300],
-    excluded_directories: [
-      type: {:list, :string},
-      default: [".git", "_build", "deps", "node_modules"]
-    ]
-  ]
+  @impl true
+  def options,
+    do: %{
+      backend: {__MODULE__, []},
+      max_query_bytes: 1_024,
+      max_files: 2_000,
+      max_entries: 10_000,
+      max_file_bytes: 1_000_000,
+      max_matches: 100,
+      max_line_graphemes: 300,
+      excluded_directories: MapSet.new([".git", "_build", "deps", "node_modules"])
+    }
 
   @impl true
   def arguments(opts) do
-    limits = validate_options!(opts)
-
     {"Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
      [
-       query: [type: Arguments.text(1, limits.max_query_bytes), required: true],
+       query: [type: Arguments.text(1, opts.max_query_bytes), required: true],
        path: [type: :string, default: "."],
        case_sensitive: [type: :boolean, default: true]
      ]}
@@ -40,13 +37,12 @@ defmodule Alto.Tools.SearchFiles do
     path = arguments["path"]
     case_sensitive? = arguments["case_sensitive"]
 
-    with {:ok, limits} <- validate_options(opts),
-         {backend, backend_opts} <- limits.backend,
+    with {backend, backend_opts} <- opts.backend,
          result <-
            backend.search(
              %{query: query, path: path, case_sensitive: case_sensitive?},
              context,
-             if(backend == __MODULE__ and backend_opts == [], do: limits, else: backend_opts)
+             if(backend == __MODULE__ and backend_opts == [], do: opts, else: backend_opts)
            ),
          {:ok, output} <- normalize_backend_result(result, backend) do
       {:ok, output |> Map.put(:path, path) |> Map.put(:query, query)}
@@ -61,12 +57,10 @@ defmodule Alto.Tools.SearchFiles do
         %Context{} = context,
         opts
       ) do
-    limits = if is_map(opts), do: opts, else: validate_options!(opts)
-
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, stat} <- File.lstat(resolved),
          {:ok, state} <-
-           search(resolved, stat.type, query, case_sensitive?, context.cwd, limits) do
+           search(resolved, stat.type, query, case_sensitive?, context.cwd, opts) do
       {:ok,
        %{
          matches: Enum.reverse(state.matches),
@@ -186,21 +180,5 @@ defmodule Alto.Tools.SearchFiles do
   defp truncate_line(line, limit) do
     {prefix, rest} = String.split_at(line, limit)
     if rest == "", do: prefix, else: prefix <> "…"
-  end
-
-  defp validate_options(opts) do
-    with {:ok, limits} <-
-           Alto.Tool.Options.validate(opts, @options_schema, :invalid_search_options),
-         {:ok, backend} <- Alto.Capabilities.resolve(limits.backend, Alto.Search.Backend) do
-      {:ok,
-       %{limits | backend: backend, excluded_directories: MapSet.new(limits.excluded_directories)}}
-    end
-  end
-
-  defp validate_options!(opts) do
-    case validate_options(opts) do
-      {:ok, limits} -> limits
-      {:error, reason} -> raise ArgumentError, "invalid search options: #{inspect(reason)}"
-    end
   end
 end
