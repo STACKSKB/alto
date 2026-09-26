@@ -1,6 +1,7 @@
 defmodule Alto.Runner.Budget do
   @moduledoc "A shared effect budget and monotonic deadline for a run and its descendants."
   alias Alto.Runner.Budget.Account
+  alias Alto.Persistence.Retained
   defstruct [:counter, :account, :max_effects, :max_model_requests, :deadline]
 
   @default_max_effects 10_000
@@ -46,7 +47,7 @@ defmodule Alto.Runner.Budget do
 
   defp attach_account(budget, nil), do: {:ok, budget}
 
-  defp attach_account(budget, %Account{} = account) do
+  defp attach_account(budget, %Retained{kind: Account} = account) do
     with {:ok, %{packet: packet}} <-
            Account.tighten(
              account,
@@ -69,7 +70,7 @@ defmodule Alto.Runner.Budget do
 
   @doc "Return a portable, string-key snapshot of counters, caps, and remaining time."
   @spec snapshot(t()) :: map()
-  def snapshot(%__MODULE__{account: %Account{} = account} = budget) do
+  def snapshot(%__MODULE__{account: %Retained{kind: Account} = account} = budget) do
     case Account.read(account, budget.deadline) do
       {:ok, %{packet: packet}} ->
         packet
@@ -133,7 +134,7 @@ defmodule Alto.Runner.Budget do
       {nil, nil} ->
         :ok
 
-      {%Account{} = account, identity} when is_map(identity) ->
+      {%Retained{kind: Account} = account, identity} when is_map(identity) ->
         if Account.identity(account) == identity,
           do: :ok,
           else: {:error, :budget_account_mismatch}
@@ -202,7 +203,12 @@ defmodule Alto.Runner.Budget do
     )
   end
 
-  defp reserve(%__MODULE__{account: %Account{} = account} = budget, index, cap, _error) do
+  defp reserve(
+         %__MODULE__{account: %Retained{kind: Account} = account} = budget,
+         index,
+         cap,
+         _error
+       ) do
     with :ok <- check(budget),
          :ok <-
            Account.take(account, if(index == 1, do: :effect, else: :model), cap, budget.deadline),

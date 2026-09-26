@@ -28,6 +28,7 @@ defmodule Alto.OperationLog do
   defstruct @enforce_keys ++ [:lock, ops: %{}, order: []]
 
   @type op_key :: String.t()
+  @type revision :: pos_integer() | {pos_integer(), binary()}
   @type outcome_class ::
           :completed
           | :rejected_before_dispatch
@@ -64,26 +65,27 @@ defmodule Alto.OperationLog do
   @type request ::
           {:intent, op_key(), binary(), binary() | nil, map() | nil}
           | {:retain, op_key(), binary(), map() | nil, binary(), map()}
-          | {:retire_checkpoint, op_key(), pos_integer(), map(), binary(), map()}
+          | {:retire_checkpoint, op_key(), revision(), map(), binary(), map()}
           | {:attempt, op_key(), binary()}
           | {:release, op_key(), binary()}
           | {:outcome, op_key(), binary(), outcome_class(), map()}
           | {:checkpoint, op_key(), binary(), map()}
-          | {:checkpoint_update, op_key(), pos_integer(), map()}
-          | {:resume_checkpoint, op_key(), pos_integer(), map()}
+          | {:checkpoint_update, op_key(), revision(), map()}
+          | {:resume_checkpoint, op_key(), revision(), map()}
           | {:status, op_key()}
           | {:attempts, op_key()}
-          | {:reject_intended, op_key(), pos_integer(), map()}
+          | {:reject_intended, op_key(), revision(), map()}
           | {:entries, :all | :open | :parked}
           | {:recovery, op_key()}
           | :identity
-          | {:reconcile, op_key(), pos_integer(), atom(), map()}
+          | {:reconcile, op_key(), revision(), atom(), map()}
 
   @doc """
   Execute a native ledger request. Mutation tuples are the same commands written
   to the durable log; validation, evidence scrubbing, revision checks, and durable
   publication happen in the ledger process. Supply all tuple fields explicitly,
-  including absent recovery (`nil`) and empty evidence (`%{}`).
+  including absent recovery (`nil`) and empty evidence (`%{}`). Revision fences
+  may pair the revision with a recovery generation to prevent writes after key reuse.
 
   `:retain` atomically creates a checkpoint if absent and leaves an existing
   record unchanged. `:retire_checkpoint` retires one at its exact revision.
@@ -279,6 +281,12 @@ defmodule Alto.OperationLog do
   defp entry_matches?(%{status: {:decided, :requires_operator, _}}, :parked), do: true
   defp entry_matches?(_entry, _filter), do: false
 
+  defp expect_revision(
+         %{revision: revision, recovery: %{"generation" => generation}},
+         {revision, generation}
+       ),
+       do: :ok
+
   defp expect_revision(%{revision: revision}, revision), do: :ok
   defp expect_revision(_entry, _expected), do: {:error, :stale_revision}
 
@@ -318,6 +326,11 @@ defmodule Alto.OperationLog do
     do: validate_identifier(value, :attempt, state.max_identifier_bytes, :invalid_attempt)
 
   defp validate(:revision, value, _) when is_integer(value) and value >= 1, do: :ok
+
+  defp validate(:revision, {revision, generation}, _)
+       when is_integer(revision) and revision >= 1 and is_binary(generation),
+       do: :ok
+
   defp validate(:recovery, nil, _), do: :ok
 
   defp validate(:outcome, value, _)

@@ -93,7 +93,7 @@ defmodule Alto.Subagents.ContinuationTest do
              Continuation.lookup(ledger, "batch-lookup", typo: true)
 
     assert :ok = OperationLog.request(ledger, {:intent, "wrong-kind", "other", nil, %{}})
-    assert {:error, :invalid_batch} = Continuation.lookup(ledger, "wrong-kind")
+    assert {:error, :invalid_retained_cell} = Continuation.lookup(ledger, "wrong-kind")
   end
 
   test "a dispatched child remains pending after restart and cannot be redispatched", %{
@@ -176,14 +176,14 @@ defmodule Alto.Subagents.ContinuationTest do
     assert :ok = Continuation.retire(evict_batch, evict_acknowledged.revision)
     reused = open!(ledger, "batch-retire", ["child-a"])
     assert reused.generation != batch.generation
-    assert {:error, :batch_generation_mismatch} = Continuation.read(batch)
+    assert {:error, :retained_generation_mismatch} = Continuation.read(batch)
   end
 
   test "unavailable and full ledgers fail closed", %{dir: dir, id: id} do
     %{ledger: ledger, child_id: child_id} = start_ledger!(dir, id)
     stop_supervised!(child_id)
 
-    assert {:error, {:subagent_journal_unavailable, _}} =
+    assert {:error, {:retained_unavailable, _}} =
              Continuation.open(ledger, "unavailable", ["child-a"])
 
     %{ledger: full} = start_ledger!(dir, id <> "-full", max_ops: 1)
@@ -313,7 +313,7 @@ defmodule Alto.Subagents.ContinuationTest do
       |> Enum.map(fn _ -> Task.async(fn -> Continuation.open(ledger, "many", ids) end) end)
       |> Enum.map(&Task.await(&1, 2_000))
 
-    assert Enum.all?(batches, &match?({:ok, %Continuation{}}, &1))
+    assert Enum.all?(batches, &match?({:ok, %Alto.Persistence.Retained{kind: Continuation}}, &1))
     [{:ok, batch} | _] = batches
     assert Enum.all?(batches, fn {:ok, opened} -> opened.generation == batch.generation end)
 

@@ -65,7 +65,7 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     pending = %{"frame" => String.duplicate("p", 200_000)}
     assert {:ok, cell} = Continuation.open(ledger, "large", [], %{}, parent: pending)
     assert {:ok, entry} = OperationLog.request(ledger, {:recovery, "large"})
-    assert entry.recovery["parent"] == pending
+    assert entry.recovery["initial"]["parent"] == pending
     assert {:ok, %{parent: ^pending}} = Continuation.read(cell)
 
     assert {:error, :invalid_batch_key} =
@@ -79,10 +79,10 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     assert :ok =
              OperationLog.request(
                ledger,
-               {:intent, "corrupt-owned", "alto_subagent_continuation", nil, %{}}
+               {:intent, "corrupt-owned", Atom.to_string(Continuation), nil, %{}}
              )
 
-    assert {:error, :invalid_batch} = Continuation.list(ledger)
+    assert {:error, :invalid_retained_cell} = Continuation.list(ledger)
   end
 
   test "retained children must exactly match the plan and contain valid state", %{ledger: ledger} do
@@ -146,6 +146,6 @@ defmodule Alto.Subagents.ContinuationFrameTest do
     monitor = Process.monitor(ledger)
     Process.exit(ledger, :shutdown)
     assert_receive {:DOWN, ^monitor, :process, ^ledger, _}
-    assert {:error, {:subagent_journal_unavailable, _}} = Continuation.list(ledger)
+    assert {:error, {:retained_unavailable, _}} = Continuation.list(ledger)
   end
 end

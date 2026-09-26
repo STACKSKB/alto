@@ -214,6 +214,9 @@ Alto.run(task, budget_account: account, loop: loop, provider: provider)
 
 The caller supervises the ledger. A run and its children consume the same
 account; sharing it across additional runs intentionally shares one allowance.
+Accounts and child continuations use `Alto.Persistence.Retained` handles and a
+shared storage envelope. Their snapshots report `:active` or `:retired`; domain
+APIs retain the counter, dispatch, approval and join rules.
 Each successful reservation appends and syncs a revision-fenced counter update
 before granting permission to dispatch. Both counters are read in one coherent
 snapshot. Reopening an account preserves its generation and counters; caps can

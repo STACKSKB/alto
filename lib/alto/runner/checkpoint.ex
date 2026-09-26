@@ -6,7 +6,7 @@ defmodule Alto.Runner.Checkpoint do
   See `docs/checkpoints.md#portability-and-bounds` for restoration and storage constraints.
   """
   alias Alto.Runner.Budget
-  alias Alto.Persistence.Codec
+  alias Alto.Persistence.{Codec, Retained}
   alias Alto.OperationLog
   @limit 1_000_000
   @continuation_format 4
@@ -276,7 +276,7 @@ defmodule Alto.Runner.Checkpoint do
     if match?(%Alto.Subagents.Continuation.Ticket{}, Map.get(run, :subagent_ticket)) and
          run.agent_depth > 0 and is_map(run.child_profile) and
          not Map.has_key?(run.child_profile, :provider) and
-         is_struct(run.budget.account, Budget.Account),
+         match?(%Retained{kind: Budget.Account}, run.budget.account),
        do: :ok,
        else: {:error, :child_checkpoint_not_supported}
   end
@@ -354,7 +354,7 @@ defmodule Alto.Runner.Checkpoint do
 
   defp parent_capabilities(run) do
     cond do
-      not match?(%Budget{account: %Budget.Account{}}, run.budget) ->
+      not match?(%Budget{account: %Retained{kind: Budget.Account}}, run.budget) ->
         {:error, :parent_checkpoint_requires_budget_account}
 
       run.agent_depth != 0 or is_nil(Map.get(run, :continuation_store)) or

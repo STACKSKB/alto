@@ -113,7 +113,7 @@ defmodule Alto.Runner.SerialContinuationTest do
   test "unavailable journal prevents any child callback", %{ledger: ledger} do
     stop_supervised!(OperationLog)
 
-    assert {:error, {:invalid_spawn_agents, {:subagent_journal_unavailable, _}}, _} =
+    assert {:error, {:invalid_spawn_agents, {:retained_unavailable, _}}, _} =
              Alto.run(%{agents: [%{id: "worker", task: "work"}]},
                loop: loop(),
                continuation_store: ledger,

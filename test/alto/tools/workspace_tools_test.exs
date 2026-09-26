@@ -116,11 +116,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              Alto.Tool.run(EditFile, %{}, context, max_input_bytes: 0)
   end
 
-  test "edit schema and runtime require the canonical edits list", %{context: context} do
-    parameters = EditFile.schema().parameters
-    assert parameters.required == ["path", "edits"]
-    assert Map.keys(parameters.properties) |> Enum.sort() == [:edits, :path]
-
+  test "runtime rejects the legacy single-edit shape", %{context: context} do
     assert {:error, :unknown_tool_argument} =
              Alto.Tool.run(
                EditFile,

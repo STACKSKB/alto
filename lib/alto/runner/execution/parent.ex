@@ -43,7 +43,7 @@ defmodule Alto.Runner.Execution.Parent do
 
   def start(data, rest, terminal, run, complete) do
     with true <- run.agent_depth == 0 and not is_nil(run.continuation_store),
-         true <- is_struct(run.budget.account, Budget.Account),
+         true <- match?(%Alto.Persistence.Retained{kind: Budget.Account}, run.budget.account),
          {:ok, specs, concurrency} <- Children.validate_batch(data, run),
          {:ok, specs} <- Children.prepare_resources(specs, run),
          {key, run} <- Operation.next(run),

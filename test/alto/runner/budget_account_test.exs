@@ -111,12 +111,15 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert {:error, :not_found} = Account.lookup(ledger, "missing")
     assert {:error, :invalid_retained_options} = Account.lookup(ledger, "lookup", typo: 1)
     assert :ok = OperationLog.request(ledger, {:intent, "foreign", "other_kind", nil, %{}})
-    assert {:error, :invalid_budget_account} = Account.lookup(ledger, "foreign")
+    assert {:error, :invalid_retained_cell} = Account.lookup(ledger, "foreign")
 
     assert :ok =
-             OperationLog.request(ledger, {:intent, "malformed", "alto_budget_account", nil, %{}})
+             OperationLog.request(
+               ledger,
+               {:intent, "malformed", Atom.to_string(Account), nil, %{}}
+             )
 
-    assert {:error, :invalid_budget_account} = Account.lookup(ledger, "malformed")
+    assert {:error, :invalid_retained_cell} = Account.lookup(ledger, "malformed")
   end
 
   test "a full ledger rejects another account without reserving budget", %{dir: dir} do
@@ -146,15 +149,16 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert active.state == :active
     assert {:error, :stale_revision} = Account.close(account, active.revision - 1)
     assert {:error, :invalid_budget_account_revision} = Account.close(account, 0)
+    account = %{account | deadline: System.monotonic_time(:millisecond) - 1}
     assert :ok = Account.close(account, active.revision)
     {:ok, closed} = Account.read(account)
-    assert closed.state == :closed
+    assert closed.state == :retired
     assert closed.packet["effects_used"] == 1
     assert closed.packet["model_requests_used"] == 1
-    assert {:error, :budget_account_closed} = Account.take(account, :effect, 3)
-    assert {:error, :budget_account_closed} = Account.tighten(account, 1, 1)
+    assert {:error, :retained_closed} = Account.take(account, :effect, 3)
+    assert {:error, :retained_closed} = Account.tighten(account, 1, 1)
 
-    assert {:ok, looked_up, %{state: :closed, revision: closed_revision}} =
+    assert {:ok, looked_up, %{state: :retired, revision: closed_revision}} =
              Account.lookup(ledger, "closed")
 
     assert Account.identity(looked_up) == Account.identity(account)
@@ -164,7 +168,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     restarted = start_supervised!({OperationLog, opts})
     restored = %{account | ledger: restarted}
     {:ok, after_restart} = Account.read(restored)
-    assert after_restart.state == :closed
+    assert after_restart.state == :retired
     assert after_restart.packet == closed.packet
     assert :ok = Account.close(restored, after_restart.revision)
     assert OperationLog.request(restarted, {:attempts, "closed"}) == 2
@@ -192,7 +196,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert Account.read(restored) == {:ok, active}
     assert :ok = Account.close(restored, active.revision)
 
-    assert {:ok, %{state: :closed, revision: revision, packet: %{"effects_used" => 1}}} =
+    assert {:ok, %{state: :retired, revision: revision, packet: %{"effects_used" => 1}}} =
              Account.read(restored)
 
     assert revision == active.revision + 1
@@ -203,7 +207,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     {:ok, account} = Account.open(ledger, "closure-fence", max_effects: 2, max_model_requests: 2)
     {:ok, active} = Account.read(account)
     forged = %{account | generation: String.duplicate("f", 32)}
-    assert {:error, :budget_account_mismatch} = Account.close(forged, active.revision)
+    assert {:error, :retained_generation_mismatch} = Account.close(forged, active.revision)
     assert Account.read(account) == {:ok, active}
   end
 
@@ -221,6 +225,25 @@ defmodule Alto.Runner.BudgetAccountTest do
              Account.open(ledger, "second", max_effects: 1, max_model_requests: 1)
 
     assert {:error, :not_found} = Account.read(account)
+  end
+
+  test "a stale cell cannot rewrite a reused key at the same revision", %{dir: dir} do
+    {:ok, ledger} = OperationLog.start_link(id: "reuse-fence", name: nil, dir: dir, max_ops: 1)
+    limits = [max_effects: 2, max_model_requests: 2]
+    {:ok, old} = Account.open(ledger, "reused", limits)
+    {:ok, stale} = Alto.Persistence.Retained.read(old)
+    :ok = Account.close(old, stale.revision)
+    {:ok, other} = Account.open(ledger, "evict", limits)
+    {:ok, current} = Account.read(other)
+    :ok = Account.close(other, current.revision)
+    {:ok, replacement} = Account.open(ledger, "reused", limits)
+    {:ok, before} = Account.read(replacement)
+    assert before.revision == stale.revision
+
+    assert {:error, :stale_revision} =
+             Alto.Persistence.Retained.replace(old, stale, %{stale.packet | "effects_used" => 1})
+
+    assert Account.read(replacement) == {:ok, before}
   end
 
   test "lookup rejects expired deadlines before reading", %{ledger: ledger} do

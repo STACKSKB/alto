@@ -311,7 +311,11 @@ defmodule Alto.Runner.Execution do
 
   defp do_execute(
          [%Effect{kind: :spawn_agents, data: data} | rest],
-         %{continuation_store: store, budget: %{account: %Budget.Account{}}, agent_depth: 0} =
+         %{
+           continuation_store: store,
+           budget: %{account: %Alto.Persistence.Retained{kind: Budget.Account}},
+           agent_depth: 0
+         } =
            run,
          terminal
        )

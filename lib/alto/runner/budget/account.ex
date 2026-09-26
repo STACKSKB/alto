@@ -7,92 +7,57 @@ defmodule Alto.Runner.Budget.Account do
   """
   alias Alto.Persistence.Retained
 
-  @enforce_keys [:ledger, :key, :generation]
-  defstruct [:ledger, :key, :generation]
-  @type t :: %__MODULE__{ledger: GenServer.server(), key: binary(), generation: binary()}
+  @type t :: Retained.t()
   @max 18_446_744_073_709_551_615
-  @kind "alto_budget_account"
-  @attempt "initialize-budget"
-  @close "close-budget"
   @limits ["max_effects", "max_model_requests"]
   @counters ["effects_used", "model_requests_used"]
 
   @doc "Create or reconnect an account. Reopening can tighten but never widen caps."
   def open(ledger, key, opts) do
-    with {:ok, caps} <- limits(opts) do
-      generation = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-      initial = Map.merge(caps, %{"kind" => @kind, "version" => 2, "generation" => generation})
-      deadline = Keyword.get(opts, :deadline, :infinity)
-
-      packet =
-        Map.merge(caps, %{
-          "generation" => generation,
-          "effects_used" => 0,
-          "model_requests_used" => 0
-        })
-
-      safe(fn ->
-        with {:ok, entry} <-
-               Retained.ensure_checkpoint(ledger, key, @kind, initial, @attempt, packet, deadline),
-             :ok <- valid_initial(entry),
-             account = %__MODULE__{
-               ledger: ledger,
-               key: key,
-               generation: entry.recovery["generation"]
-             },
-             {:ok, _} <-
-               tighten(account, caps["max_effects"], caps["max_model_requests"], deadline) do
-          {:ok, account}
-        end
-      end)
+    with {:ok, caps} <- limits(opts),
+         {:ok, account, _} <-
+           Retained.open(
+             ledger,
+             key,
+             __MODULE__,
+             caps,
+             Map.merge(caps, %{"effects_used" => 0, "model_requests_used" => 0}),
+             Keyword.get(opts, :deadline, :infinity)
+           ),
+         {:ok, _} <-
+           tighten(account, caps["max_effects"], caps["max_model_requests"], account.deadline) do
+      {:ok, account}
     end
   end
 
   @doc "Portable binding used to reconnect checkpointed runs to this same account."
-  def identity(%__MODULE__{key: key, generation: generation}),
-    do: %{"key" => key, "generation" => generation}
+  def identity(account), do: Retained.identity(account)
 
   @doc "Look up one retained account without initializing or mutating it."
   def lookup(ledger, key, opts \\ []) do
-    with {:ok, deadline} <- Retained.deadline(opts) do
-      safe(fn ->
-        with {:ok, entry} <- Retained.request(ledger, {:recovery, key}, deadline),
-             :ok <- valid_initial(entry),
-             :ok <- valid_packet(entry.checkpoint, entry.recovery),
-             {:ok, state} <- lifecycle(entry) do
-          account = %__MODULE__{
-            ledger: ledger,
-            key: key,
-            generation: entry.recovery["generation"]
-          }
-
-          {:ok, account, %{revision: entry.revision, packet: entry.checkpoint, state: state}}
-        end
-      end)
-    end
+    Retained.lookup(ledger, key, __MODULE__, opts)
   end
 
   @doc "Read one consistent revision, both counters, and the closure state."
-  def read(%__MODULE__{} = account, deadline \\ :infinity) do
-    with {:ok, found, snapshot} <- lookup(account.ledger, account.key, deadline: deadline) do
-      if found.generation == account.generation,
-        do: {:ok, snapshot},
-        else: {:error, :budget_account_mismatch}
-    end
+  def read(account, deadline \\ :infinity)
+
+  def read(%Retained{kind: __MODULE__} = account, deadline) do
+    Retained.read(%{account | deadline: deadline})
   end
 
+  def read(_, _), do: {:error, :invalid_budget_account}
+
   @doc "Lower shared caps. Already consumed counts remain consumed."
-  def tighten(%__MODULE__{} = account, effects, models, deadline \\ :infinity) do
+  def tighten(%Retained{kind: __MODULE__} = account, effects, models, deadline \\ :infinity) do
     if valid_cap?(effects) and valid_cap?(models) do
-      update(
-        account,
-        fn packet ->
+      Retained.update(
+        %{account | deadline: deadline},
+        fn %{packet: packet} ->
           {:ok,
            packet
            |> Map.update!("max_effects", &min(&1, effects))
            |> Map.update!("max_model_requests", &min(&1, models))}
-        end,
-        deadline
+        end
       )
     else
       {:error, :invalid_budget_account_limits}
@@ -100,7 +65,7 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   @doc "Reserve one unit under both the account cap and the caller's narrower cap."
-  def take(%__MODULE__{} = account, kind, cap, deadline \\ :infinity)
+  def take(%Retained{kind: __MODULE__} = account, kind, cap, deadline \\ :infinity)
       when kind in [:effect, :model] do
     if valid_cap?(cap) and (deadline == :infinity or is_integer(deadline)) do
       {counter, limit, error} =
@@ -109,9 +74,9 @@ defmodule Alto.Runner.Budget.Account do
           :model -> {"model_requests_used", "max_model_requests", :model_request_limit}
         end
 
-      case update(
-             account,
-             fn packet ->
+      case Retained.update(
+             %{account | deadline: deadline},
+             fn %{packet: packet} ->
                maximum = min(cap, packet[limit])
 
                cond do
@@ -124,8 +89,7 @@ defmodule Alto.Runner.Budget.Account do
                  true ->
                    {:error, {error, maximum}}
                end
-             end,
-             deadline
+             end
            ) do
         {:ok, _} -> :ok
         {:error, _} = error -> error
@@ -136,68 +100,21 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   @doc "Close an account at the viewed revision, denying future reservations. Never refunds counts."
-  def close(%__MODULE__{} = account, expected_revision) do
+  def close(%Retained{kind: __MODULE__} = account, expected_revision) do
     if is_integer(expected_revision) and expected_revision >= 1 do
-      safe(fn ->
-        with {:ok, snapshot} <- read(account),
-             true <- snapshot.revision == expected_revision do
-          close_snapshot(account, snapshot)
-        else
-          false -> {:error, :stale_revision}
-          {:error, _} = error -> error
-        end
-      end)
+      Retained.retire(%{account | deadline: :infinity}, expected_revision)
     else
       {:error, :invalid_budget_account_revision}
     end
   end
 
-  defp close_snapshot(_, %{state: :closed}), do: :ok
-
-  defp close_snapshot(account, %{state: :active} = snapshot) do
-    Retained.request(
-      account.ledger,
-      {:retire_checkpoint, account.key, snapshot.revision,
-       %{"action" => "close_budget", "generation" => account.generation}, @close,
-       Map.take(snapshot.packet, @limits ++ @counters)}
-    )
+  @doc false
+  def snapshot(%{initial: initial, packet: packet} = current) do
+    with :ok <- valid_initial(initial), :ok <- valid_packet(packet, initial), do: {:ok, current}
   end
 
-  defp update(account, fun, deadline) do
-    safe(fn ->
-      with :ok <- Retained.deadline_ok(deadline),
-           {:ok, %{revision: revision, packet: packet, state: :active} = current} <-
-             active_read(account, deadline),
-           {:ok, replacement} <- fun.(packet) do
-        if replacement == packet do
-          {:ok, current}
-        else
-          case Retained.request(
-                 account.ledger,
-                 {:checkpoint_update, account.key, revision, replacement},
-                 deadline
-               ) do
-            {:ok, entry} -> {:ok, %{revision: entry.revision, packet: entry.checkpoint}}
-            {:error, :stale_revision} -> update(account, fun, deadline)
-            {:error, _} = error -> error
-          end
-        end
-      end
-    end)
-  end
-
-  defp active_read(account, deadline) do
-    case read(account, deadline) do
-      {:ok, %{state: :active} = snapshot} -> {:ok, snapshot}
-      {:ok, _} -> {:error, :budget_account_closed}
-      error -> error
-    end
-  end
-
-  defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
-    if Enum.sort(Map.keys(initial)) == Enum.sort(["kind", "version", "generation" | @limits]) and
-         initial["kind"] == @kind and initial["version"] == 2 and
-         is_binary(initial["generation"]) and byte_size(initial["generation"]) == 32 and
+  defp valid_initial(initial) when is_map(initial) do
+    if Enum.sort(Map.keys(initial)) == Enum.sort(@limits) and
          Enum.all?(@limits, &valid_cap?(initial[&1])),
        do: :ok,
        else: {:error, :invalid_budget_account}
@@ -206,7 +123,7 @@ defmodule Alto.Runner.Budget.Account do
   defp valid_initial(_), do: {:error, :invalid_budget_account}
 
   defp valid_packet(packet, initial) when is_map(packet) do
-    if map_size(packet) == 5 and packet["generation"] == initial["generation"] and
+    if map_size(packet) == 4 and
          Enum.all?(@limits, &(valid_cap?(packet[&1]) and packet[&1] <= initial[&1])) and
          Enum.all?(Enum.zip(@counters, @limits), fn {counter, cap} ->
            is_integer(packet[counter]) and packet[counter] >= 0 and
@@ -217,21 +134,6 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   defp valid_packet(_, _), do: {:error, :invalid_budget_account}
-
-  defp lifecycle(%{status: {:checkpointed, _, @attempt}}), do: {:ok, :active}
-
-  defp lifecycle(%{
-         checkpoint_decision: %{"action" => "close_budget", "generation" => generation},
-         recovery: %{"generation" => generation},
-         checkpoint: packet,
-         status: {:decided, :completed, evidence}
-       }) do
-    if evidence == Map.take(packet, @limits ++ @counters),
-      do: {:ok, :closed},
-      else: {:error, :invalid_budget_account}
-  end
-
-  defp lifecycle(_), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
     keys = if Keyword.keyword?(opts), do: Keyword.keys(opts), else: []
@@ -252,11 +154,4 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max
-
-  defp safe(fun) do
-    fun.()
-  catch
-    :exit, {:timeout, _reason} -> {:error, :run_timeout}
-    :exit, reason -> {:error, {:budget_account_unavailable, reason}}
-  end
 end
