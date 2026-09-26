@@ -168,8 +168,6 @@ defmodule Alto.Runner.Execution.Setup do
       else: {:error, {:invalid_option, :agent_identity, agent_identity}}
   end
 
-  # A provider is model capability state: generic rule runs are constructed
-  # without one and fail closed only if a model effect is requested.
   def normalize_provider(nil), do: {:ok, nil}
 
   def normalize_provider(spec), do: Alto.Capabilities.resolve(spec, Alto.Provider)

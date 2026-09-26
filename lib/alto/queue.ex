@@ -553,32 +553,20 @@ defmodule Alto.Queue do
   defp fitting_prefix([], _remaining, kept), do: {:ok, Enum.reverse(kept)}
 
   defp fitting_prefix([record | rest], remaining, kept) do
-    case wire_size(record) do
-      {:ok, size} when size <= remaining ->
+    size = record |> Alto.Protocol.encode_term() |> JSON.encode!() |> byte_size()
+
+    cond do
+      size <= remaining ->
         fitting_prefix(rest, remaining - size - 1, [record | kept])
 
-      {:ok, size} when kept == [] ->
+      kept == [] ->
         {:error, {:record_too_large, %{id: record.id, key: record.key, size: size}}}
 
-      {:ok, _size} ->
+      true ->
         {:ok, Enum.reverse(kept)}
-
-      {:error, _reason} ->
-        {:error, {:queue_unencodable, record.id}}
     end
-  end
-
-  # The same codec the transports use: lossy term encoding, then JSON.
-  defp wire_size(record) do
-    size =
-      record
-      |> Alto.Protocol.encode_term()
-      |> JSON.encode!()
-      |> byte_size()
-
-    {:ok, size}
   rescue
-    error -> {:error, Exception.message(error)}
+    _ -> {:error, {:queue_unencodable, record.id}}
   end
 
   # Expired leases revert lazily: no timer, no scheduler — a claim dies

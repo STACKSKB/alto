@@ -14,8 +14,9 @@ documentation, generated output, and dependencies are counted separately.
 The earlier pass reached 32,747 lines; model-selected subagents then added 593,
 bringing the starting point for this follow-up to 33,340. Cleanup removed 879
 production lines, reaching 32,461. Shared agent messaging then added 1,073 net
-lines after integration. Unifying input then removed another 40 lines, leaving
-**33,494 (17.6% below the original)**. **5,036 lines remain** to reach the target.
+lines after integration. Input and retained-state cleanup removed another 59
+lines, leaving **33,475 (17.7% below the original)**. **5,017 lines remain** to
+reach the target.
 The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
 
@@ -35,6 +36,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   share validation and no longer persist unused command envelopes.
   Budget packets omit immutable headers already stored in recovery metadata;
   the account format is version 2, with no migration.
+  Continuation recovery omits the type already held by its ledger entry;
+  its format is version 4, with no migration. Child membership validation
+  checks the canonical IDs directly instead of constructing temporary sets.
   Stores share directory and ID validation; queue schedules accept one explicit
   non-negative delay or timestamp, with no options meaning immediate eligibility.
 - Tools have one execution callback, `run/3`. Optional `prepare/3` returns the
@@ -109,7 +113,8 @@ recovery, and actual user interactions.
 ## Verification
 
 The combined cleanup and messaging worktree passes **1,056 core tests and
-141 TUI tests**.
+141 TUI tests**. The latest core rerun covers the retained-state and queue
+cleanup; TUI sources and contracts are unchanged since its passing run.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an
 active turn before checking ordering and timeout interruption. Formatting and

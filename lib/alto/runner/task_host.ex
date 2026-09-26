@@ -1,11 +1,7 @@
 defmodule Alto.Runner.TaskHost do
   @moduledoc """
-  Optional supervised-task lifecycle for execution hosts.
-
   Owns task replies, cancellation, crash outcomes, and completion subscriptions.
-  Hosts supply a function accepting a cancellation reference. Completed handles
-  remain available for 60 seconds after completion, independently of the creating process.
-  Other runner implementations can supply an entirely different lifecycle.
+  Hosts supply a function accepting a cancellation reference.
   """
   use GenServer
   alias Alto.Runner.Result

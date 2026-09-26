@@ -37,8 +37,7 @@ defmodule Alto.Subagents.Continuation do
 
     with :ok <- valid_key(key), :ok <- valid_plan(ids, metadata, parent) do
       initial = %{
-        "kind" => @kind,
-        "version" => 3,
+        "version" => 4,
         "generation" => nonce(),
         "ids" => ids,
         "metadata" => metadata,
@@ -545,8 +544,8 @@ defmodule Alto.Subagents.Continuation do
   defp lifecycle(_), do: {:error, :invalid_batch_state}
 
   defp valid_initial(%{tool: @kind, recovery: initial}) when is_map(initial) do
-    if Enum.sort(Map.keys(initial)) == Enum.sort(~w(kind version generation ids metadata parent)) and
-         initial["kind"] == @kind and initial["version"] == 3 and nonce?(initial["generation"]) do
+    if Enum.sort(Map.keys(initial)) == Enum.sort(~w(version generation ids metadata parent)) and
+         initial["version"] == 4 and nonce?(initial["generation"]) do
       valid_plan(initial["ids"], initial["metadata"], initial["parent"])
     else
       {:error, :invalid_batch}
@@ -557,8 +556,8 @@ defmodule Alto.Subagents.Continuation do
 
   defp valid_packet(%{"generation" => generation, "children" => children} = packet, initial)
        when map_size(packet) == 4 and is_map(children) do
-    if generation == initial["generation"] and Enum.all?(Map.values(children), &valid_child?/1) and
-         MapSet.new(Map.keys(children)) == MapSet.new(initial["ids"]) do
+    if generation == initial["generation"] and map_size(children) == length(initial["ids"]) and
+         Enum.all?(initial["ids"], &valid_child?(children[&1])) do
       valid_phase(packet, initial["parent"])
     else
       {:error, :invalid_batch}
