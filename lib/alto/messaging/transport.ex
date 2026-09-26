@@ -32,8 +32,9 @@ defmodule Alto.Messaging.Transport do
         Alto.Input.start_link(opts)
 
       {transport, opts} ->
-        with {:ok, {module, config}} <- Alto.Capabilities.resolve(transport, __MODULE__),
-             {:ok, handle} <- module.open(Keyword.merge(config, opts)),
+        {module, config} = Alto.Capabilities.normalize(transport)
+
+        with {:ok, handle} <- module.open(Keyword.merge(config, opts)),
              do: {:ok, %Channel{module: module, handle: handle}}
     end
   end

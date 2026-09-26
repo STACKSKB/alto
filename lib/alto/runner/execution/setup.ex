@@ -21,10 +21,7 @@ defmodule Alto.Runner.Execution.Setup do
     cwd = opts |> Keyword.get(:cwd, File.cwd!()) |> Path.expand()
 
     approval =
-      Alto.Capabilities.resolve(
-        Keyword.get(opts, :approval, Alto.Approvals.DenyAll),
-        Alto.Approval
-      )
+      Alto.Capabilities.normalize(Keyword.get(opts, :approval, Alto.Approvals.DenyAll))
 
     with {:ok, limits} <- limits(opts),
          {:ok, budget} <- resolve_budget(opts[:budget], opts),
@@ -35,14 +32,11 @@ defmodule Alto.Runner.Execution.Setup do
              limits.tool_timeout,
              Keyword.get(opts, :cancel_ref)
            ),
-         {:ok, provider} <- provider,
-         {:ok, approval} <- approval,
          :ok <- validate_directory(cwd),
          {:ok, compaction} <- normalize_compaction(Keyword.get(opts, :compaction, false)),
-         {:ok, tool_map, definitions} <- Alto.Tool.Registry.build(tools, child_limits),
+         {:ok, tool_map} <- Alto.Tool.Registry.build(tools, child_limits),
          {:ok, definitions, model_exposure} <-
            Alto.Tool.Registry.expose(
-             definitions,
              tool_map,
              Keyword.get(opts, :model_tools),
              Keyword.get(opts, :parent_model_tools)
@@ -140,9 +134,9 @@ defmodule Alto.Runner.Execution.Setup do
       else: {:error, {:invalid_option, :agent_identity, agent_identity}}
   end
 
-  def normalize_provider(nil), do: {:ok, nil}
+  def normalize_provider(nil), do: nil
 
-  def normalize_provider(spec), do: Alto.Capabilities.resolve(spec, Alto.Provider)
+  def normalize_provider(spec), do: Alto.Capabilities.normalize(spec)
 
   defp resolve_child_policy(factory, budget, timeout, cancel_ref) when is_function(factory, 0) do
     case Alto.Runner.Execution.Call.run(factory, Budget.timeout(budget, timeout), cancel_ref) do
@@ -256,8 +250,7 @@ defmodule Alto.Runner.Execution.Setup do
   defp normalize_compaction(opts) do
     normalized = NimbleOptions.validate!(opts, @compaction_schema)
 
-    with {:ok, strategy} <- Alto.Context.Reducer.resolve(normalized[:strategy]),
-         do: {:ok, Keyword.put(normalized, :strategy, strategy)}
+    {:ok, Keyword.update!(normalized, :strategy, &Alto.Capabilities.normalize/1)}
   end
 
   defp persist_start(run, opts, task) do

@@ -24,12 +24,14 @@ defmodule Alto.Runner do
   def default, do: Alto.Runner.Serial
 
   def run(task, opts \\ []) do
-    with {:ok, module} <- resolve(opts), do: module.run(task, opts)
+    module = Keyword.get(opts, :runner, default())
+    module.run(task, opts)
   end
 
   def start(task, opts \\ []) do
-    with {:ok, module} <- resolve(opts),
-         {:ok, state} <- module.start(task, opts),
+    module = Keyword.get(opts, :runner, default())
+
+    with {:ok, state} <- module.start(task, opts),
          do: {:ok, %Handle{runner: module, state: state}}
   end
 
@@ -45,12 +47,4 @@ defmodule Alto.Runner do
 
   def subscribe(%Handle{runner: runner, state: state}, pid \\ self()),
     do: runner.subscribe(state, pid)
-
-  defp resolve(opts) do
-    module = Keyword.get(opts, :runner, Alto.Runner.Serial)
-
-    if Alto.Capabilities.implements?(module, __MODULE__),
-      do: {:ok, module},
-      else: {:error, {:invalid_runner, module}}
-  end
 end

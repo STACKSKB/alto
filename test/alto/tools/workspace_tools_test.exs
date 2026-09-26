@@ -301,7 +301,10 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert result.scanned_files == 7
 
     options = [backend: {SearchBackend, label: "index"}, max_query_bytes: 6]
-    assert {:ok, _tools, [definition]} = Alto.Tool.Registry.build([{SearchFiles, options}])
+
+    assert {:ok, %{"search_files" => %{definition: definition}}} =
+             Alto.Tool.Registry.build([{SearchFiles, options}])
+
     assert definition["function"]["parameters"][:properties][:query][:maxLength] == 6
 
     assert {:error, %NimbleOptions.ValidationError{key: :query}} =

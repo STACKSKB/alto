@@ -49,6 +49,7 @@ defmodule Alto.Listeners.WebAuthTest do
     refute WebAuth.allowed?(conn, broken)
     assert {:ok, {:none, nil}} = WebAuth.normalize(:none)
     assert WebAuth.allowed?(conn, :none)
-    assert {:error, _} = WebAuth.normalize({MissingAuth, []})
+    {:ok, {missing, nil}} = WebAuth.normalize({MissingAuth, []})
+    refute WebAuth.allowed?(conn, missing)
   end
 end

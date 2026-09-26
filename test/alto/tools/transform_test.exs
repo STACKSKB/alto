@@ -66,7 +66,7 @@ defmodule Alto.Tools.TransformTest do
         {:ok, Map.put(arguments, "path", Path.join(context.cwd, arguments["path"]))}
       end)
 
-    assert {:ok, tools, _definitions} = Alto.Tool.Registry.build([spec])
+    assert {:ok, tools} = Alto.Tool.Registry.build([spec])
     tool = tools["freeze"]
     assert tool.execution_mode == :exclusive
     assert tool.approval == :required

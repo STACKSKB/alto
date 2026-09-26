@@ -88,7 +88,7 @@ defmodule Alto.External.MCP.ClientTest do
 
   test "FFF specs use MCP server options and the active workspace", %{root: root, server: server} do
     specs = Alto.Tools.FFF.tools(command: server, startup_timeout: 5_000, request_timeout: 5_000)
-    assert {:ok, tools, _definitions} = Alto.Tool.Registry.build(specs)
+    assert {:ok, tools} = Alto.Tool.Registry.build(specs)
     assert Enum.sort(Map.keys(tools)) == ["fff_find_files", "fff_grep", "fff_multi_grep"]
     context = %Alto.Tool.Context{session_id: "fff", cwd: root}
 

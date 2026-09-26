@@ -16,14 +16,7 @@ defmodule Alto.MessagingTransportTest do
     def close(_), do: :ok
   end
 
-  test "transport configuration rejects invalid capabilities and preserves open failures" do
-    for spec <- [NonexistentTransport, {Custom, [:invalid]}] do
-      normalized = if is_atom(spec), do: {spec, []}, else: spec
-
-      assert {:error, {:invalid_capability, Alto.Messaging.Transport, ^normalized}} =
-               Input.open(transport: spec)
-    end
-
+  test "transport open failures are preserved" do
     assert {:error, :transport_offline} = Input.open(transport: {Unavailable, []})
   end
 

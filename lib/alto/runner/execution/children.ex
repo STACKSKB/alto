@@ -470,7 +470,7 @@ defmodule Alto.Runner.Execution.Children do
            run.cancel_ref
          ) do
       {:ok, provider} ->
-        Alto.Runner.Execution.Setup.normalize_provider(provider)
+        {:ok, Alto.Runner.Execution.Setup.normalize_provider(provider)}
 
       {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})

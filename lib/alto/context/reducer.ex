@@ -10,8 +10,6 @@ defmodule Alto.Context.Reducer do
   @callback compact(map(), (map() -> {:ok, map()} | {:error, term()}), keyword()) ::
               {:ok, map()} | {:error, term()}
 
-  def resolve(spec), do: Alto.Capabilities.resolve(spec, __MODULE__)
-
   def request(input, isolated, transcript) do
     messages =
       case input.request_mode do

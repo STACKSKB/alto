@@ -9,8 +9,9 @@ Host configuration is trusted Elixir: `loop:` is an `Alto.Loop.Spec`, supplied
 `budget:` values are `Alto.Runner.Budget` structs, project instruction options
 are `nil`, `:auto`, or keywords, and compaction is `false`, `true`, or keywords.
 Directory options are binary paths or `nil`. Malformed host configuration can
-raise during synchronous execution; an asynchronous run reports the worker
-failure through its normal completion outcome. Numeric execution bounds,
+raise during configuration or synchronous execution. Failures inside asynchronous
+workers are reported through the normal completion outcome. Callback contracts
+are exercised directly instead of preflighting every exported function. Numeric execution bounds,
 workspace authority, participant failures, and durable data remain validated.
 
 Every host implements `run/2`, `start/2`, `await/2`, `cancel/2`, `terminate/2`,

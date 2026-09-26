@@ -133,8 +133,4 @@ defmodule Alto.Runner.ContractTest do
     assert_receive {:DOWN, ^monitor, :process, ^starter, _}, 2_000
     refute_receive {:starting, "queued", _}
   end
-
-  test "invalid runner modules fail before starting work" do
-    assert {:error, {:invalid_runner, String}} = Alto.start("unused", runner: String)
-  end
 end

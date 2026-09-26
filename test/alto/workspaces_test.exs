@@ -94,6 +94,54 @@ defmodule Alto.WorkspacesTest do
 
   defp owner(path), do: %{root_run_id: "root", path: [path]}
 
+  test "a cold backend still releases external resources when discarding", %{
+    source: source,
+    manager: manager,
+    snapshot: snapshot
+  } do
+    module = Module.concat(Alto.Test, "ColdWorkspaceBackend#{System.unique_integer([:positive])}")
+    beam_dir = Path.join(Path.dirname(source), "cold-backend")
+    File.mkdir_p!(beam_dir)
+
+    [{^module, beam}] =
+      Code.compile_string("""
+      defmodule #{inspect(module)} do
+        defdelegate checkout(snapshot, path, opts), to: Alto.WorkspacesTest.Backend
+        def discard(_, _, opts) do
+          send(opts[:owner], :external_workspace_released)
+          :ok
+        end
+      end
+      """)
+
+    File.write!(Path.join(beam_dir, "#{module}.beam"), beam)
+    Code.prepend_path(beam_dir)
+
+    on_exit(fn ->
+      Code.delete_path(beam_dir)
+      :code.purge(module)
+      :code.delete(module)
+    end)
+
+    options = [
+      root: manager.root,
+      ledger: manager.ledger,
+      backend: module,
+      backend_options: [owner: self()]
+    ]
+
+    assert {:ok, ready} = Workspaces.create(Workspaces.new(options), snapshot, owner("cold"))
+    :code.purge(module)
+    :code.delete(module)
+    refute function_exported?(module, :discard, 3)
+
+    assert {:ok, %{status: "discarded"}} =
+             Workspaces.discard(Workspaces.new(options), ready.id, ready.revision, "unused")
+
+    assert_receive :external_workspace_released
+    refute File.exists?(ready.workspace["cwd"])
+  end
+
   for stage <- [:prepare_apply, :verify_apply, :apply], kind <- [:raise, :throw, :exit] do
     @tag failure_stage: stage, failure_kind: kind
     test "#{stage} #{kind} respects the dispatch boundary", %{

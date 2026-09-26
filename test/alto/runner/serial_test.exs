@@ -627,40 +627,6 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:DOWN, ^monitor, :process, ^prepare_pid, _reason}
   end
 
-  test "approval policies without a decision callback fail before provider dispatch" do
-    assert %Alto.Runner.Result{
-             status: :error,
-             reason: {:invalid_capability, Alto.Approval, {MissingRunTool, []}}
-           } =
-             result =
-             Alto.run("construct",
-               provider: {ToolThenAnswerProvider, test_pid: self()},
-               approval: MissingRunTool
-             )
-
-    assert result.model_requests == 0
-    refute_receive {:provider_request, _request}
-  end
-
-  test "tools without a run callback are rejected" do
-    parent = self()
-
-    assert %Alto.Runner.Result{
-             status: :error,
-             reason: {:invalid_capability, Alto.Tool, {MissingRunTool, []}}
-           } =
-             result =
-             Alto.run("construct",
-               provider: {ToolThenAnswerProvider, test_pid: parent},
-               tools: [MissingRunTool]
-             )
-
-    assert result.model_requests == 0
-    assert result.events == []
-
-    refute_receive {:provider_request, _request}
-  end
-
   test "unprepared tools use run/3 and expose arguments for approval" do
     parent = self()
 

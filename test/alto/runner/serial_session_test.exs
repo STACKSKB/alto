@@ -117,12 +117,12 @@ defmodule Alto.Runner.SerialSessionTest do
              Alto.resume(bare, "task", provider_opts() ++ [session_dir: dir])
   end
 
-  test "construction failures still report the session id", %{dir: dir} do
+  test "duplicate tool rejection still reports the session id", %{dir: dir} do
     assert %Alto.Runner.Result{status: :error, reason: _reason} =
              result =
              Alto.run("task",
                provider: {HistoryProvider, test_pid: self()},
-               tools: [Nope.NotAModule],
+               tools: [Alto.Tools.ReadFile, Alto.Tools.ReadFile],
                session: :new,
                session_dir: dir
              )

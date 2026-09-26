@@ -75,6 +75,10 @@ domain preparation. Required fields, defaults, types and configured bounds have
 one definition; unknown keys are rejected without creating atoms from input.
 The small `Alto.Tool.Arguments` projection supports the types used by these
 tools. Custom and remote tools can continue supplying their own `schema/1`.
+Registration keeps runtime metadata and each provider definition together.
+Model exposure projects that registry in tool-name order, intersected with the
+parent's exposure when delegated. Reordering configured tools does not reorder
+the provider schema.
 Text contracts enforce UTF-8 byte limits; the schema's character ceiling is a
 conservative projection, so multibyte strings can reach the byte limit sooner.
 

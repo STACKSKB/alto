@@ -23,11 +23,8 @@ defmodule Alto.Workspaces do
   def new(opts) do
     opts = Keyword.validate!(opts, [:root, :ledger, :backend, :backend_options])
     backend = Keyword.get(opts, :backend, Alto.Workspaces.Git)
+    Code.ensure_loaded!(backend)
     backend_options = Keyword.get(opts, :backend_options, [])
-
-    unless Alto.Capabilities.implements?(backend, Alto.Workspaces.Backend) and
-             Keyword.keyword?(backend_options),
-           do: raise(ArgumentError, "invalid workspace backend")
 
     %__MODULE__{
       root: opts |> Keyword.fetch!(:root) |> Path.expand(),
