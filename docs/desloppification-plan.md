@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,744 lines (17.0% below the original)**. **5,286 lines
+The current count is **33,705 lines (17.1% below the original)**. **5,247 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -137,7 +137,10 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   supervision and cleanup, replacing custom process loops. Webhook listeners retain only delivery IDs; routing owns validated
   endpoint maps without a second internal struct or duplicate endpoint state.
   MCP and Codex ports also use native framing, with per-message payload limits;
-  startup success and failure share waiter cleanup. MCP and Codex also share
+  startup success and failure share waiter cleanup. One JSONRPC GenServer now
+  hosts both MCP and Codex, owning startup, readiness, transport, status redaction
+  and termination. Protocol clients retain their handshake, replies and cancellation.
+  MCP and Codex also share
   request admission, caller monitoring, and startup/error return handling through
   JSONRPC callbacks; their protocol-specific replies and cancellation remain local.
   CLI rendering uses GenServer calls for stop replies and timeouts instead of
@@ -213,6 +216,10 @@ and 2,400 complete multiline/cursor projections; all outputs matched.
 
 The shared JSON-RPC request/startup workflow passes 46 focused external-client,
 Codex-agent, and external-tool tests, plus the TUI backend integration suite.
+The sole-process-host consolidation removes another 39 production lines and
+passes both full suites. Live MCP and Codex clients also verify that process
+status omits configured secrets. A duplicate constructor comparison is removed
+from restored-tool-history coverage; explicit rendered-content assertions remain.
 
 Protocol normalization matched the previous decoder across 8,721 input cases.
 Subscriber delivery matched 100,000 mixed enqueue/pull transitions, including

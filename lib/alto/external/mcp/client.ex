@@ -8,7 +8,6 @@ defmodule Alto.External.MCP.Client do
   tools only; roots, sampling, elicitation, resources, and prompts are refused.
   """
 
-  use GenServer
   alias Alto.External.JSONRPC
 
   @protocol_version "2025-11-25"
@@ -55,41 +54,19 @@ defmodule Alto.External.MCP.Client do
   @spec stop(pid()) :: :ok
   def stop(pid), do: GenServer.stop(pid, :normal)
 
-  def start_link(opts), do: JSONRPC.start_link(__MODULE__, opts)
+  def initial_state(_opts), do: %{tools: nil}
 
-  @doc false
-  def child_spec(opts) do
-    JSONRPC.child_spec(__MODULE__, opts)
-  end
-
-  @impl true
-  def format_status(status), do: JSONRPC.format_status(status)
-
-  @impl true
-  def init(opts) do
-    Process.flag(:trap_exit, true)
-    {:ok, JSONRPC.state(opts, %{tools: nil}), {:continue, :open}}
-  end
-
-  @impl true
-  def handle_continue(:open, state) do
+  def initialize(state) do
     request = %{
       "protocolVersion" => Keyword.fetch!(state.opts, :protocol_version),
       "capabilities" => %{},
       "clientInfo" => %{"name" => "alto", "version" => "0.1.0"}
     }
 
-    JSONRPC.open(
-      state,
-      &open_port/1,
-      &JSONRPC.initialize(&1, request, :mcp_pending_request_limit),
-      &fail_all/2
-    )
+    JSONRPC.initialize(state, request, :mcp_pending_request_limit)
   end
 
-  @impl true
-  def handle_call(:await_ready, from, state),
-    do: JSONRPC.await_ready(state, from, :mcp_ready_waiter_limit)
+  def ready_waiter_limit, do: :mcp_ready_waiter_limit
 
   def handle_call({:list_tools, _params, _timeout}, _from, %{phase: :ready, tools: tools} = state)
       when is_list(tools),
@@ -113,7 +90,6 @@ defmodule Alto.External.MCP.Client do
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:mcp_not_ready, state.phase}}, state}
 
-  @impl true
   def handle_info({:request_timeout, id}, state) do
     JSONRPC.expire(state, id, fn reply ->
       cancel_request(state, id, "timeout")
@@ -125,12 +101,6 @@ defmodule Alto.External.MCP.Client do
     {:noreply,
      JSONRPC.drop_owner(state, monitor, owner, &cancel_request(state, &1, "owner_disconnected"))}
   end
-
-  def handle_info(message, state),
-    do: JSONRPC.handle_transport(message, state, &handle_message/2, &fail_all/2)
-
-  @impl true
-  def terminate(_reason, state), do: JSONRPC.close(state)
 
   @options_schema [
     command: [type: :string, required: true],
@@ -148,7 +118,7 @@ defmodule Alto.External.MCP.Client do
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
-  defp open_port(opts) do
+  def open_port(opts) do
     context = %Alto.Tool.Context{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
 
     result =
@@ -183,14 +153,14 @@ defmodule Alto.External.MCP.Client do
 
   # A server request has both `method` and `id`; inspect that shape before
   # looking up pending responses so it cannot consume an outgoing id.
-  defp handle_message(%{"method" => _method, "id" => _id} = message, state) do
+  def handle_message(%{"method" => _method, "id" => _id} = message, state) do
     maybe_refuse_server_request(message, state)
   end
 
-  defp handle_message(%{"id" => id} = message, state),
+  def handle_message(%{"id" => id} = message, state),
     do: JSONRPC.settle(state, id, message, &settle_response/3)
 
-  defp handle_message(_notification, state), do: {:ok, state}
+  def handle_message(_notification, state), do: {:ok, state}
 
   defp settle_response(:initialize, %{"result" => result}, state) when is_map(result) do
     expected = Keyword.fetch!(state.opts, :protocol_version)
@@ -251,7 +221,7 @@ defmodule Alto.External.MCP.Client do
 
   defp maybe_refuse_server_request(_message, state), do: {:ok, state}
 
-  defp fail_all(state, reason),
+  def fail_all(state, reason),
     do:
       JSONRPC.fail_all(state, reason, fn reply, reason ->
         reply_error(reply, reason, classify_failure(reply))

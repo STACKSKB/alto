@@ -1,5 +1,6 @@
 defmodule Alto.External.JSONRPC do
-  @moduledoc false
+  @moduledoc "Shared JSON-RPC process lifecycle; client modules own protocol callbacks."
+  use GenServer
 
   alias Alto.External.Process, as: ExternalProcess
 
@@ -18,28 +19,35 @@ defmodule Alto.External.JSONRPC do
     end
   end
 
-  def state(opts, protocol_state) when is_map(protocol_state) do
-    Map.merge(
-      %{
-        opts: opts,
-        process: nil,
-        phase: :starting,
-        next_id: 1,
-        pending: %{},
-        ready_waiters: [],
-        initialize_timer: nil
-      },
-      protocol_state
-    )
+  @impl true
+  def init({protocol, opts}) do
+    Process.flag(:trap_exit, true)
+
+    state =
+      Map.merge(
+        %{
+          protocol: protocol,
+          opts: opts,
+          process: nil,
+          phase: :starting,
+          next_id: 1,
+          pending: %{},
+          ready_waiters: [],
+          initialize_timer: nil
+        },
+        protocol.initial_state(opts)
+      )
+
+    {:ok, state, {:continue, :open}}
   end
 
   def start_link(module, opts),
-    do: GenServer.start_link(module, opts, name: Keyword.get(opts, :name))
+    do: GenServer.start_link(__MODULE__, {module, opts}, name: Keyword.get(opts, :name))
 
   def child_spec(module, opts) do
     %{
       id: {module, Keyword.get(opts, :name)},
-      start: {module, :start_link, [opts]},
+      start: {__MODULE__, :start_link, [module, opts]},
       restart: :temporary
     }
   end
@@ -49,7 +57,7 @@ defmodule Alto.External.JSONRPC do
     identity = opts |> Enum.reverse() |> Map.new() |> :erlang.term_to_binary([:deterministic])
     key = {module, :crypto.hash(:sha256, identity)}
     name = {:via, Registry, {Alto.External.Registry, key}}
-    child = {module, Keyword.put(opts, :name, name)}
+    child = child_spec(module, Keyword.put(opts, :name, name))
 
     case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
       {:ok, pid} ->
@@ -74,21 +82,23 @@ defmodule Alto.External.JSONRPC do
   def call_timeout(:infinity), do: :infinity
   def call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout + 100
 
-  def open(state, opener, initialize, fail_all) do
-    case opener.(state.opts) do
+  @impl true
+  def handle_continue(:open, %{protocol: protocol} = state) do
+    case protocol.open_port(state.opts) do
       {:ok, process} ->
         state = %{state | process: process}
 
-        case initialize.(state) do
+        case protocol.initialize(state) do
           {:ok, state} -> {:noreply, arm_startup_timeout(state)}
-          {:error, reason} -> {:stop, reason, fail_all.(state, reason)}
+          {:error, reason} -> {:stop, reason, protocol.fail_all(state, reason)}
         end
 
       {:error, reason} ->
-        {:stop, reason, fail_all.(state, reason)}
+        {:stop, reason, protocol.fail_all(state, reason)}
     end
   end
 
+  @impl true
   def format_status(status) do
     Map.update(status, :state, %{}, fn state ->
       %{phase: state.phase, pending_count: map_size(state.pending)}
@@ -96,13 +106,15 @@ defmodule Alto.External.JSONRPC do
     |> Map.put(:message, :redacted)
   end
 
-  def await_ready(%{phase: :ready} = state, _from, _limit_error),
+  @impl true
+  def handle_call(:await_ready, _from, %{phase: :ready} = state),
     do: {:reply, {:ok, self()}, state}
 
-  def await_ready(%{phase: {:failed, reason}} = state, _from, _limit_error),
+  def handle_call(:await_ready, _from, %{phase: {:failed, reason}} = state),
     do: {:reply, {:error, reason}, state}
 
-  def await_ready(state, from, limit_error) do
+  def handle_call(:await_ready, from, state) do
+    limit_error = state.protocol.ready_waiter_limit()
     limit = Keyword.fetch!(state.opts, :max_ready_waiters)
 
     if length(state.ready_waiters) >= limit do
@@ -112,6 +124,8 @@ defmodule Alto.External.JSONRPC do
       {:noreply, %{state | ready_waiters: [{from, monitor} | state.ready_waiters]}}
     end
   end
+
+  def handle_call(message, from, state), do: state.protocol.handle_call(message, from, state)
 
   def ready(state), do: finish_startup(state, :ready, {:ok, self()})
 
@@ -137,10 +151,17 @@ defmodule Alto.External.JSONRPC do
     %{state | initialize_timer: timer}
   end
 
-  def handle_transport(message, state, handle_message, fail_all) do
-    case transport_event(message, state, handle_message) do
+  @impl true
+  def handle_info({:request_timeout, _} = message, state),
+    do: state.protocol.handle_info(message, state)
+
+  def handle_info({:DOWN, _, :process, _, _} = message, state),
+    do: state.protocol.handle_info(message, state)
+
+  def handle_info(message, %{protocol: protocol} = state) do
+    case transport_event(message, state, &protocol.handle_message/2) do
       {:ok, state} -> {:noreply, state}
-      {:error, reason, state} -> {:stop, reason, fail_all.(state, reason)}
+      {:error, reason, state} -> {:stop, reason, protocol.fail_all(state, reason)}
     end
   end
 
@@ -165,9 +186,9 @@ defmodule Alto.External.JSONRPC do
 
   defp transport_event(_, state, _), do: {:ok, state}
 
-  def close(%{process: nil}), do: :ok
-
-  def close(%{process: process}), do: ExternalProcess.close(process)
+  @impl true
+  def terminate(_reason, %{process: nil}), do: :ok
+  def terminate(_reason, %{process: process}), do: ExternalProcess.close(process)
 
   def initialize(state, params, limit_error),
     do: request(state, "initialize", params, :initialize, nil, limit_error)

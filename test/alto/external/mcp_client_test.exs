@@ -109,12 +109,21 @@ defmodule Alto.External.MCP.ClientTest do
     root: root,
     server: server
   } do
-    opts = [command: server, cwd: root, request_timeout: 5_000, startup_timeout: 5_000]
+    secret = "mcp-status-secret"
+
+    opts = [
+      command: server,
+      cwd: root,
+      request_timeout: 5_000,
+      startup_timeout: 5_000,
+      env: %{"API_KEY" => secret}
+    ]
 
     assert {:ok, client} = Client.ensure_started(opts)
     on_exit(fn -> if Process.alive?(client), do: Client.stop(client) end)
     assert {:ok, same_client} = Client.ensure_started(Enum.reverse(opts))
     assert client == same_client
+    refute inspect(:sys.get_status(client), limit: :infinity) =~ secret
 
     assert {:ok, [%{"name" => "echo"}]} = Client.list_tools(client, 5_000)
 

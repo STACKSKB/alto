@@ -8,7 +8,6 @@ defmodule Alto.Codex.AppServer.Client do
   loaded Codex threads survive individual turns.
   """
 
-  use GenServer
   alias Alto.External.JSONRPC
   alias Alto.External.Process, as: ExternalProcess
 
@@ -92,40 +91,18 @@ defmodule Alto.Codex.AppServer.Client do
   def interrupt_turn(client, thread_id, turn_id),
     do: request(client, "turn/interrupt", %{"threadId" => thread_id, "turnId" => turn_id})
 
-  @doc false
-  def child_spec(opts) do
-    JSONRPC.child_spec(__MODULE__, opts)
-  end
+  def initial_state(_opts), do: %{subscribers: %{}}
 
-  def start_link(opts), do: JSONRPC.start_link(__MODULE__, opts)
-
-  @impl true
-  def format_status(status), do: JSONRPC.format_status(status)
-
-  @impl true
-  def init(opts) do
-    Process.flag(:trap_exit, true)
-    {:ok, JSONRPC.state(opts, %{subscribers: %{}}), {:continue, :open}}
-  end
-
-  @impl true
-  def handle_continue(:open, state) do
+  def initialize(state) do
     params = %{
       "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
       "capabilities" => %{"experimentalApi" => Keyword.get(state.opts, :experimental_api, false)}
     }
 
-    JSONRPC.open(
-      state,
-      &open_port/1,
-      &JSONRPC.initialize(&1, params, :codex_app_server_pending_request_limit),
-      &fail_all/2
-    )
+    JSONRPC.initialize(state, params, :codex_app_server_pending_request_limit)
   end
 
-  @impl true
-  def handle_call(:await_ready, from, state),
-    do: JSONRPC.await_ready(state, from, :codex_app_server_ready_waiter_limit)
+  def ready_waiter_limit, do: :codex_app_server_ready_waiter_limit
 
   def handle_call({:subscribe, subscriber}, _from, state) do
     if Map.has_key?(state.subscribers, subscriber) do
@@ -173,7 +150,6 @@ defmodule Alto.Codex.AppServer.Client do
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:codex_app_server_not_ready, state.phase}}, state}
 
-  @impl true
   def handle_info({:request_timeout, id}, state) do
     JSONRPC.expire(state, id, fn reply ->
       cancel_request(state, id)
@@ -186,12 +162,6 @@ defmodule Alto.Codex.AppServer.Client do
     subscribers = Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
     {:noreply, %{state | subscribers: subscribers}}
   end
-
-  def handle_info(message, state),
-    do: JSONRPC.handle_transport(message, state, &handle_message/2, &fail_all/2)
-
-  @impl true
-  def terminate(_reason, state), do: JSONRPC.close(state)
 
   @options_schema [
     command: [type: :string, default: "codex"],
@@ -210,7 +180,7 @@ defmodule Alto.Codex.AppServer.Client do
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
-  defp open_port(opts) do
+  def open_port(opts) do
     command = Keyword.fetch!(opts, :command)
 
     case ExternalProcess.open(command, Keyword.fetch!(opts, :args),
@@ -233,16 +203,16 @@ defmodule Alto.Codex.AppServer.Client do
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.
-  defp handle_message(%{"method" => method, "id" => id} = message, state)
-       when is_binary(method) do
+  def handle_message(%{"method" => method, "id" => id} = message, state)
+      when is_binary(method) do
     broadcast(state, {:codex_request, self(), id, method, message["params"] || %{}})
     {:ok, state}
   end
 
-  defp handle_message(%{"id" => id} = message, state),
+  def handle_message(%{"id" => id} = message, state),
     do: JSONRPC.settle(state, id, message, &settle_response/3)
 
-  defp handle_message(%{"method" => method} = notification, state) do
+  def handle_message(%{"method" => method} = notification, state) do
     broadcast(
       state,
       {:codex_notification, self(), method, Map.get(notification, "params", %{})}
@@ -251,7 +221,7 @@ defmodule Alto.Codex.AppServer.Client do
     {:ok, state}
   end
 
-  defp handle_message(_message, state), do: {:ok, state}
+  def handle_message(_message, state), do: {:ok, state}
 
   defp settle_response(:initialize, %{"result" => result}, state) when is_map(result) do
     case send_notification(state, "initialized") do
@@ -300,7 +270,7 @@ defmodule Alto.Codex.AppServer.Client do
     :ok
   end
 
-  defp fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
+  def fail_all(state, reason), do: JSONRPC.fail_all(state, reason, &reply_error/2)
 
   defp reply_error(:initialize, _reason), do: :ok
   defp reply_error({:request, from, _method}, reason), do: GenServer.reply(from, {:error, reason})

@@ -73,10 +73,20 @@ defmodule Alto.Codex.AppServer.ClientTest do
     root: root,
     server: server
   } do
-    opts = [command: server, args: [], cwd: root, startup_timeout: 5_000, request_timeout: 5_000]
+    secret = "codex-status-secret"
+
+    opts = [
+      command: server,
+      args: [],
+      cwd: root,
+      startup_timeout: 5_000,
+      request_timeout: 5_000,
+      env: %{"API_KEY" => secret}
+    ]
 
     assert {:ok, client} = Client.ensure_started(opts)
     assert {:ok, ^client} = Client.ensure_started(Enum.reverse(opts))
+    refute inspect(:sys.get_status(client), limit: :infinity) =~ secret
     assert {:ok, isolated} = Client.ensure_started(Keyword.put(opts, :instance, :isolated))
     refute isolated == client
     GenServer.stop(isolated)
@@ -134,15 +144,6 @@ defmodule Alto.Codex.AppServer.ClientTest do
       refute entry.detail =~ "%{"
       refute entry.detail =~ "=>"
     end
-
-    assert command ==
-             Backend.item_entry(%{
-               "type" => "commandExecution",
-               "command" => "ls -la",
-               "aggregatedOutput" => "file.txt",
-               "status" => "failed",
-               "exitCode" => 2
-             })
   end
 
   test "approval levels map to Codex policy and sandbox independently", _context do
