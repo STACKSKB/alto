@@ -15,7 +15,8 @@ The earlier pass reached 32,747 lines; model-selected subagents then added 593,
 bringing the starting point for this follow-up to 33,340. Cleanup removed 879
 production lines, reaching 32,461. Shared agent messaging then added 1,073 net
 lines after integration. Input, retained-state and capability cleanup removed
-another 86 lines, leaving **33,448 (17.7% below the original)**. **4,990 lines remain** to
+another 86 lines. Reusing ThousandIsland for Unix socket supervision removes
+69 more, leaving **33,379 (17.9% below the original)**. **4,921 lines remain** to
 reach the target.
 The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
@@ -74,7 +75,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   using shared atomic-write and lock helpers. Consumers use `artifact_path`;
   the multi-file directory publisher and legacy file map are removed.
 - Unix sockets use bounded OTP line framing instead of a second line buffer and
-  splitter. Webhook listeners retain only delivery IDs; routing owns validated
+  splitter. The existing ThousandIsland dependency owns acceptance, connection
+  supervision and cleanup, replacing custom process loops. Webhook listeners retain only delivery IDs; routing owns validated
   endpoint maps without a second internal struct or duplicate endpoint state.
   MCP and Codex ports also use native framing, with per-message payload limits;
   startup success and failure share waiter cleanup.
@@ -115,7 +117,7 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,058 core tests and
+The combined cleanup and messaging worktree passes **1,059 core tests and
 141 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an

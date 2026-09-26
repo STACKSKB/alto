@@ -1,79 +1,61 @@
 defmodule Alto.Listeners.UnixSocket do
   @moduledoc """
-  The v1 dogfood transport (the protocol contract): a Unix domain socket speaking
-  NDJSON envelopes.
+  Unix-domain NDJSON transport with bounded OTP line framing.
 
-  The listener process binds `{:local, path}`, chmods the socket to `0600`
-  inside a `0700` directory, and hands each accepted connection to a client
-  process. Client processes own their socket, decode commands through
-  `Alto.Protocol`, forward them to the `Alto.FrontEnd.Registry`, and encode
-  registry notifications back onto the wire, pulling for more as they drain.
-  A line over `max_line_bytes` closes the connection rather than truncating
-  it — truncating a stream that carries approval decisions is unsafe, and
-  closing is the fail-closed behavior.
-
-  A stale socket file at `path` (an unclean shutdown's leftover, detected
-  by a refused probe connection) is removed before binding; a live socket
-  fails the start as `already_in_use` and any other pre-existing file as
-  `path_taken`. The filesystem boundary (0700 directory,
-  0600 socket) is the authentication for the single-user v1 default.
+  The socket is `0600` inside a `0700` directory. A refused probe identifies
+  a stale socket; live sockets and other existing files are never replaced.
+  ThousandIsland owns acceptance, connection supervision and socket cleanup;
+  `Alto.Listeners.Connection` owns protocol dispatch and notification encoding.
   """
-
   use GenServer
-
-  alias Alto.FrontEnd.Registry
   alias Alto.Listeners.Connection
 
-  ## Client API
-
-  @doc """
-  Start the listener. Options:
-
-    * `:registry` — the `Alto.FrontEnd.Registry` server (required);
-    * `:path` — Unix socket path (required);
-    * `:max_line_bytes` — per-line bound (default 1 MiB);
-    * `:name` — registered name of the listener process.
-  """
+  @doc "Start with required :registry and :path, optional :name and :max_line_bytes (1 MiB)."
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  ## Listener implementation
-
   @impl true
   def init(opts) do
-    # Supervisor shutdown must run terminate/2 to unlink the socket.
     Process.flag(:trap_exit, true)
-
-    registry = Keyword.fetch!(opts, :registry)
     path = opts |> Keyword.fetch!(:path) |> Path.expand()
-    max_line_bytes = Keyword.get(opts, :max_line_bytes, Connection.default_max_line_bytes())
+    limit = Keyword.get(opts, :max_line_bytes, Connection.default_max_line_bytes())
 
     with :ok <- prepare_socket_path(path),
-         {:ok, listen_socket} <-
-           :gen_tcp.listen(0, [
-             :binary,
-             {:ip, {:local, to_charlist(path)}},
-             {:backlog, 8},
-             {:active, false},
-             {:packet, :line},
-             {:packet_size, max_line_bytes + 1},
-             {:buffer, max_line_bytes + 1},
-             {:exit_on_close, true}
-           ]),
+         {:ok, server} <-
+           ThousandIsland.start_link(
+             port: 0,
+             num_acceptors: 1,
+             read_timeout: :infinity,
+             shutdown_timeout: 1_000,
+             handler_module: __MODULE__.Handler,
+             handler_options: {Keyword.fetch!(opts, :registry), limit},
+             transport_options: [
+               ip: {:local, to_charlist(path)},
+               backlog: 8,
+               packet: :line,
+               packet_size: limit + 1,
+               buffer: limit + 1
+             ]
+           ),
          :ok <- File.chmod(path, 0o600) do
-      acceptor = spawn_link(fn -> accept_loop(listen_socket, registry, max_line_bytes) end)
-
-      {:ok,
-       %{
-         path: path,
-         listen_socket: listen_socket,
-         acceptor: acceptor
-       }}
+      {:ok, %{path: path, server: server}}
     else
-      {:error, reason} ->
-        {:stop, {:socket_bind_failed, path, reason}}
+      {:error, reason} -> {:stop, {:socket_bind_failed, path, reason}}
     end
+  end
+
+  @impl true
+  def handle_info({:EXIT, server, reason}, %{server: server} = state),
+    do: {:stop, {:listener_stopped, reason}, state}
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    File.rm(state.path)
+    if Process.alive?(state.server), do: Supervisor.stop(state.server)
+    :ok
   end
 
   defp prepare_socket_path(path) do
@@ -119,95 +101,44 @@ defmodule Alto.Listeners.UnixSocket do
     end
   end
 
-  defp accept_loop(listen_socket, registry, max_line_bytes) do
-    case :gen_tcp.accept(listen_socket, :infinity) do
-      {:ok, socket} ->
-        client = spawn(fn -> client_init(socket, registry, max_line_bytes) end)
+  defmodule Handler do
+    @moduledoc false
+    use ThousandIsland.Handler
+    alias Alto.FrontEnd.Registry
+    alias Alto.Listeners.Connection
+    alias ThousandIsland.Socket
 
-        case :gen_tcp.controlling_process(socket, client) do
-          :ok -> :ok
-          {:error, _reason} -> :gen_tcp.close(socket)
-        end
-
-        accept_loop(listen_socket, registry, max_line_bytes)
-
-      {:error, :closed} ->
-        :ok
-
-      {:error, _reason} ->
-        accept_loop(listen_socket, registry, max_line_bytes)
+    @impl true
+    def handle_connection(socket, {registry, limit} = state) do
+      :ok = Socket.send(socket, Connection.hello_lines(registry, limit))
+      send(self(), :alto_wakeup)
+      {:continue, state}
     end
-  end
 
-  @impl true
-  def handle_info({:EXIT, acceptor, reason}, %{acceptor: acceptor} = state),
-    do: {:stop, {:acceptor_stopped, reason}, state}
+    @impl true
+    def handle_data(line, socket, {registry, limit} = state) do
+      # OTP can truncate at the buffer bound; never dispatch a fragment.
+      if byte_size(line) <= limit + 1 and String.ends_with?(line, "\n") do
+        line = line |> String.trim_trailing("\n") |> String.trim_trailing("\r")
+        :ok = Socket.send(socket, Connection.command_lines(line, registry, limit))
+        {:continue, state}
+      else
+        {:close, state}
+      end
+    end
 
-  def handle_info(_message, state), do: {:noreply, state}
+    @impl true
+    def handle_info(:alto_wakeup, {socket, {registry, _} = state}) do
+      Registry.pull(registry, self(), Connection.pull_batch())
+      Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
+      {:noreply, {socket, state}}
+    end
 
-  @impl true
-  def terminate(_reason, state) do
-    :gen_tcp.close(state.listen_socket)
-    File.rm(state.path)
-    :ok
-  end
+    def handle_info(:alto_close, state), do: {:stop, :normal, state}
 
-  ## Client process
-  ##
-  ## OTP frames NDJSON lines; command
-  ## dispatch and notification encoding are shared with the WebSocket
-  ## transport through `Alto.Listeners.Connection`.
-
-  defp client_init(socket, registry, max_line_bytes) do
-    Enum.each(Connection.hello_lines(registry, max_line_bytes), &:gen_tcp.send(socket, &1))
-
-    :inet.setopts(socket, active: :once)
-    Registry.pull(registry, self(), Connection.pull_batch())
-    Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
-    client_loop(socket, registry, max_line_bytes)
-  end
-
-  defp client_loop(socket, registry, max_line_bytes) do
-    send_line = fn line -> :gen_tcp.send(socket, line) end
-
-    receive do
-      {:tcp, ^socket, line} ->
-        # Line mode truncates at the configured buffer bound. Never dispatch a fragment.
-        if byte_size(line) <= max_line_bytes + 1 and String.ends_with?(line, "\n") do
-          line = line |> String.trim_trailing("\n") |> String.trim_trailing("\r")
-          Enum.each(Connection.command_lines(line, registry, max_line_bytes), send_line)
-          :inet.setopts(socket, active: :once)
-          client_loop(socket, registry, max_line_bytes)
-        else
-          Registry.detach(registry, self())
-          :gen_tcp.close(socket)
-        end
-
-      {:tcp_closed, ^socket} ->
-        Registry.detach(registry, self())
-
-      {:tcp_error, ^socket, _reason} ->
-        Registry.detach(registry, self())
-        :gen_tcp.close(socket)
-
-      :alto_close ->
-        Registry.detach(registry, self())
-        :gen_tcp.close(socket)
-
-      :alto_wakeup ->
-        # Safety net for the pull model: a batch that drains an empty buffer
-        # must not wait forever for the next notification to re-trigger.
-        Registry.pull(registry, self(), Connection.pull_batch())
-        Process.send_after(self(), :alto_wakeup, Connection.wakeup_ms())
-        client_loop(socket, registry, max_line_bytes)
-
-      {:alto_notification, notification} ->
-        Enum.each(
-          Connection.notification_lines(notification, registry, max_line_bytes),
-          send_line
-        )
-
-        client_loop(socket, registry, max_line_bytes)
+    def handle_info({:alto_notification, notification}, {socket, {registry, limit} = state}) do
+      :ok = Socket.send(socket, Connection.notification_lines(notification, registry, limit))
+      {:noreply, {socket, state}}
     end
   end
 end

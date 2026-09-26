@@ -66,17 +66,22 @@ defmodule Alto.Listeners.UnixSocketTest do
     %{root: root, path: path, registry: registry, socket: socket, buffer: ""}
   end
 
-  test "supervised shutdown removes the socket and stops its acceptor", %{path: path} do
-    acceptor = :sys.get_state(UnixSocket).acceptor
-    monitor = Process.monitor(acceptor)
+  test "supervised shutdown removes the socket and closes owned connections", %{
+    path: path,
+    socket: socket
+  } do
+    {_hello, _} = recv_json(socket, "")
+    server = :sys.get_state(UnixSocket).server
+    monitor = Process.monitor(server)
 
     assert :ok = stop_supervised(UnixSocket)
     refute File.exists?(path)
-    assert_receive {:DOWN, ^monitor, :process, ^acceptor, _reason}
+    assert_receive {:DOWN, ^monitor, :process, ^server, _reason}
+    assert {:error, :closed} = :gen_tcp.recv(socket, 0, 2_000)
     assert {:error, :enoent} = :gen_tcp.connect({:local, path}, 0, [:binary, {:active, false}])
   end
 
-  test "acceptor failure terminates the listener instead of leaving an inert socket", %{
+  test "acceptor failure recovers accepting and server failure removes the listener", %{
     root: root,
     registry: registry
   } do
@@ -85,12 +90,50 @@ defmodule Alto.Listeners.UnixSocketTest do
     spec = listener_spec(name, registry, path, name) |> Map.put(:restart, :temporary)
     listener = start_supervised!(spec)
     monitor = Process.monitor(listener)
-    acceptor = :sys.get_state(listener).acceptor
+    server = :sys.get_state(listener).server
+    pool = child_pid(server, :acceptor_pool_supervisor)
+    acceptor = pool |> child_pid("acceptor-1") |> child_pid(:acceptor)
+    acceptor_monitor = Process.monitor(acceptor)
 
     Process.exit(acceptor, :kill)
+    assert_receive {:DOWN, ^acceptor_monitor, :process, ^acceptor, :killed}, 5_000
+    {:ok, socket} = :gen_tcp.connect({:local, path}, 0, [:binary, {:active, false}])
+    {hello, _} = recv_json(socket, "")
+    assert hello["type"] == "hello"
+    :gen_tcp.close(socket)
+    assert Process.alive?(listener)
 
-    assert_receive {:DOWN, ^monitor, :process, ^listener, {:acceptor_stopped, :killed}}, 5_000
+    Process.exit(server, :kill)
+
+    assert_receive {:DOWN, ^monitor, :process, ^listener, {:listener_stopped, :killed}}, 5_000
     refute File.exists?(path)
+  end
+
+  test "disconnecting a subscribed client removes its registry subscription", %{
+    socket: socket,
+    registry: registry
+  } do
+    {_hello, buffer} = recv_json(socket, "")
+    send_command(socket, %{"v" => 1, "type" => "attach", "id" => "attach"})
+    {_ok, _buffer} = recv_ok(socket, buffer, "attach")
+    [client] = Map.keys(:sys.get_state(registry).subscribers)
+    monitor = Process.monitor(client)
+    :gen_tcp.close(socket)
+    assert_receive {:DOWN, ^monitor, :process, ^client, _}, 5_000
+    assert_eventually(fn -> :sys.get_state(registry).subscribers == %{} end)
+  end
+
+  defp child_pid(supervisor, id),
+    do: supervisor |> Supervisor.which_children() |> List.keyfind(id, 0) |> elem(1)
+
+  defp assert_eventually(fun, attempts \\ 100) do
+    if fun.() do
+      :ok
+    else
+      assert attempts > 0
+      Process.sleep(1)
+      assert_eventually(fun, attempts - 1)
+    end
   end
 
   test "greets with the protocol version, live runs, and the line bound", %{
