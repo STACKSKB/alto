@@ -5,6 +5,7 @@ defmodule Alto.Runner.Execution.Model do
   Providers receive only the request, stream sink, and configured options.
   """
 
+  require Logger
   alias Alto.{Event, Usage}
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
@@ -175,15 +176,23 @@ defmodule Alto.Runner.Execution.Model do
   end
 
   defp retry_decision(caps, reason, attempt) do
-    policy = caps.retry_policy
+    policy = caps.retry_policy || (&Alto.Retry.Transient.decide/2)
 
     case Call.run(
-           fn -> Alto.Retry.decide(policy, reason, attempt) end,
+           fn ->
+             try do
+               policy.(reason, attempt)
+             catch
+               _, _ ->
+                 Logger.warning("retry policy failed; stopping retries")
+                 :stop
+             end
+           end,
            Budget.timeout(caps.budget, caps.provider_timeout),
            caps.cancel_ref
          ) do
       {:error, {:cancelled, _}} = error -> error
-      {:retry, _, _} = retry -> retry
+      {:retry, delay, _} = retry when is_integer(delay) and delay >= 0 -> retry
       _ -> :stop
     end
   end

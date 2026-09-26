@@ -4,9 +4,7 @@ defmodule Alto.Retry.Transient do
   Set `jitter: false` for fixed delays, or supply a zero-arity `random_source`
   returning a number in 0..1 for deterministic scheduling tests.
   """
-  @behaviour Alto.Retry
-  @impl true
-  def decide(reason, attempt, opts) do
+  def decide(reason, attempt, opts \\ []) do
     case stream_error_kind(reason) do
       nil ->
         :stop

@@ -224,7 +224,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "prompt options are rejected for provider-less runs at construction" do
-    for prompt_opts <- [[prompt: "beep"], [prompt: Alto.Prompts.Coding]] do
+    for prompt_opts <- [[prompt: "beep"], [prompt: &Alto.Prompts.Coding.build/1]] do
       opts =
         Keyword.merge([loop: Alto.loop(CountingRuleLoop), tools: [RuleEchoTool]], prompt_opts)
 

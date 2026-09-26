@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **32,620 lines**, a **19.8% reduction**, with **4,162 lines remaining**.
+Current: **32,517 lines**, a **20.0% reduction**, with **4,059 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,15 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Prompts, retry policies and tool presenters now use function callbacks. Configured
+options live in closures; the Prompt.Builder, Retry and ToolPresentation dispatch
+modules are deleted. Retry defects stop retries with a fixed, redacted warning;
+presenters retain timeout, cancellation and fallback behavior. Prompt tool metadata
+uses the same configured defaults as execution. This pass removes **103 production
+lines**: **76 code/typespec**, **21 blank**, and **6 documentation/comment** lines.
+All 1,083 core tests pass, including actual failing-policy execution and configured
+tool-name projection. The shipped configuration loads all 15 tools.
 
 Middleware now composes three-argument functions directly; lifecycle hooks use
 closures in the same chain. The Hook, Middleware and Middleware.After dispatch

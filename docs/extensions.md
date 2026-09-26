@@ -8,8 +8,10 @@ adapters without changing the runner.
 ## System prompts
 
 The `:prompt` run option accepts literal text, `nil` to omit the system message,
-a builder module, `{module, options}`, or a function receiving the prompt context.
-For example, use `prompt: "Answer concisely"` or `prompt: Alto.Prompts.Coding`.
+or a function receiving the prompt context. For example, use
+`prompt: "Answer concisely"` or `prompt: &Alto.Prompts.Coding.build/1`.
+Capture options in a closure, such as
+`prompt: &Alto.Prompts.Chat.build(&1, identity: "Answer concisely.")`.
 The CLI's `--system-prompt` and `--no-system-prompt` flags set this same option.
 A resumed conversation retains its stored system message.
 
@@ -262,8 +264,8 @@ its policy decision. Built-in implementations use the same callbacks as host cod
 | `loop.context` | `Alto.Context.Policy.check/3` | `Alto.Context.Window` |
 | `loop.subagents` | `Alto.Subagents.Policy.limits/1`, `admit/3` | `Alto.Subagents` |
 | `compaction[:strategy]` | `Alto.Context.Reducer.compact/3` | `Reducers.Summary`, `Reducers.Handoff` |
-| `retry_policy` | `Alto.Retry.decide/3` | `Alto.Retry.Transient` |
-| `tool_presenter` | `Alto.ToolPresentation.summary/3` | `Alto.ToolDisplay` |
+| `retry_policy` | `fn(reason, attempt)` | `&Alto.Retry.Transient.decide/2` |
+| `tool_presenter` | `fn(name, arguments)` | `&Alto.ToolDisplay.summary/2` |
 
 Context and child policies use `{Module, state}`, where state may be any term.
 A context check returns `{:ok, :unavailable}`, a budget map
@@ -281,8 +283,8 @@ structured `compact/3` contract.
 Built-in reducers use the same module configuration as host reducers.
 
 ```elixir
-retry_policy: {Alto.Retry.Transient, base_delay: 100, max_delay: 2_000},
-tool_presenter: {Alto.ToolDisplay, []},
+retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 100, max_delay: 2_000),
+tool_presenter: &Alto.ToolDisplay.summary/2,
 compaction: [strategy: {Alto.Context.Reducers.Handoff, []}]
 ```
 

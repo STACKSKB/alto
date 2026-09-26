@@ -28,8 +28,6 @@ defmodule Alto.Runner.Execution.Setup do
 
     with {:ok, limits} <- limits(opts),
          :ok <- Alto.Context.Policy.validate(spec.context),
-         :ok <- Alto.Retry.validate(Keyword.get(opts, :retry_policy)),
-         :ok <- Alto.ToolPresentation.validate(Keyword.get(opts, :tool_presenter)),
          {:ok, budget} <- resolve_budget(opts[:budget], opts),
          {:ok, child_limits} <-
            resolve_child_policy(
@@ -212,7 +210,7 @@ defmodule Alto.Runner.Execution.Setup do
       end
 
     with {:ok, instructions} <- instructions,
-         {:ok, prompt} <-
+         prompt <-
            Alto.Prompt.build(opts[:prompt], %{
              cwd: cwd,
              tools: tools,

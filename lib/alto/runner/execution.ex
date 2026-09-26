@@ -1300,7 +1300,7 @@ defmodule Alto.Runner.Execution do
   defp tool_summary(run, name, arguments) do
     present(
       run,
-      fn -> Alto.ToolPresentation.summary(run.tool_presenter, name, arguments) end,
+      fn -> run.tool_presenter.(name, arguments) end,
       to_string(name || "tool"),
       500
     )

@@ -709,7 +709,7 @@ defmodule Alto.Runner.SerialTest do
              _result =
              Alto.run("answer",
                provider: {AnswerProvider, test_pid: parent},
-               prompt: Alto.Prompts.Coding,
+               prompt: &Alto.Prompts.Coding.build/1,
                cwd: root,
                project_instructions: :auto
              )

@@ -544,7 +544,7 @@ defmodule Alto.CLI do
     cond do
       Keyword.get(options, :no_system_prompt, false) -> Keyword.put(run_options, :prompt, nil)
       prompt = Keyword.get(options, :system_prompt) -> Keyword.put(run_options, :prompt, prompt)
-      true -> Keyword.put_new(run_options, :prompt, Alto.Prompts.Coding)
+      true -> Keyword.put_new(run_options, :prompt, &Alto.Prompts.Coding.build/1)
     end
   end
 

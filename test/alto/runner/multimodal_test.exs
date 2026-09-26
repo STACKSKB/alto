@@ -46,7 +46,7 @@ defmodule Alto.Runner.MultimodalTest do
     assert %Alto.Runner.Result{status: :ok} =
              result =
              Alto.run("inspect",
-               tool_presenter: {Alto.ToolDisplay, []},
+               tool_presenter: &Alto.ToolDisplay.summary/2,
                provider: {Provider, owner: self()},
                tools: [{Tool, value: content()}],
                loop: Alto.default_loop(tool_execution: {:parallel, 2}),

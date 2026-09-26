@@ -1,8 +1,6 @@
 defmodule Alto.Prompts.Coding do
   @moduledoc "The shipped coding-agent prompt builder."
 
-  @behaviour Alto.Prompt.Builder
-
   @tool_guidance "Use the provided tools when you need facts from the workspace. Tool results are bounded, so continue reads with offsets when necessary."
   @no_tools "No workspace tools are available. Do not claim to have inspected or changed the workspace."
   @read_only "This run is read-only. Explain any proposed changes instead of claiming to have written them."
@@ -11,8 +9,7 @@ defmodule Alto.Prompts.Coding do
   @command_disabled "Command execution is disabled for this run."
   @finish "Keep working until the task is answered or completed, then return a concise final response."
 
-  @impl true
-  def build(%{cwd: cwd, tools: tools} = context, _opts) do
+  def build(%{cwd: cwd, tools: tools} = context) do
     names = MapSet.new(tools, &tool_name/1)
 
     [
@@ -33,10 +30,10 @@ defmodule Alto.Prompts.Coding do
   end
 
   defp tool_name({module, opts}) when is_atom(module) and is_list(opts) do
-    module.name(opts)
+    module.name(Alto.Tool.configure(module, opts))
   end
 
-  defp tool_name(module) when is_atom(module), do: module.name([])
+  defp tool_name(module) when is_atom(module), do: tool_name({module, []})
 
   defp workspace_capability(names) do
     cond do

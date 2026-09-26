@@ -122,15 +122,10 @@ defmodule Alto.ToolDisplayTest do
     end
   end
 
-  defmodule Presenter do
-    @behaviour Alto.ToolPresentation
-    def summary(name, _arguments, options), do: Keyword.fetch!(options, :prefix) <> name
-  end
-
   test "host presenters and absent presentation use the same execution path" do
     for {presenter, expected} <- [
           {nil, "read_file"},
-          {{Presenter, prefix: "custom "}, "custom read_file"}
+          {fn name, _arguments -> "custom " <> name end, "custom read_file"}
         ] do
       assert %Alto.Runner.Result{status: :ok} =
                result =
@@ -154,7 +149,7 @@ defmodule Alto.ToolDisplayTest do
       assert %Alto.Runner.Result{status: :ok} =
                result =
                Alto.run("read",
-                 tool_presenter: {Alto.ToolDisplay, []},
+                 tool_presenter: &Alto.ToolDisplay.summary/2,
                  provider: {Provider, []},
                  tools: [Alto.Tools.ReadFile],
                  loop: Alto.default_loop(tool_execution: execution),

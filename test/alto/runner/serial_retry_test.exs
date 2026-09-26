@@ -177,7 +177,7 @@ defmodule Alto.Runner.SerialRetryTest do
         provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
         tools: [],
         provider_retries: 100,
-        retry_policy: {Alto.Retry.Transient, base_delay: 5_000, jitter: false},
+        retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 5_000, jitter: false),
         event_sink: fn event -> send(owner, {:evt, event}) end
       )
 

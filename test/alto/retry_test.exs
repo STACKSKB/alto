@@ -1,14 +1,6 @@
 defmodule Alto.RetryTest do
   use ExUnit.Case, async: true
 
-  defmodule Policy do
-    @behaviour Alto.Retry
-    def decide(:host_transient, _attempt, opts) do
-      send(opts[:owner], :retry_decided)
-      {:retry, 0, :host}
-    end
-  end
-
   defmodule Provider do
     def describe(_), do: %{}
 
@@ -23,6 +15,13 @@ defmodule Alto.RetryTest do
   end
 
   test "host policy retries custom errors but cannot replay delivered output" do
+    owner = self()
+
+    policy = fn :host_transient, _attempt ->
+      send(owner, :retry_decided)
+      {:retry, 0, :host}
+    end
+
     for stream <- [false, true] do
       {:ok, counter} = Agent.start_link(fn -> 0 end)
 
@@ -30,7 +29,7 @@ defmodule Alto.RetryTest do
         Alto.run("hello",
           provider: {Provider, counter: counter, stream: stream},
           provider_retries: 1,
-          retry_policy: {Policy, owner: self()}
+          retry_policy: policy
         )
 
       if stream do
@@ -48,41 +47,45 @@ defmodule Alto.RetryTest do
   end
 
   test "transient policy adds deterministic bounded jitter" do
-    policy = {Alto.Retry.Transient, base_delay: 100, max_delay: 150, random_source: fn -> 0.5 end}
-
-    assert Alto.Retry.decide(policy, {:transport_error, :closed}, 1) ==
-             {:retry, 50, :transport}
+    assert Alto.Retry.Transient.decide({:transport_error, :closed}, 1,
+             base_delay: 100,
+             max_delay: 150,
+             random_source: fn -> 0.5 end
+           ) == {:retry, 50, :transport}
   end
 
   test "jitter remains effective at the exponential delay cap" do
     for {sample, delay} <- [{0.0, 0}, {0.5, 75}, {1.0, 150}] do
       assert {:retry, ^delay, {:http, 503}} =
-               Alto.Retry.decide(
-                 {Alto.Retry.Transient,
-                  base_delay: 100, max_delay: 150, random_source: fn -> sample end},
-                 {:http_error, 503, nil},
-                 4
+               Alto.Retry.Transient.decide({:http_error, 503, nil}, 4,
+                 base_delay: 100,
+                 max_delay: 150,
+                 random_source: fn -> sample end
                )
     end
 
     assert {:retry, 150, :transport} =
-             Alto.Retry.decide(
-               {Alto.Retry.Transient, base_delay: 100, max_delay: 150, jitter: false},
-               {:transport_error, :closed},
-               4
+             Alto.Retry.Transient.decide({:transport_error, :closed}, 4,
+               base_delay: 100,
+               max_delay: 150,
+               jitter: false
              )
   end
 
-  defmodule BrokenPolicy do
-    def decide(_, _, _), do: raise("sensitive provider content")
-  end
+  test "policy defects stop actual retries without logging provider content" do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
 
-  test "policy defects are diagnosed without logging provider content" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert :stop = Alto.Retry.decide({BrokenPolicy, []}, :secret, 1)
+        assert %Alto.Runner.Result{status: :error, reason: :host_transient} =
+                 Alto.run("secret",
+                   provider: {Provider, counter: counter},
+                   provider_retries: 1,
+                   retry_policy: fn _, _ -> raise("sensitive provider content") end
+                 )
       end)
 
+    assert Agent.get(counter, & &1) == 1
     assert log =~ "retry policy failed"
     refute log =~ "sensitive provider content"
     refute log =~ "secret"

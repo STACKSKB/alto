@@ -139,9 +139,9 @@ Alto.Config.new(
        command: System.get_env("CODEX_BIN") || "codex",
        model: System.get_env("ALTO_CODEX_MODEL")}
   ],
-  tool_presenter: {Alto.ToolDisplay, []},
+  tool_presenter: &Alto.ToolDisplay.summary/2,
   approval: Alto.Approvals.Interactive,
-  prompt: Alto.Prompts.Coding,
+  prompt: &Alto.Prompts.Coding.build/1,
   tui: [
     type_to_compose: true,
     narrow_context: :adaptive,
@@ -162,6 +162,6 @@ Alto.Config.new(
     max_input_bytes: 1_000_000,
     max_handoff_bytes: 24_000
   ],
-  retry_policy: {Alto.Retry.Transient, base_delay: 500, max_delay: 5_000},
+  retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 500, max_delay: 5_000),
   provider_retries: 3
 )
