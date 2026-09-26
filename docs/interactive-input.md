@@ -24,8 +24,7 @@ budgets and deadline; delivery never refreshes them.
 Each channel has one active consumer, preventing concurrent runs from inserting
 the same message. Messages are acknowledged only after transcript insertion;
 failed insertion leaves them queued. A channel outlives a consumer crash, if its
-own host remains alive, and can be attached to a later run. `Alto.Input.list/1`
-reports pending entries. Memory is the default transport. File-backed and custom transports use the same
+own host remains alive, and can be attached to a later run. `Alto.Input.request/2` with `:list` reports pending entries. Memory is the default transport. File-backed and custom transports use the same
 mailbox interface; see below.
 
 An accepted enqueue is not a promise of delivery: a run may finish or exhaust
@@ -51,7 +50,7 @@ agent tools:
 {:ok, run} = Alto.start("Inspect the parser", input: input, provider: provider)
 {:ok, receipt} = Alto.Messaging.send(input,
   text: "Focus on JSON", delivery: :steer, idempotency_key: "submission-1")
-Alto.Input.receipt(input, receipt.message_id)
+Alto.Input.request(input, {:receipt, receipt.message_id})
 # {:ok, %{message_id: "msg-...", status: :queued | :consumed}}
 ```
 
@@ -84,7 +83,7 @@ including closed addresses, so reusing a display label cannot redirect an old
 message to a new child. Sends to unknown or closed recipients
 return explicit errors. Successfully admitted input remains queued if the run
 ends before consuming it; hosts with reusable input channels can inspect
-`Alto.Input.list/1`. `Alto.Input.take(input, :user)` starts only user submissions
+`Alto.Input.request(input, :list)`. `Alto.Input.request(input, {:take, :user})` starts only user submissions
 as new turns, preserving peer-message provenance during host retries. Taking an
 entry transfers it to the host and marks its receipt `:taken`; this does not
 claim that a subsequent run has inserted it into a transcript.
@@ -125,11 +124,12 @@ and `close(handle)`. The runtime supplies `:id`, a stable mailbox address, in
 a polling adapter can transact against another store. Core execution does not
 assume a socket, filesystem, polling interval, or SSH command.
 
-The request protocol is defined by `Alto.Input.request/3` and its public wrappers.
+The request protocol is defined by `Alto.Input.request/2,3`; each operation is passed as a native tuple.
 Implementations must provide atomic admission, deduplication, exclusive reader
 claim/release, token-authorized reads and acknowledgements, snapshot and restore.
-`Input.claim/1` returns `{:ok, reader}`. Pass that token to `Input.read/3`,
-`Input.acknowledge/4` and `Input.settle/3`; releasing the claim or owner death
+`Input.request(input, :claim)` returns `{:ok, reader}`. Pass that token in
+`{:read, reader, modes}`, `{:acknowledge, reader, id, status}` and
+`{:settle, reader, id}` requests; releasing the claim or owner death
 revokes it. Only the claiming process can release the channel.
 `:checkpoint` returns the same portable state as `:snapshot` and seals admission;
 new sends return `:input_checkpointed` until restore, while duplicate sends still

@@ -80,7 +80,7 @@ defmodule Alto.Runner.Execution do
         run_scoped(task, Keyword.put(opts, :input_reader, reader), scheduler)
       after
         try do
-          Alto.Input.release(input)
+          Alto.Input.request(input, :release)
         catch
           :exit, _ -> :ok
         end
@@ -89,7 +89,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp claim_input(input) do
-    Alto.Input.claim(input)
+    Alto.Input.request(input, :claim)
   catch
     :exit, reason -> {:error, {:input_unavailable, reason}}
   end
@@ -237,7 +237,7 @@ defmodule Alto.Runner.Execution do
     if modes != [] and map_size(Map.get(run, :pending_provider_calls, %{})) == 0 do
       reader = run.input_reader
 
-      case Alto.Input.read(input, reader, modes, max(Budget.remaining(run.budget), 1)) do
+      case Alto.Input.request(input, {:read, reader, modes}, max(Budget.remaining(run.budget), 1)) do
         nil ->
           do_execute(effects, run, terminal)
 
@@ -248,11 +248,9 @@ defmodule Alto.Runner.Execution do
           case RunTranscript.append(run, input_message(entry)) do
             {:ok, next} ->
               :ok =
-                Alto.Input.acknowledge(
+                Alto.Input.request(
                   input,
-                  reader,
-                  entry.message_id,
-                  :consumed,
+                  {:acknowledge, reader, entry.message_id, :consumed},
                   max(Budget.remaining(run.budget), 1)
                 )
 
@@ -1154,7 +1152,7 @@ defmodule Alto.Runner.Execution do
         reason =
           cond do
             Alto.Messaging.paused?(run.messaging) == true -> :checkpoint
-            Alto.Input.pending?(run.input, [:steer]) -> :message
+            Alto.Input.request(run.input, {:pending, [:steer]}) -> :message
             Enum.any?(agents, &(&1.status == :completed)) -> :completed
             System.monotonic_time(:millisecond) >= deadline -> :timeout
             true -> nil

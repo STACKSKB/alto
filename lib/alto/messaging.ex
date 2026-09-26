@@ -22,7 +22,7 @@ defmodule Alto.Messaging do
 
   def send(input, opts) when is_list(opts) do
     with {:ok, message} <- envelope(opts, %{kind: :user}),
-         do: safe(fn -> Alto.Input.enqueue(input, message) end)
+         do: safe(fn -> Alto.Input.request(input, {:enqueue, message}) end)
   end
 
   @doc "Render attributed input for a model without promoting peer text to user authority."
@@ -38,7 +38,7 @@ defmodule Alto.Messaging do
   @doc false
   def duplicate(input, opts) do
     with {:ok, message} <- envelope(opts, %{kind: :user}),
-         do: safe(fn -> Alto.Input.duplicate(input, message) end)
+         do: safe(fn -> Alto.Input.request(input, {:duplicate, message}) end)
   end
 
   def send(sender, recipient, opts) do
@@ -297,8 +297,8 @@ defmodule Alto.Messaging do
         if descendant?(id, root, state.entries) do
           with {:ok, input} <-
                  if(seal,
-                   do: Alto.Input.checkpoint(entry.input),
-                   else: Alto.Input.snapshot(entry.input)
+                   do: Alto.Input.request(entry.input, :checkpoint),
+                   else: Alto.Input.request(entry.input, :snapshot)
                  ) do
             status = if entry.status == :closed and not entry.pause, do: :closed, else: :pending
 
@@ -325,7 +325,7 @@ defmodule Alto.Messaging do
         Enum.reduce_while(saved, {:ok, state}, fn {id, value}, {:ok, acc} ->
           case restore_entry(acc, id, value) do
             {:ok, entry} ->
-              case Alto.Input.restore(entry.input, value.input) do
+              case Alto.Input.request(entry.input, {:restore, value.input}) do
                 :ok ->
                   {:cont, {:ok, put_in(acc.entries[id], entry)}}
 
@@ -395,8 +395,8 @@ defmodule Alto.Messaging do
           message = Map.merge(message, %{sender: sender, recipient: id})
 
           if status == :closed,
-            do: safe(fn -> Alto.Input.duplicate(input, message) end),
-            else: safe(fn -> Alto.Input.enqueue(input, message) end)
+            do: safe(fn -> Alto.Input.request(input, {:duplicate, message}) end),
+            else: safe(fn -> Alto.Input.request(input, {:enqueue, message}) end)
       end
 
     {:reply, reply, state}

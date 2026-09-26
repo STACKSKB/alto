@@ -418,7 +418,7 @@ defmodule Alto.TUI.App do
   defp one_follow_up_available(_input, :steer), do: :ok
 
   defp one_follow_up_available(input, :follow_up) do
-    if Enum.any?(Alto.Input.list(input), &(&1.mode == :follow_up)),
+    if Enum.any?(Alto.Input.request(input, :list), &(&1.mode == :follow_up)),
       do: {:error, :follow_up_pending},
       else: :ok
   end
@@ -451,7 +451,7 @@ defmodule Alto.TUI.App do
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
       {false, input} when not is_nil(input) and map_size(state.runs) < 32 ->
-        case Alto.Input.take(input, :user) do
+        case Alto.Input.request(input, {:take, :user}) do
           :empty ->
             state
 

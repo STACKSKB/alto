@@ -260,7 +260,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert_receive {:request, "root", request, root}, @timeout
     assert List.last(request.messages)["content"] == "new direction"
     assert :ok = Alto.Context.Transcript.validate(request.messages)
-    assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, receipt.message_id)
+    assert {:ok, %{status: :consumed}} = Alto.Input.request(input, {:receipt, receipt.message_id})
     answer(root, "done")
     assert {:ok, result} = Alto.await(handle)
     assert result.loop_state.task == "new direction"

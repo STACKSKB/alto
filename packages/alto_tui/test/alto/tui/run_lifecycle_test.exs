@@ -113,7 +113,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     original_task = state(app).selected_task_id
 
     submit(app, "next")
-    assert [%{text: "next"}] = Alto.Input.list(state(app).inputs[original_task])
+    assert [%{text: "next"}] = Alto.Input.request(state(app).inputs[original_task], :list)
     assert map_size(state(app).runs) == 1
     refute_receive {:model_waiting, _, _}, 50
 
@@ -155,7 +155,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert_receive {:DOWN, ^monitor, :process, ^first, _}, 5_000
     eventually(fn -> state(app).runs == %{} end)
     assert ExRatatui.textarea_get_value(state(app).textarea) == "draft kept"
-    assert length(Alto.Input.list(state(app).inputs[task_id])) == 1
+    assert length(Alto.Input.request(state(app).inputs[task_id], :list)) == 1
     refute_receive {:model_waiting, _, _}, 50
     assert state(app).notice =~ "queued message paused"
 
@@ -194,7 +194,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     submit(app, "next")
     submit(app, "later")
     task_id = state(app).selected_task_id
-    assert [%{text: "next"}] = Alto.Input.list(state(app).inputs[task_id])
+    assert [%{text: "next"}] = Alto.Input.request(state(app).inputs[task_id], :list)
     assert ExRatatui.textarea_get_value(state(app).textarea) == "later"
     assert state(app).notice =~ "one message already queued"
     send(first, {:finish, "done"})
@@ -215,7 +215,7 @@ defmodule Alto.TUI.RunLifecycleTest do
 
     task_id = state(app).selected_task_id
     input = state(app).inputs[task_id]
-    assert [%{mode: :steer, text: "change direction"}] = Alto.Input.list(input)
+    assert [%{mode: :steer, text: "change direction"}] = Alto.Input.request(input, :list)
     send(first, {:finish, "first done"})
 
     assert_receive {:model_waiting, second, messages}, 5_000
@@ -241,7 +241,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     ExRatatui.textarea_set_value(state(app).textarea, "steer next")
     key(app, "enter", ["ctrl"])
     submit(app, "follow later")
-    assert length(Alto.Input.list(state(app).inputs[task_id])) == 2
+    assert length(Alto.Input.request(state(app).inputs[task_id], :list)) == 2
 
     key(app, "esc")
     eventually(fn -> state(app).runs == %{} end)
@@ -254,7 +254,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert List.last(messages)["content"] == "steer next"
     assert state(app).selected_task_id == nil
     assert Map.has_key?(state(app).input_routes, task_id)
-    assert [%{text: "follow later"}] = Alto.Input.list(state(app).inputs[task_id])
+    assert [%{text: "follow later"}] = Alto.Input.request(state(app).inputs[task_id], :list)
 
     send(second, {:finish, "done"})
     assert_receive {:model_waiting, third, messages}, 5_000

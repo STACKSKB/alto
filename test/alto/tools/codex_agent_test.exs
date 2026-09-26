@@ -144,8 +144,8 @@ defmodule Alto.Tools.CodexAgentTest do
     [value] = result.output
     assert [%{message_id: id, status: :delivered}] = value.deliveries
     assert id == receipt.message_id
-    assert {:ok, %{status: :delivered}} = Alto.Input.receipt(input, id)
-    assert Alto.Input.list(input) == []
+    assert {:ok, %{status: :delivered}} = Alto.Input.request(input, {:receipt, id})
+    assert Alto.Input.request(input, :list) == []
     sent = requests(context.log)
     steer = Enum.find(sent, &(&1["method"] == "turn/steer"))
     assert steer["params"]["expectedTurnId"] == "turn-1"
@@ -181,7 +181,7 @@ defmodule Alto.Tools.CodexAgentTest do
     assert Enum.all?(turns, &(&1["params"]["model"] == "chosen-followup"))
     assert Enum.all?(turns, &(&1["params"]["effort"] == "high"))
     assert List.last(turns)["params"]["input"] == [%{"type" => "text", "text" => "second task"}]
-    assert {:ok, %{status: :delivered}} = Alto.Input.receipt(input, later.message_id)
+    assert {:ok, %{status: :delivered}} = Alto.Input.request(input, {:receipt, later.message_id})
   end
 
   test "Codex messages have runtime provenance and duplicate tool calls send once", context do
@@ -195,7 +195,9 @@ defmodule Alto.Tools.CodexAgentTest do
                opts(context, messaging: router, tools: [context.tool, Alto.Tools.SendMessage])
              )
 
-    assert [%{text: "peer reply", sender: %{kind: :agent, id: from}}] = Alto.Input.list(inbox)
+    assert [%{text: "peer reply", sender: %{kind: :agent, id: from}}] =
+             Alto.Input.request(inbox, :list)
+
     assert from != peer.id
     sent = requests(context.log)
     first = Enum.find(sent, &(&1["id"] == "send-first"))["result"]
@@ -219,7 +221,7 @@ defmodule Alto.Tools.CodexAgentTest do
                )
              )
 
-    assert Alto.Input.list(inbox) == []
+    assert Alto.Input.request(inbox, :list) == []
     sent = requests(context.log)
     assert Enum.find(sent, &(&1["method"] == "thread/start"))["params"]["dynamicTools"] == []
     assert Enum.find(sent, &(&1["id"] == "send-first"))["error"]["code"] == -32602
@@ -233,17 +235,19 @@ defmodule Alto.Tools.CodexAgentTest do
     wait_for(context.log, "turn/start")
     {:ok, receipt} = Alto.Messaging.send(input, text: "timeout", idempotency_key: "once")
     assert {:error, _, _} = Alto.await(handle)
-    assert {:ok, %{status: :unknown}} = Alto.Input.receipt(input, receipt.message_id)
+    assert {:ok, %{status: :unknown}} = Alto.Input.request(input, {:receipt, receipt.message_id})
 
     assert {:ok, %{status: :unknown}} =
              Alto.Messaging.send(input, text: "timeout", idempotency_key: "once")
 
     assert Enum.count(requests(context.log), &(&1["method"] == "turn/steer")) == 1
-    {:ok, snapshot} = Alto.Input.snapshot(input)
+    {:ok, snapshot} = Alto.Input.request(input, :snapshot)
     {:ok, restored} = Alto.Input.start_link()
-    assert :ok = Alto.Input.restore(restored, snapshot)
-    assert Alto.Input.list(restored) == []
-    assert {:ok, %{status: :unknown}} = Alto.Input.receipt(restored, receipt.message_id)
+    assert :ok = Alto.Input.request(restored, {:restore, snapshot})
+    assert Alto.Input.request(restored, :list) == []
+
+    assert {:ok, %{status: :unknown}} =
+             Alto.Input.request(restored, {:receipt, receipt.message_id})
   end
 
   test "read-only turn returns correlated messages, usage and rejects permission requests",

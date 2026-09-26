@@ -8,7 +8,7 @@ defmodule Alto.InputFaultTest do
     assert catch_exit(Alto.Runner.Execution.run(%{}, opts, fn _, _ -> exit(:scheduler_down) end)) ==
              :scheduler_down
 
-    assert {:ok, _reader} = Alto.Input.claim(input)
+    assert {:ok, _reader} = Alto.Input.request(input, :claim)
   end
 
   test "a dead input channel reports an input failure" do
@@ -26,7 +26,7 @@ defmodule Alto.InputFaultTest do
 
     owner =
       spawn(fn ->
-        send(parent, {:claimed, Alto.Input.claim(input)})
+        send(parent, {:claimed, Alto.Input.request(input, :claim)})
 
         receive do
           :stop -> :ok
@@ -34,21 +34,23 @@ defmodule Alto.InputFaultTest do
       end)
 
     assert_receive {:claimed, {:ok, old_reader}}
-    assert {:error, :not_input_owner} = Alto.Input.read(input, "invalid-token", [:steer])
 
     assert {:error, :not_input_owner} =
-             Alto.Input.acknowledge(input, "invalid-token", id, :consumed)
+             Alto.Input.request(input, {:read, "invalid-token", [:steer]})
+
+    assert {:error, :not_input_owner} =
+             Alto.Input.request(input, {:acknowledge, "invalid-token", id, :consumed})
 
     owner_ref = Process.monitor(owner)
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
     assert {:ok, reader} = claim_eventually(input)
-    assert {:error, :not_input_owner} = Alto.Input.read(input, old_reader, [:steer])
+    assert {:error, :not_input_owner} = Alto.Input.request(input, {:read, old_reader, [:steer]})
 
     assert %{message_id: ^id, text: "abc", mode: :steer} =
-             Alto.Input.read(input, reader, [:steer])
+             Alto.Input.request(input, {:read, reader, [:steer]})
 
-    assert :ok = Alto.Input.acknowledge(input, reader, id, :consumed)
+    assert :ok = Alto.Input.request(input, {:acknowledge, reader, id, :consumed})
 
     # Acknowledgement reclaims the exact encoded byte capacity.
     assert {:ok, _} = Alto.Messaging.send(input, text: "xyz", delivery: :follow_up)
@@ -58,7 +60,7 @@ defmodule Alto.InputFaultTest do
   defp claim_eventually(_input, 0), do: {:error, :owner_not_released}
 
   defp claim_eventually(input, attempts) do
-    case Alto.Input.claim(input) do
+    case Alto.Input.request(input, :claim) do
       {:ok, _} = claimed ->
         claimed
 

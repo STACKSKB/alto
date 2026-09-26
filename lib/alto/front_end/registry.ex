@@ -391,7 +391,7 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   def handle_call({:input_status, run_id}, _from, state) do
-    reply_with_run(state, run_id, &{:ok, Alto.Input.list(&1.input)})
+    reply_with_run(state, run_id, &{:ok, Alto.Input.request(&1.input, :list)})
   end
 
   def handle_call({:cancel, run_id, reason}, _from, state) do

@@ -52,31 +52,37 @@ defmodule Alto.MessagingTransportTest do
   test "custom transport supports queue ownership, portable snapshots and deduplication" do
     {:ok, channel} = Input.open(transport: {Custom, []})
     {:ok, receipt} = Messaging.send(channel, text: "first", idempotency_key: "key")
-    assert {:ok, reader} = Input.claim(channel)
+    assert {:ok, reader} = Alto.Input.request(channel, :claim)
 
     assert {:error, :not_input_owner} =
-             Task.async(fn -> Input.read(channel, "invalid", [:steer]) end) |> Task.await()
+             Task.async(fn -> Alto.Input.request(channel, {:read, "invalid", [:steer]}) end)
+             |> Task.await()
 
-    entry = Task.async(fn -> Input.read(channel, reader, [:steer]) end) |> Task.await()
+    entry =
+      Task.async(fn -> Alto.Input.request(channel, {:read, reader, [:steer]}) end) |> Task.await()
+
     assert entry.message_id == receipt.message_id
 
     assert {:error, :not_input_owner} =
-             Task.async(fn -> Input.release(channel) end) |> Task.await()
+             Task.async(fn -> Alto.Input.request(channel, :release) end) |> Task.await()
 
     assert {:error, :invalid_input_operation} =
-             Input.acknowledge(channel, reader, entry.message_id, :taken)
+             Alto.Input.request(channel, {:acknowledge, reader, entry.message_id, :taken})
 
-    {:ok, snapshot} = Input.snapshot(channel)
+    {:ok, snapshot} = Alto.Input.request(channel, :snapshot)
     assert {:ok, encoded} = Alto.Persistence.Codec.encode(snapshot)
     {:ok, saved} = Alto.Persistence.Codec.decode(encoded)
     {:ok, restored} = Input.open()
-    assert :ok = Input.restore(restored, saved)
-    assert Input.list(restored) == [entry]
-    assert {:ok, restored_reader} = Input.claim(restored)
+    assert :ok = Alto.Input.request(restored, {:restore, saved})
+    assert Alto.Input.request(restored, :list) == [entry]
+    assert {:ok, restored_reader} = Alto.Input.request(restored, :claim)
 
     assert :ok =
              Task.async(fn ->
-               Input.acknowledge(restored, restored_reader, entry.message_id, :consumed)
+               Alto.Input.request(
+                 restored,
+                 {:acknowledge, restored_reader, entry.message_id, :consumed}
+               )
              end)
              |> Task.await()
 
@@ -88,11 +94,11 @@ defmodule Alto.MessagingTransportTest do
     assert {:error, :idempotency_conflict} =
              Messaging.send(restored, text: "changed", idempotency_key: "key")
 
-    assert :ok = Input.release(channel)
-    assert {:error, :not_input_owner} = Input.read(channel, reader, [:steer])
+    assert :ok = Alto.Input.request(channel, :release)
+    assert {:error, :not_input_owner} = Alto.Input.request(channel, {:read, reader, [:steer]})
 
     assert {:error, :not_input_owner} =
-             Input.acknowledge(channel, reader, entry.message_id, :consumed)
+             Alto.Input.request(channel, {:acknowledge, reader, entry.message_id, :consumed})
 
     Input.close(channel)
   end
@@ -100,26 +106,30 @@ defmodule Alto.MessagingTransportTest do
   test "checkpoint seals admission, preserves duplicate receipts and respects narrower bounds" do
     {:ok, input} = Input.start_link(max_messages: 5, max_bytes: 100)
     {:ok, receipt} = Messaging.send(input, text: "saved", idempotency_key: "saved")
-    {:ok, saved} = Input.checkpoint(input)
+    {:ok, saved} = Alto.Input.request(input, :checkpoint)
     assert {:error, :input_checkpointed} = Messaging.send(input, text: "too late")
     assert {:ok, ^receipt} = Messaging.send(input, text: "saved", idempotency_key: "saved")
     {:ok, smaller} = Input.start_link(max_messages: 1, max_bytes: 10)
-    assert :ok = Input.restore(smaller, saved)
+    assert :ok = Alto.Input.request(smaller, {:restore, saved})
     assert {:error, :input_capacity} = Messaging.send(smaller, text: "overflow")
 
     assert {:error, :invalid_input_snapshot} =
-             Input.restore(smaller, %{
-               saved
-               | receipts: %{
-                   receipt.message_id => %{message_id: receipt.message_id, status: :invalid}
-                 }
-             })
+             Alto.Input.request(
+               smaller,
+               {:restore,
+                %{
+                  saved
+                  | receipts: %{
+                      receipt.message_id => %{message_id: receipt.message_id, status: :invalid}
+                    }
+                }}
+             )
   end
 
   test "restore rejects inconsistent queued receipts and malformed messages without changing input" do
     {:ok, channel} = Input.open()
     {:ok, receipt} = Messaging.send(channel, text: "first")
-    {:ok, saved} = Input.snapshot(channel)
+    {:ok, saved} = Alto.Input.request(channel, :snapshot)
     [entry] = saved.entries
 
     malformed = [
@@ -132,8 +142,8 @@ defmodule Alto.MessagingTransportTest do
     ]
 
     for snapshot <- malformed do
-      assert {:error, :invalid_input_snapshot} = Input.restore(channel, snapshot)
-      assert Input.list(channel) == [entry]
+      assert {:error, :invalid_input_snapshot} = Alto.Input.request(channel, {:restore, snapshot})
+      assert Alto.Input.request(channel, :list) == [entry]
     end
   end
 
@@ -143,27 +153,30 @@ defmodule Alto.MessagingTransportTest do
     options = [transport: {Alto.Messaging.Transport.File, directory: directory}, id: "agent-one"]
     {:ok, channel} = Input.open(options)
     {:ok, writer} = Input.open(options)
-    assert {:ok, reader} = Input.claim(channel)
-    task = Task.async(fn -> Input.claim(writer) end)
+    assert {:ok, reader} = Alto.Input.request(channel, :claim)
+    task = Task.async(fn -> Alto.Input.request(writer, :claim) end)
     assert {:error, _} = Task.await(task)
 
     {:ok, first} =
       Task.async(fn -> Messaging.send(writer, text: "one", idempotency_key: "one") end)
       |> Task.await()
 
-    {:ok, snapshot} = Input.snapshot(channel)
-    entry = Input.read(channel, reader, [:steer])
-    assert :ok = Input.acknowledge(channel, reader, entry.message_id, :consumed)
+    {:ok, snapshot} = Alto.Input.request(channel, :snapshot)
+    entry = Alto.Input.request(channel, {:read, reader, [:steer]})
+    assert :ok = Alto.Input.request(channel, {:acknowledge, reader, entry.message_id, :consumed})
     assert {:ok, second} = Messaging.send(writer, text: "two", idempotency_key: "two")
-    assert :ok = Input.release(channel)
+    assert :ok = Alto.Input.request(channel, :release)
     {:ok, reopened} = Input.open(options)
-    assert :ok = Input.restore(reopened, snapshot)
-    assert [%{message_id: id}] = Input.list(reopened)
+    assert :ok = Alto.Input.request(reopened, {:restore, snapshot})
+    assert [%{message_id: id}] = Alto.Input.request(reopened, :list)
     assert id == second.message_id
-    assert {:ok, %{status: :consumed}} = Input.receipt(reopened, first.message_id)
-    assert {:ok, _reader} = Input.claim(reopened)
-    assert :ok = Input.release(reopened)
-    assert {:ok, %{message_id: ^id}} = Input.take(writer)
+
+    assert {:ok, %{status: :consumed}} =
+             Alto.Input.request(reopened, {:receipt, first.message_id})
+
+    assert {:ok, _reader} = Alto.Input.request(reopened, :claim)
+    assert :ok = Alto.Input.request(reopened, :release)
+    assert {:ok, %{message_id: ^id}} = Alto.Input.request(writer, {:take, :any})
   end
 
   test "file reader lock recovers after a reader dies", %{directory: directory} do
@@ -174,7 +187,7 @@ defmodule Alto.MessagingTransportTest do
 
     pid =
       spawn(fn ->
-        {:ok, _reader} = Input.claim(channel)
+        {:ok, _reader} = Alto.Input.request(channel, :claim)
         send(parent, :claimed)
         receive do: (:never -> :ok)
       end)
@@ -183,7 +196,7 @@ defmodule Alto.MessagingTransportTest do
     monitor = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
-    assert {:ok, _reader} = Input.claim(channel)
-    assert :ok = Input.release(channel)
+    assert {:ok, _reader} = Alto.Input.request(channel, :claim)
+    assert :ok = Alto.Input.request(channel, :release)
   end
 end

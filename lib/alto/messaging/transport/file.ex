@@ -82,7 +82,7 @@ defmodule Alto.Messaging.Transport.File do
   defp transact(handle, operation, timeout, reset_owner \\ false) do
     Alto.Storage.with_lock(handle.path <> ".lock", [timeout: timeout], fn ->
       with {:ok, state} <- load(handle) do
-        state = if reset_owner, do: %{state | owner: nil, reader: nil}, else: state
+        state = if reset_owner, do: %{state | owner: nil}, else: state
         {:reply, reply, next} = Alto.Input.handle_call(operation, {actor(), nil}, state)
 
         if next == state and File.exists?(handle.path) do
@@ -99,16 +99,10 @@ defmodule Alto.Messaging.Transport.File do
   defp load(handle) do
     case Alto.BoundedFile.read(handle.path, div(@limit * 4, 3) + 8) do
       {:ok, encoded} ->
-        with {:ok, state} <- Codec.decode(encoded, max_bytes: @limit),
-             true <-
-               is_map(state) and
-                 Alto.Input.valid_snapshot?(Map.drop(state, [:owner, :reader, :monitor, :sealed])),
-             true <- Map.has_key?(state, :monitor) and is_nil(state.monitor),
-             true <-
-               Map.has_key?(state, :owner) and (is_nil(state.owner) or is_binary(state.owner)),
-             true <-
-               Map.has_key?(state, :reader) and (is_nil(state.reader) or is_binary(state.reader)),
-             true <- is_boolean(Map.get(state, :sealed)) do
+        with {:ok, %{owner: owner, sealed: sealed} = state} <-
+               Codec.decode(encoded, max_bytes: @limit),
+             true <- valid_owner?(owner) and is_boolean(sealed),
+             true <- Alto.Input.valid_snapshot?(Map.drop(state, [:owner, :sealed])) do
           {:ok, state}
         else
           _ -> {:error, :invalid_file_mailbox}
@@ -124,6 +118,10 @@ defmodule Alto.Messaging.Transport.File do
         error
     end
   end
+
+  defp valid_owner?(nil), do: true
+  defp valid_owner?({actor, token, nil}), do: is_binary(actor) and is_binary(token)
+  defp valid_owner?(_), do: false
 
   defp actor do
     key = {__MODULE__, :actor}

@@ -245,7 +245,7 @@ defmodule Alto.Tools.CodexAgent do
   defp deliver(turn, modes, kind) do
     context = turn.context
 
-    case Alto.Input.read(context.input, context.input_reader, modes) do
+    case Alto.Input.request(context.input, {:read, context.input_reader, modes}) do
       nil ->
         {:ok, turn}
 
@@ -257,15 +257,17 @@ defmodule Alto.Tools.CodexAgent do
         # unknown receipt; restore must never automatically resend this message.
         with :ok <- Alto.Runner.Budget.take(context.budget),
              :ok <-
-               Alto.Input.acknowledge(
+               Alto.Input.request(
                  context.input,
-                 context.input_reader,
-                 entry.message_id,
-                 :unknown
+                 {:acknowledge, context.input_reader, entry.message_id, :unknown}
                ),
              {:ok, response} <- send_input(turn, entry, kind),
              {:ok, next} <- delivered_turn(turn, response, kind),
-             :ok <- Alto.Input.settle(context.input, context.input_reader, entry.message_id) do
+             :ok <-
+               Alto.Input.request(
+                 context.input,
+                 {:settle, context.input_reader, entry.message_id}
+               ) do
           {:ok,
            %{
              next

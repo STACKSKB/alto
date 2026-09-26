@@ -12,26 +12,24 @@ defmodule Alto.Input do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc false
-  def enqueue(channel, message), do: request(channel, {:enqueue, message})
-  @doc false
-  def duplicate(channel, message), do: request(channel, {:duplicate, message})
-  def receipt(channel, message_id), do: request(channel, {:receipt, message_id})
-
-  def pending?(channel, modes \\ [:steer, :follow_up]),
-    do: request(channel, {:pending, modes})
-
-  def claim(channel), do: request(channel, :claim)
-  def release(channel), do: request(channel, :release)
-  def list(channel), do: request(channel, :list)
-
-  @doc "Atomically consume the oldest entry while no runner owns the channel."
-  def take(channel, sender_kind \\ :any), do: request(channel, {:take, sender_kind})
-
   @doc "Open a channel using a host-selected transport (memory by default)."
   def open(opts \\ []), do: Alto.Messaging.Transport.open(opts)
 
-  @doc false
+  @doc """
+  Send a native operation tuple to the channel. Supported operations are
+  `:claim`, `:release`, `:list`, `:checkpoint`, `:snapshot`,
+  `{:enqueue, message}`, `{:duplicate, message}`, `{:receipt, id}`,
+  `{:pending, modes}`, `{:take, sender_kind}`, `{:restore, snapshot}`,
+  `{:read, token, modes}`, `{:settle, token, id}`, and
+  `{:acknowledge, token, id, status}`. Pass `:any` explicitly to `:take` to
+  include every sender; pass `:user` or `:agent` to filter. Readers pass their
+  modes explicitly. Calls default to 5,000 ms.
+
+  `:checkpoint` seals the channel against new enqueues; `:snapshot` leaves it
+  writable. Both return portable queued data and receipts without reader authority.
+  """
+  def request(channel, operation, timeout \\ 5_000)
+
   def request(
         %Alto.Messaging.Transport.Channel{module: module, handle: handle},
         operation,
@@ -40,7 +38,6 @@ defmodule Alto.Input do
       do: module.request(handle, operation, timeout)
 
   def request(channel, operation, timeout), do: GenServer.call(channel, operation, timeout)
-  def request(channel, operation), do: request(channel, operation, 5_000)
 
   def close(%Alto.Messaging.Transport.Channel{module: module, handle: handle}),
     do: module.close(handle)
@@ -48,20 +45,6 @@ defmodule Alto.Input do
   def close(channel) when is_pid(channel) do
     if Process.alive?(channel), do: GenServer.stop(channel), else: :ok
   end
-
-  @doc false
-  def checkpoint(channel), do: request(channel, :checkpoint)
-  @doc "A portable queue, receipt and deduplication snapshot; reader authority is excluded."
-  def snapshot(channel), do: request(channel, :snapshot)
-  def restore(channel, snapshot), do: request(channel, {:restore, snapshot})
-
-  def read(channel, token, modes, timeout \\ 5_000),
-    do: request(channel, {:read, token, modes}, timeout)
-
-  def settle(channel, token, id), do: request(channel, {:settle, token, id})
-
-  def acknowledge(channel, token, id, status, timeout \\ 5_000),
-    do: request(channel, {:acknowledge, token, id, status}, timeout)
 
   @impl true
   def init(opts) do
@@ -73,14 +56,12 @@ defmodule Alto.Input do
       {:ok,
        %{
          identity: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
-         reader: nil,
          sealed: false,
          entries: [],
          receipts: %{},
          keys: %{},
          bytes: 0,
          owner: nil,
-         monitor: nil,
          max_messages: max_messages,
          max_bytes: max_bytes
        }}
@@ -92,27 +73,24 @@ defmodule Alto.Input do
   @impl true
   def handle_call(:claim, {pid, _}, %{owner: nil} = state) do
     token = random_token()
-
-    {:reply, {:ok, token},
-     %{state | owner: pid, reader: token, monitor: if(is_pid(pid), do: Process.monitor(pid))}}
+    owner = {pid, token, if(is_pid(pid), do: Process.monitor(pid))}
+    {:reply, {:ok, token}, %{state | owner: owner}}
   end
 
   def handle_call(:claim, _from, state), do: {:reply, {:error, :input_in_use}, state}
 
-  def handle_call(:release, {pid, _}, %{owner: pid} = state) do
-    if state.monitor, do: Process.demonitor(state.monitor, [:flush])
-    {:reply, :ok, %{state | owner: nil, monitor: nil, reader: nil}}
+  def handle_call(:release, {pid, _}, %{owner: {pid, _, monitor}} = state) do
+    if monitor, do: Process.demonitor(monitor, [:flush])
+    {:reply, :ok, %{state | owner: nil}}
   end
 
   def handle_call(:release, _, state), do: {:reply, {:error, :not_input_owner}, state}
 
   def handle_call(:checkpoint, _, state),
-    do:
-      {:reply, {:ok, Map.drop(state, [:owner, :monitor, :reader, :sealed])},
-       %{state | sealed: true}}
+    do: {:reply, {:ok, Map.drop(state, [:owner, :sealed])}, %{state | sealed: true}}
 
   def handle_call(:snapshot, _, state),
-    do: {:reply, {:ok, Map.drop(state, [:owner, :monitor, :reader, :sealed])}, state}
+    do: {:reply, {:ok, Map.drop(state, [:owner, :sealed])}, state}
 
   def handle_call({:restore, saved}, _, state) do
     cond do
@@ -140,8 +118,7 @@ defmodule Alto.Input do
     end
   end
 
-  def handle_call({:settle, token, id}, _, %{reader: token, owner: owner} = state)
-      when not is_nil(token) and not is_nil(owner) do
+  def handle_call({:settle, token, id}, _, %{owner: {_pid, token, _monitor}} = state) do
     case state.receipts[id] do
       %{status: :unknown} = receipt ->
         {:reply, :ok, put_in(state.receipts[id], %{receipt | status: :delivered})}
@@ -165,14 +142,14 @@ defmodule Alto.Input do
   def handle_call({:pending, modes}, _from, state),
     do: {:reply, Enum.any?(state.entries, &(&1.mode in modes)), state}
 
-  def handle_call({:read, token, modes}, _, %{reader: token, owner: owner} = state)
-      when not is_nil(token) and not is_nil(owner) and is_list(modes),
+  def handle_call({:read, token, modes}, _, %{owner: {_pid, token, _monitor}} = state)
+      when is_list(modes),
       do: {:reply, Enum.find(state.entries, &(&1.mode in modes)), state}
 
   def handle_call({:read, _, _}, _, state), do: {:reply, {:error, :not_input_owner}, state}
 
-  def handle_call({:acknowledge, token, id, status}, _, %{reader: token, owner: owner} = state)
-      when not is_nil(token) and not is_nil(owner) and status in [:consumed, :delivered, :unknown] do
+  def handle_call({:acknowledge, token, id, status}, _, %{owner: {_pid, token, _monitor}} = state)
+      when status in [:consumed, :delivered, :unknown] do
     case Enum.find(state.entries, &(&1.message_id == id)) do
       nil ->
         {:reply, {:error, :unknown_input}, state}
@@ -182,9 +159,8 @@ defmodule Alto.Input do
     end
   end
 
-  def handle_call({:acknowledge, token, _, _}, _, %{reader: token, owner: owner} = state)
-      when not is_nil(token) and not is_nil(owner),
-      do: {:reply, {:error, :invalid_input_operation}, state}
+  def handle_call({:acknowledge, token, _, _}, _, %{owner: {_pid, token, _monitor}} = state),
+    do: {:reply, {:error, :invalid_input_operation}, state}
 
   def handle_call({:acknowledge, _, _, _}, _, state),
     do: {:reply, {:error, :not_input_owner}, state}
@@ -316,8 +292,8 @@ defmodule Alto.Input do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _, _}, %{monitor: ref} = state),
-    do: {:noreply, %{state | owner: nil, monitor: nil, reader: nil}}
+  def handle_info({:DOWN, ref, :process, _, _}, %{owner: {_pid, _token, ref}} = state),
+    do: {:noreply, %{state | owner: nil}}
 
   def handle_info(_, state), do: {:noreply, state}
 end

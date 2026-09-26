@@ -24,14 +24,17 @@ defmodule Alto.MessagingTest do
              Alto.Messaging.send(b, a.id, text: "changed", idempotency_key: "one")
 
     assert {:error, :input_capacity} = Alto.Messaging.send(b, a.id, text: "full")
-    assert [%{sender: %{kind: :agent, id: sender_id}, message_id: ^id}] = Alto.Input.list(input)
+
+    assert [%{sender: %{kind: :agent, id: sender_id}, message_id: ^id}] =
+             Alto.Input.request(input, :list)
+
     assert sender_id == b.id
     assert {:ok, ^input} = Alto.Messaging.bind(a)
-    assert {:ok, reader} = Alto.Input.claim(input)
-    entry = Alto.Input.read(input, reader, [:steer])
-    assert :ok = Alto.Input.acknowledge(input, reader, entry.message_id, :consumed)
+    assert {:ok, reader} = Alto.Input.request(input, :claim)
+    entry = Alto.Input.request(input, {:read, reader, [:steer]})
+    assert :ok = Alto.Input.request(input, {:acknowledge, reader, entry.message_id, :consumed})
     assert :ok = Alto.Messaging.close(a)
-    assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, id)
+    assert {:ok, %{status: :consumed}} = Alto.Input.request(input, {:receipt, id})
 
     assert {:ok, %{message_id: ^id, status: :consumed}} =
              Alto.Messaging.send(b, a.id, text: "hello", idempotency_key: "one")
@@ -48,7 +51,7 @@ defmodule Alto.MessagingTest do
 
     assert {:error, :input_capacity} = Alto.Messaging.send(input, text: "12345")
     assert {:ok, _} = Alto.Messaging.send(input, text: "1234", delivery: :follow_up)
-    assert [%{sender: %{kind: :user}, mode: :follow_up}] = Alto.Input.list(input)
+    assert [%{sender: %{kind: :user}, mode: :follow_up}] = Alto.Input.request(input, :list)
   end
 
   test "recipient exit closes routing while accepted input remains inspectable" do
@@ -73,7 +76,7 @@ defmodule Alto.MessagingTest do
       assert {:error, :recipient_closed} = Alto.Messaging.send(router, agent.id, text: "late")
     end)
 
-    assert Enum.any?(Alto.Input.list(input), &(&1.text == "accepted"))
+    assert Enum.any?(Alto.Input.request(input, :list), &(&1.text == "accepted"))
   end
 
   test "idle host retries select user submissions without promoting peer context" do
@@ -83,8 +86,11 @@ defmodule Alto.MessagingTest do
     {:ok, b} = Alto.Messaging.register(router)
     {:ok, _} = Alto.Messaging.send(b, a.id, text: "peer context")
     {:ok, _} = Alto.Messaging.send(input, text: "user task")
-    assert {:ok, %{text: "user task", sender: %{kind: :user}}} = Alto.Input.take(input, :user)
-    assert [%{text: "peer context", sender: %{kind: :agent}}] = Alto.Input.list(input)
+
+    assert {:ok, %{text: "user task", sender: %{kind: :user}}} =
+             Alto.Input.request(input, {:take, :user})
+
+    assert [%{text: "peer context", sender: %{kind: :agent}}] = Alto.Input.request(input, :list)
   end
 
   defp eventually(fun, attempts \\ 100) do

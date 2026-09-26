@@ -164,7 +164,7 @@ defmodule Alto.TUI.State do
   defp pending_input(state, task_id) do
     case Map.get(state.inputs, task_id) do
       nil -> []
-      input -> Alto.Input.list(input)
+      input -> Alto.Input.request(input, :list)
     end
   catch
     :exit, _ -> []

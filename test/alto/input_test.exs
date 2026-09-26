@@ -24,17 +24,20 @@ defmodule Alto.InputTest do
 
     assert {:ok, %{message_id: second}} = Alto.Messaging.send(input, text: "hi", delivery: :steer)
     assert {:error, :input_capacity} = Alto.Messaging.send(input, text: "x")
-    assert {:ok, reader} = Alto.Input.claim(input)
-    assert {:error, :input_in_use} = Alto.Input.take(input)
-    assert %{message_id: ^second} = Alto.Input.read(input, reader, [:steer])
-    assert %{message_id: ^first} = Alto.Input.read(input, reader, [:follow_up])
-    assert :ok = Alto.Input.acknowledge(input, reader, second, :consumed)
-    assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, second)
-    assert [%{message_id: ^first}] = Alto.Input.list(input)
-    assert :ok = Alto.Input.release(input)
-    assert {:ok, %{message_id: ^first, text: "one", mode: :follow_up}} = Alto.Input.take(input)
-    assert {:ok, %{status: :taken}} = Alto.Input.receipt(input, first)
-    assert :empty = Alto.Input.take(input)
+    assert {:ok, reader} = Alto.Input.request(input, :claim)
+    assert {:error, :input_in_use} = Alto.Input.request(input, {:take, :any})
+    assert %{message_id: ^second} = Alto.Input.request(input, {:read, reader, [:steer]})
+    assert %{message_id: ^first} = Alto.Input.request(input, {:read, reader, [:follow_up]})
+    assert :ok = Alto.Input.request(input, {:acknowledge, reader, second, :consumed})
+    assert {:ok, %{status: :consumed}} = Alto.Input.request(input, {:receipt, second})
+    assert [%{message_id: ^first}] = Alto.Input.request(input, :list)
+    assert :ok = Alto.Input.request(input, :release)
+
+    assert {:ok, %{message_id: ^first, text: "one", mode: :follow_up}} =
+             Alto.Input.request(input, {:take, :any})
+
+    assert {:ok, %{status: :taken}} = Alto.Input.request(input, {:receipt, first})
+    assert :empty = Alto.Input.request(input, {:take, :any})
     assert {:ok, _} = Alto.Messaging.send(input, text: "12345")
   end
 
@@ -68,7 +71,7 @@ defmodule Alto.InputTest do
     send(next, :answer)
     assert {:ok, result} = Alto.await(handle)
     assert result.model_requests == 2
-    assert Alto.Input.list(input) == []
+    assert Alto.Input.request(input, :list) == []
   end
 
   test "two runs cannot consume one channel concurrently" do
@@ -79,7 +82,7 @@ defmodule Alto.InputTest do
     assert {:error, :input_in_use, _} = Alto.run("second", opts)
     send(worker, :answer)
     assert {:ok, _} = Alto.await(handle)
-    assert {:ok, _reader} = Alto.Input.claim(input)
+    assert {:ok, _reader} = Alto.Input.request(input, :claim)
   end
 
   test "a rejected transcript insertion leaves the queued message available" do
@@ -94,7 +97,7 @@ defmodule Alto.InputTest do
                prompt: "system"
              )
 
-    assert length(Alto.Input.list(input)) == 1
+    assert length(Alto.Input.request(input, :list)) == 1
     refute_receive {:request, _, _}, 20
   end
 end
