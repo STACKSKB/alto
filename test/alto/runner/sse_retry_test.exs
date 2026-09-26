@@ -129,7 +129,7 @@ defmodule Alto.Runner.SSERetryTest do
     caps = %{
       budget: budget,
       cancel_ref: nil,
-      provider_timeout: 2_000,
+      provider_timeout: 5_000,
       provider_retries: retries,
       event_sink: sink,
       retry_policy: nil

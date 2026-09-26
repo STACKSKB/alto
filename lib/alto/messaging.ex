@@ -409,15 +409,8 @@ defmodule Alto.Messaging do
   defp restore_entry(state, id, value) do
     case state.entries[id] do
       nil ->
-        with {:ok, input} <- Alto.Input.open(transport: state.transport, id: id) do
-          {:ok,
-           Map.merge(Map.drop(value, [:input]), %{
-             sender: %Sender{router: self(), id: id, token: make_ref()},
-             input: input,
-             owned_input: true,
-             pause: false
-           })}
-        end
+        with {:ok, entry} <- new_entry(state, id: id, label: value.label, parent: value.parent),
+             do: {:ok, %{entry | status: value.status}}
 
       entry ->
         {:ok, %{entry | pause: false}}

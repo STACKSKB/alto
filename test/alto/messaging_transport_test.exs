@@ -52,22 +52,33 @@ defmodule Alto.MessagingTransportTest do
   test "custom transport supports queue ownership, portable snapshots and deduplication" do
     {:ok, channel} = Input.open(transport: {Custom, []})
     {:ok, receipt} = Messaging.send(channel, text: "first", idempotency_key: "key")
-    assert :ok = Input.claim(channel)
-    {:ok, reader} = Input.reader(channel)
+    assert {:ok, reader} = Input.claim(channel)
 
     assert {:error, :not_input_owner} =
-             Task.async(fn -> Input.peek(channel, [:steer]) end) |> Task.await()
+             Task.async(fn -> Input.read(channel, "invalid", [:steer]) end) |> Task.await()
 
     entry = Task.async(fn -> Input.read(channel, reader, [:steer]) end) |> Task.await()
     assert entry.message_id == receipt.message_id
+
+    assert {:error, :not_input_owner} =
+             Task.async(fn -> Input.release(channel) end) |> Task.await()
+
+    assert {:error, :invalid_input_operation} =
+             Input.acknowledge(channel, reader, entry.message_id, :taken)
+
     {:ok, snapshot} = Input.snapshot(channel)
     assert {:ok, encoded} = Alto.Persistence.Codec.encode(snapshot)
     {:ok, saved} = Alto.Persistence.Codec.decode(encoded)
     {:ok, restored} = Input.open()
     assert :ok = Input.restore(restored, saved)
     assert Input.list(restored) == [entry]
-    assert :ok = Input.claim(restored)
-    assert :ok = Input.ack(restored, entry.message_id)
+    assert {:ok, restored_reader} = Input.claim(restored)
+
+    assert :ok =
+             Task.async(fn ->
+               Input.acknowledge(restored, restored_reader, entry.message_id, :consumed)
+             end)
+             |> Task.await()
 
     assert {:ok, %{status: :consumed, message_id: id}} =
              Messaging.send(restored, text: "first", idempotency_key: "key")
@@ -79,6 +90,10 @@ defmodule Alto.MessagingTransportTest do
 
     assert :ok = Input.release(channel)
     assert {:error, :not_input_owner} = Input.read(channel, reader, [:steer])
+
+    assert {:error, :not_input_owner} =
+             Input.acknowledge(channel, reader, entry.message_id, :consumed)
+
     Input.close(channel)
   end
 
@@ -128,7 +143,7 @@ defmodule Alto.MessagingTransportTest do
     options = [transport: {Alto.Messaging.Transport.File, directory: directory}, id: "agent-one"]
     {:ok, channel} = Input.open(options)
     {:ok, writer} = Input.open(options)
-    assert :ok = Input.claim(channel)
+    assert {:ok, reader} = Input.claim(channel)
     task = Task.async(fn -> Input.claim(writer) end)
     assert {:error, _} = Task.await(task)
 
@@ -137,8 +152,8 @@ defmodule Alto.MessagingTransportTest do
       |> Task.await()
 
     {:ok, snapshot} = Input.snapshot(channel)
-    entry = Input.peek(channel, [:steer])
-    assert :ok = Input.ack(channel, entry.message_id)
+    entry = Input.read(channel, reader, [:steer])
+    assert :ok = Input.acknowledge(channel, reader, entry.message_id, :consumed)
     assert {:ok, second} = Messaging.send(writer, text: "two", idempotency_key: "two")
     assert :ok = Input.release(channel)
     {:ok, reopened} = Input.open(options)
@@ -146,7 +161,7 @@ defmodule Alto.MessagingTransportTest do
     assert [%{message_id: id}] = Input.list(reopened)
     assert id == second.message_id
     assert {:ok, %{status: :consumed}} = Input.receipt(reopened, first.message_id)
-    assert :ok = Input.claim(reopened)
+    assert {:ok, _reader} = Input.claim(reopened)
     assert :ok = Input.release(reopened)
     assert {:ok, %{message_id: ^id}} = Input.take(writer)
   end
@@ -159,7 +174,7 @@ defmodule Alto.MessagingTransportTest do
 
     pid =
       spawn(fn ->
-        :ok = Input.claim(channel)
+        {:ok, _reader} = Input.claim(channel)
         send(parent, :claimed)
         receive do: (:never -> :ok)
       end)
@@ -168,7 +183,7 @@ defmodule Alto.MessagingTransportTest do
     monitor = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
-    assert :ok = Input.claim(channel)
+    assert {:ok, _reader} = Input.claim(channel)
     assert :ok = Input.release(channel)
   end
 end

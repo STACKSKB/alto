@@ -24,11 +24,11 @@ defmodule Alto.InputTest do
 
     assert {:ok, %{message_id: second}} = Alto.Messaging.send(input, text: "hi", delivery: :steer)
     assert {:error, :input_capacity} = Alto.Messaging.send(input, text: "x")
-    assert :ok = Alto.Input.claim(input)
+    assert {:ok, reader} = Alto.Input.claim(input)
     assert {:error, :input_in_use} = Alto.Input.take(input)
-    assert %{message_id: ^second} = Alto.Input.peek(input, [:steer])
-    assert %{message_id: ^first} = Alto.Input.peek(input, [:follow_up])
-    assert :ok = Alto.Input.ack(input, second)
+    assert %{message_id: ^second} = Alto.Input.read(input, reader, [:steer])
+    assert %{message_id: ^first} = Alto.Input.read(input, reader, [:follow_up])
+    assert :ok = Alto.Input.acknowledge(input, reader, second, :consumed)
     assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, second)
     assert [%{message_id: ^first}] = Alto.Input.list(input)
     assert :ok = Alto.Input.release(input)
@@ -79,7 +79,7 @@ defmodule Alto.InputTest do
     assert {:error, :input_in_use, _} = Alto.run("second", opts)
     send(worker, :answer)
     assert {:ok, _} = Alto.await(handle)
-    assert :ok = Alto.Input.claim(input)
+    assert {:ok, _reader} = Alto.Input.claim(input)
   end
 
   test "a rejected transcript insertion leaves the queued message available" do

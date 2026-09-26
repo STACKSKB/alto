@@ -127,7 +127,10 @@ assume a socket, filesystem, polling interval, or SSH command.
 
 The request protocol is defined by `Alto.Input.request/3` and its public wrappers.
 Implementations must provide atomic admission, deduplication, exclusive reader
-claim/release, opaque delegated readers, acknowledgement, snapshot and restore.
+claim/release, token-authorized reads and acknowledgements, snapshot and restore.
+`Input.claim/1` returns `{:ok, reader}`. Pass that token to `Input.read/3`,
+`Input.acknowledge/4` and `Input.settle/3`; releasing the claim or owner death
+revokes it. Only the claiming process can release the channel.
 `:checkpoint` returns the same portable state as `:snapshot` and seals admission;
 new sends return `:input_checkpointed` until restore, while duplicate sends still
 return their original receipt. This fences the snapshot against accepting and

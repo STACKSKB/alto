@@ -79,9 +79,8 @@ defmodule Alto.Runner.Execution do
   defp run_with_input(task, opts, scheduler) do
     input = Keyword.fetch!(opts, :input)
 
-    with :ok <- claim_input(input) do
+    with {:ok, reader} <- claim_input(input) do
       try do
-        {:ok, reader} = Alto.Input.reader(input)
         run_scoped(task, Keyword.put(opts, :input_reader, reader), scheduler)
       after
         try do
@@ -235,7 +234,9 @@ defmodule Alto.Runner.Execution do
       end
 
     if modes != [] and map_size(Map.get(run, :pending_provider_calls, %{})) == 0 do
-      case Alto.Input.peek(input, modes, max(Budget.remaining(run.budget), 1)) do
+      reader = run.tool_context.input_reader
+
+      case Alto.Input.read(input, reader, modes, max(Budget.remaining(run.budget), 1)) do
         nil ->
           do_execute(effects, run, terminal)
 
@@ -245,7 +246,15 @@ defmodule Alto.Runner.Execution do
         entry ->
           case RunTranscript.append(run, input_message(entry)) do
             {:ok, next} ->
-              :ok = Alto.Input.ack(input, entry.message_id, max(Budget.remaining(run.budget), 1))
+              :ok =
+                Alto.Input.acknowledge(
+                  input,
+                  reader,
+                  entry.message_id,
+                  :consumed,
+                  max(Budget.remaining(run.budget), 1)
+                )
+
               event = Event.durable(:input_received, entry)
 
               rest =

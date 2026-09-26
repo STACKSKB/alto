@@ -40,9 +40,9 @@ defmodule Alto.Messaging.Transport.File do
       with {:ok, lock} <-
              Alto.Storage.acquire(handle.path <> ".reader", timeout: min(timeout, 100)) do
         case transact(handle, :claim, timeout, true) do
-          :ok ->
+          {:ok, _token} = claimed ->
             Process.put(key, lock)
-            :ok
+            claimed
 
           error ->
             Alto.Storage.release(lock)

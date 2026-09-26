@@ -27,9 +27,9 @@ defmodule Alto.MessagingTest do
     assert [%{sender: %{kind: :agent, id: sender_id}, message_id: ^id}] = Alto.Input.list(input)
     assert sender_id == b.id
     assert {:ok, ^input} = Alto.Messaging.bind(a)
-    assert :ok = Alto.Input.claim(input)
-    entry = Alto.Input.peek(input, [:steer])
-    assert :ok = Alto.Input.ack(input, entry.message_id)
+    assert {:ok, reader} = Alto.Input.claim(input)
+    entry = Alto.Input.read(input, reader, [:steer])
+    assert :ok = Alto.Input.acknowledge(input, reader, entry.message_id, :consumed)
     assert :ok = Alto.Messaging.close(a)
     assert {:ok, %{status: :consumed}} = Alto.Input.receipt(input, id)
 

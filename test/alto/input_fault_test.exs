@@ -8,7 +8,7 @@ defmodule Alto.InputFaultTest do
     assert catch_exit(Alto.Runner.Execution.run(%{}, opts, fn _, _ -> exit(:scheduler_down) end)) ==
              :scheduler_down
 
-    assert :ok = Alto.Input.claim(input)
+    assert {:ok, _reader} = Alto.Input.claim(input)
   end
 
   test "a dead input channel reports an input failure" do
@@ -33,17 +33,22 @@ defmodule Alto.InputFaultTest do
         end
       end)
 
-    assert_receive {:claimed, :ok}
-    assert {:error, :not_input_owner} = Alto.Input.peek(input, [:steer])
-    assert {:error, :not_input_owner} = Alto.Input.ack(input, id)
+    assert_receive {:claimed, {:ok, old_reader}}
+    assert {:error, :not_input_owner} = Alto.Input.read(input, "invalid-token", [:steer])
+
+    assert {:error, :not_input_owner} =
+             Alto.Input.acknowledge(input, "invalid-token", id, :consumed)
 
     owner_ref = Process.monitor(owner)
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
-    assert :ok = claim_eventually(input)
+    assert {:ok, reader} = claim_eventually(input)
+    assert {:error, :not_input_owner} = Alto.Input.read(input, old_reader, [:steer])
 
-    assert %{message_id: ^id, text: "abc", mode: :steer} = Alto.Input.peek(input, [:steer])
-    assert :ok = Alto.Input.ack(input, id)
+    assert %{message_id: ^id, text: "abc", mode: :steer} =
+             Alto.Input.read(input, reader, [:steer])
+
+    assert :ok = Alto.Input.acknowledge(input, reader, id, :consumed)
 
     # Acknowledgement reclaims the exact encoded byte capacity.
     assert {:ok, _} = Alto.Messaging.send(input, text: "xyz", delivery: :follow_up)
@@ -54,8 +59,8 @@ defmodule Alto.InputFaultTest do
 
   defp claim_eventually(input, attempts) do
     case Alto.Input.claim(input) do
-      :ok ->
-        :ok
+      {:ok, _} = claimed ->
+        claimed
 
       {:error, :input_in_use} ->
         Process.sleep(1)
