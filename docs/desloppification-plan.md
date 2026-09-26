@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,226 lines (15.8% below the original)**. **5,768 lines
+The current count is **34,215 lines (15.8% below the original)**. **5,757 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -45,6 +45,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 - Context windows and bounded subagent policies use the existing `{module, state}`
   contract. Tokenizer adapters return a unary function. Redundant config structs,
   defaults, direct resolution APIs, and their helper-only tests are removed.
+  Tokenizer adapters accept the callback's exact message/tool input and resolve
+  fixed framing overhead once when constructed.
   Context and child policies now require that tuple representation; bare-struct
   dispatch and fingerprint handling are removed. Tools and approvals use the
   shared capability resolver, rejecting missing callbacks before dispatch.

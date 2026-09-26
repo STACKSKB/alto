@@ -27,29 +27,18 @@ defmodule Alto.Context.Estimator do
       )
       |> Map.new()
 
-    fn input -> estimate(input, config) end
-  end
+    overhead = config.provider_overhead + Map.get(config.model_overhead, config.model, 0)
 
-  defp estimate(input, config) when is_map(input) do
-    messages = Map.get(input, :messages, Map.get(input, "messages", []))
-    tools = Map.get(input, :tools, Map.get(input, "tools", []))
-
-    if is_list(messages) and is_list(tools) do
-      model_overhead = Map.get(config.model_overhead, config.model, 0)
-
-      config.provider_overhead + model_overhead +
+    fn %{messages: messages, tools: tools} when is_list(messages) and is_list(tools) ->
+      overhead +
         Enum.reduce(
           messages,
           0,
           &tokenize_entry(&2, &1, config.tokenizer, config.message_overhead)
         ) +
         Enum.reduce(tools, 0, &tokenize_entry(&2, &1, config.tokenizer, config.tool_overhead))
-    else
-      raise ArgumentError, "context input must contain message and tool lists"
     end
   end
-
-  defp estimate(_input, _config), do: raise(ArgumentError, "context input must be a map")
 
   defp tokenize_entry(acc, entry, tokenizer, overhead) do
     tokens = tokenizer.(JSON.encode!(entry))
