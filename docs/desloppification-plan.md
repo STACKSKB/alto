@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,129 lines (16.1% below the original)**. **5,671 lines
+The current count is **34,105 lines (16.1% below the original)**. **5,647 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -75,6 +75,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   the existing event handlers.
   The details drawer's saved return focus also records whether it is open;
   a redundant boolean and its parallel updates are removed.
+  Prose projection uses a map-reduce pass to track row offsets and builds wrapped
+  rows directly; repeated accumulated-list copies and prefix scans are removed.
+  Automatic and interactive Codex approvals use the same response callback.
 - Codex UI and delegated agents share bounded model pagination. Provider discovery
   and streaming share Req response handling. Validated Anthropic tool-input maps
   bypass JSON round trips. Provider observers use the existing notification helper.
@@ -165,4 +168,6 @@ diff checks pass.
 Focused coverage includes mixed-error batches, child limits and authority,
 continuation recovery, storage failures, frozen tool preparation, workspace path
 checks, UTF-8 bounds, redaction, and observer exceptions/throws/exits. Terminal
-selection benchmarks remain about 1 ms at 200×60.
+selection benchmarks remain about 1 ms at 200×60. Prose wrapping was also
+compared against the previous implementation in 40,080 whitespace/Unicode cases
+and 2,400 complete multiline/cursor projections; all outputs matched.

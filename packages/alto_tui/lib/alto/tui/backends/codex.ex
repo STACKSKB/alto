@@ -719,6 +719,14 @@ defmodule Alto.TUI.Backends.Codex do
         end
 
       {local_id, run} ->
+        respond = fn decision ->
+          CodexClient.respond(
+            data(state).client,
+            id,
+            codex_approval_response(method, decision, params)
+          )
+        end
+
         case run.approval_level do
           :ask ->
             request = %{
@@ -730,13 +738,7 @@ defmodule Alto.TUI.Backends.Codex do
             }
 
             pending = %{
-              respond: fn decision ->
-                CodexClient.respond(
-                  data(state).client,
-                  id,
-                  codex_approval_response(method, decision, params)
-                )
-              end,
+              respond: respond,
               local_id: local_id,
               request: request
             }
@@ -750,12 +752,7 @@ defmodule Alto.TUI.Backends.Codex do
           level when level in [:read_only, :full_access] ->
             decision = if level == :full_access, do: :approve, else: {:deny, :read_only}
 
-            CodexClient.respond(
-              data(state).client,
-              id,
-              codex_approval_response(method, decision, params)
-            )
-
+            respond.(decision)
             state
         end
     end
