@@ -12,7 +12,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **33,644 lines (17.2% below the original)**. **5,186 lines
+The current count is **33,607 lines (17.3% below the original)**. **5,149 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -28,6 +28,14 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 
 ## Changes in the worktree
 
+- Approval, parent, child and cooperative execution checkpoints share one capture
+  and restore pipeline. The encoded state owns the frame, budget and authority
+  binding; child capture no longer pretends to be a root approval. Routing and
+  the displayable approval request remain in JSON. Restores validate and narrow
+  authority before restoring messaging and children, while async children keep
+  their live shared budget. The continuation format is version 4, without a
+  migration. Pass-through loop checkpoint tests and literal shape checks are
+  removed; behavioral, corruption and concurrency coverage remains.
 - Owned children use one ordered collection throughout admission, dispatch,
   checkpoint restoration, shutdown and collection. Completion shares one path
   for failed starts and finished runs; finished entries release process handles.
@@ -207,6 +215,12 @@ recovery, and actual user interactions.
 
 The combined cleanup and messaging worktree passes **1,069 core tests and
 142 TUI tests**.
+The shared checkpoint pipeline passes those full suites. Its final envelope-bound
+correction is checked by the 72-test continuation suite, including large-state
+round trips and malformed budget/transcript rejection. Raw state remains bounded
+at 1 MB; the envelope allows Base64 expansion without allocating another encoded
+copy merely to check its size. The formatted production reduction is 37 lines;
+the larger draft estimate did not survive formatting and complete validation.
 The child scheduler consolidation passes that full core suite and the updated
 11-test messaging suite, including a new regression for refused/crashed starts,
 slot release, requested result order, and collecting child usage only once.

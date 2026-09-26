@@ -236,7 +236,8 @@ defmodule Alto.Runner.CheckpointTest do
     {:error, :approval_suspended, second} =
       Serial.run("{}", Keyword.put(opts, :checkpoint, {first.checkpoint, :approve}))
 
-    assert second.checkpoint["budget"]["effects_used"] == 2
+    assert {:ok, saved} = Checkpoint.decode(second.checkpoint["state"])
+    assert saved.budget["effects_used"] == 2
 
     assert {:error, {:effect_limit, 2}, _} =
              Serial.run("{}", Keyword.put(opts, :checkpoint, {second.checkpoint, :approve}))

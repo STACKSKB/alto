@@ -112,8 +112,9 @@ defmodule Alto.Runner.DurableBudgetTest do
 
     assert {:error, :approval_suspended, suspended} = Alto.run("{}", opts)
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
-    assert packet["budget"]["effects_used"] == 1
-    assert packet["budget"]["account"] == Account.identity(c.account)
+    assert {:ok, saved} = Alto.Runner.Checkpoint.decode(packet["state"])
+    assert saved.budget["effects_used"] == 1
+    assert saved.budget["account"] == Account.identity(c.account)
     assert :ok = Account.take(c.account, :effect, 10)
     File.write!(Path.join(c.dir, "input"), "changed")
     stop_supervised!(OperationLog)

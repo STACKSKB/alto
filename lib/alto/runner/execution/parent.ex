@@ -55,7 +55,8 @@ defmodule Alto.Runner.Execution.Parent do
          pending = %{kind: :children, ids: Enum.map(specs, & &1.id)},
          {:ok, packet} <-
            call(fn -> Checkpoint.capture_parent(run, pending, rest, terminal) end, run),
-         run = Map.put(run, :parent_expires_at_ms, packet["expires_at_ms"]),
+         {:ok, %{binding: binding}} <- Checkpoint.decode(packet["state"]),
+         run = Map.put(run, :parent_expires_at_ms, binding.expires_at_ms),
          {:ok, cell, run} <-
            Children.open_reserved_continuation(specs, run, packet, key),
          {:ok, %{phase: :children}} <- call(fn -> Continuation.read(cell) end, run) do

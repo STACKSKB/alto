@@ -11,8 +11,9 @@ checkpoint callbacks, the shared execution hosts return:
 The prepared tool has not executed. The packet contains the exact pending
 prepared value, remaining ordered effects, declared loop state, transcript,
 operation identity, accounting, and remaining execution budget. Completed
-operations are not replayed and tool preparation is not repeated. Root serial
-runs are supported; child runs cannot independently suspend a shared parent.
+operations are not replayed and tool preparation is not repeated. Root runs can
+suspend for approval; durable child approval and parent joins use the same
+capture and restore pipeline (see [child continuations](child-continuations.md)).
 
 The runner does not persist or authorize its own continuation. A durable host
 uses the existing operation ledger and queue:
@@ -57,9 +58,9 @@ version is another application-controlled compatibility fence.
 Packets exclude provider configuration and live process capabilities. Exact
 messages and prepared tool values may contain sensitive data and require
 private storage. Pids, references, ports and functions in continuation data are
-rejected. The exact state is at most 1 MB with depth at most 64; its Base64 wire
-representation is larger. Decoding never creates atoms or loads client-selected
-modules. Fresh-VM restoration requires any atoms in custom data to already be
+rejected. The exact state is at most 1 MB with depth at most 64; the envelope has
+a separate 2 MB bound to accommodate Base64 expansion. Decoding never creates
+atoms or loads client-selected modules. Fresh-VM restoration requires any atoms in custom data to already be
 provided by trusted loaded code. Unknown shapes fail closed.
 
 Loop snapshot callbacks run under the runner's existing timeout and cancellation
@@ -75,8 +76,14 @@ used by short queue examples. Checkpoints do not make an uncertain external
 effect automatically retryable. Interruptions after resumed dispatch still
 require authoritative reconciliation or explicit operator review.
 
-Checkpoint packets use one versioned continuation format for automatic and
-manual execution. Journal and workspace bindings use the durable
+Checkpoint packets use one versioned continuation format for approval, parent,
+child, and cooperative execution suspension. One encoded state owns the frame,
+saved run, budget, and any authority binding; the envelope carries routing
+metadata and the approval request for inspection. Cooperative async children
+resume against their live shared budget. Durable restores intersect saved and
+current limits before restoring messaging and children.
+
+Journal and workspace bindings use the durable
 store identity, not the current server PID; restarting the same store preserves
 the binding. Unavailable or different stores fail closed. Tool/loop code and
 explicit checkpoint version checks still apply.

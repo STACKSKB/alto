@@ -82,11 +82,11 @@ defmodule Alto.Runner.ParentCheckpointTest do
     assert {:ok, same_packet} =
              Checkpoint.capture_parent(run, pending, tail, {:stop, "tail done"})
 
-    assert same_packet["fingerprint"] == packet["fingerprint"]
+    assert {:ok, same} = Checkpoint.decode(same_packet["state"])
+    assert {:ok, saved} = Checkpoint.decode(packet["state"])
+    assert same.fingerprint == saved.fingerprint
     assert packet["kind"] == "parent"
-    refute Map.has_key?(packet, "request")
-    refute Map.has_key?(packet, "usage")
-    refute Map.has_key?(packet, "agent_identity")
+    assert packet["request"] == nil
     packet = packet |> JSON.encode!() |> JSON.decode!()
 
     # Children can spend shared reservations after the pending parent is saved.
@@ -104,19 +104,38 @@ defmodule Alto.Runner.ParentCheckpointTest do
     assert Budget.snapshot(restored.budget)["model_requests_used"] == 1
   end
 
+  test "wire expansion does not reduce the encoded-state limit", context do
+    %{run: run, pending: pending, opts: opts} = context
+    run = %{run | loop_state: String.duplicate("x", 800_000)}
+    assert {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
+    assert byte_size(packet["state"]) > 1_000_000
+    assert {:ok, restored, _} = Checkpoint.restore_parent(run, packet, opts)
+    assert restored.loop_state == run.loop_state
+
+    assert {:error, :checkpoint_not_portable_or_too_large} =
+             Checkpoint.capture_parent(
+               %{run | loop_state: String.duplicate("x", 1_000_000)},
+               pending,
+               [],
+               :continue
+             )
+  end
+
   test "restore and subsequent capture keep the original expiry", context do
     %{run: run, pending: pending, opts: opts} = context
     expiry = System.system_time(:millisecond) + 500
     run = Map.put(run, :parent_expires_at_ms, expiry)
     assert {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
-    assert packet["expires_at_ms"] == expiry
+    assert {:ok, saved} = Checkpoint.decode(packet["state"])
+    assert saved.binding.expires_at_ms == expiry
     assert {:ok, restored, _} = Checkpoint.restore_parent(run, packet, opts)
     assert Budget.remaining(restored.budget) <= 500
 
     assert {:ok, ready} =
              Checkpoint.capture_parent(restored, %{kind: :frame}, [], {:stop, "done"})
 
-    assert ready["expires_at_ms"] <= expiry
+    assert {:ok, saved_ready} = Checkpoint.decode(ready["state"])
+    assert saved_ready.binding.expires_at_ms <= expiry
 
     assert {:ok, _, %{pending: %{kind: :frame}}} =
              Checkpoint.restore_parent(restored, ready, opts)
@@ -222,21 +241,16 @@ defmodule Alto.Runner.ParentCheckpointTest do
     %{run: run, pending: pending, opts: opts} = context
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
 
-    for changed <- [
-          Map.put(packet, "session_id", "other"),
-          Map.put(packet, "expires_at_ms", packet["expires_at_ms"] + 1),
-          put_in(packet, ["budget", "effects_used"], 0.5)
-        ] do
-      assert {:error, _} = Checkpoint.restore_parent(run, changed, opts)
-    end
+    assert {:error, _} =
+             Checkpoint.restore_parent(run, Map.put(packet, "session_id", "other"), opts)
 
-    refute Map.has_key?(packet, "stage")
-    refute Map.has_key?(packet, "store")
-    refute Map.has_key?(packet, "authority")
     {:ok, saved} = Checkpoint.decode(packet["state"])
 
     for changed <- [
-          put_in(saved, [:pending, :kind], :invalid),
+          put_in(saved, [:frame, :pending, :kind], :invalid),
+          put_in(saved, [:budget, "effects_used"], 0.5),
+          Map.put(saved, :budget, 7),
+          put_in(saved, [:run, :messages_rev], [%{"content" => {:not, :json}}]),
           put_in(saved, [:binding, :store], %{}),
           put_in(saved, [:binding, :authority, :max_steps], -1),
           put_in(saved, [:run, :usage], %{run.usage | input_tokens: -1}),
@@ -278,6 +292,6 @@ defmodule Alto.Runner.ParentCheckpointTest do
   defp replace_expiry(packet, expiry) do
     {:ok, saved} = Checkpoint.decode(packet["state"])
     {:ok, state} = Checkpoint.encode(put_in(saved, [:binding, :expires_at_ms], expiry))
-    packet |> Map.put("expires_at_ms", expiry) |> Map.put("state", state)
+    Map.put(packet, "state", state)
   end
 end

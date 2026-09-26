@@ -13,7 +13,7 @@ defmodule Alto.Runner.Checkpoint do
   alias Alto.Persistence.Codec
   alias Alto.OperationLog
   @limit 1_000_000
-  @continuation_format 3
+  @continuation_format 4
   @fields [
     :messages_rev,
     :transcript_bytes,
@@ -28,329 +28,298 @@ defmodule Alto.Runner.Checkpoint do
     :resolved_operations,
     :agent_identity,
     :communication,
-    :async_children
+    :async_children,
+    :persistence_errors
   ]
 
-  def capture(run, pending, remaining, terminal) do
-    driver = run.spec.driver
-    frame = %{pending: pending.job, remaining: remaining, terminal: terminal}
-
-    with true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
-         true <- function_exported?(driver, :dump_checkpoint, 2),
-         true <- function_exported?(driver, :load_checkpoint, 2),
-         true <- run.agent_depth == 0,
-         {:ok, captured} <- capture_state(run, @fields, frame) do
-      packet = checkpoint_packet(run, captured, Budget.snapshot(run.budget))
-      {:ok, Map.put(packet, "request", Alto.Protocol.encode_term(pending.request))}
-    else
-      false -> {:error, :checkpoint_not_supported}
-      {:error, _} = error -> error
-      _ -> {:error, :invalid_loop_checkpoint}
-    end
-  rescue
-    _ -> {:error, :invalid_loop_checkpoint}
-  end
-
-  def restore(
-        run,
-        %{"format" => 1, "continuation_format" => @continuation_format} = packet,
-        decision,
-        opts
-      ) do
-    with true <- is_nil(packet["kind"]),
-         true <- decision in [:approve, :deny],
-         true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
-         {:ok,
-          %{run: saved, loop: loop, pending: pending, remaining: remaining, terminal: terminal} =
-            decoded} <- decode_state(run, packet, @fields),
-         true <- map_size(decoded) == 5,
-         {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
-         {:ok, budget} <- Budget.restore(opts, packet["budget"]),
-         true <- saved.transcript_bytes <= run.max_transcript_bytes,
-         true <- within_budget?(budget),
-         {:ok, restored} <- restore_run(run, saved, state, budget) do
-      {:ok, restored,
-       %{pending: pending, remaining: remaining, terminal: terminal, decision: decision}}
-    else
-      false -> {:error, :checkpoint_mismatch}
-      {:error, _} = error -> error
-      _ -> {:error, :invalid_checkpoint}
-    end
-  end
-
-  def restore(_, _, _, _), do: {:error, :invalid_checkpoint}
-
-  @parent_fields @fields ++ [:persistence_errors]
   @authority_fields Alto.Config.authority_fields()
-  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget session_id transcript_revision expires_at_ms messaging_id)
+  @packet_fields ~w(format continuation_format kind state session_id messaging_id transcript_revision request)
 
-  @doc """
-  Capture a root parent's pending child join or its exact next frame.
+  def capture(run, pending, remaining, terminal),
+    do: capture_snapshot(run, nil, pending.job, remaining, terminal, pending.request)
 
-  This only constructs a portable packet; the host must save it before child
-  dispatch and fence consumption durably. Descendant reservations require a
-  shared durable budget account. Carry `expires_at_ms` into the live run's
-  `parent_expires_at_ms` before capturing its subsequent frame.
-  """
-  def capture_parent(run, pending, remaining, terminal) do
-    frame = %{pending: pending, remaining: remaining, terminal: terminal}
+  def restore(run, packet, decision, opts),
+    do: restore_snapshot(run, packet, nil, decision, opts)
 
-    with :ok <- parent_capabilities(run),
-         true <- valid_parent_pending?(pending),
-         true <- valid_frame?(remaining, terminal),
-         {:ok, store} <- OperationLog.request(run.continuation_store, :identity, 100),
-         authority <- Map.take(run, @authority_fields),
-         true <- valid_authority?(authority),
-         expires <- parent_expiry(run),
-         true <- is_integer(expires),
-         :ok <- unexpired(expires),
-         budget <- Budget.snapshot(run.budget),
-         binding <- %{
-           store: store,
-           authority: authority,
-           expires_at_ms: expires,
-           budget: budget,
-           session_id: run.session
-         },
-         {:ok, captured} <- capture_state(run, @parent_fields, frame, %{binding: binding}),
-         true <- valid_parent_saved?(captured.saved, authority) do
-      packet =
-        run
-        |> checkpoint_packet(captured, budget)
-        |> Map.merge(%{
-          "kind" => "parent",
-          "expires_at_ms" => expires
-        })
+  @doc "Capture a root parent's pending child join or its exact next frame."
+  def capture_parent(run, pending, remaining, terminal),
+    do: capture_snapshot(run, "parent", pending, remaining, terminal)
 
-      # Bound the envelope too, not merely its encoded state.
-      with {:ok, _} <- encode(packet), do: {:ok, packet}
-    else
-      false -> {:error, :invalid_parent_checkpoint}
-      {:error, _} = error -> error
-      _ -> {:error, :invalid_parent_checkpoint}
-    end
-  rescue
-    _ -> {:error, :invalid_parent_checkpoint}
-  catch
-    :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
-  end
-
-  @doc "Restore a saved root parent without dispatching children or consuming its frame."
-  def restore_parent(run, packet, opts) when is_map(packet) and is_list(opts) do
-    with :ok <- parent_capabilities(run),
-         true <- Enum.sort(Map.keys(packet)) == Enum.sort(@parent_packet_fields),
-         true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
-         true <- packet["kind"] == "parent",
-         {:ok, _} <- encode(packet),
-         {:ok, store} <- OperationLog.request(run.continuation_store, :identity, 100),
-         {:ok,
-          %{
-            run: saved,
-            loop: loop,
-            pending: pending,
-            remaining: remaining,
-            terminal: terminal,
-            binding: binding
-          } = decoded} <- decode_state(run, packet, @parent_fields),
-         true <- map_size(decoded) == 6,
-         true <- valid_parent_binding?(binding, packet) and binding.store == store,
-         :ok <- parent_budget_binding(run, packet["budget"]),
-         true <- valid_parent_pending?(pending),
-         true <- valid_frame?(remaining, terminal),
-         true <- valid_parent_saved?(saved, binding.authority),
-         true <- valid_authority?(Map.take(run, @authority_fields)),
-         authority <- narrow_authority(run, binding.authority),
-         true <- saved.transcript_bytes <= authority.max_transcript_bytes,
-         true <- packet["session_id"] == run.session,
-         :ok <- unexpired(binding.expires_at_ms),
-         {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
-         {:ok, budget} <- Budget.restore(opts, packet["budget"]),
-         budget <- clamp_parent_deadline(budget, binding.expires_at_ms),
-         :ok <- Budget.check(budget),
-         true <- within_budget?(budget),
-         {:ok, restored} <- restore_run(run, saved, state, budget) do
-      restored =
-        restored
-        |> Map.merge(authority)
-        |> Map.put(:parent_expires_at_ms, binding.expires_at_ms)
-
-      {:ok, restored, %{pending: pending, remaining: remaining, terminal: terminal}}
-    else
-      false -> {:error, :checkpoint_mismatch}
-      {:error, _} = error -> error
-      _ -> {:error, :invalid_parent_checkpoint}
-    end
-  catch
-    :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
-  end
-
-  def restore_parent(_, _, _), do: {:error, :invalid_parent_checkpoint}
+  @doc "Restore a saved root parent without consuming its durable grant."
+  def restore_parent(run, packet, opts),
+    do: restore_snapshot(run, packet, "parent", nil, opts)
 
   @doc "Capture an independently suspended child with immutable inherited authority."
-  def capture_child(run, pending, remaining, terminal) do
-    with %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
-         true <- run.agent_depth > 0,
-         true <- is_map(run.child_profile) and not Map.has_key?(run.child_profile, :provider),
-         true <- is_struct(run.budget.account, Budget.Account),
-         {:ok, store} <- OperationLog.request(ticket.batch.ledger, :identity, 100),
-         {:ok, packet} <- capture(%{run | agent_depth: 0}, pending, remaining, terminal),
-         authority <- Map.take(run, @authority_fields),
-         true <- valid_authority?(authority),
-         expiry <- parent_expiry(run),
-         :ok <- unexpired(expiry),
-         binding <- %{
-           journal: Alto.Subagents.Continuation.identity(ticket.batch),
-           store: store,
-           id: ticket.id,
-           attempt: ticket.attempt,
-           profile: run.child_profile,
-           authority: authority,
-           expires_at_ms: expiry,
-           agent_depth: run.agent_depth,
-           cwd: run.cwd,
-           resume_snapshot: run.resume_snapshot,
-           budget: packet["budget"],
-           session_id: run.session
-         },
-         {:ok, child} <- encode(binding),
-         result <- Map.merge(packet, %{"kind" => "child", "child" => child}),
-         {:ok, _} <- encode(result) do
-      {:ok, result}
-    else
-      {:error, _} = error -> error
-      _ -> {:error, :child_checkpoint_not_supported}
-    end
-  rescue
-    _ -> {:error, :child_checkpoint_not_supported}
+  def capture_child(run, pending, remaining, terminal),
+    do: capture_snapshot(run, "child", pending.job, remaining, terminal, pending.request)
+
+  @doc "Inspect the saved child profile; grants remain owned by its journal."
+  def child_binding(%{"kind" => "child", "state" => state}) do
+    with {:ok, %{binding: binding}} <- decode(state), do: {:ok, binding}
   end
 
-  @doc "Inspect the bounded saved child profile; grants remain owned by its journal."
-  def child_binding(%{"kind" => "child", "child" => child}), do: decode(child)
   def child_binding(_), do: {:error, :invalid_child_checkpoint}
 
-  @doc "Validate the exact child checkpoint before consuming its explicit decision."
-  def restore_child(run, packet, decision, opts) do
-    with {:ok, binding} <- child_binding(packet),
-         %Alto.Subagents.Continuation.Ticket{} = ticket <- Map.get(run, :subagent_ticket),
-         {:ok, store} <- OperationLog.request(ticket.batch.ledger, :identity, 100),
-         true <- binding.journal == Alto.Subagents.Continuation.identity(ticket.batch),
-         true <-
-           binding.store == store and binding.id == ticket.id and
-             binding.attempt == ticket.attempt,
-         true <- binding.agent_depth == run.agent_depth and run.agent_depth > 0,
-         true <- binding.session_id == run.session and packet["session_id"] == run.session,
-         true <-
-           binding.budget == packet["budget"] and is_struct(run.budget.account, Budget.Account),
-         true <- binding.profile == run.child_profile and binding.cwd == run.cwd,
-         true <- binding.resume_snapshot == run.resume_snapshot,
-         true <- valid_authority?(binding.authority),
-         :ok <- parent_budget_binding(run, binding.budget),
-         :ok <- unexpired(binding.expires_at_ms),
-         {:ok, restored, frame} <-
-           restore(run, Map.drop(packet, ["kind", "child"]), decision, opts),
-         true <- length(restored.agent_identity.path) == binding.agent_depth,
-         authority <- narrow_authority(run, binding.authority),
-         true <- restored.transcript_bytes <= authority.max_transcript_bytes,
-         budget <- clamp_parent_deadline(restored.budget, binding.expires_at_ms),
-         :ok <- Budget.check(budget) do
-      {:ok,
-       restored
-       |> Map.merge(authority)
-       |> Map.put(:budget, budget)
-       |> Map.put(:parent_expires_at_ms, binding.expires_at_ms), frame}
-    else
-      {:error, _} = error -> error
-      _ -> {:error, :child_checkpoint_mismatch}
-    end
-  end
+  @doc "Validate a child checkpoint before consuming its explicit decision."
+  def restore_child(run, packet, decision, opts),
+    do: restore_snapshot(run, packet, "child", decision, opts)
 
   @doc false
-  def capture_execution(run, effects, terminal) do
-    with true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
-         true <- is_nil(run.workspaces),
-         true <- is_nil(run.continuation_store),
-         {:ok, captured} <-
-           capture_state(run, @fields, %{pending: :frame, remaining: effects, terminal: terminal}) do
-      {:ok,
-       Map.put(checkpoint_packet(run, captured, Budget.snapshot(run.budget)), "kind", "execution")}
-    else
-      false -> {:error, :async_checkpoint_not_supported}
-      error -> error
-    end
-  end
+  def capture_execution(run, effects, terminal),
+    do: capture_snapshot(run, "execution", :frame, effects, terminal)
 
   @doc false
-  def restore_execution(
-        run,
-        %{"kind" => "execution", "continuation_format" => @continuation_format} = packet
-      ) do
-    with true <- run.agent_depth > 0,
-         {:ok, %{run: saved, loop: loop, pending: :frame, remaining: effects, terminal: terminal}} <-
-           decode_state(run, packet, @fields),
-         true <- valid_frame?(effects, terminal),
-         {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
-         :ok <- Budget.check(run.budget),
-         {:ok, restored} <- restore_run(run, saved, state, run.budget) do
-      {:ok, restored, %{effects: effects, terminal: terminal}}
-    else
-      false -> {:error, :checkpoint_mismatch}
-      error -> error
+  def restore_execution(run, packet) do
+    with {:ok, restored, frame} <- restore_snapshot(run, packet, "execution", nil, []) do
+      {:ok, restored, %{effects: frame.remaining, terminal: frame.terminal}}
     end
   end
 
-  def restore_execution(_, _), do: {:error, :invalid_async_checkpoint}
-
-  defp capture_state(run, fields, frame, extras \\ %{}) do
-    with {:ok, children} <- capture_agents(run),
-         {:ok, communication} <- capture_messaging(run, map_size(extras) == 0),
-         run <- Map.merge(run, %{communication: communication, async_children: children}),
+  defp capture_snapshot(run, kind, pending, remaining, terminal, request \\ nil) do
+    with {:ok, binding} <- capture_binding(kind, run),
+         true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
+         true <- function_exported?(run.spec.driver, :dump_checkpoint, 2),
+         true <- function_exported?(run.spec.driver, :load_checkpoint, 2),
+         true <- valid_pending?(kind, pending) and valid_frame?(remaining, terminal),
+         {:ok, children} <- capture_agents(run),
+         {:ok, communication} <- capture_messaging(run, kind != "parent"),
          {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
          {:ok, revision} <- transcript_revision(run),
          true <- run.transcript_revision in [:any, revision],
-         saved <- Map.take(%{run | transcript_revision: revision}, fields),
+         saved <-
+           Map.take(
+             Map.merge(run, %{
+               transcript_revision: revision,
+               communication: communication,
+               async_children: children
+             }),
+             @fields
+           ),
+         true <- valid_saved?(saved, Map.take(run, @authority_fields)),
          {:ok, fingerprint} <- fingerprint(run),
-         state <- Map.merge(%{run: saved, loop: loop}, Map.merge(frame, extras)),
-         {:ok, encoded} <- encode(state) do
-      {:ok, %{saved: saved, revision: revision, fingerprint: fingerprint, encoded: encoded}}
+         {:ok, state} <-
+           encode(%{
+             run: saved,
+             loop: loop,
+             binding: binding,
+             frame: %{pending: pending, remaining: remaining, terminal: terminal},
+             budget: Budget.snapshot(run.budget),
+             version: run.checkpoint_version,
+             fingerprint: fingerprint,
+             session_id: run.session,
+             messaging_id: messaging_id(run)
+           }),
+         packet <- %{
+           "format" => 1,
+           "continuation_format" => @continuation_format,
+           "kind" => kind,
+           "state" => state,
+           "session_id" => run.session,
+           "messaging_id" => messaging_id(run),
+           "transcript_revision" => revision,
+           "request" => request && Alto.Protocol.encode_term(request)
+         },
+         true <- Codec.valid?(packet, max_bytes: 2 * @limit) do
+      {:ok, packet}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, capture_error(kind)}
     end
+  rescue
+    _ -> {:error, capture_error(kind)}
   end
 
-  defp checkpoint_packet(run, captured, budget) do
-    %{
-      "format" => 1,
-      "continuation_format" => @continuation_format,
-      "version" => run.checkpoint_version,
-      "fingerprint" => captured.fingerprint,
-      "state" => captured.encoded,
-      "budget" => budget,
-      "session_id" => run.session,
-      "messaging_id" => messaging_id(run),
-      "transcript_revision" => captured.revision
-    }
-  end
-
-  defp decode_state(run, packet, fields) do
-    with true <-
-           is_binary(run.checkpoint_version) and packet["version"] == run.checkpoint_version,
+  defp restore_snapshot(run, packet, kind, decision, opts) do
+    with true <- is_map(packet) and is_list(opts),
+         true <- Enum.sort(Map.keys(packet)) == Enum.sort(@packet_fields),
+         true <- packet["format"] == 1 and packet["continuation_format"] == @continuation_format,
+         true <- packet["kind"] == kind,
+         true <- kind not in [nil, "child"] or decision in [:approve, :deny],
+         true <- Codec.valid?(packet, max_bytes: 2 * @limit),
+         {:ok,
+          %{
+            run: saved,
+            loop: _,
+            binding: _,
+            frame: frame,
+            budget: _,
+            version: _,
+            fingerprint: _,
+            session_id: _,
+            messaging_id: _
+          } = data} <-
+           decode(packet["state"]),
+         true <- map_size(data) == 9 and is_map(saved) and is_map(data.budget),
+         %{pending: _, remaining: _, terminal: _} <- frame,
+         true <- map_size(frame) == 3,
+         true <- data.version == run.checkpoint_version and is_binary(data.version),
          {:ok, fingerprint} <- fingerprint(run),
-         true <- packet["fingerprint"] == fingerprint,
+         true <- data.fingerprint == fingerprint,
+         true <- data.session_id == packet["session_id"],
+         true <- data.messaging_id == packet["messaging_id"],
          true <-
-           is_nil(packet["messaging_id"]) or is_nil(messaging_id(run)) or
-             packet["messaging_id"] == messaging_id(run),
-         {:ok, decoded} <- decode(packet["state"]),
-         true <- is_map(decoded),
-         %{run: saved} <- decoded,
-         true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(fields),
-         true <- not is_nil(packet["messaging_id"]) or is_nil(saved.communication),
-         true <- valid_compaction_state?(saved),
-         true <- valid_history_state?(saved),
-         true <- saved.transcript_revision == packet["transcript_revision"],
-         true <- Alto.AgentIdentity.valid?(saved.agent_identity),
+           is_nil(data.messaging_id) or is_nil(messaging_id(run)) or
+             data.messaging_id == messaging_id(run),
+         :ok <- validate_binding(kind, run, data),
+         authority <- checkpoint_authority(run, data.binding),
+         true <- valid_saved?(data.run, authority),
+         true <- not is_nil(data.messaging_id) or is_nil(data.run.communication),
+         true <- data.run.transcript_revision == packet["transcript_revision"],
          {:ok, revision} <- transcript_revision(run),
-         true <- revision == saved.transcript_revision do
-      {:ok, decoded}
+         true <- revision == data.run.transcript_revision,
+         true <-
+           valid_pending?(kind, data.frame.pending) and
+             valid_frame?(data.frame.remaining, data.frame.terminal),
+         {:ok, state} <- run.spec.driver.load_checkpoint(data.loop, run.spec),
+         {:ok, budget} <- restore_budget(kind, run, data, opts),
+         true <- within_budget?(budget),
+         {:ok, restored} <- restore_run(Map.merge(run, authority), data.run, state, budget) do
+      restored =
+        if data.binding,
+          do: Map.put(restored, :parent_expires_at_ms, data.binding.expires_at_ms),
+          else: restored
+
+      {:ok, restored, data.frame}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :checkpoint_mismatch}
     end
   end
+
+  defp capture_binding(nil, %{agent_depth: 0}), do: {:ok, nil}
+
+  defp capture_binding("execution", %{workspaces: nil, continuation_store: nil}),
+    do: {:ok, nil}
+
+  defp capture_binding(kind, run) when kind in ["parent", "child"] do
+    with :ok <- binding_capabilities(kind, run),
+         {:ok, store} <- store_identity(kind, run),
+         authority <- Map.take(run, @authority_fields),
+         true <- valid_authority?(authority),
+         expiry <- parent_expiry(run),
+         :ok <- unexpired(expiry) do
+      common = %{store: store, authority: authority, expires_at_ms: expiry}
+
+      binding =
+        if kind == "parent",
+          do: common,
+          else:
+            Map.merge(common, %{
+              journal: Alto.Subagents.Continuation.identity(run.subagent_ticket.batch),
+              id: run.subagent_ticket.id,
+              attempt: run.subagent_ticket.attempt,
+              profile: run.child_profile,
+              agent_depth: run.agent_depth,
+              cwd: run.cwd,
+              resume_snapshot: run.resume_snapshot
+            })
+
+      {:ok, binding}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, capture_error(kind)}
+    end
+  end
+
+  defp capture_binding(kind, _), do: {:error, capture_error(kind)}
+
+  defp validate_binding(kind, run, %{binding: nil}) when kind in [nil, "execution"] do
+    if kind != "execution" or run.agent_depth > 0, do: :ok, else: {:error, :checkpoint_mismatch}
+  end
+
+  defp validate_binding(kind, run, data) when kind in ["parent", "child"] do
+    binding = data.binding
+
+    with :ok <- binding_capabilities(kind, run),
+         %{store: _, authority: authority, expires_at_ms: _} <- binding,
+         true <- valid_authority?(authority),
+         true <- Alto.AgentIdentity.valid?(Map.get(data.run, :agent_identity)),
+         {:ok, store} <- store_identity(kind, run),
+         true <- binding.store == store and data.session_id == run.session,
+         :ok <- parent_budget_binding(run, data.budget),
+         :ok <- unexpired(binding.expires_at_ms) do
+      valid =
+        if kind == "parent" do
+          map_size(binding) == 3 and data.run.agent_identity.path == []
+        else
+          ticket = run.subagent_ticket
+
+          Enum.sort(Map.keys(binding)) ==
+            Enum.sort([
+              :store,
+              :authority,
+              :expires_at_ms,
+              :journal,
+              :id,
+              :attempt,
+              :profile,
+              :agent_depth,
+              :cwd,
+              :resume_snapshot
+            ]) and
+            binding.journal == Alto.Subagents.Continuation.identity(ticket.batch) and
+            binding.id == ticket.id and binding.attempt == ticket.attempt and
+            binding.agent_depth == run.agent_depth and
+            length(data.run.agent_identity.path) == binding.agent_depth and
+            binding.profile == run.child_profile and binding.cwd == run.cwd and
+            binding.resume_snapshot == run.resume_snapshot
+        end
+
+      if valid, do: :ok, else: {:error, :checkpoint_mismatch}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :checkpoint_mismatch}
+    end
+  end
+
+  defp validate_binding(_, _, _), do: {:error, :checkpoint_mismatch}
+
+  defp binding_capabilities("parent", run), do: parent_capabilities(run)
+
+  defp binding_capabilities("child", run) do
+    if match?(%Alto.Subagents.Continuation.Ticket{}, Map.get(run, :subagent_ticket)) and
+         run.agent_depth > 0 and is_map(run.child_profile) and
+         not Map.has_key?(run.child_profile, :provider) and
+         is_struct(run.budget.account, Budget.Account),
+       do: :ok,
+       else: {:error, :child_checkpoint_not_supported}
+  end
+
+  defp binding_store("parent", run), do: run.continuation_store
+  defp binding_store("child", run), do: run.subagent_ticket.batch.ledger
+
+  defp store_identity(kind, run) do
+    OperationLog.request(binding_store(kind, run), :identity, 100)
+  catch
+    :exit, _ -> {:error, :parent_checkpoint_store_unavailable}
+  end
+
+  defp checkpoint_authority(run, nil), do: Map.take(run, @authority_fields)
+  defp checkpoint_authority(run, binding), do: narrow_authority(run, binding.authority)
+
+  defp restore_budget(kind, run, data, opts) do
+    with {:ok, budget} <-
+           if(kind == "execution",
+             do: {:ok, run.budget},
+             else: Budget.restore(opts, data.budget)
+           ),
+         budget <-
+           if(data.binding,
+             do: clamp_parent_deadline(budget, data.binding.expires_at_ms),
+             else: budget
+           ),
+         :ok <- Budget.check(budget),
+         do: {:ok, budget}
+  end
+
+  defp valid_pending?("parent", pending), do: valid_parent_pending?(pending)
+  defp valid_pending?("execution", pending), do: pending == :frame
+  defp valid_pending?(_, pending), do: is_map(pending)
+
+  defp capture_error("parent"), do: :invalid_parent_checkpoint
+  defp capture_error("child"), do: :child_checkpoint_not_supported
+  defp capture_error("execution"), do: :async_checkpoint_not_supported
+  defp capture_error(_), do: :invalid_loop_checkpoint
 
   defp restore_run(run, saved, loop_state, budget) do
     restored =
@@ -425,15 +394,6 @@ defmodule Alto.Runner.Checkpoint do
     %{budget | deadline: min(budget.deadline, System.monotonic_time(:millisecond) + remaining)}
   end
 
-  defp valid_parent_binding?(binding, packet) when is_map(binding) do
-    map_size(binding) == 5 and valid_authority?(binding.authority) and
-      binding.budget == packet["budget"] and
-      binding.session_id == packet["session_id"] and
-      binding.expires_at_ms == packet["expires_at_ms"]
-  end
-
-  defp valid_parent_binding?(_, _), do: false
-
   defp parent_budget_binding(run, snapshot) do
     if Budget.Account.identity(run.budget.account) == snapshot["account"],
       do: :ok,
@@ -452,9 +412,9 @@ defmodule Alto.Runner.Checkpoint do
   defp narrow_authority(run, saved),
     do: Map.new(saved, fn {key, value} -> {key, min(Map.fetch!(run, key), value)} end)
 
-  defp valid_parent_saved?(saved, authority) when is_map(saved) do
-    Enum.sort(Map.keys(saved)) == Enum.sort(@parent_fields) and
-      Alto.AgentIdentity.valid?(saved.agent_identity) and saved.agent_identity.path == [] and
+  defp valid_saved?(saved, authority) when is_map(saved) do
+    Enum.sort(Map.keys(saved)) == Enum.sort(@fields) and
+      Alto.AgentIdentity.valid?(saved.agent_identity) and
       is_list(saved.messages_rev) and Enum.all?(saved.messages_rev, &is_map/1) and
       is_integer(saved.transcript_bytes) and saved.transcript_bytes >= 0 and
       saved.transcript_bytes <= authority.max_transcript_bytes and
@@ -468,9 +428,11 @@ defmodule Alto.Runner.Checkpoint do
       valid_pending_calls?(saved.pending_provider_calls) and
       (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
       saved.verdict in [:empty, :completed, :rejected_before_dispatch, :failed_known, :unknown]
+  rescue
+    _ -> false
   end
 
-  defp valid_parent_saved?(_, _), do: false
+  defp valid_saved?(_, _), do: false
 
   defp valid_compaction_state?(saved) do
     is_integer(saved.compaction_count) and saved.compaction_count >= 0
