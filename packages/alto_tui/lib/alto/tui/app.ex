@@ -801,26 +801,10 @@ defmodule Alto.TUI.App do
         state
 
       run ->
-        state = update_run_phase(state, local_id, event)
+        phase = Alto.TUI.Activity.phase(event.type, Map.get(run, :phase, "working"))
+        run = if run[:phase] == "cancelling", do: run, else: Map.put(run, :phase, phase)
+        state = put_in(state.runs[local_id], run)
         do_ingest_event(state, run.task_id, event)
-    end
-  end
-
-  defp update_run_phase(state, local_id, %Event{} = event) do
-    run = Map.fetch!(state.runs, local_id)
-
-    phase = Alto.TUI.Activity.phase(event.type, Map.get(run, :phase, "working"))
-
-    run = if Map.get(run, :phase) == "cancelling", do: run, else: Map.put(run, :phase, phase)
-
-    state = put_in(state.runs[local_id], run)
-
-    case event do
-      %Event{type: :approval_resolved, data: %{request: request}} ->
-        clear_approvals(state, &(&1.request.id == request.id))
-
-      _ ->
-        state
     end
   end
 
@@ -832,6 +816,12 @@ defmodule Alto.TUI.App do
       do: State.close_details_drawer(state),
       else: state
   end
+
+  defp do_ingest_event(state, _task_id, %Event{
+         type: :approval_resolved,
+         data: %{request: request}
+       }),
+       do: clear_approvals(state, &(&1.request.id == request.id))
 
   defp do_ingest_event(state, task_id, %Event{type: :model_reasoning_delta, data: %{text: text}}),
     do: State.append_assistant_delta(state, task_id, text, :reasoning)

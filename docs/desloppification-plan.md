@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,256 lines (15.7% below the original)**. **5,798 lines
+The current count is **34,237 lines (15.8% below the original)**. **5,779 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -60,6 +60,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   of rereading the document for each project; ordering and filtering are preserved.
   Backend fallbacks use native `with` expressions. Codex startup/history replies
   reuse its async-message helper and default-model selection has one implementation.
+  Event ingestion fetches each run once and routes approval resolution through
+  the existing event handlers.
 - Codex UI and delegated agents share bounded model pagination. Provider discovery
   and streaming share Req response handling. Validated Anthropic tool-input maps
   bypass JSON round trips. Provider observers use the existing notification helper.
@@ -94,6 +96,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   Input claims return their reader token directly. Native and delegated readers
   use the same read/acknowledgement operations; the second PID-based API and
   forwarding dispatcher are gone. Restored agents reuse normal registration.
+  Snapshot collection reuses the fallible fold; mailbox validation uses boolean
+  predicates directly instead of a second success/failure control-flow layer.
 
 The “Analyze code duplication” findings were checked against actual callers.
 Extractions that added adapters without removing behavior were rejected.

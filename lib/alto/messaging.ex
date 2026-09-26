@@ -293,28 +293,26 @@ defmodule Alto.Messaging do
 
   defp dispatch({:snapshot, seal}, %{kind: :agent, id: root}, state) do
     saved =
-      Enum.reduce_while(state.entries, {:ok, %{}}, fn {id, entry}, {:ok, acc} ->
+      Alto.Result.reduce(state.entries, %{}, fn {id, entry}, acc ->
         if descendant?(id, root, state.entries) do
-          case if seal,
-                 do: Alto.Input.checkpoint(entry.input),
-                 else: Alto.Input.snapshot(entry.input) do
-            {:ok, input} ->
-              status = if entry.status == :closed and not entry.pause, do: :closed, else: :pending
+          with {:ok, input} <-
+                 if(seal,
+                   do: Alto.Input.checkpoint(entry.input),
+                   else: Alto.Input.snapshot(entry.input)
+                 ) do
+            status = if entry.status == :closed and not entry.pause, do: :closed, else: :pending
 
-              value = %{
-                input: input,
-                status: status,
-                label: entry.label,
-                parent: entry.parent
-              }
+            value = %{
+              input: input,
+              status: status,
+              label: entry.label,
+              parent: entry.parent
+            }
 
-              {:cont, {:ok, Map.put(acc, id, value)}}
-
-            error ->
-              {:halt, error}
+            {:ok, Map.put(acc, id, value)}
           end
         else
-          {:cont, {:ok, acc}}
+          {:ok, acc}
         end
       end)
 

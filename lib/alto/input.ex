@@ -244,40 +244,33 @@ defmodule Alto.Input do
 
   @doc false
   def valid_snapshot?(saved) when is_map(saved) do
-    with true <- map_size(saved) == 7,
-         true <- is_binary(saved.identity) and byte_size(saved.identity) in 1..128,
-         true <- is_integer(saved.max_messages) and saved.max_messages in 1..1024,
-         true <- is_integer(saved.max_bytes) and saved.max_bytes in 1..1_000_000,
-         true <- is_list(saved.entries) and length(saved.entries) <= saved.max_messages,
-         true <- is_map(saved.receipts) and map_size(saved.receipts) <= 4096,
-         true <- is_map(saved.keys) and map_size(saved.keys) <= 4096,
-         true <-
-           Enum.all?(saved.receipts, fn {id, receipt} ->
-             is_binary(id) and is_map(receipt) and receipt.message_id == id and
-               receipt.status in [:queued, :consumed, :taken, :delivered, :unknown]
-           end),
-         true <-
-           Enum.all?(saved.keys, fn
-             {{sender, key}, {hash, id}} ->
-               is_map(sender) and is_binary(key) and
-                 is_binary(hash) and byte_size(hash) == 32 and Map.has_key?(saved.receipts, id)
+    map_size(saved) == 7 and
+      is_binary(saved.identity) and byte_size(saved.identity) in 1..128 and
+      is_integer(saved.max_messages) and saved.max_messages in 1..1024 and
+      is_integer(saved.max_bytes) and saved.max_bytes in 1..1_000_000 and
+      is_list(saved.entries) and length(saved.entries) <= saved.max_messages and
+      is_map(saved.receipts) and map_size(saved.receipts) <= 4096 and
+      is_map(saved.keys) and map_size(saved.keys) <= 4096 and
+      Enum.all?(saved.receipts, fn {id, receipt} ->
+        is_binary(id) and is_map(receipt) and receipt.message_id == id and
+          receipt.status in [:queued, :consumed, :taken, :delivered, :unknown]
+      end) and
+      Enum.all?(saved.keys, fn
+        {{sender, key}, {hash, id}} ->
+          is_map(sender) and is_binary(key) and
+            is_binary(hash) and byte_size(hash) == 32 and Map.has_key?(saved.receipts, id)
 
-             _ ->
-               false
-           end),
-         true <-
-           Enum.all?(saved.entries, fn e ->
-             is_map(e) and is_binary(e.message_id) and
-               Alto.Messaging.valid_message?(e) and valid_sender?(e.sender) and
-               match?(%{status: :queued}, saved.receipts[e.message_id])
-           end),
-         true <- length(Enum.uniq_by(saved.entries, & &1.message_id)) == length(saved.entries),
-         true <- saved.bytes == Enum.sum(Enum.map(saved.entries, &entry_bytes/1)),
-         true <- saved.bytes <= saved.max_bytes do
-      true
-    else
-      _ -> false
-    end
+        _ ->
+          false
+      end) and
+      Enum.all?(saved.entries, fn e ->
+        is_map(e) and is_binary(e.message_id) and
+          Alto.Messaging.valid_message?(e) and valid_sender?(e.sender) and
+          match?(%{status: :queued}, saved.receipts[e.message_id])
+      end) and
+      length(Enum.uniq_by(saved.entries, & &1.message_id)) == length(saved.entries) and
+      saved.bytes == Enum.sum(Enum.map(saved.entries, &entry_bytes/1)) and
+      saved.bytes <= saved.max_bytes
   rescue
     _ -> false
   end
