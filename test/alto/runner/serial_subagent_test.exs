@@ -288,7 +288,7 @@ defmodule Alto.Runner.SerialSubagentTest do
                session_dir: dir
              )
 
-    assert {:failed, %{id: "sub-1", error: {:loop_process_failed, _}}} = result.output
+    assert {:failed, %{id: "sub-1", error: {:participant_failed, _}}} = result.output
   end
 
   test "parent cancellation tears the child down", %{dir: dir} do

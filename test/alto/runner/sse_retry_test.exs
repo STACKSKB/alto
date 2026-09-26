@@ -33,7 +33,7 @@ defmodule Alto.Runner.SSERetryTest do
   test "retries observed provider_unavailable inside HTTP 200 SSE with the identical request" do
     error = unavailable()
     {outcome, count, request} = run_stream([sse(%{"error" => error})])
-    assert {:ok, {:ok, %{message: "done"}}} = outcome
+    assert {:ok, %{message: "done"}} = outcome
     assert count == 2
     assert_receive {:attempt, ^request}
     assert_receive {:attempt, ^request}
@@ -61,13 +61,13 @@ defmodule Alto.Runner.SSERetryTest do
           %{"code" => 402}
         ] do
       {outcome, count, _} = run_stream([sse(%{"error" => error})])
-      assert outcome == {:ok, {:error, {:provider_error, error}}}
+      assert outcome == {:error, {:provider_error, error}}
       assert count == 1
       refute_receive {:event, %Event{type: :model_retry}}
     end
 
     {outcome, count, _} = run_stream(["data: not-json\n\n"])
-    assert {:ok, {:error, {:invalid_stream_json, _}}} = outcome
+    assert {:error, {:invalid_stream_json, _}} = outcome
     assert count == 1
     refute_receive {:event, %Event{type: :model_retry}}
   end
@@ -80,7 +80,7 @@ defmodule Alto.Runner.SSERetryTest do
       error = sse(%{"error" => failure})
       chunks = if combined, do: [delta <> error], else: [delta, error]
       {outcome, count, _} = run_stream(chunks)
-      assert outcome == {:ok, {:error, {:provider_error, failure}}}
+      assert outcome == {:error, {:provider_error, failure}}
       assert count == 1
       assert_receive {:event, %Event{data: %{text: "partial"}}}
       refute_receive {:event, %Event{type: :model_retry}}
@@ -90,14 +90,14 @@ defmodule Alto.Runner.SSERetryTest do
 
   test "retry budget remains opt-in and bounded" do
     {outcome, count, _} = run_stream([sse(%{"error" => unavailable()})], 0)
-    assert outcome == {:ok, {:error, {:provider_error, unavailable()}}}
+    assert outcome == {:error, {:provider_error, unavailable()}}
     assert count == 1
     refute_receive {:event, %Event{type: :model_retry}}
   end
 
   test "retries an empty streamed idle timeout with the identical request" do
     {outcome, count, request} = run_stream([sse(%{"error" => idle_timeout()})])
-    assert {:ok, {:ok, %{message: "done"}}} = outcome
+    assert {:ok, %{message: "done"}} = outcome
     assert count == 2
     assert_receive {:attempt, ^request}
     assert_receive {:attempt, ^request}
@@ -107,7 +107,7 @@ defmodule Alto.Runner.SSERetryTest do
   test "streamed timeout retries are opt-in and stop at the configured limit" do
     for retries <- [0, 2] do
       {outcome, count, _} = run_stream([sse(%{"error" => idle_timeout()})], retries, true)
-      assert outcome == {:ok, {:error, {:provider_error, idle_timeout()}}}
+      assert outcome == {:error, {:provider_error, idle_timeout()}}
       assert count == retries + 1
     end
   end

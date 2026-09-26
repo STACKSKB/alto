@@ -471,15 +471,15 @@ defmodule Alto.Runner.Execution.Children do
            Budget.timeout(run.budget, 30_000),
            run.cancel_ref
          ) do
-      {:ok, {:ok, provider}} ->
+      {:ok, provider} ->
         Alto.Runner.Execution.Setup.normalize_provider(provider)
 
-      {:ok, {:error, _} = error} ->
-        error
-
-      {:cancelled, reason} ->
+      {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})
         {:error, {:cancelled, reason}}
+
+      {:error, _} = error ->
+        error
 
       _ ->
         {:error, :child_provider_resolution_failed}
@@ -630,15 +630,11 @@ defmodule Alto.Runner.Execution.Children do
   defp canonical_tool(spec), do: spec
 
   defp admit(run, agents) do
-    case Alto.Runner.Execution.Call.run(
-           fn -> ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}) end,
-           Budget.timeout(run.budget, run.tool_timeout),
-           run.cancel_ref
-         ) do
-      {:ok, result} -> result
-      {:cancelled, reason} -> {:cancelled, reason}
-      {:error, reason} -> {:error, {:subagent_policy_failed, reason}}
-    end
+    Alto.Runner.Execution.Call.run(
+      fn -> ChildPolicy.admit(run.spec.subagents, agents, %{depth: run.agent_depth}) end,
+      Budget.timeout(run.budget, run.tool_timeout),
+      run.cancel_ref
+    )
   end
 
   def validate_batch(%{agents: agents}, run) when is_list(agents) do
@@ -685,15 +681,12 @@ defmodule Alto.Runner.Execution.Children do
 
   defp durable_call(fun, run) do
     case Alto.Runner.Execution.Call.run(fun, Budget.remaining(run.budget), run.cancel_ref) do
-      {:ok, value} ->
-        value
-
-      {:error, reason} ->
-        {:error, {:subagent_journal_outcome_unknown, reason}}
-
-      {:cancelled, reason} ->
+      {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})
         {:error, {:cancelled, reason}}
+
+      result ->
+        result
     end
   end
 end

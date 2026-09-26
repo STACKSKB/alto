@@ -23,17 +23,11 @@ defmodule Alto.Runner.Execution.Tool do
         )
 
       case outcome do
-        {:ok, {:ok, prepared, details}} ->
+        {:ok, prepared, details} ->
           bound_details(prepared, details, caps.max_approval_details_bytes)
 
-        {:ok, {:error, reason}} ->
-          {:error, reason}
-
-        {:error, reason} ->
-          {:error, {:tool_prepare_process_failed, reason}}
-
-        {:cancelled, reason} ->
-          {:cancelled, reason}
+        {:error, _} = error ->
+          error
       end
     else
       {:ok, arguments, %{}}
@@ -69,12 +63,11 @@ defmodule Alto.Runner.Execution.Tool do
 
     decision =
       case outcome do
-        {:ok, :approve} -> :ok
-        {:ok, :suspend} -> {:suspend, request}
-        {:ok, {:deny, reason}} -> {:deny, reason}
-        {:ok, other} -> {:error, {:invalid_decision, other}}
-        {:error, reason} -> {:error, {:policy_process_failed, reason}}
-        {:cancelled, reason} -> {:cancelled, reason}
+        :approve -> :ok
+        :suspend -> {:suspend, request}
+        {:deny, reason} -> {:deny, reason}
+        {:error, _} = error -> error
+        other -> {:error, {:invalid_decision, other}}
       end
 
     Alto.Events.notify(
@@ -128,6 +121,6 @@ defmodule Alto.Runner.Execution.Tool do
   defp decision_name({:suspend, _}), do: :suspended
   defp decision_name(:ok), do: :approved
   defp decision_name({:deny, reason}), do: {:denied, reason}
+  defp decision_name({:error, {:cancelled, reason}}), do: {:cancelled, reason}
   defp decision_name({:error, reason}), do: {:error, reason}
-  defp decision_name({:cancelled, reason}), do: {:cancelled, reason}
 end

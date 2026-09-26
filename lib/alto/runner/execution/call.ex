@@ -11,8 +11,13 @@ defmodule Alto.Runner.Execution.Call do
     end)
   end
 
-  @doc "Run a participant under the task supervisor with a deadline and cancellation."
-  def run(_fun, timeout, _cancel_ref) when timeout <= 0, do: {:error, :timeout}
+  @doc """
+  Return the participant's value under a deadline and cancellation boundary.
+  Infrastructure failures return `{:error, {:participant_failed, reason}}`;
+  cancellation returns `{:error, {:cancelled, reason}}`.
+  """
+  def run(_fun, timeout, _cancel_ref) when timeout <= 0,
+    do: {:error, {:participant_failed, :timeout}}
 
   def run(fun, timeout, cancel_ref) when is_function(fun, 0) do
     task = start(fun)
@@ -32,18 +37,18 @@ defmodule Alto.Runner.Execution.Call do
     receive do
       {^ref, value} ->
         Process.demonitor(ref, [:flush])
-        {:ok, value}
+        value
 
       {:DOWN, ^ref, :process, _, reason} ->
-        {:error, reason}
+        {:error, {:participant_failed, reason}}
 
       {:alto_cancel, ^cancel_ref, reason} when not is_nil(cancel_ref) ->
         Task.shutdown(task, :brutal_kill)
-        {:cancelled, reason}
+        {:error, {:cancelled, reason}}
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
         Task.shutdown(task, :brutal_kill)
-        {:error, :timeout}
+        {:error, {:participant_failed, :timeout}}
     end
   end
 

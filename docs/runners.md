@@ -86,6 +86,12 @@ Execution components consume the fields required by each operation.
 `Execution.Setup.open/2` assembles the run map; independent callers can supply
 the required capabilities directly. Components do not call Serial.
 
+`Execution.Call.run/3` returns the callback's value directly. Worker crashes and
+timeouts return `{:error, {:participant_failed, reason}}`; cancellation returns
+`{:error, {:cancelled, reason}}`. Callers retain domain errors and distinguish
+uncertain mutations at the dispatch boundary. `Call.cancellation/1` is a polling
+check and returns `:continue` or `{:cancelled, reason}`.
+
 Shared hosts use the same versioned checkpoint continuation format. A custom
 host using a different interpreter must define its own compatible continuation
 contract or reject checkpoint input; it must never silently start over.

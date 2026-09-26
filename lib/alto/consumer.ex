@@ -199,14 +199,14 @@ defmodule Alto.Consumer do
       )
 
     case outcome do
-      {:ok, verdict} ->
-        apply_verdict(op, claim_id, verdict, state)
-
-      {:error, :timeout} ->
+      {:error, {:participant_failed, :timeout}} ->
         park(op, claim_id, :handler_timeout, %{timeout_ms: state.handle_timeout}, state)
 
-      {:error, reason} ->
+      {:error, {:participant_failed, reason}} ->
         park(op, claim_id, :handler_crashed, %{error: inspect(reason, limit: 3)}, state)
+
+      verdict ->
+        apply_verdict(op, claim_id, verdict, state)
     end
   end
 

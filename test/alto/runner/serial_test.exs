@@ -597,7 +597,7 @@ defmodule Alto.Runner.SerialTest do
     assert Enum.any?(
              result.events,
              &(&1.type == :tool_failed and
-                 &1.data[:error] == {:tool_prepare_process_failed, :timeout})
+                 &1.data[:error] == {:participant_failed, :timeout})
            )
 
     refute_receive {:approval_decision, _request}

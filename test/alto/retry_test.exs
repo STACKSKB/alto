@@ -34,7 +34,7 @@ defmodule Alto.RetryTest do
         )
 
       if stream do
-        assert {:error, {:model_request_failed, :host_transient}, _} = result
+        assert {:error, :host_transient, _} = result
         refute_receive :retry_decided
         assert Agent.get(counter, & &1) == 1
       else

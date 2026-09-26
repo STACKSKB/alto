@@ -158,7 +158,7 @@ defmodule Alto.Runner.Execution.Transcript do
             end
 
             result = module.compact(input, model, opts)
-            {result, Agent.get(accounting, & &1, :infinity)}
+            {:compacted, result, Agent.get(accounting, & &1, :infinity)}
           after
             if Process.alive?(accounting), do: Agent.stop(accounting)
           end
@@ -168,7 +168,7 @@ defmodule Alto.Runner.Execution.Transcript do
       )
 
     case outcome do
-      {:ok, {result, {requests, usage}}} ->
+      {:compacted, result, {requests, usage}} ->
         run = %{
           run
           | usage: Usage.merge(run.usage, usage),
@@ -181,11 +181,11 @@ defmodule Alto.Runner.Execution.Transcript do
           other -> record_compact_failed(run, {:compaction_failed, other})
         end
 
-      {:cancelled, reason} ->
-        {:error, {:cancelled, reason}, run}
+      {:error, {:cancelled, _} = reason} ->
+        {:error, reason, run}
 
-      other ->
-        record_compact_failed(run, {:compaction_failed, other})
+      {:error, reason} ->
+        record_compact_failed(run, reason)
     end
   end
 

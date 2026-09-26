@@ -186,7 +186,7 @@ defmodule Alto.Runner.CheckpointTest do
       |> Keyword.put(:loop, Alto.loop(HangingLoop, steps: ["guarded"]))
       |> Keyword.put(:run_timeout, 100)
 
-    assert {:error, {:checkpoint_process_failed, :timeout}, _} = Serial.run("{}", opts)
+    assert {:error, {:participant_failed, :timeout}, _} = Serial.run("{}", opts)
     refute File.exists?(Path.join(dir, "guarded"))
   end
 

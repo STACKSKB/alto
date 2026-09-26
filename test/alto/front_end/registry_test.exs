@@ -425,14 +425,14 @@ defmodule Alto.FrontEnd.RegistryTest do
                     {:event, ^run_id, _seq,
                      %Event{
                        type: :tool_failed,
-                       data: %{error: {:approval_failed, {:policy_process_failed, :timeout}}}
+                       data: %{error: {:approval_failed, {:participant_failed, :timeout}}}
                      }}},
                    @receive_timeout
 
     # The host still emits the resolved notification for the timed-out wait.
     assert_receive {:alto_notification,
                     {:approval_resolved, ^run_id, ^request,
-                     {:error, {:policy_process_failed, :timeout}}}},
+                     {:error, {:participant_failed, :timeout}}}},
                    @receive_timeout
 
     assert_receive {:alto_notification, {:result, ^run_id, :ok, "finished", _}}, @receive_timeout

@@ -84,7 +84,7 @@ defmodule Alto.PolicyCompositionTest do
   test "child policy resolution respects the callback deadline" do
     loop = Alto.loop(ParentLoop, subagents: {BlockingChildren, owner: self(), block: :limits})
 
-    assert {:error, {:subagent_policy_failed, :timeout}, _} =
+    assert {:error, {:participant_failed, :timeout}, _} =
              Alto.run(:batch, provider: nil, loop: loop, tool_timeout: 50)
 
     assert_receive {:limits_called, worker}

@@ -74,7 +74,7 @@ defmodule Alto.Runner.ReleaseContractsTest do
   end
 
   test "a blocked policy callback cannot outlive the run deadline" do
-    assert {:error, {:loop_process_failed, :timeout}, _} =
+    assert {:error, {:participant_failed, :timeout}, _} =
              Alto.run(%{}, loop: Alto.loop(Stuck), run_timeout: 30)
   end
 

@@ -153,15 +153,11 @@ defmodule Alto.Runner.Execution.Setup do
     do: Alto.Subagents.Policy.resolve(nil)
 
   defp resolve_child_policy(policy, budget, timeout, cancel_ref) do
-    case Alto.Runner.Execution.Call.run(
-           fn -> Alto.Subagents.Policy.resolve(policy) end,
-           Budget.timeout(budget, timeout),
-           cancel_ref
-         ) do
-      {:ok, result} -> result
-      {:cancelled, reason} -> {:error, {:cancelled, reason}}
-      {:error, reason} -> {:error, {:subagent_policy_failed, reason}}
-    end
+    Alto.Runner.Execution.Call.run(
+      fn -> Alto.Subagents.Policy.resolve(policy) end,
+      Budget.timeout(budget, timeout),
+      cancel_ref
+    )
   end
 
   defp resolve_budget(opts) do

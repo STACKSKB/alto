@@ -95,10 +95,9 @@ defmodule Alto.Runner.Execution.History do
 
   defp storage_call(run, failure, fun) do
     case Call.run(fun, Budget.remaining(run.budget), run.cancel_ref) do
-      {:ok, {:ok, value}} -> {:ok, value}
-      {:ok, {:error, reason}} -> {:error, {failure, reason}, run}
+      {:ok, _} = result -> result
+      {:error, {:cancelled, _} = reason} -> {:error, reason, run}
       {:error, reason} -> {:error, {failure, reason}, run}
-      {:cancelled, reason} -> {:error, {:cancelled, reason}, run}
     end
   end
 

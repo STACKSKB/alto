@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **33,557 lines**, a **17.5% reduction**, with **5,099 lines remaining**.
+Current: **33,490 lines**, a **17.6% reduction**, with **5,032 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,13 +53,20 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-The latest cleanup removes **65 net production lines**: 54 implementation lines
+The latest cleanup removes **67 net production lines** across twelve modules:
+69 implementation lines removed, with two net documentation/typespec lines added.
+Supervised calls return callback values directly and share failure/cancellation
+tags, removing repeated unwrapping across execution, consumers and front ends.
+Cancellation still preserves completed siblings and bypasses false tool-result
+commitments; mutation uncertainty remains classified at dispatch boundaries.
+
+The preceding cleanup removed 65 net production lines: 54 implementation lines
 and 11 lines from the now string-keyed snapshot typespec. Conversation storage,
 revision reads, forks and resume now share the same JSON-shaped record instead
 of carrying paired storage/public representations. Provider profiles normalize
 structs, maps and keywords through one path. The conversation format is version
 4; old formats are rejected without migration.
-The preceding tool-contract pass removed 106 production lines. Input ownership
+The tool-contract pass removed 106 production lines. Input ownership
 and ledger transition composition removed 26 and 77 lines in preceding passes.
 The separately requested worktree feature added 426 production lines, included
 in the current total without resetting the baseline.
@@ -89,8 +96,10 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current code passes **1,087 core tests** and **144 TUI tests** with application
-modules preloaded. The canonical-record change preserves coverage for forks,
+The current code passes **1,089 core tests** and **144 TUI tests** with application
+modules preloaded. The direct-call consolidation retains retry, cancellation,
+uncertain-outcome and successful-sibling coverage, adding reducer crash and
+cancellation regressions. The canonical-record change preserves coverage for forks,
 resume, crash recovery, frozen dispatches, bounds and provider normalization.
 Its byte-accounting regression checks the stored bytes and immutable revision;
 corruption cases cover missing dispatch/counter fields and mismatched fences.

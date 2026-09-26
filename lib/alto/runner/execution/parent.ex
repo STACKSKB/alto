@@ -15,15 +15,11 @@ defmodule Alto.Runner.Execution.Parent do
     timeout = Keyword.get(opts, :run_timeout, 30_000)
 
     if is_integer(timeout) and timeout > 0 do
-      case Call.run(
-             fn -> resolve_packet(opts, identity) end,
-             min(timeout, 30_000),
-             opts[:cancel_ref]
-           ) do
-        {:ok, value} -> value
-        {:cancelled, reason} -> {:error, {:cancelled, reason}}
-        {:error, reason} -> {:error, {:continuation_store_unavailable, reason}}
-      end
+      Call.run(
+        fn -> resolve_packet(opts, identity) end,
+        min(timeout, 30_000),
+        opts[:cancel_ref]
+      )
     else
       {:error, {:invalid_option, :run_timeout, timeout}}
     end
@@ -70,7 +66,9 @@ defmodule Alto.Runner.Execution.Parent do
               Children.merge_child_summary(acc, Children.child_summary(id, outcome))
             end)
 
-          {kind, reason, state}
+          if kind == :cancelled,
+            do: {:error, {:cancelled, reason}, state},
+            else: {kind, reason, state}
 
         {:error, {:subagent_journal_failed, {:child_pending, _, _}}, _} ->
           join(cell, run, rest, terminal, complete)
@@ -80,7 +78,6 @@ defmodule Alto.Runner.Execution.Parent do
       end
     else
       false -> {:error, :parent_continuation_not_supported, run}
-      {:cancelled, reason} -> {:cancelled, reason, run}
       {:error, reason} -> {:error, reason, run}
       {:error, reason, failed} -> {:error, reason, failed}
     end
@@ -112,7 +109,7 @@ defmodule Alto.Runner.Execution.Parent do
             join(cell, restored, frame.remaining, frame.terminal, complete)
           else
             false -> {:error, :parent_continuation_mismatch, restored}
-            {:cancelled, reason} -> {:cancelled, reason, restored}
+            {:cancelled, reason} -> {:error, {:cancelled, reason}, restored}
             {:error, reason} -> {:error, reason, restored}
           end
 
@@ -172,10 +169,6 @@ defmodule Alto.Runner.Execution.Parent do
   defp parent_packet(_), do: {:error, :invalid_parent_continuation}
 
   defp call(fun, run) do
-    case Call.run(fun, Budget.remaining(run.budget), run.cancel_ref) do
-      {:ok, value} -> value
-      {:cancelled, reason} -> {:error, {:cancelled, reason}}
-      {:error, reason} -> {:error, {:continuation_store_outcome_unknown, reason}}
-    end
+    Call.run(fun, Budget.remaining(run.budget), run.cancel_ref)
   end
 end

@@ -136,8 +136,7 @@ defmodule Alto.Runner.Execution do
                 {nil, nil} ->
                   case call_policy(fn -> Runtime.init(run.spec, task) end, run) do
                     {:ok, transition} -> drive(transition, run, [])
-                    {:cancelled, reason} -> cancelled(reason, run)
-                    {:error, reason} -> {:error, reason, result(run, nil, :error)}
+                    {:error, reason} -> abort(run, reason)
                   end
 
                 {nil, {packet, decision}} ->
@@ -336,16 +335,7 @@ defmodule Alto.Runner.Execution do
   defp reserve_effect(%{budget: %{account: nil}} = run), do: Budget.take(run.budget)
 
   defp reserve_effect(run) do
-    case Call.run(
-           fn -> Budget.take(run.budget) end,
-           Budget.remaining(run.budget),
-           run.cancel_ref
-         ) do
-      {:ok, result} -> result
-      {:cancelled, reason} -> {:cancelled, reason, run}
-      {:error, :timeout} -> {:error, :run_timeout}
-      {:error, reason} -> {:error, {:budget_account_unavailable, reason}}
-    end
+    Call.run(fn -> Budget.take(run.budget) end, Budget.remaining(run.budget), run.cancel_ref)
   end
 
   defp finish_effect(interpreted, rest, run, terminal) do
@@ -358,7 +348,7 @@ defmodule Alto.Runner.Execution do
         end)
 
       {:error, reason} ->
-        {:done, {:error, reason, result(run, nil, :error)}}
+        {:done, abort(run, reason)}
 
       {:ok, next_run} ->
         execute(rest, next_run, terminal)
@@ -369,14 +359,8 @@ defmodule Alto.Runner.Execution do
       {:events, events, next_run} ->
         dispatch_batch(events, next_run, [], rest, terminal)
 
-      {:error, {:cancelled, reason}, next_run} ->
-        {:done, cancelled(reason, next_run)}
-
       {:error, reason, next_run} ->
-        {:done, {:error, reason, result(next_run, nil, :error)}}
-
-      {:cancelled, reason, next_run} ->
-        {:done, cancelled(reason, next_run)}
+        {:done, abort(next_run, reason)}
     end
   end
 
@@ -482,13 +466,8 @@ defmodule Alto.Runner.Execution do
          do: :ok
   end
 
-  defp checkpoint_call(fun, run) do
-    case Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
-      {:ok, value} -> value
-      {:error, reason} -> {:error, {:checkpoint_process_failed, reason}}
-      {:cancelled, reason} -> {:error, {:cancelled, reason}}
-    end
-  end
+  defp checkpoint_call(fun, run),
+    do: Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref)
 
   defp complete_retained_batch(results, journal, run, rest, terminal) do
     # Joining retained work cannot trigger an ungranted provider compaction.
@@ -505,9 +484,8 @@ defmodule Alto.Runner.Execution do
   end
 
   defp parent_outcome({:error, reason, run}),
-    do: ungranted_parent({:error, reason, result(run, nil, :error)})
+    do: ungranted_parent(abort(run, reason))
 
-  defp parent_outcome({:cancelled, reason, run}), do: ungranted_parent(cancelled(reason, run))
   defp parent_outcome({:done, {:error, _, _} = outcome}), do: ungranted_parent(outcome)
 
   defp parent_outcome({:suspended, reason, identity, run}) do
@@ -527,10 +505,9 @@ defmodule Alto.Runner.Execution do
 
   defp call_policy(fun, run) do
     case Call.run(fun, Budget.timeout(run.budget, 30_000), run.cancel_ref) do
-      {:ok, %Transition{} = transition} -> {:ok, transition}
-      {:ok, other} -> {:error, {:invalid_transition, other}}
-      {:error, reason} -> {:error, {:loop_process_failed, reason}}
-      {:cancelled, reason} -> {:cancelled, reason}
+      %Transition{} = transition -> {:ok, transition}
+      {:error, _} = error -> error
+      other -> {:error, {:invalid_transition, other}}
     end
   end
 
@@ -583,8 +560,8 @@ defmodule Alto.Runner.Execution do
          {:ok, results, journal, run} <- spawn_agents(specs, concurrency, run) do
       batch_completed(results, run, journal)
     else
+      {:error, {:cancelled, _} = reason} -> {:error, reason, run}
       {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
-      {:cancelled, reason} -> {:cancelled, reason, run}
       other -> other
     end
   end
@@ -601,13 +578,13 @@ defmodule Alto.Runner.Execution do
 
       case status do
         :ok -> {:ok, results, journal, run}
-        {:cancelled, reason} -> {:cancelled, reason, run}
+        {:cancelled, reason} -> {:error, {:cancelled, reason}, run}
         {:error, reason} -> {:error, reason, run}
       end
     else
       {:error, reason, run} -> {:error, reason, run}
+      {:error, {:cancelled, _} = reason} -> {:error, reason, run}
       {:error, reason} -> {:error, {:invalid_spawn_agents, reason}, run}
-      {:cancelled, reason} -> {:cancelled, reason, run}
     end
   end
 
@@ -674,21 +651,15 @@ defmodule Alto.Runner.Execution do
       run = %{run | model_requests: run.model_requests + 1}
 
       case outcome do
-        {:ok, {:ok, completion}} ->
+        {:ok, completion} ->
           usage = Usage.normalize(if(is_map(completion), do: Map.get(completion, :usage)))
 
           observation = Alto.Context.Observation.new(request, usage.input_tokens)
 
           complete_model(Map.put(run, :context_observation, observation), completion)
 
-        {:ok, {:error, reason}} ->
-          {:error, {:model_request_failed, reason}, run}
-
         {:error, reason} ->
-          {:error, {:model_process_failed, reason}, run}
-
-        {:cancelled, reason} ->
-          {:cancelled, reason, run}
+          {:error, reason, run}
       end
     end
   end
@@ -855,18 +826,18 @@ defmodule Alto.Runner.Execution do
           {:deny, reason} ->
             commit_tool_outcome(job, {:rejected_before_dispatch, {:approval_denied, reason}}, run)
 
+          {:error, {:cancelled, _} = reason} ->
+            {:error, reason, run}
+
           {:error, reason} ->
             commit_tool_outcome(job, {:rejected_before_dispatch, {:approval_failed, reason}}, run)
-
-          {:cancelled, reason} ->
-            {:cancelled, reason, run}
         end
 
       {:error, reason, job} ->
         commit_tool_outcome(job, {:rejected_before_dispatch, reason}, run)
 
-      {:cancelled, reason} ->
-        {:cancelled, reason, run}
+      {:error, reason} ->
+        {:error, reason, run}
     end
   end
 
@@ -887,7 +858,7 @@ defmodule Alto.Runner.Execution do
          summary: tool_summary(run, job.name, arguments)
        }), details}
     else
-      {:cancelled, reason} -> {:cancelled, reason}
+      {:error, {:cancelled, _}} = error -> error
       {:error, reason} -> {:error, reason, job}
     end
   end
@@ -991,8 +962,8 @@ defmodule Alto.Runner.Execution do
           origin = tool_origin(run, id, name)
 
           case prepare_tool_job(call, :json, origin, op_id, run) do
-            {:cancelled, reason} ->
-              {:halt, {:error, {:cancelled, reason}, run}}
+            {:error, reason} ->
+              {:halt, {:error, reason, run}}
 
             {:ok, job, _details} ->
               {:cont, {:ok, [{job, :ready} | jobs], run}}
@@ -1003,9 +974,6 @@ defmodule Alto.Runner.Execution do
 
         {:error, reason} ->
           {:halt, {:error, reason, run}}
-
-        {:cancelled, reason, next} ->
-          {:halt, {:error, {:cancelled, reason}, next}}
       end
     end)
   end
@@ -1026,11 +994,8 @@ defmodule Alto.Runner.Execution do
           terminal -> execute(effects ++ transition.effects, next, terminal)
         end
 
-      {:cancelled, reason} ->
-        {:done, cancelled(reason, run)}
-
       {:error, reason} ->
-        {:done, {:error, reason, result(run, nil, :error)}}
+        {:done, abort(run, reason)}
     end
   end
 
@@ -1040,7 +1005,7 @@ defmodule Alto.Runner.Execution do
       Enum.each(jobs, &notify_tool_started(&1, run))
       {:ok, run}
     else
-      {:cancelled, reason} -> {:cancelled, reason, run}
+      {:cancelled, reason} -> {:error, {:cancelled, reason}, run}
       error -> error
     end
   end
@@ -1065,8 +1030,8 @@ defmodule Alto.Runner.Execution do
              do: {:ok, Children.with_journal(%{results: results}, journal), next}
       end)
     else
+      {:error, {:cancelled, _} = reason} -> {:error, reason, run}
       {:error, reason} -> commit_tool_outcome(job, {:rejected_before_dispatch, reason}, run)
-      other -> other
     end
   end
 
@@ -1086,14 +1051,14 @@ defmodule Alto.Runner.Execution do
 
           commit_tool_outcome(job, outcome, next)
 
+        {:error, {:cancelled, _}, _} = cancelled ->
+          cancelled
+
         {:error, reason, next} ->
           outcome =
             if error_class == :known, do: {:failed_known, reason}, else: {:unknown, reason}
 
           commit_tool_outcome(job, outcome, next)
-
-        {:cancelled, reason, next} ->
-          {:cancelled, reason, next}
       end
     end
   end
@@ -1112,7 +1077,6 @@ defmodule Alto.Runner.Execution do
     else
       false -> {:error, :async_continuations_unsupported, run}
       {:error, reason} -> {:error, reason, run}
-      {:cancelled, reason} -> {:cancelled, reason, run}
     end
   end
 
@@ -1125,13 +1089,13 @@ defmodule Alto.Runner.Execution do
     outcome = wait_agents(args.agents, deadline, run)
 
     case outcome do
-      {:cancelled, _, _} ->
+      {:error, {:cancelled, _}, _} ->
         outcome
 
       {_, _, next} ->
         case resume_agent_slot(next) do
           :ok -> outcome
-          {:cancelled, reason} -> {:cancelled, reason, next}
+          {:cancelled, reason} -> {:error, {:cancelled, reason}, next}
           {:error, reason} -> {:error, reason, next}
         end
     end
@@ -1140,7 +1104,7 @@ defmodule Alto.Runner.Execution do
   defp wait_agents(ids, deadline, run) do
     case {check(run), Alto.Runner.Agents.snapshot(run.async_agents, ids)} do
       {{:cancelled, reason}, _} ->
-        {:cancelled, reason, run}
+        {:error, {:cancelled, reason}, run}
 
       {{:error, reason}, _} ->
         {:error, reason, run}
@@ -1360,10 +1324,10 @@ defmodule Alto.Runner.Execution do
 
   defp present(run, callback, fallback, limit) do
     case Call.run(callback, Budget.timeout(run.budget, run.tool_timeout), run.cancel_ref) do
-      {:ok, text} when is_binary(text) ->
+      text when is_binary(text) ->
         Alto.Text.prefix(text, limit)
 
-      {:cancelled, reason} ->
+      {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})
         fallback
 
@@ -1403,16 +1367,11 @@ defmodule Alto.Runner.Execution do
       timeout = Keyword.get(opts, :run_timeout, 900_000)
 
       if is_integer(timeout) and timeout > 0 do
-        case Call.run(
-               fn -> Alto.Runner.Execution.Setup.open(task, opts) end,
-               timeout,
-               Keyword.get(opts, :cancel_ref)
-             ) do
-          {:ok, result} -> result
-          {:cancelled, reason} -> {:error, {:cancelled, reason}}
-          {:error, :timeout} -> {:error, :run_timeout}
-          {:error, reason} -> {:error, {:budget_account_unavailable, reason}}
-        end
+        Call.run(
+          fn -> Alto.Runner.Execution.Setup.open(task, opts) end,
+          timeout,
+          Keyword.get(opts, :cancel_ref)
+        )
       else
         {:error, {:invalid_option, :run_timeout, timeout}}
       end

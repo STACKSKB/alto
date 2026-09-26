@@ -199,8 +199,9 @@ defmodule Alto.Runner.AgentMessagingTest do
              "status" => "error",
              "error" => %{
                "$tuple" => [
-                 "model_request_failed",
-                 %{"$tuple" => ["http_error", 402, %{"message" => "payment required"}]}
+                 "http_error",
+                 402,
+                 %{"message" => "payment required"}
                ]
              }
            } = failed
@@ -309,7 +310,7 @@ defmodule Alto.Runner.AgentMessagingTest do
     assert_receive {:request, "root", _, root}, @timeout
     tool(root, "start_agents", %{"agents" => [agent("a"), agent("b")]})
 
-    assert {:error, {:model_request_failed, {:model_request_limit, 1}}, result} =
+    assert {:error, {:model_request_limit, 1}, result} =
              Alto.await(handle)
 
     assert result.usage.requests == 1

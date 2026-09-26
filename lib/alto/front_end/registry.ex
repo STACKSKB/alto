@@ -119,8 +119,8 @@ defmodule Alto.FrontEnd.Registry do
              timeout,
              nil
            ) do
-        {:ok, result} -> result
-        {:error, reason} -> {:error, {:command_outcome_unknown, reason}}
+        {:error, {:participant_failed, reason}} -> {:error, {:command_outcome_unknown, reason}}
+        result -> result
       end
     end
   end

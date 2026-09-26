@@ -119,6 +119,22 @@ defmodule Alto.Runner.SerialCompactionTest do
     end
   end
 
+  defmodule CrashingReducer do
+    @behaviour Alto.Context.Reducer
+    def compact(_input, _model, _opts), do: exit(:reducer_crash)
+  end
+
+  defmodule BlockingReducer do
+    @behaviour Alto.Context.Reducer
+    def compact(_input, _model, opts) do
+      send(opts[:owner], {:reducer_started, self()})
+
+      receive do
+        :release -> {:ok, %{content: "unused", data: %{}}}
+      end
+    end
+  end
+
   defmodule NativeBatchLoop do
     @behaviour Alto.Loop
 
@@ -393,6 +409,60 @@ defmodule Alto.Runner.SerialCompactionTest do
 
     assert state.messages_rev == before
     assert state.compaction_count == 0
+  end
+
+  test "a reducer crash is reported and leaves transcript and accounting intact", %{dir: dir} do
+    state = reduction_state(dir, {CrashingReducer, []})
+
+    assert {:error, {:participant_failed, :reducer_crash}, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    assert failed.transcript_bytes == state.transcript_bytes
+    assert failed.compaction_count == state.compaction_count
+    assert failed.model_requests == state.model_requests
+    assert failed.usage == state.usage
+    assert Enum.any?(failed.events_rev, &(&1.type == :context_compact_failed))
+  end
+
+  test "cancelling a running reducer leaves transcript and accounting intact", %{dir: dir} do
+    cancel_ref = make_ref()
+    state = reduction_state(dir, {BlockingReducer, owner: self()}, cancel_ref)
+    caller = Task.async(fn -> Alto.Runner.Execution.Transcript.reduce(state) end)
+
+    assert_receive {:reducer_started, worker}
+    send(caller.pid, {:alto_cancel, cancel_ref, :operator_stop})
+
+    assert {:error, {:cancelled, :operator_stop}, unchanged} = Task.await(caller)
+    refute Process.alive?(worker)
+    assert unchanged.messages_rev == state.messages_rev
+    assert unchanged.transcript_bytes == state.transcript_bytes
+    assert unchanged.compaction_count == state.compaction_count
+    assert unchanged.model_requests == state.model_requests
+    assert unchanged.usage == state.usage
+  end
+
+  defp reduction_state(dir, strategy, cancel_ref \\ nil) do
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+        provider: nil,
+        max_transcript_bytes: 10_000,
+        compaction: [
+          strategy: strategy,
+          max_compactions: 2,
+          keep_recent_messages: 1,
+          max_summary_bytes: 200
+        ],
+        session: Session.generate_id(),
+        session_dir: dir,
+        cancel_ref: cancel_ref
+      )
+
+    Enum.reduce(1..3, run, fn index, state ->
+      message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+      {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+      state
+    end)
   end
 
   test "handoff strategy creates structured artifacts and a generated next step", %{dir: dir} do

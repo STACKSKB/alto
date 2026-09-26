@@ -118,7 +118,7 @@ defmodule Alto.Runner.SerialRetryTest do
         assert attempts(agent) == 2
         assert [{1, 3, {:http, ^status}}] = retry_events()
       else
-        assert {:error, {:model_request_failed, {:http_error, ^status, _}}, _} = outcome
+        assert {:error, {:http_error, ^status, _}, _} = outcome
         assert attempts(agent) == 1
         assert retry_events() == []
       end
@@ -128,7 +128,7 @@ defmodule Alto.Runner.SerialRetryTest do
   test "exhausted retries surface the last failure uniformly", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :timeout}} end
 
-    assert {:error, {:model_request_failed, {:transport_error, :timeout}}, _result} =
+    assert {:error, {:transport_error, :timeout}, _result} =
              Alto.run("retry me",
                provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
                tools: [],
@@ -143,7 +143,7 @@ defmodule Alto.Runner.SerialRetryTest do
   test "retry stays off unless configured", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :boom}} end
 
-    assert {:error, {:model_request_failed, {:transport_error, :boom}}, _} =
+    assert {:error, {:transport_error, :boom}, _} =
              Alto.run("retry me",
                provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
                tools: []
@@ -155,7 +155,7 @@ defmodule Alto.Runner.SerialRetryTest do
   test "our own deadline is never retried" do
     # SleepyProvider outlives the deadline; the timeout must surface once,
     # not as four attempts.
-    assert {:error, {:model_process_failed, :timeout}, _} =
+    assert {:error, {:participant_failed, :timeout}, _} =
              Alto.run("retry me",
                provider: {SleepyProvider, []},
                tools: [],

@@ -6,7 +6,7 @@ defmodule Alto.Runner.CallTest do
     other = make_ref()
     send(self(), {:alto_cancel, other, :unrelated})
     send(self(), {:alto_cancel, nil, :disabled})
-    assert {:ok, :value} = Call.run(fn -> :value end, 1_000, nil)
+    assert :value = Call.run(fn -> :value end, 1_000, nil)
     assert_receive {:alto_cancel, ^other, :unrelated}
     assert_receive {:alto_cancel, nil, :disabled}
     refute_receive {:DOWN, _, :process, _, _}
@@ -50,7 +50,12 @@ defmodule Alto.Runner.CallTest do
       assert_receive {:participant, worker}
       monitor = Process.monitor(worker)
       if mode == :cancel, do: send(caller.pid, {:alto_cancel, cancel_ref, :user})
-      expected = if mode == :cancel, do: {:cancelled, :user}, else: {:error, :timeout}
+
+      expected =
+        if mode == :cancel,
+          do: {:error, {:cancelled, :user}},
+          else: {:error, {:participant_failed, :timeout}}
+
       assert Task.await(caller) == expected
       refute Process.alive?(worker)
       assert_receive {:DOWN, ^monitor, :process, ^worker, reason}

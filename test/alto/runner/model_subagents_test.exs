@@ -136,13 +136,10 @@ defmodule Alto.Runner.ModelSubagentsTest do
     for {reason, expected} <- [
           {{:http_error, 402, %{"message" => "payment required"}},
            %{
-             "$tuple" => [
-               "model_request_failed",
-               %{"$tuple" => ["http_error", 402, %{"message" => "payment required"}]}
-             ]
+             "$tuple" => ["http_error", 402, %{"message" => "payment required"}]
            }},
-          {:unavailable, %{"$tuple" => ["model_request_failed", "unavailable"]}},
-          {"provider offline", %{"$tuple" => ["model_request_failed", "provider offline"]}}
+          {:unavailable, "unavailable"},
+          {"provider offline", "provider offline"}
         ] do
       requests = [task("successful"), task("failed") |> Map.put("model", "model-b")]
       calls = [call("spawn", "spawn_agents", %{"agents" => requests})]
