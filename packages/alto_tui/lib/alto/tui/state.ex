@@ -21,6 +21,7 @@ defmodule Alto.TUI.State do
     :selected_model,
     :selected_backend,
     :overlay,
+    :worktree_creation,
     :dragging,
     :notice,
     :clipboard_text,

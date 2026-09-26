@@ -117,6 +117,17 @@ selection. Saved folders appear only while the input is empty.
 The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 
+Use **Ctrl+G, W → Create worktree…** to create a local linked Git worktree from
+the selected workspace. Enter a name and a starting ref (HEAD by default).
+Leave the branch field empty for a detached checkout, or enter a new branch
+name. Creation uses committed files and leaves uncommitted source changes
+untouched. On completion Alto opens a new task in the worktree and preserves
+your draft; existing tasks continue in their original directories. Escape
+dismisses the progress popup without cancelling creation or switching tasks
+when it finishes. Worktrees and their ledger are stored beside the harness
+catalog, outside the source repository, and remembered across TUI restarts.
+Closing a workspace only hides it; it does not delete its Git worktree.
+
 Close a workspace with the **×** on its sidebar row, **Ctrl+G, X**, or
 **Ctrl+G, W → Close workspace**. Closing hides it without cancelling running work
 or deleting files, tasks, or transcripts. Reopen its folder to restore its tasks.

@@ -208,6 +208,88 @@ defmodule Alto.TUI.AppTest do
     }
   end
 
+  test "worktree menu creates and opens a linked checkout while preserving draft and original task",
+       context do
+    source = Path.join(context.root, "source")
+    File.mkdir_p!(source)
+
+    git = fn args ->
+      {output, 0} = System.cmd("git", args, cd: source, stderr_to_stdout: true)
+      output
+    end
+
+    git.(["init", "-q"])
+    git.(["config", "user.name", "Alto Test"])
+    git.(["config", "user.email", "alto@example.test"])
+    File.write!(Path.join(source, "tracked.txt"), "base\n")
+    git.(["add", "."])
+    git.(["commit", "-qm", "base"])
+    File.write!(Path.join(source, "tracked.txt"), "dirty\n")
+    state = state!(context, project: source, credentials_path: context.credentials)
+    ExRatatui.textarea_insert_str(state.textarea, "keep this draft")
+    {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
+    index = Enum.find_index(state.overlay.items, &(&1.value == :new_worktree))
+
+    {:noreply, form} =
+      App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
+
+    assert form.overlay.kind == :worktree_form
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "Local experiment"}, form)
+    terminal = ExRatatui.init_test_terminal(120, 36)
+    ExRatatui.draw(terminal, View.widgets(form, %{width: 120, height: 36}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "Create local worktree"
+    assert ExRatatui.get_buffer_content(terminal) =~ "Local experiment"
+    {:noreply, pending} = App.handle_event(%Key{code: "s", modifiers: ["ctrl"]}, form)
+    assert pending.overlay.kind == :worktree_creating
+    assert_receive {:alto_worktree_created, _, {:ok, result}} = message, 15_000
+    {:noreply, opened} = App.handle_info(message, pending)
+    assert opened.overlay == nil
+    assert opened.worktree_creation == nil
+    assert State.selected_project(opened)["root"] == result["cwd"]
+    assert State.selected_project(opened)["name"] == "Local experiment"
+    assert opened.selected_task_id == nil
+    assert ExRatatui.textarea_get_value(opened.textarea) == "keep this draft"
+    assert File.read!(Path.join(result["cwd"], "tracked.txt")) == "base\n"
+    assert File.read!(Path.join(source, "tracked.txt")) == "dirty\n"
+    assert git.(["worktree", "list", "--porcelain"]) =~ result["cwd"]
+    restarted = state!(context, project: source, credentials_path: context.credentials)
+    assert Enum.any?(restarted.projects, &(&1["root"] == result["cwd"]))
+
+    # Leaving the progress popup must not steal focus when creation completes.
+    {:noreply, dismissed} = App.handle_event(%Key{code: "esc"}, pending)
+    {:noreply, background} = App.handle_info(message, dismissed)
+    assert background.selected_project_id == state.selected_project_id
+    assert background.notice =~ "Worktree created:"
+
+    {:alto_worktree_created, token, _} = message
+    missing = Map.put(result, "cwd", Path.join(context.root, "removed-before-opening"))
+
+    {:noreply, unavailable} =
+      App.handle_info({:alto_worktree_created, token, {:ok, missing}}, pending)
+
+    assert unavailable.overlay.kind == :worktree_form
+    assert unavailable.overlay.error =~ "Folder does not exist"
+  end
+
+  test "failed worktree creation restores its editable form", context do
+    state = state!(context, credentials_path: context.credentials)
+    {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
+    index = Enum.find_index(state.overlay.items, &(&1.value == :new_worktree))
+
+    {:noreply, form} =
+      App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
+
+    {:noreply, pending} = App.handle_event(%Key{code: "s", modifiers: ["ctrl"]}, form)
+    assert_receive {:alto_worktree_created, _, {:error, _}} = message, 15_000
+    {:noreply, failed} = App.handle_info(message, pending)
+    assert failed.overlay.kind == :worktree_form
+    assert failed.overlay.error =~ "Could not create worktree"
+    assert failed.worktree_creation == nil
+    assert failed.selected_project_id == state.selected_project_id
+  end
+
   test "Ctrl+G W opens a new folder workspace, preserves the draft and remembers the folder",
        context do
     folder = Path.join(context.root, "Second Project!")

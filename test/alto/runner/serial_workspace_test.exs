@@ -125,6 +125,28 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     ]
   end
 
+  test "linked worktree backend runs children with distinct cwd and freezes their patches", c do
+    manager = %{c.manager | backend: Alto.Workspaces.GitWorktree}
+
+    agents =
+      Enum.map(["left", "right"], fn id ->
+        %{id: id, task: %{content: id <> "\n"}, loop: Alto.loop(WriteLoop)}
+      end)
+
+    assert {:ok, result} = Alto.run(%{agents: agents}, run_opts(manager, c.dir))
+    assert {:completed, results} = result.output
+    assert Enum.all?(results, &(&1.status == :ok and &1.workspace.status == "frozen"))
+    assert length(Enum.uniq_by(results, & &1.workspace.workspace["cwd"])) == 2
+
+    for child <- results do
+      cwd = child.workspace.workspace["cwd"]
+      assert File.read!(Path.join(cwd, "tracked.txt")) == child.id <> "\n"
+      assert git!(c.source, ["worktree", "list", "--porcelain"]) =~ cwd
+    end
+
+    assert File.read!(Path.join(c.source, "tracked.txt")) == "base\n"
+  end
+
   test "concurrent children receive isolated workspaces and frozen patches", %{
     dir: dir,
     source: source,

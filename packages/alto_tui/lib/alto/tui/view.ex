@@ -59,7 +59,7 @@ defmodule Alto.TUI.View do
     do: WorkspaceForm.selection_content(form, width, height)
 
   def selection_content(%State{overlay: %{kind: kind} = form}, width, height)
-      when kind in [:provider_form, :model_form] do
+      when kind in [:provider_form, :model_form, :worktree_form] do
     rect = content_rect(overlay_rect(form, width, height))
     prefix = form.prefix_width
 
@@ -507,7 +507,7 @@ defmodule Alto.TUI.View do
     do: widgets ++ WorkspaceForm.widgets(form, root)
 
   defp add_overlay(widgets, %{kind: kind} = form, root)
-       when kind in [:provider_form, :model_form],
+       when kind in [:provider_form, :model_form, :worktree_form],
        do: widgets ++ text_form_widgets(form, root)
 
   defp add_overlay(widgets, overlay, root) do
@@ -777,7 +777,7 @@ defmodule Alto.TUI.View do
     do: WorkspaceForm.rect(width, height)
 
   defp overlay_rect(%{kind: kind} = form, width, height)
-       when kind in [:provider_form, :model_form],
+       when kind in [:provider_form, :model_form, :worktree_form],
        do: popup_rect(width, height, form.width_percent, form.height_percent)
 
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)

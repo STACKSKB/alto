@@ -11,7 +11,10 @@ defmodule Alto.Workspaces.Git do
                     max_files: [type: :pos_integer, default: 20_000],
                     max_checkout_bytes: [type: :pos_integer, default: 128 * 1_024 * 1_024],
                     max_patch_bytes: [type: {:in, 1..1_000_000}, default: 1_000_000],
-                    timeout_ms: [type: {:in, 1..120_000}, default: 120_000]
+                    timeout_ms: [type: {:in, 1..120_000}, default: 120_000],
+                    layout: [type: {:in, [:clone, :worktree]}, default: :clone],
+                    ref: [type: :string, default: "HEAD"],
+                    branch: [type: {:or, [:string, nil]}, default: nil]
                   )
 
   @doc false
@@ -39,29 +42,55 @@ defmodule Alto.Workspaces.Git do
   @spec snapshot(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     with {:ok, limits} <- limits(opts),
-         {:ok, root, commit} <- source_head(repo, limits),
-         {:ok, tree} <- git(root, ["rev-parse", "--verify", "HEAD^{tree}"], limits),
+         {:ok, root, _head} <- source_head(repo, limits),
+         {:ok, ref} <- Alto.Tools.Git.ref(limits.ref),
+         {:ok, commit} <- git(root, ["rev-parse", "--verify", ref <> "^{commit}"], limits),
+         commit <- String.trim(commit),
+         {:ok, tree} <- git(root, ["rev-parse", "--verify", commit <> "^{tree}"], limits),
          {:ok, _} <- checkout_size(root, commit, limits.max_checkout_bytes, limits),
-         {:ok, status} <-
+         :ok <- source_status(root, limits) do
+      snapshot = %{"source" => root, "base_commit" => commit, "base_tree" => String.trim(tree)}
+
+      if limits.layout == :worktree do
+        with {:ok, common} <- common_dir(root, limits),
+             :ok <- validate_branch(root, limits.branch, limits) do
+          {:ok, Map.merge(snapshot, %{"common_dir" => common, "branch" => limits.branch})}
+        end
+      else
+        {:ok, snapshot}
+      end
+    end
+  end
+
+  defp source_status(_root, %{layout: :worktree}), do: :ok
+
+  defp source_status(root, limits) do
+    with {:ok, status} <-
            git(
              root,
              ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all"],
              limits
            ),
-         true <- String.trim(status) == "" or {:error, :source_dirty} do
-      {:ok, %{"source" => root, "base_commit" => commit, "base_tree" => String.trim(tree)}}
-    end
+         true <- String.trim(status) == "" or {:error, :source_dirty},
+         do: :ok
   end
 
   @spec checkout(map(), Path.t(), keyword()) :: :ok | {:error, term()}
   def checkout(snapshot, destination, opts \\ [])
       when is_map(snapshot) and is_binary(destination) do
+    with {:ok, limits} <- limits(opts),
+         {:ok, snapshot} <- validate_snapshot(snapshot) do
+      if limits.layout == :worktree,
+        do: checkout_linked(snapshot, Path.expand(destination), limits),
+        else: checkout_clone(snapshot, destination, limits)
+    end
+  end
+
+  defp checkout_clone(snapshot, destination, limits) do
     root = Path.expand(destination)
     git_dir = root <> ".git"
 
-    with {:ok, limits} <- limits(opts),
-         {:ok, snapshot} <- validate_snapshot(snapshot),
-         :ok <- ordinary_repository(snapshot["source"]),
+    with :ok <- ordinary_repository(snapshot["source"]),
          :ok <- bounded_source(snapshot["source"], limits),
          {:ok, _} <-
            checkout_size(
@@ -107,10 +136,10 @@ defmodule Alto.Workspaces.Git do
     with {:ok, limits} <- limits(opts),
          {:ok, snapshot} <- validate_snapshot(snapshot),
          root <- Path.expand(destination),
-         git_dir <- root <> ".git",
-         :ok <- verify_git_pointer(root, git_dir),
+         {:ok, git_dir} <- workspace_metadata(root, snapshot, limits),
          true <- File.dir?(root) or {:error, :wrong_workspace},
          :ok <- verify_checkout(root, snapshot, limits, git_dir),
+         :ok <- reject_source_filters(root, limits),
          :ok <- bounded_workspace(root, git_dir, limits),
          {:ok, _} <- workspace_git(root, git_dir, ["add", "--all"], limits),
          :ok <- reject_index_gitlinks(root, git_dir, limits),
@@ -177,9 +206,13 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp bounded_source(root, limits) do
-    with :ok <- bounded_tree(Path.join(root, ".git"), limits.max_source_bytes, limits.max_files),
-         :ok <- reject_alternates(root) do
+    with {:ok, metadata} <- source_metadata(root, limits),
+         :ok <- bounded_tree(metadata, limits.max_source_bytes, limits.max_files),
+         false <- File.exists?(Path.join(metadata, "objects/info/alternates")) do
       :ok
+    else
+      true -> {:error, :alternates_unsupported}
+      error -> error
     end
   end
 
@@ -188,7 +221,7 @@ defmodule Alto.Workspaces.Git do
 
     with true <- File.dir?(root) or {:error, :repository_not_found},
          :ok <- reject_symlink_components(root),
-         :ok <- ordinary_repository(root),
+         :ok <- repository_layout(root, limits),
          {:ok, reported} <- git(root, ["rev-parse", "--show-toplevel"], limits),
          true <- Path.expand(String.trim(reported)) == root or {:error, :not_repository} do
       {:ok, root}
@@ -219,9 +252,10 @@ defmodule Alto.Workspaces.Git do
   defp validate_snapshot(
          %{"source" => source, "base_commit" => commit, "base_tree" => tree} = snapshot
        )
-       when map_size(snapshot) == 3 and is_binary(source) and is_binary(commit) and
+       when map_size(snapshot) in [3, 5] and is_binary(source) and is_binary(commit) and
               is_binary(tree) do
-    with true <- Path.expand(source) == source or {:error, :invalid_snapshot},
+    with true <- valid_snapshot_layout?(snapshot) or {:error, :invalid_snapshot},
+         true <- Path.expand(source) == source or {:error, :invalid_snapshot},
          true <- (valid_hex?(commit, 40) and valid_hex?(tree, 40)) or {:error, :invalid_snapshot},
          :ok <- reject_symlink_components(source),
          true <- File.dir?(source) or {:error, :invalid_snapshot} do
@@ -230,6 +264,15 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp validate_snapshot(_), do: {:error, :invalid_snapshot}
+
+  defp valid_snapshot_layout?(snapshot) when map_size(snapshot) == 3, do: true
+
+  defp valid_snapshot_layout?(%{"common_dir" => common, "branch" => branch}),
+    do:
+      is_binary(common) and Path.type(common) == :absolute and
+        (is_nil(branch) or is_binary(branch))
+
+  defp valid_snapshot_layout?(_), do: false
 
   defp verify_checkout(root, snapshot, limits, git_dir) do
     runner = &workspace_git(root, git_dir, &1, limits)
@@ -389,10 +432,124 @@ defmodule Alto.Workspaces.Git do
       else: reject_symlink_components(Path.dirname(expanded))
   end
 
-  defp reject_alternates(root) do
-    if File.exists?(Path.join(root, ".git/objects/info/alternates")),
-      do: {:error, :alternates_unsupported},
-      else: :ok
+  defp repository_layout(root, %{layout: :clone}), do: ordinary_repository(root)
+
+  defp repository_layout(root, limits) do
+    with {:ok, _} <- common_dir(root, limits), do: :ok
+  end
+
+  defp source_metadata(root, %{layout: :clone}), do: {:ok, Path.join(root, ".git")}
+  defp source_metadata(root, limits), do: common_dir(root, limits)
+
+  defp common_dir(root, limits) do
+    with :ok <- reject_symlink_components(Path.join(root, ".git")),
+         {:ok, output} <-
+           git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], limits),
+         path <- String.trim(output),
+         :ok <- reject_symlink_components(path),
+         true <- File.dir?(path) or {:error, :invalid_git_pointer} do
+      {:ok, path}
+    end
+  end
+
+  defp validate_branch(_root, nil, _limits), do: :ok
+
+  defp validate_branch(root, branch, limits) do
+    with {:ok, _} <- Alto.Tools.Git.ref(branch),
+         {:ok, _} <- git(root, ["check-ref-format", "refs/heads/" <> branch], limits),
+         do: :ok
+  end
+
+  defp linked_source(snapshot, limits) do
+    with {:ok, root} <- repository_root(snapshot["source"], limits),
+         {:ok, common} <- common_dir(root, limits),
+         true <- common == snapshot["common_dir"] or {:error, :wrong_workspace},
+         :ok <- bounded_source(root, limits),
+         :ok <- reject_source_filters(root, limits),
+         :ok <- validate_branch(root, snapshot["branch"], limits),
+         {:ok, _} <-
+           checkout_size(root, snapshot["base_commit"], limits.max_checkout_bytes, limits) do
+      :ok
+    end
+  end
+
+  defp checkout_linked(snapshot, root, limits) do
+    branch_args = if snapshot["branch"], do: ["-b", snapshot["branch"]], else: ["--detach"]
+
+    with :ok <- linked_source(snapshot, limits),
+         :ok <- reject_new_path(root),
+         :ok <- File.mkdir_p(Path.dirname(root)),
+         {:ok, _} <-
+           git(
+             snapshot["source"],
+             ["worktree", "add"] ++ branch_args ++ ["--", root, snapshot["base_commit"]],
+             limits
+           ),
+         {:ok, git_dir} <- workspace_metadata(root, snapshot, limits),
+         :ok <- verify_checkout(root, snapshot, limits, git_dir) do
+      :ok
+    end
+  end
+
+  defp workspace_metadata(root, _snapshot, %{layout: :clone}) do
+    git_dir = root <> ".git"
+    with :ok <- verify_git_pointer(root, git_dir), do: {:ok, git_dir}
+  end
+
+  defp workspace_metadata(root, snapshot, limits) do
+    # Check both sides of Git's linkage before staging or removing anything.
+    with :ok <- reject_symlink_components(root),
+         {:ok, common} <- common_dir(root, limits),
+         true <- common == snapshot["common_dir"] or {:error, :invalid_git_pointer},
+         {:ok, output} <- git(root, ["rev-parse", "--absolute-git-dir"], limits),
+         git_dir <- String.trim(output),
+         true <-
+           Path.dirname(git_dir) == Path.join(common, "worktrees") or
+             {:error, :invalid_git_pointer},
+         :ok <- verify_git_pointer(root, git_dir),
+         {:ok, backref} <- File.read(Path.join(git_dir, "gitdir")),
+         true <- String.trim(backref) == Path.join(root, ".git") or {:error, :invalid_git_pointer} do
+      {:ok, git_dir}
+    end
+  end
+
+  @doc false
+  def discard(snapshot, destination, opts) do
+    with {:ok, limits} <- limits(opts) do
+      if Map.has_key?(snapshot, "common_dir"),
+        do: discard_linked(snapshot, destination, %{limits | layout: :worktree}),
+        else: :ok
+    end
+  end
+
+  defp discard_linked(snapshot, destination, limits) do
+    with {:ok, snapshot} <- validate_snapshot(snapshot),
+         root <- Path.expand(destination),
+         {:ok, common} <- common_dir(snapshot["source"], limits),
+         true <- common == snapshot["common_dir"] or {:error, :wrong_workspace} do
+      with :ok <- reject_symlink_components(root),
+           {:ok, registered} <-
+             git(snapshot["source"], ["worktree", "list", "--porcelain", "-z"], limits) do
+        if ("worktree " <> root) in String.split(registered, <<0>>) do
+          # A missing checkout is recoverable after an interrupted removal.
+          with :ok <- verify_removal(root, snapshot, limits),
+               {:ok, _} <-
+                 git(snapshot["source"], ["worktree", "remove", "--force", "--", root], limits),
+               do: :ok
+        else
+          # No registration was made, or Git already rolled back a failed add.
+          :ok
+        end
+      end
+    end
+  end
+
+  defp verify_removal(root, snapshot, limits) do
+    if File.exists?(root) do
+      with {:ok, _} <- workspace_metadata(root, snapshot, limits), do: :ok
+    else
+      :ok
+    end
   end
 
   defp reject_symlink_components(path) do

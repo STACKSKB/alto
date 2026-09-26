@@ -152,7 +152,7 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay) do
-    if overlay.kind in [:provider_form, :model_form] do
+    if overlay.kind in [:provider_form, :model_form, :worktree_form] do
       {:noreply, form_result(state, TextForm.paste(overlay, content))}
     else
       {:noreply, filter_overlay(state, overlay.filter <> content)}
@@ -329,6 +329,49 @@ defmodule Alto.TUI.App do
   def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
     finish_runner_message(state, :ref, ref, result)
   end
+
+  def handle_info(
+        {:alto_worktree_created, token, result},
+        %{worktree_creation: %{token: token} = pending} = state
+      ) do
+    Process.demonitor(pending.monitor, [:flush])
+    visible? = state.overlay && state.overlay.kind == :worktree_creating
+    state = %{state | worktree_creation: nil}
+
+    case result do
+      {:ok, result} ->
+        if visible? do
+          {:noreply, form_result(%{state | overlay: pending.form}, {:submit, result["cwd"]})}
+        else
+          state =
+            case Alto.Harness.Catalog.navigation(state.catalog_opts) do
+              {:ok, projects, tasks} -> %{state | projects: projects, tasks: tasks}
+              _ -> state
+            end
+
+          {:noreply, %{state | notice: "Worktree created: " <> result["cwd"]}}
+        end
+
+      {:error, reason} ->
+        error = "Could not create worktree: #{Alto.Display.error(reason)}"
+
+        {:noreply,
+         if(visible?,
+           do: %{state | overlay: %{pending.form | error: error}},
+           else: %{state | notice: error}
+         )}
+    end
+  end
+
+  def handle_info(
+        {:DOWN, monitor, :process, _pid, reason},
+        %{worktree_creation: %{monitor: monitor} = pending} = state
+      ),
+      do:
+        handle_info(
+          {:alto_worktree_created, pending.token, {:error, {:creation_exited, reason}}},
+          state
+        )
 
   def handle_info({:DOWN, monitor, :process, _pid, reason}, state) do
     finish_runner_message(state, :monitor, monitor, {:error, {:run_exited, reason}})
@@ -977,7 +1020,10 @@ defmodule Alto.TUI.App do
     items =
       [%{label: "Open another folder…", value: :new_workspace}] ++
         if(state.selected_project_id,
-          do: [%{label: "Close workspace · ^G X", value: :close_workspace}],
+          do: [
+            %{label: "Create worktree…", value: :new_worktree},
+            %{label: "Close workspace · ^G X", value: :close_workspace}
+          ],
           else: []
         ) ++
         Enum.map(
@@ -1002,7 +1048,7 @@ defmodule Alto.TUI.App do
     do: form_result(state, WorkspaceForm.key(form, key))
 
   defp overlay_key(%{overlay: %{kind: kind} = form} = state, key)
-       when kind in [:provider_form, :model_form],
+       when kind in [:provider_form, :model_form, :worktree_form],
        do: form_result(state, TextForm.key(form, key))
 
   defp overlay_key(state, %Key{code: "esc"}), do: %{state | overlay: nil}
@@ -1049,6 +1095,9 @@ defmodule Alto.TUI.App do
 
       %{value: :new_workspace} ->
         open_workspace_form(state)
+
+      %{value: :new_worktree} ->
+        open_worktree_form(state)
 
       %{value: :close_workspace} ->
         State.close_workspace(state, state.selected_project_id)
@@ -1451,6 +1500,35 @@ defmodule Alto.TUI.App do
     }
   end
 
+  defp open_worktree_form(%{worktree_creation: pending} = state) when not is_nil(pending),
+    do: %{state | notice: "A worktree is already being created"}
+
+  defp open_worktree_form(state) do
+    project = State.selected_project(state)
+
+    %{
+      state
+      | leader?: false,
+        overlay:
+          TextForm.new(
+            :worktree_form,
+            "Create local worktree",
+            [
+              {:name, "Name", "", []},
+              {:ref, "Start ref", "HEAD", []},
+              {:branch, "New branch", "", []}
+            ],
+            intro: "#{project["root"]} · committed files only",
+            hint: "Tab next · Ctrl+S create · Esc cancel",
+            buttons: ["[ Create & open ]", "[ Cancel ]"],
+            prefix_width: 14,
+            width_percent: 80,
+            height_percent: 65,
+            source: project["root"]
+          )
+    }
+  end
+
   defp open_model_form(state, profile_id) do
     %{
       state
@@ -1496,6 +1574,37 @@ defmodule Alto.TUI.App do
       {:error, reason} ->
         put_in(state.overlay.error, "Could not open workspace: #{Alto.Display.error(reason)}")
     end
+  end
+
+  defp form_result(%{overlay: %{kind: :worktree_form} = form} = state, :submit) do
+    values = TextForm.values(form)
+    args = %{"name" => String.trim(values.name), "ref" => String.trim(values.ref)}
+
+    args =
+      if String.trim(values.branch) == "",
+        do: args,
+        else: Map.put(args, "branch", String.trim(values.branch))
+
+    owner = self()
+    token = make_ref()
+
+    {_pid, monitor} =
+      spawn_monitor(fn ->
+        send(
+          owner,
+          {:alto_worktree_created, token,
+           Alto.Harness.Worktrees.create(form.source, args, state.catalog_opts)}
+        )
+      end)
+
+    %{
+      state
+      | worktree_creation: %{token: token, monitor: monitor, form: form},
+        overlay:
+          Menu.new(:worktree_creating, "Creating worktree…", [
+            %{label: "Esc returns to your task; creation continues", value: nil}
+          ])
+    }
   end
 
   defp form_result(%{overlay: %{kind: :provider_form}} = state, :submit),
@@ -1544,7 +1653,7 @@ defmodule Alto.TUI.App do
   end
 
   defp handle_overlay_click(%{overlay: %{kind: kind} = form} = state, row)
-       when kind in [:provider_form, :model_form],
+       when kind in [:provider_form, :model_form, :worktree_form],
        do: form_result(state, TextForm.click(form, row))
 
   defp handle_overlay_click(state, row),

@@ -447,14 +447,47 @@ policy = Alto.Subagents.bounded(
 # Use policy as the parent loop's :subagents option.
 ```
 
-The host captures one clean source commit before admitting the batch. Each
-execution-tree child identity gets its own local clone, object store and index.
+For local linked worktrees, select the other built-in backend:
+
+```elixir
+manager = Alto.Workspaces.new(
+  root: "/private/alto-state/worktrees", ledger: ledger,
+  backend: Alto.Workspaces.GitWorktree)
+
+# Use this manager in the same bounded subagent policy, or expose a tool:
+tools = [{Alto.Tools.CreateWorktree, manager: manager}]
+
+# Direct callers may select a committed ref and an optional new branch:
+{:ok, snapshot} = Alto.Workspaces.prepare(manager, "/projects/app",
+  ref: "HEAD", branch: "feature/experiment")
+```
+
+The linked backend accepts either a main checkout or another linked worktree.
+It captures the chosen commit without copying, stashing, or committing dirty
+source files. It shares Git objects and refs with the source, while keeping its
+own working files, HEAD and index. Checkouts are detached by default; `branch`
+creates a new branch and an existing branch name is an error. Keep the source
+repository available for the retained workspace's lifecycle. Submodule,
+filter, symlink and size restrictions still apply.
+
+`create_worktree` takes a required `name`, an optional `ref` (HEAD by default),
+and an optional new `branch`. Its host-provided manager chooses the storage
+root; the source is the invoking agent's cwd. Preparation freezes the commit
+before approval. Execution returns `workspace_id`, `cwd`, `base_commit`,
+`branch`, `revision` and `status`. It does not change the invoking agent's cwd.
+Re-executing the same prepared invocation returns the retained resource; a
+fresh invocation with the same session/name but a different snapshot conflicts.
+For automatic child cwd assignment, use the manager in the subagent policy.
+
+With the default clone backend, the host captures one clean source commit
+before admitting the batch. Each execution-tree child identity gets its own
+local clone, object store and index.
 The runner sets the child's tool cwd; a spawn request cannot choose another
 cwd. Descendants inherit the manager along with existing authority and budgets.
 Use a unique child ID for each assignment within a root execution: an already
 used workspace is retained for review and cannot execute that assignment again.
 
-The built-in Git backend requires an ordinary repository with a `.git`
+The default `Alto.Workspaces.Git` clone backend requires an ordinary repository with a `.git`
 directory and a clean source checkout. Dirty sources, linked source worktrees,
 submodules, source-local filters, alternates and symlinked paths are rejected
 explicitly. Ignored build output is neither cloned nor captured; it does not consume checkout bounds.
@@ -485,6 +518,8 @@ status and metadata, including the source commit and frozen patch hash.
 `Alto.Workspaces.get/2` inspects it; `patch/2` returns the bounded immutable Git
 diff. Hosts can also use `prepare/2`, `create/3`, `use/4` and `freeze/3` directly
 with an optional backend implementing `snapshot/2`, `checkout/3` and `diff/3`.
+`prepare/3` accepts backend snapshot options such as a worktree ref; these are
+captured in metadata without changing the manager's lifecycle configuration.
 `prepare/2` returns an `Alto.Workspaces.Snapshot` carrying the expanded source
 separately from provider-owned metadata. A backend that supports reviewed
 integration may additionally implement `prepare_apply/4`, `verify_apply/4`
@@ -496,7 +531,10 @@ metadata.
 
 `discard/4` requires the viewed revision and an explanatory note. It holds the
 same operating-system resource lock as worker use, so cleanup cannot remove a
-live worker's files. Interrupted resources remain cleanup obligations until
+live worker's files. An optional backend `discard/3` callback runs before the
+manager deletes retained files. The linked backend unregisters the worktree
+with Git, including explicitly discarded dirty files; named branches remain.
+Interrupted resources remain cleanup obligations until
 explicitly discarded. Workspace storage survives ledger restart; it does not
 make the child run independently resumable. Applying a patch to the lead's
 checkout remains a separate reviewed integration operation; capture never

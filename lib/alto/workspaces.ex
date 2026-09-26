@@ -39,11 +39,16 @@ defmodule Alto.Workspaces do
 
   @doc "Capture one immutable source for every workspace in a delegation batch."
   @spec prepare(t(), Path.t()) :: {:ok, Snapshot.t()} | {:error, term()}
-  def prepare(%__MODULE__{} = manager, source) when is_binary(source) do
+  @spec prepare(t(), Path.t(), keyword()) :: {:ok, Snapshot.t()} | {:error, term()}
+  def prepare(%__MODULE__{} = manager, source, snapshot_options \\ []) when is_binary(source) do
     source = Path.expand(source)
 
     with :ok <- separate_root(manager.root, source),
-         {:ok, metadata} <- manager.backend.snapshot(source, manager.backend_options),
+         {:ok, metadata} <-
+           manager.backend.snapshot(
+             source,
+             Keyword.merge(manager.backend_options, snapshot_options)
+           ),
          :ok <- json_map(metadata) do
       {:ok, %Snapshot{source: source, metadata: metadata}}
     end
@@ -341,9 +346,13 @@ defmodule Alto.Workspaces do
     with true <- is_binary(note) and byte_size(note) in 1..4_096 and String.valid?(note) do
       locked(manager, id, fn ->
         with {:ok, info} <- expect(manager, id, revision, false),
+             true <-
+               info.workspace["backend"] == Atom.to_string(manager.backend) or
+                 {:error, :workspace_backend_mismatch},
              {:ok, info} <- activate(manager, info, "discard"),
              path <- Path.join(manager.root, id),
              :ok <- safe_path(path),
+             :ok <- discard_backend(manager, info.workspace),
              {:ok, _} <- File.rm_rf(path),
              :ok <- Alto.AtomicFile.sync_directory(manager.root),
              :ok <-
@@ -361,6 +370,13 @@ defmodule Alto.Workspaces do
     else
       false -> {:error, :workspace_discard_note_required}
     end
+  end
+
+  defp discard_backend(manager, workspace) do
+    if function_exported?(manager.backend, :discard, 3),
+      do:
+        manager.backend.discard(workspace["snapshot"], workspace["cwd"], manager.backend_options),
+      else: :ok
   end
 
   defp create_workspace(manager, info) do
