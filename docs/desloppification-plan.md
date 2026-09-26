@@ -11,7 +11,7 @@ The original baseline is 40,655 physical production `.ex` lines in `lib/` and
 `packages/alto_tui/lib/`. The 30% target is at most 28,458 lines. Tests,
 documentation, generated output, and dependencies are counted separately.
 
-The current count is **34,298 lines (15.6% below the original)**. **5,840 lines
+The current count is **34,256 lines (15.7% below the original)**. **5,798 lines
 remain** to reach the unchanged target. Added model-selection and messaging
 features are included in this count; their growth does not reset the baseline.
 The reduction includes removed duplicate source documentation. Examples
@@ -58,6 +58,8 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
   per-task usage, removing the global value that leaked across task selection.
   Navigation reads one catalog snapshot for projects and grouped tasks instead
   of rereading the document for each project; ordering and filtering are preserved.
+  Backend fallbacks use native `with` expressions. Codex startup/history replies
+  reuse its async-message helper and default-model selection has one implementation.
 - Codex UI and delegated agents share bounded model pagination. Provider discovery
   and streaming share Req response handling. Validated Anthropic tool-input maps
   bypass JSON round trips. Provider observers use the existing notification helper.

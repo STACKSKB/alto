@@ -19,10 +19,7 @@ defmodule Alto.Subagents.Policy do
   def implementation?(module), do: Alto.Capabilities.implements?(module, __MODULE__)
 
   def validate(policy) do
-    case resolve(policy) do
-      {:ok, _limits} -> :ok
-      error -> error
-    end
+    with {:ok, _limits} <- resolve(policy), do: :ok
   end
 
   def resolve(policy) do

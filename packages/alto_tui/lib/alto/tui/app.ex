@@ -536,10 +536,7 @@ defmodule Alto.TUI.App do
   end
 
   defp submit_backend(state, prompt) do
-    case Backend.ui(state, {:submit, prompt}) do
-      :pass -> submit_runner(state, prompt)
-      next -> next
-    end
+    with :pass <- Backend.ui(state, {:submit, prompt}), do: submit_runner(state, prompt)
   end
 
   defp submit_runner(state, prompt) do
@@ -1078,10 +1075,8 @@ defmodule Alto.TUI.App do
         open_model_form(state, profile_id)
 
       %{value: value} ->
-        case Backend.ui(state, {:select, value}) do
-          :pass -> apply_selection(state, state.overlay.kind, value)
-          next -> next
-        end
+        with :pass <- Backend.ui(state, {:select, value}),
+             do: apply_selection(state, state.overlay.kind, value)
     end
   end
 
@@ -1606,10 +1601,7 @@ defmodule Alto.TUI.App do
     do: State.update_task(state, task["id"], %{"backend" => Atom.to_string(backend)})
 
   defp backend_action(state, action) do
-    case Backend.ui(state, action) do
-      :pass -> state
-      next -> next
-    end
+    with :pass <- Backend.ui(state, action), do: state
   end
 
   defp credentials_opts(state), do: [credentials_path: state.credentials_path]

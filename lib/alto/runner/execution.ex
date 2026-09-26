@@ -483,19 +483,18 @@ defmodule Alto.Runner.Execution do
   defp claim_child_checkpoint(%{child_resume: nil}, _decision), do: :ok
 
   defp claim_child_checkpoint(run, decision) do
-    case checkpoint_call(
-           fn ->
-             Alto.Subagents.Continuation.claim_child(
-               run.subagent_ticket,
-               run.child_resume,
-               decision
-             )
-           end,
-           run
-         ) do
-      {:ok, _} -> :ok
-      error -> error
-    end
+    with {:ok, _} <-
+           checkpoint_call(
+             fn ->
+               Alto.Subagents.Continuation.claim_child(
+                 run.subagent_ticket,
+                 run.child_resume,
+                 decision
+               )
+             end,
+             run
+           ),
+         do: :ok
   end
 
   defp checkpoint_call(fun, run) do
@@ -1332,9 +1331,8 @@ defmodule Alto.Runner.Execution do
   defp add_outcome_message(run, %{origin: :provider} = job, _status, content) do
     message = %{"role" => "tool", "tool_call_id" => job.id, "content" => content}
 
-    case RunTranscript.append(run, message) do
-      {:ok, run} -> {:ok, consume_pending_provider_call(run, job.id, job.name)}
-      error -> error
+    with {:ok, run} <- RunTranscript.append(run, message) do
+      {:ok, consume_pending_provider_call(run, job.id, job.name)}
     end
   end
 

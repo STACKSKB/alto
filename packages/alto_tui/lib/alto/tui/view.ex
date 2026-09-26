@@ -632,10 +632,8 @@ defmodule Alto.TUI.View do
     settings_width = layout(state, width, height).settings.width
 
     provider =
-      case Alto.TUI.Backend.ui(state, :provider_label) do
-        :pass -> (profile && profile.label) || "none"
-        label -> label
-      end
+      with :pass <- Alto.TUI.Backend.ui(state, :provider_label),
+           do: (profile && profile.label) || "none"
 
     segments =
       cond do
@@ -806,10 +804,8 @@ defmodule Alto.TUI.View do
     model = State.model_metadata(state) || %{}
 
     context =
-      case Alto.TUI.Backend.ui(state, :context_window) do
-        :pass -> model[:context_length] || model["context_length"]
-        value -> value
-      end
+      with :pass <- Alto.TUI.Backend.ui(state, :context_window),
+           do: model[:context_length] || model["context_length"]
 
     context_percent(usage, usage.context_window || context)
   end
@@ -822,10 +818,7 @@ defmodule Alto.TUI.View do
   defp context_percent(_usage, _context), do: "—"
 
   defp quota_suffix(state) do
-    case Alto.TUI.Backend.ui(state, :quota_label) do
-      :pass -> ""
-      label -> label
-    end
+    with :pass <- Alto.TUI.Backend.ui(state, :quota_label), do: ""
   end
 
   defp context_fullscreen?(%{narrow_context: :fullscreen}, _width), do: true

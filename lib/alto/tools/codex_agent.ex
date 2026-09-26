@@ -171,10 +171,8 @@ defmodule Alto.Tools.CodexAgent do
         {:unknown, {:codex_disconnected, reason}}
     after
       20 ->
-        case deliver(client, turn, [:steer], :steer) do
-          {:ok, turn} -> await(client, turn, messages, usage, limit)
-          error -> error
-        end
+        with {:ok, turn} <- deliver(client, turn, [:steer], :steer),
+             do: await(client, turn, messages, usage, limit)
     end
   end
 

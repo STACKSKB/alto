@@ -243,18 +243,14 @@ defmodule Alto.Workspaces.Git do
   end
 
   defp reject_index_gitlinks(root, git_dir, limits) do
-    case workspace_git(root, git_dir, ["ls-files", "--stage", "-z"], limits) do
-      {:ok, output} ->
-        if output
-           |> String.split(<<0>>, trim: true)
-           |> Enum.any?(fn entry -> String.starts_with?(entry, "160000 ") end) do
-          {:error, :submodule_unsupported}
-        else
-          :ok
-        end
-
-      error ->
-        error
+    with {:ok, output} <- workspace_git(root, git_dir, ["ls-files", "--stage", "-z"], limits) do
+      if output
+         |> String.split(<<0>>, trim: true)
+         |> Enum.any?(fn entry -> String.starts_with?(entry, "160000 ") end) do
+        {:error, :submodule_unsupported}
+      else
+        :ok
+      end
     end
   end
 

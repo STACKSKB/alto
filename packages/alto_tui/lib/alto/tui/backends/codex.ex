@@ -145,10 +145,7 @@ defmodule Alto.TUI.Backends.Codex do
   defp handle_info({:codex_refreshed, {:ok, %{models: models, rate_limits: limits}}}, state) do
     selected =
       if selected?(state) and not Enum.any?(models, &(&1.id == state.selected_model)) do
-        case Enum.find(models, &Map.get(&1, :default?, false)) || List.first(models) do
-          nil -> nil
-          model -> model.id
-        end
+        default_model(models)
       else
         state.selected_model
       end
@@ -287,7 +284,6 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp start_codex_task(state, task, prompt) do
     local_id = "codex-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
-    owner = self()
     client = data(state).client
     project = State.selected_project(state)
 
@@ -312,9 +308,8 @@ defmodule Alto.TUI.Backends.Codex do
       started_at_ms: System.system_time(:millisecond)
     }
 
-    Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      result = CodexBackend.start_turn(client, task["conversation_id"], prompt, opts)
-      send(owner, {:codex_turn_started, local_id, result})
+    async_send({:codex_turn_started, local_id}, fn ->
+      CodexBackend.start_turn(client, task["conversation_id"], prompt, opts)
     end)
 
     Host.attach_run(state, local_id, run, prompt, "starting Codex…")
@@ -328,11 +323,10 @@ defmodule Alto.TUI.Backends.Codex do
 
     if selected?(state) and is_binary(thread_id) and entries == [] and
          not MapSet.member?(data(state).history_loading, task_id) and is_pid(data(state).client) do
-      owner = self()
       client = data(state).client
 
-      Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-        send(owner, {:codex_history_loaded, task_id, CodexBackend.history(client, thread_id)})
+      async_send({:codex_history_loaded, task_id}, fn ->
+        CodexBackend.history(client, thread_id)
       end)
 
       update_in(state.backend_state[__MODULE__].history_loading, &MapSet.put(&1, task_id))
@@ -369,7 +363,7 @@ defmodule Alto.TUI.Backends.Codex do
       true ->
         opts = data(state).options
         owner = self()
-        async_send(:codex_connected, fn -> CodexBackend.connect(opts, owner) end)
+        async_send({:codex_connected}, fn -> CodexBackend.connect(opts, owner) end)
 
         codex = %{data(state) | status: :connecting}
         next = %{put_data(state, codex) | notice: "connecting to Codex App Server…"}
@@ -379,7 +373,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    async_send(:codex_refreshed, fn -> CodexBackend.refresh(client) end)
+    async_send({:codex_refreshed}, fn -> CodexBackend.refresh(client) end)
 
     put_in(state.backend_state[__MODULE__].status, :refreshing)
   end
@@ -401,7 +395,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp start_codex_login(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    async_send(:codex_login_started, fn -> CodexClient.login_chatgpt(client) end)
+    async_send({:codex_login_started}, fn -> CodexClient.login_chatgpt(client) end)
 
     codex = %{data(state) | status: {:authenticating, :pending}}
     %{put_data(state, codex) | overlay: codex_connecting_overlay("starting ChatGPT sign-in…")}
@@ -411,7 +405,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp logout_codex(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    async_send(:codex_logout_finished, fn -> CodexClient.logout(client) end)
+    async_send({:codex_logout_finished}, fn -> CodexClient.logout(client) end)
 
     %{
       state
@@ -436,7 +430,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp open_codex_url(state, url) do
     opts = data(state).options
-    async_send(:codex_browser_opened, fn -> CodexBackend.open_url(url, opts) end)
+    async_send({:codex_browser_opened}, fn -> CodexBackend.open_url(url, opts) end)
 
     %{state | notice: "opened ChatGPT sign-in in your browser"}
   end
@@ -537,7 +531,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp reconnect_codex_account(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    async_send(:codex_connected, fn ->
+    async_send({:codex_connected}, fn ->
       with {:ok, account} <- CodexClient.account(client) do
         {:ok, %{client: client, account: account}}
       end
@@ -697,7 +691,7 @@ defmodule Alto.TUI.Backends.Codex do
 
   defp refresh_limits_after_turn(%{backend_state: %{__MODULE__ => %{client: client}}} = state)
        when is_pid(client) do
-    async_send(:codex_limits_refreshed, fn -> CodexClient.rate_limits(client) end)
+    async_send({:codex_limits_refreshed}, fn -> CodexClient.rate_limits(client) end)
 
     state
   end
@@ -785,13 +779,14 @@ defmodule Alto.TUI.Backends.Codex do
     end
   end
 
-  defp backend_model(state) do
-    Keyword.get(data(state).options, :model) ||
-      case Enum.find(data(state).models, &Map.get(&1, :default?, false)) ||
-             List.first(data(state).models) do
-        nil -> nil
-        model -> model.id
-      end
+  defp backend_model(state),
+    do: Keyword.get(data(state).options, :model) || default_model(data(state).models)
+
+  defp default_model(models) do
+    case Enum.find(models, &Map.get(&1, :default?, false)) || List.first(models) do
+      nil -> nil
+      model -> model.id
+    end
   end
 
   defp ready?(state) do
@@ -799,11 +794,11 @@ defmodule Alto.TUI.Backends.Codex do
       Process.alive?(data(state).client)
   end
 
-  defp async_send(tag, fun) do
+  defp async_send(prefix, fun) do
     owner = self()
 
     Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
-      send(owner, {tag, fun.()})
+      send(owner, Tuple.append(prefix, fun.()))
     end)
   end
 

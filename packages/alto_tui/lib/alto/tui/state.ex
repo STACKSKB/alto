@@ -173,13 +173,9 @@ defmodule Alto.TUI.State do
 
   def model_metadata(state) do
     models =
-      case Alto.TUI.Backend.ui(state, :models) do
-        :pass ->
-          profile = selected_profile(state)
-          profile && known_models(state, profile)
-
-        models ->
-          models
+      with :pass <- Alto.TUI.Backend.ui(state, :models) do
+        profile = selected_profile(state)
+        profile && known_models(state, profile)
       end
 
     if is_list(models),
@@ -662,13 +658,9 @@ defmodule Alto.TUI.State do
     state = %{state | selected_backend: backend}
 
     model =
-      case Alto.TUI.Backend.ui(state, :sync_model) do
-        :pass ->
-          profile = selected_profile(state)
-          profile && profile.default_model
-
-        model ->
-          model
+      with :pass <- Alto.TUI.Backend.ui(state, :sync_model) do
+        profile = selected_profile(state)
+        profile && profile.default_model
       end
 
     %{state | selected_model: model}

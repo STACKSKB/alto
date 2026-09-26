@@ -759,10 +759,7 @@ defmodule Alto.Queue do
 
       {:ok, %{size: current}} ->
         if state.auto_compact do
-          case compact_log(state, append_bytes) do
-            {:ok, _} -> :ok
-            error -> error
-          end
+          with {:ok, _} <- compact_log(state, append_bytes), do: :ok
         else
           {:error, {:queue_log_too_large, current + append_bytes, state.max_log_bytes}}
         end
