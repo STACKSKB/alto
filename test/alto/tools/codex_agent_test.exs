@@ -9,6 +9,7 @@ defmodule Alto.Tools.CodexAgentTest do
 
     File.write!(server, ~S"""
     import json, sys
+    turn_count = 0
     def emit(value):
         print(json.dumps(value), flush=True)
     for line in sys.stdin:
@@ -27,11 +28,19 @@ defmodule Alto.Tools.CodexAgentTest do
         elif method == 'thread/start':
             emit({'id': ident, 'result': {'thread': {'id': 'thread-1'}}})
         elif method == 'turn/start':
-            emit({'id': ident, 'result': {'turn': {'id': 'turn-1'}}})
+            turn_count += 1
+            turn_id = 'turn-' + str(turn_count)
+            emit({'id': ident, 'result': {'turn': {'id': turn_id}}})
             task = msg['params']['input'][0]['text']
             if task == 'disconnect':
                 sys.exit(0)
-            if task == 'hang':
+            if task.startswith('send:'):
+                target = task.split(':', 1)[1]
+                params = {'threadId': 'thread-1', 'turnId': turn_id, 'callId': 'send-one', 'tool': 'send_message', 'arguments': {'to': target, 'text': 'peer reply'}}
+                emit({'id': 'send-first', 'method': 'item/tool/call', 'params': params})
+                emit({'id': 'send-duplicate', 'method': 'item/tool/call', 'params': params})
+                emit({'id': 'bad-turn', 'method': 'item/tool/call', 'params': dict(params, turnId='wrong')})
+            if task in ['hang', 'live', 'timeout', 'follow']:
                 continue
             emit({'method': 'item/completed', 'params': {'threadId': 'unrelated', 'turnId': 'turn-1', 'item': {'type': 'agentMessage', 'id': 'other', 'text': 'ignore me'}}})
             emit({'method': 'item/completed', 'params': {'threadId': 'thread-1', 'turnId': 'old-turn', 'item': {'type': 'agentMessage', 'id': 'old', 'text': 'ignore me'}}})
@@ -39,7 +48,13 @@ defmodule Alto.Tools.CodexAgentTest do
             text = 'x' * 1000 if task == 'large' else 'Review complete'
             emit({'method': 'item/completed', 'params': {'threadId': 'thread-1', 'turnId': 'turn-1', 'item': {'type': 'agentMessage', 'id': 'answer', 'text': text}}})
             emit({'method': 'thread/tokenUsage/updated', 'params': {'threadId': 'thread-1', 'tokenUsage': {'total': {'inputTokens': 12, 'outputTokens': 4}}}})
-            emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'failed' if task == 'fail' else 'completed'}}})
+            emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': turn_id, 'status': 'failed' if task == 'fail' else 'completed'}}})
+        elif method == 'turn/steer':
+            if msg['params']['input'][0]['text'] == 'timeout':
+                continue
+            emit({'id': ident, 'result': {'turnId': 'turn-1'}})
+            emit({'id': 'dynamic', 'method': 'item/tool/call', 'params': {'threadId': 'thread-1', 'turnId': 'turn-1', 'callId': 'call-one', 'tool': 'list_agents', 'arguments': {}}})
+            emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
         elif method == 'turn/interrupt':
             emit({'id': ident, 'result': {}})
     """)
@@ -48,7 +63,7 @@ defmodule Alto.Tools.CodexAgentTest do
 
     tool =
       {Alto.Tools.CodexAgent,
-       command: System.find_executable("python3"), args: [server, log], startup_timeout: 2_000}
+       command: System.find_executable("python3"), args: [server, log], startup_timeout: 5_000}
 
     %{root: root, log: log, tool: tool}
   end
@@ -72,7 +87,7 @@ defmodule Alto.Tools.CodexAgentTest do
     end
   end
 
-  defp wait_for(log, method, attempts \\ 200)
+  defp wait_for(log, method, attempts \\ 500)
   defp wait_for(_, _, 0), do: flunk("App Server request never arrived")
 
   defp wait_for(log, method, attempts) do
@@ -82,6 +97,124 @@ defmodule Alto.Tools.CodexAgentTest do
       Process.sleep(10)
       wait_for(log, method, attempts - 1)
     end
+  end
+
+  test "live steering uses the current turn and exposes only authorized messaging tools",
+       context do
+    {:ok, input} = Alto.Input.start_link()
+
+    {:ok, handle} =
+      Alto.start(
+        %{"task" => "live"},
+        opts(context, input: input, tools: [context.tool, Alto.Tools.ListAgents])
+      )
+
+    wait_for(context.log, "turn/start")
+    {:ok, receipt} = Alto.Messaging.send(input, text: "use the new plan")
+    assert {:ok, result} = Alto.await(handle)
+    [value] = result.output
+    assert [%{message_id: id, status: :delivered}] = value.deliveries
+    assert id == receipt.message_id
+    assert {:ok, %{status: :delivered}} = Alto.Input.receipt(input, id)
+    assert Alto.Input.list(input) == []
+    sent = requests(context.log)
+    steer = Enum.find(sent, &(&1["method"] == "turn/steer"))
+    assert steer["params"]["expectedTurnId"] == "turn-1"
+    assert steer["params"]["input"] == [%{"type" => "text", "text" => "use the new plan"}]
+
+    assert [%{"name" => "list_agents"}] =
+             Enum.find(sent, &(&1["method"] == "thread/start"))["params"]["dynamicTools"]
+
+    assert Enum.find(sent, &(&1["id"] == "dynamic"))["result"]["success"]
+  end
+
+  test "follow-up starts a fresh turn after the active turn finishes", context do
+    {:ok, input} = Alto.Input.start_link()
+
+    {:ok, handle} =
+      Alto.start(
+        %{"task" => "follow", "model" => "chosen-followup"},
+        opts(context,
+          input: input,
+          tools: [{elem(context.tool, 0), Keyword.put(elem(context.tool, 1), :effort, "high")}]
+        )
+      )
+
+    wait_for(context.log, "turn/start")
+    {:ok, later} = Alto.Messaging.send(input, text: "second task", delivery: :follow_up)
+    Process.sleep(40)
+    assert Enum.count(requests(context.log), &(&1["method"] == "turn/start")) == 1
+    {:ok, _} = Alto.Messaging.send(input, text: "finish current turn")
+    assert {:ok, result} = Alto.await(handle)
+    assert [%{turn_id: "turn-2"}] = result.output
+    turns = Enum.filter(requests(context.log), &(&1["method"] == "turn/start"))
+    assert length(turns) == 2
+    assert Enum.all?(turns, &(&1["params"]["model"] == "chosen-followup"))
+    assert Enum.all?(turns, &(&1["params"]["effort"] == "high"))
+    assert List.last(turns)["params"]["input"] == [%{"type" => "text", "text" => "second task"}]
+    assert {:ok, %{status: :delivered}} = Alto.Input.receipt(input, later.message_id)
+  end
+
+  test "Codex messages have runtime provenance and duplicate tool calls send once", context do
+    {:ok, router} = Alto.Messaging.start_link()
+    {:ok, inbox} = Alto.Input.start_link()
+    {:ok, peer} = Alto.Messaging.register(router, input: inbox, label: "peer")
+
+    assert {:ok, _} =
+             Alto.run(
+               %{"task" => "send:" <> peer.id},
+               opts(context, messaging: router, tools: [context.tool, Alto.Tools.SendMessage])
+             )
+
+    assert [%{text: "peer reply", sender: %{kind: :agent, id: from}}] = Alto.Input.list(inbox)
+    assert from != peer.id
+    sent = requests(context.log)
+    first = Enum.find(sent, &(&1["id"] == "send-first"))["result"]
+    assert first["success"]
+    assert Enum.find(sent, &(&1["id"] == "send-duplicate"))["result"] == first
+    assert Enum.find(sent, &(&1["id"] == "bad-turn"))["error"]["code"] == -32602
+  end
+
+  test "model-hidden messaging is not exposed to Codex", context do
+    {:ok, router} = Alto.Messaging.start_link()
+    {:ok, inbox} = Alto.Input.start_link()
+    {:ok, peer} = Alto.Messaging.register(router, input: inbox)
+
+    assert {:ok, _} =
+             Alto.run(
+               %{"task" => "send:" <> peer.id},
+               opts(context,
+                 messaging: router,
+                 tools: [context.tool, Alto.Tools.SendMessage],
+                 model_tools: []
+               )
+             )
+
+    assert Alto.Input.list(inbox) == []
+    sent = requests(context.log)
+    assert Enum.find(sent, &(&1["method"] == "thread/start"))["params"]["dynamicTools"] == []
+    assert Enum.find(sent, &(&1["id"] == "send-first"))["error"]["code"] == -32602
+  end
+
+  test "uncertain live delivery is retained as unknown and never resent", context do
+    {:ok, input} = Alto.Input.start_link()
+    {module, settings} = context.tool
+    tool = {module, Keyword.put(settings, :request_timeout, 300)}
+    {:ok, handle} = Alto.start(%{"task" => "timeout"}, opts(context, input: input, tools: [tool]))
+    wait_for(context.log, "turn/start")
+    {:ok, receipt} = Alto.Messaging.send(input, text: "timeout", idempotency_key: "once")
+    assert {:error, _, _} = Alto.await(handle)
+    assert {:ok, %{status: :unknown}} = Alto.Input.receipt(input, receipt.message_id)
+
+    assert {:ok, %{status: :unknown}} =
+             Alto.Messaging.send(input, text: "timeout", idempotency_key: "once")
+
+    assert Enum.count(requests(context.log), &(&1["method"] == "turn/steer")) == 1
+    {:ok, snapshot} = Alto.Input.snapshot(input)
+    {:ok, restored} = Alto.Input.start_link()
+    assert :ok = Alto.Input.restore(restored, snapshot)
+    assert Alto.Input.list(restored) == []
+    assert {:ok, %{status: :unknown}} = Alto.Input.receipt(restored, receipt.message_id)
   end
 
   test "read-only turn returns correlated messages, usage and rejects permission requests",

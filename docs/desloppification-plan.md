@@ -16,8 +16,10 @@ bringing the starting point for this follow-up to 33,340. Cleanup removed 879
 production lines, reaching 32,461. Shared agent messaging then added 1,073 net
 lines after integration. Input, retained-state and capability cleanup removed
 another 86 lines. Reusing ThousandIsland for Unix socket supervision removes
-69 more, leaving **33,379 (17.9% below the original)**. **4,921 lines remain** to
-reach the target.
+69 more, reaching 33,379. Composable messaging transports, async checkpointing
+and live Codex delivery then added 1,014 net production lines after integration.
+The current count is **34,393 (15.4% below the original)**. **5,935 lines remain**
+to reach the unchanged target.
 The reduction includes 15 lines of
 duplicate Registry documentation; examples separately lose 39 implementation lines.
 
@@ -83,6 +85,9 @@ git ls-files -z 'lib/*.ex' 'packages/alto_tui/lib/*.ex' |
 - User and agent input share one messaging ingress and receipt representation.
   Acknowledgements use `message_id`; the legacy enqueue API, numeric sequence,
   duplicate validation, and unreachable channel-free execution branches are gone.
+  Native and Codex input share message rendering; live ingress and restored
+  snapshots share message validation. Transport configuration uses the existing
+  capability resolver, and mailbox reads use the existing bounded-file helper.
 
 The “Analyze code duplication” findings were checked against actual callers.
 Extractions that added adapters without removing behavior were rejected.
@@ -93,6 +98,10 @@ No dependencies were added. The earlier SSE dependency replaced two parsers.
 Tool JSON fallback normalizes unsupported terms while preserving the result
 shape, so a tuple error cannot hide successful sibling output, run IDs, or usage.
 Native values and custom JSON encoders keep their existing fast path.
+
+Codex follow-up turns retain the selected model and effort. Cancellation tracks
+the accepted turn before settling its delivery receipt. Restored mailboxes reject
+duplicate message IDs, malformed messages and missing queued receipts.
 
 The spawn and async-start schemas reflect the resolved child limit. Regression tests cover
 schema limits 1, 4, and 12; five children run under limit 5 and are rejected
@@ -117,7 +126,7 @@ recovery, and actual user interactions.
 
 ## Verification
 
-The combined cleanup and messaging worktree passes **1,059 core tests and
+The combined cleanup and messaging worktree passes **1,072 core tests and
 141 TUI tests**.
 Run full suites sequentially with `--max-cases 8`; concurrent VMs caused timing
 failures. Tests allow fixture startup time and establish prepared work or an

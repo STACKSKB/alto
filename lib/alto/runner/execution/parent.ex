@@ -37,6 +37,7 @@ defmodule Alto.Runner.Execution.Parent do
       {:ok,
        opts
        |> Keyword.put(:session, packet["session_id"])
+       |> Keyword.put(:messaging_id, packet["messaging_id"])
        |> Keyword.put(:parent_transcript_revision, packet["transcript_revision"])}
     else
       nil -> {:error, :continuation_store_required}

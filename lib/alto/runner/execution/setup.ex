@@ -136,7 +136,12 @@ defmodule Alto.Runner.Execution.Setup do
         cwd: cwd,
         metadata: Keyword.get(opts, :tool_context_metadata, %{}),
         agent_identity: agent_identity,
-        messaging: Keyword.get(opts, :messaging)
+        messaging: Keyword.get(opts, :messaging),
+        input: Keyword.get(opts, :input),
+        input_reader: Keyword.get(opts, :input_reader),
+        messaging_tools:
+          Keyword.get(opts, :messaging_tools, Alto.Messaging.allowed_tools(settings)),
+        budget: settings.budget
       },
       model_requests: 0,
       usage: Usage.new(),

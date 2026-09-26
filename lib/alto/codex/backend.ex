@@ -76,7 +76,7 @@ defmodule Alto.Codex.Backend do
     model = Keyword.get(opts, :model)
     approval = Keyword.get(opts, :approval, :ask)
 
-    with {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval),
+    with {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval, opts),
          {:ok, result} <-
            Client.start_turn(client, %{
              "threadId" => thread_id,
@@ -135,8 +135,8 @@ defmodule Alto.Codex.Backend do
   def sandbox_policy(:read_only), do: %{"type" => "readOnly", "networkAccess" => false}
   def sandbox_policy(:full_access), do: %{"type" => "dangerFullAccess"}
 
-  defp ensure_thread(client, thread_id, cwd, model, approval) do
-    params = thread_params(cwd, model, approval)
+  defp ensure_thread(client, thread_id, cwd, model, approval, opts) do
+    params = thread_params(cwd, model, approval, opts)
 
     result =
       if is_binary(thread_id),
@@ -146,7 +146,7 @@ defmodule Alto.Codex.Backend do
     with {:ok, result} <- result, do: extract_thread_id(result)
   end
 
-  defp thread_params(cwd, model, approval) do
+  defp thread_params(cwd, model, approval, opts) do
     %{
       "cwd" => cwd,
       "model" => model,
@@ -155,6 +155,11 @@ defmodule Alto.Codex.Backend do
       "approvalsReviewer" => "user",
       "serviceName" => "alto"
     }
+    |> then(fn params ->
+      if opts[:dynamic_tools],
+        do: Map.put(params, "dynamicTools", opts[:dynamic_tools]),
+        else: params
+    end)
   end
 
   defp extract_thread_id(result) do

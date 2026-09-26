@@ -112,7 +112,7 @@ defmodule Alto.Codex.AppServer.Client do
   def handle_continue(:open, state) do
     params = %{
       "clientInfo" => %{"name" => "alto", "title" => "Alto", "version" => "0.1.0"},
-      "capabilities" => %{"experimentalApi" => false}
+      "capabilities" => %{"experimentalApi" => Keyword.get(state.opts, :experimental_api, false)}
     }
 
     case JSONRPC.open(
@@ -211,6 +211,7 @@ defmodule Alto.Codex.AppServer.Client do
     args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
     cwd: [type: :string],
     env: [type: {:map, :any, :any}, default: %{}],
+    experimental_api: [type: :boolean, default: false],
     instance: [type: :any, default: :shared],
     startup_timeout: [type: :pos_integer, default: 30_000],
     request_timeout: [type: :pos_integer, default: @default_turn_timeout],

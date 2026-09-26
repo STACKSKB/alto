@@ -25,13 +25,14 @@ Each channel has one active consumer, preventing concurrent runs from inserting
 the same message. Messages are acknowledged only after transcript insertion;
 failed insertion leaves them queued. A channel outlives a consumer crash, if its
 own host remains alive, and can be attached to a later run. `Alto.Input.list/1`
-reports pending entries. The channel itself is in memory, so hosts needing
-durable ingress should retain submissions in their application store.
+reports pending entries. Memory is the default transport. File-backed and custom transports use the same
+mailbox interface; see below.
 
 An accepted enqueue is not a promise of delivery: a run may finish or exhaust
 its budget before consuming it. Hosts should inspect pending entries on
-completion and decide whether to start another run. Checkpoints do not serialize
-the channel; the host explicitly supplies it again on resume.
+completion and decide whether to start another run. Checkpoints retain queue contents, receipt history, deduplication keys and stable
+agent addresses. Connections, reader leases and credentials are recreated from
+host configuration on resume.
 
 In the optional TUI, Enter queues a native Alto follow-up while a run is active,
 and Ctrl+Enter submits native steering input for the next model boundary. Input
@@ -93,8 +94,75 @@ explicitly attributed peer context. They do not replace the default loop's
 current task. User messages retain the existing task-steering behavior. Custom
 loops receive the structured `:input_received` event and choose their response.
 Neither delivery mode grants tools, changes approvals, refreshes budgets, nor
-interrupts already dispatched work. The Codex whole-agent adapter currently
-advertises `messaging: false` and rejects live message delivery.
+interrupts already dispatched work. The Codex whole-agent adapter accepts live steering and follow-ups, and can call
+the same authorized messaging tools as its parent.
 
 The front-end protocol exposes `send_message` and `list_agents`; the TUI uses
 the same host ingress for Enter and Ctrl+Enter. See [PROTOCOL.md](../PROTOCOL.md).
+
+## Composable transports and checkpoints
+
+Use `Alto.Input.open/1` for an explicit host channel, or configure the transport
+for every mailbox created by a runner or front-end configuration:
+
+```elixir
+Alto.start("Inspect the parser",
+  provider: provider,
+  messaging_transport: {Alto.Messaging.Transport.File, directory: "/private/alto-mailboxes"},
+  checkpoint_version: "application-v1"
+)
+
+{:ok, input} = Alto.Input.open(
+  transport: {Alto.Messaging.Transport.File, directory: "/private/alto-mailboxes"},
+  id: "host-inbox"
+)
+```
+
+Omitting the transport uses in-memory `Alto.Input`. A custom module implements
+`Alto.Messaging.Transport`: `open(options)`, `request(handle, operation, timeout)`
+and `close(handle)`. The runtime supplies `:id`, a stable mailbox address, in
+`open/1` options. An SSH adapter can forward requests to a remote mailbox service;
+a polling adapter can transact against another store. Core execution does not
+assume a socket, filesystem, polling interval, or SSH command.
+
+The request protocol is defined by `Alto.Input.request/3` and its public wrappers.
+Implementations must provide atomic admission, deduplication, exclusive reader
+claim/release, opaque delegated readers, acknowledgement, snapshot and restore.
+`:checkpoint` returns the same portable state as `:snapshot` and seals admission;
+new sends return `:input_checkpointed` until restore, while duplicate sends still
+return their original receipt. This fences the snapshot against accepting and
+then losing late messages. Snapshot inspection alone does not seal admission.
+Transports must retain newer writes/receipts when restoring the same durable
+mailbox, and reject conflicting state rather than overwriting it. Cross-store
+migration requires a quiesced source and the host's existing one-use checkpoint
+fence. Checkpoint format 3 is required; earlier continuation formats are rejected.
+
+The supplied file transport uses private files, atomic replacement and OS advisory
+locks. Writers can open independent handles to the same address. The reader holds
+an OS lifetime lock; a crashed reader releases it without waiting for a lease to
+expire. Use a filesystem that supports flock and atomic rename; this is not a
+claim that arbitrary network filesystems have those semantics. Files and receipts
+persist after a run, and retention/removal belongs to the host.
+
+## Codex live delivery
+
+The delegated adapter calls App Server `turn/steer` with the active turn ID.
+`follow_up` starts another turn in the same thread after the current turn finishes.
+Peer messages retain their agent identity and are explicitly labeled peer context.
+`list_agents` and `send_message` are experimental App Server dynamic tools, exposed
+only when those exact built-in capabilities are model-visible in the parent.
+Each delivery/tool call consumes the shared Alto effect budget. Codex's internal
+model requests remain externally accounted.
+
+Receipts report `:delivered` after App Server accepts input. Before network dispatch,
+the adapter records `:unknown`; a timeout, disconnect, stale turn rejection, or crash
+leaves that receipt explicit and prevents automatic replay. Hosts must reconcile
+uncertain delivery before choosing to submit a new message. Delivery does not mean
+the agent followed the instruction. Duplicate dynamic call IDs reuse their response;
+conflicting calls and mismatched thread/turn IDs are rejected. Permission requests
+remain subject to the adapter's existing read-only boundary.
+
+An external Codex turn is one Alto effect: checkpointing waits for that effect to
+settle. It does not serialize a running App Server process or interrupt and replay
+an external turn. The official protocol contracts are documented in
+[Codex App Server](https://learn.chatgpt.com/docs/app-server).

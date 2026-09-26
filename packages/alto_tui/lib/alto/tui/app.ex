@@ -433,11 +433,14 @@ defmodule Alto.TUI.App do
 
   defp ensure_input(state, task_id) do
     case Map.get(state.inputs, task_id) do
-      input when is_pid(input) ->
+      input when not is_nil(input) ->
         {:ok, state}
 
       nil ->
-        case Alto.Input.start_link() do
+        case Alto.Input.open(
+               transport: state.run_options[:messaging_transport],
+               id: "task-" <> task_id
+             ) do
           {:ok, input} -> {:ok, put_in(state.inputs[task_id], input)}
           {:error, reason} -> {:error, reason}
         end
@@ -446,7 +449,7 @@ defmodule Alto.TUI.App do
 
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
-      {false, input} when is_pid(input) and map_size(state.runs) < 32 ->
+      {false, input} when not is_nil(input) and map_size(state.runs) < 32 ->
         case Alto.Input.take(input, :user) do
           :empty ->
             state

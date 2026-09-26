@@ -13,7 +13,7 @@ defmodule Alto.Runner.Checkpoint do
   alias Alto.Persistence.Codec
   alias Alto.OperationLog
   @limit 1_000_000
-  @continuation_format 2
+  @continuation_format 3
   @fields [
     :messages_rev,
     :transcript_bytes,
@@ -26,7 +26,9 @@ defmodule Alto.Runner.Checkpoint do
     :transcript_revision,
     :compaction_count,
     :resolved_operations,
-    :agent_identity
+    :agent_identity,
+    :communication,
+    :async_children
   ]
 
   def capture(run, pending, remaining, terminal) do
@@ -65,8 +67,9 @@ defmodule Alto.Runner.Checkpoint do
          {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          true <- saved.transcript_bytes <= run.max_transcript_bytes,
-         true <- within_budget?(budget) do
-      {:ok, restore_run(run, saved, state, budget),
+         true <- within_budget?(budget),
+         {:ok, restored} <- restore_run(run, saved, state, budget) do
+      {:ok, restored,
        %{pending: pending, remaining: remaining, terminal: terminal, decision: decision}}
     else
       false -> {:error, :checkpoint_mismatch}
@@ -89,7 +92,7 @@ defmodule Alto.Runner.Checkpoint do
     :tool_timeout,
     :approval_timeout
   ]
-  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget session_id transcript_revision expires_at_ms)
+  @parent_packet_fields ~w(format continuation_format kind version fingerprint state budget session_id transcript_revision expires_at_ms messaging_id)
 
   @doc """
   Capture a root parent's pending child join or its exact next frame.
@@ -174,9 +177,10 @@ defmodule Alto.Runner.Checkpoint do
          {:ok, budget} <- Budget.restore(opts, packet["budget"]),
          budget <- clamp_parent_deadline(budget, binding.expires_at_ms),
          :ok <- Budget.check(budget),
-         true <- within_budget?(budget) do
+         true <- within_budget?(budget),
+         {:ok, restored} <- restore_run(run, saved, state, budget) do
       restored =
-        restore_run(run, saved, state, budget)
+        restored
         |> Map.merge(authority)
         |> Map.put(:parent_expires_at_ms, binding.expires_at_ms)
 
@@ -270,8 +274,47 @@ defmodule Alto.Runner.Checkpoint do
     end
   end
 
+  @doc false
+  def capture_execution(run, effects, terminal) do
+    with true <- is_binary(run.checkpoint_version) and run.checkpoint_version != "",
+         true <- is_nil(run.workspaces),
+         true <- is_nil(run.continuation_store),
+         {:ok, captured} <-
+           capture_state(run, @fields, %{pending: :frame, remaining: effects, terminal: terminal}) do
+      {:ok,
+       Map.put(checkpoint_packet(run, captured, Budget.snapshot(run.budget)), "kind", "execution")}
+    else
+      false -> {:error, :async_checkpoint_not_supported}
+      error -> error
+    end
+  end
+
+  @doc false
+  def restore_execution(
+        run,
+        %{"kind" => "execution", "continuation_format" => @continuation_format} = packet
+      ) do
+    with true <- run.agent_depth > 0,
+         {:ok, %{run: saved, loop: loop, pending: :frame, remaining: effects, terminal: terminal}} <-
+           decode_state(run, packet, @fields),
+         true <- valid_frame?(effects, terminal),
+         {:ok, state} <- run.spec.driver.load_checkpoint(loop, run.spec),
+         :ok <- Budget.check(run.budget),
+         {:ok, restored} <- restore_run(run, saved, state, run.budget) do
+      {:ok, restored, %{effects: effects, terminal: terminal}}
+    else
+      false -> {:error, :checkpoint_mismatch}
+      error -> error
+    end
+  end
+
+  def restore_execution(_, _), do: {:error, :invalid_async_checkpoint}
+
   defp capture_state(run, fields, frame, extras \\ %{}) do
-    with {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
+    with {:ok, children} <- capture_agents(run),
+         {:ok, communication} <- capture_messaging(run, map_size(extras) == 0),
+         run <- Map.merge(run, %{communication: communication, async_children: children}),
+         {:ok, loop} <- run.spec.driver.dump_checkpoint(run.loop_state, run.spec),
          {:ok, revision} <- transcript_revision(run),
          true <- run.transcript_revision in [:any, revision],
          saved <- Map.take(%{run | transcript_revision: revision}, fields),
@@ -291,6 +334,7 @@ defmodule Alto.Runner.Checkpoint do
       "state" => captured.encoded,
       "budget" => budget,
       "session_id" => run.session,
+      "messaging_id" => messaging_id(run),
       "transcript_revision" => captured.revision
     }
   end
@@ -300,10 +344,14 @@ defmodule Alto.Runner.Checkpoint do
            is_binary(run.checkpoint_version) and packet["version"] == run.checkpoint_version,
          {:ok, fingerprint} <- fingerprint(run),
          true <- packet["fingerprint"] == fingerprint,
+         true <-
+           is_nil(packet["messaging_id"]) or is_nil(messaging_id(run)) or
+             packet["messaging_id"] == messaging_id(run),
          {:ok, decoded} <- decode(packet["state"]),
          true <- is_map(decoded),
          %{run: saved} <- decoded,
          true <- is_map(saved) and Enum.sort(Map.keys(saved)) == Enum.sort(fields),
+         true <- not is_nil(packet["messaging_id"]) or is_nil(saved.communication),
          true <- valid_compaction_state?(saved),
          true <- valid_history_state?(saved),
          true <- saved.transcript_revision == packet["transcript_revision"],
@@ -315,12 +363,43 @@ defmodule Alto.Runner.Checkpoint do
   end
 
   defp restore_run(run, saved, loop_state, budget) do
-    run
-    |> Map.merge(saved)
-    |> Map.put(:loop_state, loop_state)
-    |> Map.put(:budget, budget)
-    |> Map.update!(:tool_context, &Map.put(&1, :agent_identity, saved.agent_identity))
+    restored =
+      run
+      |> Map.merge(saved)
+      |> Map.put(:loop_state, loop_state)
+      |> Map.put(:budget, budget)
+      |> Map.update!(
+        :tool_context,
+        &Map.merge(&1, %{agent_identity: saved.agent_identity, budget: budget})
+      )
+
+    with :ok <- restore_messaging(run, saved.communication),
+         :ok <- restore_agents(run, saved.async_children, restored) do
+      {:ok, Map.put(restored, :activate_agents, true)}
+    end
   end
+
+  defp messaging_id(run), do: Map.get(Map.get(run, :messaging) || %{}, :id)
+
+  defp capture_messaging(%{messaging: sender}, seal) when not is_nil(sender),
+    do: Alto.Messaging.snapshot(sender, seal)
+
+  defp capture_messaging(_, _), do: {:ok, nil}
+
+  defp capture_agents(%{async_agents: agents} = run) when is_pid(agents),
+    do: Alto.Runner.Agents.checkpoint(agents, run.budget)
+
+  defp capture_agents(_), do: {:ok, []}
+
+  defp restore_messaging(_, nil), do: :ok
+
+  defp restore_messaging(run, saved), do: Alto.Messaging.restore(run.messaging, saved)
+
+  defp restore_agents(%{async_agents: agents}, saved, restored) when is_pid(agents),
+    do: Alto.Runner.Agents.restore(agents, saved, restored)
+
+  defp restore_agents(_, [], _), do: :ok
+  defp restore_agents(_, _, _), do: {:error, :checkpoint_mismatch}
 
   defp parent_capabilities(run) do
     cond do

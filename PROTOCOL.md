@@ -384,9 +384,12 @@ for the root input channel. Optional `in_reply_to` correlates a response.
 The runtime derives user identity; clients cannot set sender identity or roles.
 An `ok` reply contains `message_id` and `status` (`queued`, or `consumed` on a
 retry after transcript insertion). The `input_received` event reports actual
-consumption with the same ID. Neither status means the agent obeyed the message.
+consumption with the same ID. No status means the agent obeyed the message. Codex delivery uses `delivered`
+after App Server acceptance, or `unknown` when dispatch cannot be confirmed;
+unknown messages are never automatically replayed.
 Identical idempotency keys deduplicate within the recipient channel; changed
-content under the same key is rejected. These receipts and queues are in memory.
+content under the same key is rejected. Host-selected transports determine
+mailbox persistence; checkpoint packets also retain queues and receipts.
 Unknown runs, closed recipients, full channels, and unsupported backends fail
 explicitly; submission does not start a new run or interrupt an active tool.
 
@@ -399,6 +402,9 @@ explicitly; submission does not start a new run or interrupt an active tool.
 The `ok` reply contains `agents` with `agent_id`, display `label`, `parent`,
 `status`, and `messaging` capability. At most 256 addresses are retained per tree.
 Root registration is asynchronous, so an immediate listing may be empty.
+Stable addresses, queued messages and receipts survive execution checkpoints.
+Admission to a captured mailbox returns `input_checkpointed` until restore.
+Transport selection is trusted host configuration, not a wire-request field.
 The registry keeps channels with its bounded retained-run window; they are
 released on eviction. Trusted hosts can inspect unconsumed root submissions with
 `Alto.FrontEnd.Registry.input_status/2`.

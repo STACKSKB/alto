@@ -46,6 +46,8 @@ defmodule Alto.Runner.Execution.Session do
   end
 
   defp completion({:ok, _result}), do: {"ok", nil, true}
+  defp completion({:error, :execution_suspended, _result}), do: {"suspended", nil, false}
+
   defp completion({:error, :approval_suspended, _result}), do: {"suspended", nil, false}
 
   defp completion({:error, reason, %{checkpoint: %{"kind" => kind}}})

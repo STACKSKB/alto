@@ -48,13 +48,21 @@ defmodule Alto.Tools.CodexAgent do
                cwd: context.cwd,
                model: model,
                effort: Keyword.get(opts, :effort),
-               approval: :read_only
+               approval: :read_only,
+               dynamic_tools: dynamic_tools(context)
              ) do
         send(guardian, {:turn, turn})
 
         await(
           client,
-          Map.put(turn, :monitor, Process.monitor(client)),
+          Map.merge(turn, %{
+            monitor: Process.monitor(client),
+            context: context,
+            opts: Keyword.put(opts, :model, model),
+            guardian: guardian,
+            deliveries: [],
+            calls: %{}
+          }),
           %{},
           nil,
           Keyword.get(opts, :max_output_bytes, 48_000)
@@ -73,7 +81,9 @@ defmodule Alto.Tools.CodexAgent do
     client_opts =
       opts |> Keyword.take([:command, :args, :env, :startup_timeout, :request_timeout])
 
-    client_opts = Keyword.merge(client_opts, cwd: context.cwd, instance: make_ref())
+    client_opts =
+      Keyword.merge(client_opts, cwd: context.cwd, instance: make_ref(), experimental_api: true)
+
     # Own startup as well as the turn so cancellation during the handshake
     # cannot leave a private App Server behind.
     owner = self()
@@ -140,6 +150,10 @@ defmodule Alto.Tools.CodexAgent do
       when thread == turn.thread_id ->
         event(method, params, client, turn, messages, usage, limit)
 
+      {:codex_request, ^client, id, "item/tool/call", params} ->
+        turn = dynamic_call(client, id, params, turn)
+        await(client, turn, messages, usage, limit)
+
       {:codex_request, ^client, id, _method, _params} ->
         Client.reject(
           client,
@@ -155,6 +169,12 @@ defmodule Alto.Tools.CodexAgent do
 
       {:DOWN, ^monitor, :process, _, reason} ->
         {:unknown, {:codex_disconnected, reason}}
+    after
+      20 ->
+        case deliver(client, turn, [:steer], :steer) do
+          {:ok, turn} -> await(client, turn, messages, usage, limit)
+          error -> error
+        end
     end
   end
 
@@ -180,22 +200,32 @@ defmodule Alto.Tools.CodexAgent do
   defp event(
          "turn/completed",
          %{"turn" => %{"id" => id, "status" => status} = result},
-         _client,
+         client,
          %{turn_id: id} = turn,
          messages,
          usage,
-         _limit
+         limit
        ) do
     if status == "completed" do
-      {:ok,
-       %{
-         backend: "codex",
-         thread_id: turn.thread_id,
-         turn_id: id,
-         messages: messages,
-         usage: usage,
-         model_request_accounting: "external"
-       }}
+      case deliver(client, turn, [:steer, :follow_up], :next_turn) do
+        {:ok, %{turn_id: ^id}} ->
+          {:ok,
+           %{
+             backend: "codex",
+             thread_id: turn.thread_id,
+             turn_id: id,
+             messages: messages,
+             usage: usage,
+             model_request_accounting: "external",
+             deliveries: turn.deliveries
+           }}
+
+        {:ok, next} ->
+          await(client, next, messages, usage, limit)
+
+        error ->
+          error
+      end
     else
       {:unknown, {:codex_turn_failed, status, result["error"]}}
     end
@@ -203,4 +233,141 @@ defmodule Alto.Tools.CodexAgent do
 
   defp event(_, _, client, turn, messages, usage, limit),
     do: await(client, turn, messages, usage, limit)
+
+  defp dynamic_tools(context) do
+    Enum.map(context.messaging_tools || [], fn name ->
+      module = messaging_module(name)
+      schema = module.schema([])
+      %{name: name, description: schema.description, inputSchema: schema.parameters}
+    end)
+  end
+
+  defp messaging_module("send_message"), do: Alto.Tools.SendMessage
+  defp messaging_module("list_agents"), do: Alto.Tools.ListAgents
+
+  defp dynamic_call(client, id, params, turn) do
+    name = params["tool"]
+    call_id = params["callId"]
+    args = params["arguments"]
+
+    valid =
+      params["threadId"] == turn.thread_id and params["turnId"] == turn.turn_id and
+        is_nil(params["namespace"]) and name in (turn.context.messaging_tools || []) and
+        is_binary(call_id) and byte_size(call_id) in 1..256 and is_map(args) and
+        :erlang.external_size(args) <= 66_000
+
+    if valid do
+      fingerprint = {name, args}
+
+      case turn.calls[call_id] do
+        {^fingerprint, result} ->
+          Client.respond(client, id, result)
+          turn
+
+        nil when map_size(turn.calls) < 256 ->
+          outcome =
+            with :ok <- Alto.Runner.Budget.take(turn.context.budget),
+                 do: messaging_module(name).run(args, turn.context, [])
+
+          {success, value} =
+            case outcome do
+              {:ok, value} -> {true, value}
+              {:error, reason} -> {false, %{error: inspect(reason, limit: 10)}}
+            end
+
+          result = %{
+            success: success,
+            contentItems: [
+              %{type: "inputText", text: JSON.encode!(Alto.Protocol.encode_term(value))}
+            ]
+          }
+
+          Client.respond(client, id, result)
+          %{turn | calls: Map.put(turn.calls, call_id, {fingerprint, result})}
+
+        _ ->
+          Client.reject(client, id, -32602, "Conflicting or excessive dynamic tool calls")
+          turn
+      end
+    else
+      Client.reject(client, id, -32602, "Uncorrelated or unauthorized messaging tool call")
+      turn
+    end
+  end
+
+  defp deliver(_client, %{context: %{input: nil}} = turn, _modes, _kind), do: {:ok, turn}
+
+  defp deliver(client, turn, modes, kind) do
+    context = turn.context
+
+    case Alto.Input.read(context.input, context.input_reader, modes) do
+      nil ->
+        {:ok, turn}
+
+      {:error, reason} ->
+        {:unknown, {:codex_input_failed, reason}}
+
+      entry ->
+        # Fence delivery before network I/O. A crash or timeout leaves an explicit
+        # unknown receipt; restore must never automatically resend this message.
+        with :ok <- Alto.Runner.Budget.take(context.budget),
+             :ok <-
+               Alto.Input.acknowledge(
+                 context.input,
+                 context.input_reader,
+                 entry.message_id,
+                 :unknown
+               ),
+             {:ok, response} <- send_input(client, turn, entry, kind),
+             {:ok, next} <- delivered_turn(turn, response, kind),
+             _ <- send(turn.guardian, {:turn, next}),
+             :ok <- Alto.Input.settle(context.input, context.input_reader, entry.message_id) do
+          {:ok,
+           %{
+             next
+             | deliveries:
+                 turn.deliveries ++
+                   [%{message_id: entry.message_id, sender: entry.sender, status: :delivered}]
+           }}
+        else
+          {:error, reason} -> {:unknown, {:codex_message_delivery, entry.message_id, reason}}
+        end
+    end
+  end
+
+  defp send_input(client, turn, entry, :steer) do
+    Client.request(
+      client,
+      "turn/steer",
+      %{
+        "threadId" => turn.thread_id,
+        "expectedTurnId" => turn.turn_id,
+        "input" => [%{"type" => "text", "text" => Alto.Messaging.message_text(entry)}]
+      },
+      Keyword.get(turn.opts, :request_timeout, 5_000)
+    )
+  end
+
+  defp send_input(client, turn, entry, :next_turn) do
+    Client.request(
+      client,
+      "turn/start",
+      %{
+        "threadId" => turn.thread_id,
+        "input" => [%{"type" => "text", "text" => Alto.Messaging.message_text(entry)}],
+        "model" => turn.opts[:model],
+        "effort" => turn.opts[:effort],
+        "approvalPolicy" => "never",
+        "sandboxPolicy" => Backend.sandbox_policy(:read_only)
+      },
+      Keyword.get(turn.opts, :request_timeout, 5_000)
+    )
+  end
+
+  defp delivered_turn(turn, %{"turnId" => id}, :steer) when id == turn.turn_id, do: {:ok, turn}
+
+  defp delivered_turn(turn, %{"turn" => %{"id" => id}}, :next_turn) when is_binary(id),
+    do: {:ok, %{turn | turn_id: id}}
+
+  defp delivered_turn(_, _, _), do: {:error, :invalid_codex_delivery_response}
 end

@@ -304,6 +304,11 @@ defmodule Alto.Runner.Execution.Children do
           else
             sub_opts = child_options(spec, run, provider)
 
+            sub_opts =
+              if spec[:async_checkpoint],
+                do: Keyword.put(sub_opts, :checkpoint, {spec.async_checkpoint, :resume}),
+                else: sub_opts
+
             with {:ok, sub_opts} <- resumed_options(sub_opts, Map.get(spec, :resume_data), run),
                  do: Alto.Runner.start(spec.task, Keyword.put(sub_opts, :runner, run.runner))
           end
@@ -319,7 +324,13 @@ defmodule Alto.Runner.Execution.Children do
       specs
       |> Enum.reject(&Map.has_key?(&1, :messaging))
       |> Enum.map(fn spec ->
-        [label: spec.id, parent: run.messaging.id, supported: spec.profile_key != "codex"]
+        id =
+          case Map.get(spec, :resume_data) do
+            {_, entry, _} -> entry.checkpoint["messaging_id"]
+            _ -> nil
+          end
+
+        [label: spec.id, parent: run.messaging.id, supported: true, id: id]
       end)
 
     with {:ok, senders} <- Alto.Messaging.register_many(run.messaging.router, options) do
@@ -388,6 +399,7 @@ defmodule Alto.Runner.Execution.Children do
           owner: run.execution_owner,
           messaging: spec.messaging,
           agent_scheduler: Map.get(spec, :agent_scheduler),
+          messaging_tools: Alto.Messaging.allowed_tools(run),
           parent_max_agent_depth: run.max_agent_depth,
           max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
           provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
@@ -415,7 +427,8 @@ defmodule Alto.Runner.Execution.Children do
         :subagent_ticket,
         :resume_data,
         :messaging,
-        :agent_scheduler
+        :agent_scheduler,
+        :async_checkpoint
       ])
 
   defp resolve_child_provider(%{profile_key: key, model: model}, run)

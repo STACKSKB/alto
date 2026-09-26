@@ -12,6 +12,7 @@ defmodule Alto.Config do
     :runner_options,
     :input,
     :messaging,
+    :messaging_transport,
     :loop,
     :provider,
     :provider_profiles,

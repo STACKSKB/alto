@@ -113,9 +113,18 @@ children and prevents queued children from starting. A final answer does not
 leave detached workers behind.
 
 `spawn_agents` retains its existing blocking batch and durable-continuation
-semantics. Async agents are in-memory resources: `start_agents` explicitly
-rejects configurations with `checkpoint_version` or `continuation_store` rather
-than producing a checkpoint that loses live children. Existing blocking batches
+semantics. With `checkpoint_version`, an approval checkpoint cooperatively pauses
+native async children at effect boundaries, saves pending children and completed
+results, and retains their stable messaging addresses, queues and receipts. Resume
+continues the saved frames under the restored shared budget; completed effects are
+not replayed. A waiting child can yield for checkpoint capture without acquiring
+another execution slot. In-flight provider/tool effects must settle within the
+existing deadline. Loops must support checkpoint callbacks and saved state must fit
+the bounded portable codec.
+
+Async starts still reject `continuation_store`, and checkpointed async starts reject
+workspace-managed children. Use blocking `spawn_agents` and its existing durable
+child-decision/workspace continuation protocol for those combinations. Existing blocking batches
 retain their per-batch concurrency limits. All modes inherit tool authority,
 approvals, depth limits, and the root effect/model-request budget. The execution
 tree retains at most 256 addresses, including completed and failed instances.

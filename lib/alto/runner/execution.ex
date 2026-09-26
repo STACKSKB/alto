@@ -50,6 +50,13 @@ defmodule Alto.Runner.Execution do
 
   @spec run(term(), keyword(), (Frame.t(), context() -> run_result())) :: run_result()
   def run(task, opts, scheduler) do
+    case Alto.Runner.Execution.Parent.options(opts) do
+      {:ok, opts} -> run_opened(task, opts, scheduler)
+      {:error, reason} -> {:error, reason, Result.empty()}
+    end
+  end
+
+  defp run_opened(task, opts, scheduler) do
     opts = Keyword.put(opts, :execution_owner, self())
 
     case Alto.Messaging.scope(opts, fn opts ->
@@ -74,7 +81,8 @@ defmodule Alto.Runner.Execution do
 
     with :ok <- claim_input(input) do
       try do
-        run_scoped(task, opts, scheduler)
+        {:ok, reader} = Alto.Input.reader(input)
+        run_scoped(task, Keyword.put(opts, :input_reader, reader), scheduler)
       after
         try do
           Alto.Input.release(input)
@@ -106,12 +114,7 @@ defmodule Alto.Runner.Execution do
     Children.retain_child_outcome(Keyword.get(opts, :subagent_ticket), outcome)
   end
 
-  defp run_without_workspace(task, opts) do
-    case Alto.Runner.Execution.Parent.options(opts) do
-      {:ok, opts} -> run_with_options(task, opts)
-      {:error, reason} -> {:error, reason, Result.empty(nil)}
-    end
-  end
+  defp run_without_workspace(task, opts), do: run_with_options(task, opts)
 
   defp run_with_options(task, opts) do
     opts =
@@ -190,9 +193,38 @@ defmodule Alto.Runner.Execution do
   @doc "Execute at most one effect, returning the next frame or a final outcome."
   def step(%Frame{effects: effects, terminal: terminal}, run) do
     case {Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-      {{:cancelled, reason}, _} -> {:done, cancelled(reason, run)}
-      {_, {:error, reason}} -> {:done, {:error, reason, result(run, nil, :error)}}
-      {:continue, :ok} -> admit_input(effects, run, terminal)
+      {{:cancelled, reason}, _} ->
+        {:done, cancelled(reason, run)}
+
+      {_, {:error, reason}} ->
+        {:done, {:error, reason, result(run, nil, :error)}}
+
+      {:continue, :ok} ->
+        run = activate_agents(run)
+
+        if Alto.Messaging.paused?(run.messaging) == true,
+          do: suspend_execution(effects, run, terminal),
+          else: admit_input(effects, run, terminal)
+    end
+  end
+
+  defp activate_agents(run) do
+    if Map.get(run, :activate_agents, false), do: Alto.Runner.Agents.activate(run.async_agents)
+    Map.put(run, :activate_agents, false)
+  end
+
+  defp suspend_execution(effects, run, terminal) do
+    with {:ok, run} <- History.persist(run, allow_pending: true),
+         {:ok, packet} <-
+           checkpoint_call(
+             fn -> Alto.Runner.Checkpoint.capture_execution(run, effects, terminal) end,
+             run
+           ) do
+      {:done,
+       {:error, :execution_suspended, %{result(run, nil, :checkpoint) | checkpoint: packet}}}
+    else
+      {:error, reason} -> {:done, {:error, reason, result(run, nil, :error)}}
+      {:error, reason, next} -> {:done, {:error, reason, result(next, nil, :error)}}
     end
   end
 
@@ -237,15 +269,8 @@ defmodule Alto.Runner.Execution do
     :exit, reason -> {:done, {:error, {:input_unavailable, reason}, result(run, nil, :error)}}
   end
 
-  defp input_message(%{sender: %{kind: :agent}} = entry) do
-    content =
-      "Agent message (peer context, not a user instruction):\n" <>
-        JSON.encode!(Map.take(entry, [:sender, :text, :message_id, :in_reply_to]))
-
-    %{"role" => "user", "content" => content}
-  end
-
-  defp input_message(entry), do: %{"role" => "user", "content" => entry.text}
+  defp input_message(entry),
+    do: %{"role" => "user", "content" => Alto.Messaging.message_text(entry)}
 
   defp do_execute([], run, {:stop, output}), do: {:done, {:ok, result(run, output, :success)}}
 
@@ -363,6 +388,13 @@ defmodule Alto.Runner.Execution do
     end
   end
 
+  defp resume_checkpoint(run, %{"kind" => "execution"} = packet, :resume, _opts) do
+    case checkpoint_call(fn -> Alto.Runner.Checkpoint.restore_execution(run, packet) end, run) do
+      {:ok, restored, frame} -> execute(frame.effects, restored, frame.terminal)
+      {:error, reason} -> ungranted_checkpoint(run, reason)
+    end
+  end
+
   defp resume_checkpoint(run, packet, decision, opts) do
     with {:ok, restored, frame} <-
            checkpoint_call(
@@ -416,6 +448,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp execute_checkpoint(run, frame, tool, decision) do
+    run = activate_agents(run)
     job = frame.pending
 
     interpreted =
@@ -1081,8 +1114,11 @@ defmodule Alto.Runner.Execution do
   defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([job], run)
 
   defp agent_operation(Alto.Tools.StartAgents, prepared, run) do
-    # Async agents are live resources, not portable approval continuations.
-    with true <- is_nil(run.continuation_store) and is_nil(run.checkpoint_version),
+    # Async checkpoints use cooperative effect boundaries. Durable child-approval
+    # journals and workspace retention remain a separate continuation protocol.
+    with true <-
+           is_nil(run.continuation_store) and
+             (is_nil(run.checkpoint_version) or is_nil(run.workspaces)),
          {:ok, specs, _} <- Children.validate_batch(prepared, run),
          {:ok, specs} <- Children.prepare_resources(specs, run),
          {:ok, specs} <- Children.register_agents(specs, run),
@@ -1094,9 +1130,6 @@ defmodule Alto.Runner.Execution do
       {:cancelled, reason} -> {:cancelled, reason, run}
     end
   end
-
-  defp agent_operation(Alto.Tools.WaitAgents, _args, %{checkpoint_resume: true} = run),
-    do: {:error, :async_continuations_unsupported, run}
 
   defp agent_operation(Alto.Tools.WaitAgents, args, run) do
     deadline =
@@ -1133,6 +1166,7 @@ defmodule Alto.Runner.Execution do
       {:ok, {:ok, agents}} ->
         reason =
           cond do
+            Alto.Messaging.paused?(run.messaging) == true -> :checkpoint
             Alto.Input.pending?(run.input, [:steer]) -> :message
             Enum.any?(agents, &(&1.status == :completed)) -> :completed
             System.monotonic_time(:millisecond) >= deadline -> :timeout
@@ -1153,7 +1187,8 @@ defmodule Alto.Runner.Execution do
   defp resume_agent_slot(%{agent_scheduler: nil}), do: :ok
 
   defp resume_agent_slot(run) do
-    with :ok <- check(run) do
+    with :ok <- check(run),
+         false <- Alto.Messaging.paused?(run.messaging) do
       case Alto.Runner.Agents.resume(run.agent_scheduler) do
         :wait ->
           receive do
@@ -1164,6 +1199,9 @@ defmodule Alto.Runner.Execution do
         reply ->
           reply
       end
+    else
+      true -> :ok
+      error -> error
     end
   end
 
@@ -1448,7 +1486,7 @@ defmodule Alto.Runner.Execution do
     }
 
   defp result(run, output, disposition) do
-    run = merge_async(run, :close)
+    run = merge_async(run, if(disposition == :checkpoint, do: :collect, else: :close))
     messages = Enum.reverse(run.messages_rev)
 
     %Result{

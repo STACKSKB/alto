@@ -1,5 +1,5 @@
 defmodule Alto.Runner.Agents do
-  @moduledoc "In-memory child scheduling for nonblocking start and interruptible joins."
+  @moduledoc "Child scheduling for nonblocking start and interruptible joins."
   use GenServer
   alias Alto.Runner
   alias Alto.Runner.Execution.Children
@@ -10,6 +10,29 @@ defmodule Alto.Runner.Agents do
   def collect(pid), do: GenServer.call(pid, :collect, :infinity)
   def close(pid), do: GenServer.call(pid, :close, :infinity)
 
+  @doc false
+  def checkpoint(pid, budget) do
+    with :ok <- GenServer.call(pid, :freeze), do: await_checkpoint(pid, budget)
+  end
+
+  defp await_checkpoint(pid, budget) do
+    with :ok <- Alto.Runner.Budget.check(budget) do
+      case GenServer.call(pid, :checkpoint) do
+        :pending ->
+          Process.sleep(10)
+          await_checkpoint(pid, budget)
+
+        result ->
+          result
+      end
+    end
+  end
+
+  @doc false
+  def restore(pid, saved, run), do: GenServer.call(pid, {:restore, saved, run})
+  @doc false
+  def activate(pid), do: GenServer.call(pid, :activate)
+
   # A waiting child relinquishes its parent's concurrency slot. It must acquire
   # a slot again before it returns to model/tool execution.
   def park(nil), do: :ok
@@ -18,7 +41,8 @@ defmodule Alto.Runner.Agents do
   def resume({pid, id}), do: GenServer.call(pid, {:resume, id}, :infinity)
 
   @impl true
-  def init(owner), do: {:ok, %{owner: Process.monitor(owner), entries: %{}, order: [], limit: 1}}
+  def init(owner),
+    do: {:ok, %{owner: Process.monitor(owner), entries: %{}, order: [], limit: 1, frozen: false}}
 
   @impl true
   def handle_call({:submit, specs, run}, _from, state) do
@@ -57,6 +81,94 @@ defmodule Alto.Runner.Agents do
 
         {:reply, {:ok, Enum.map(ids, &public(&1, next.entries[&1]))}, next}
     end
+  end
+
+  def handle_call(:freeze, _, state) do
+    Enum.each(state.entries, fn {_, entry} ->
+      if entry.status in [:starting, :running, :waiting, :resuming],
+        do: Alto.Messaging.pause(entry.spec.messaging)
+    end)
+
+    {:reply, :ok, %{state | frozen: true}}
+  end
+
+  def handle_call(:checkpoint, _, state) do
+    if Enum.any?(state.entries, fn {_, e} ->
+         e.status in [:starting, :running, :waiting, :resuming]
+       end) do
+      {:reply, :pending, state}
+    else
+      entries =
+        Enum.map(state.order, fn id ->
+          e = state.entries[id]
+
+          %{
+            id: id,
+            spec: Map.drop(e.spec, [:messaging, :agent_scheduler]),
+            status: e.status,
+            summary: e.summary,
+            collected: e.collected
+          }
+        end)
+
+      {:reply, {:ok, entries}, state}
+    end
+  end
+
+  def handle_call({:restore, saved, run}, _, %{entries: entries} = state)
+      when map_size(entries) == 0 and is_list(saved) do
+    if length(saved) <= 256 and Enum.all?(saved, &valid_saved?/1) and
+         length(Enum.uniq_by(saved, & &1.id)) == length(saved) do
+      restored =
+        Enum.reduce_while(saved, {:ok, %{}}, fn e, {:ok, acc} ->
+          case Alto.Messaging.resolve(run.messaging.router, e.id) do
+            {:ok, sender} ->
+              entry = %{
+                spec: Map.put(e.spec, :messaging, sender),
+                status: if(e.status == :suspended, do: :pending, else: e.status),
+                summary: e.summary,
+                collected: e.collected,
+                starter: nil,
+                handle: nil,
+                ref: nil,
+                run:
+                  run
+                  |> Map.drop([:messages_rev, :events_rev, :loop_state])
+                  |> Map.put(:execution_owner, self())
+              }
+
+              {:cont, {:ok, Map.put(acc, e.id, entry)}}
+
+            error ->
+              {:halt, error}
+          end
+        end)
+
+      case restored do
+        {:ok, entries} ->
+          {:reply, :ok,
+           %{
+             state
+             | entries: entries,
+               order: Enum.map(saved, & &1.id),
+               frozen: true,
+               limit: run.child_limits.max_concurrency
+           }}
+
+        error ->
+          {:reply, error, state}
+      end
+    else
+      {:reply, {:error, :invalid_async_checkpoint}, state}
+    end
+  end
+
+  def handle_call({:restore, _, _}, _, state),
+    do: {:reply, {:error, :invalid_async_checkpoint}, state}
+
+  def handle_call(:activate, _, state) do
+    send(self(), :dispatch)
+    {:reply, :ok, %{state | frozen: false}}
   end
 
   def handle_call({:snapshot, ids}, _from, state) do
@@ -141,7 +253,21 @@ defmodule Alto.Runner.Agents do
     case Enum.find(state.entries, fn {_, entry} -> entry.ref == ref end) do
       {id, entry} ->
         summary = Children.child_summary(entry.spec.id, outcome)
-        next = put_in(state.entries[id], %{entry | status: :completed, summary: summary})
+
+        next =
+          case outcome do
+            {:error, :execution_suspended, %{checkpoint: packet}} ->
+              put_in(state.entries[id], %{
+                entry
+                | status: :suspended,
+                  summary: nil,
+                  spec: Map.put(entry.spec, :async_checkpoint, packet)
+              })
+
+            _ ->
+              put_in(state.entries[id], %{entry | status: :completed, summary: summary})
+          end
+
         {:noreply, dispatch(next)}
 
       nil ->
@@ -166,6 +292,8 @@ defmodule Alto.Runner.Agents do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  defp dispatch(%{frozen: true} = state), do: state
 
   defp dispatch(state) do
     next = Enum.find(state.order, &(state.entries[&1].status in [:pending, :resuming]))
@@ -202,6 +330,13 @@ defmodule Alto.Runner.Agents do
     })
   end
 
+  defp valid_saved?(%{id: id, spec: spec, status: status, summary: _, collected: collected}) do
+    is_binary(id) and is_map(spec) and status in [:pending, :suspended, :completed] and
+      is_boolean(collected)
+  end
+
+  defp valid_saved?(_), do: false
+
   defp active(state),
     do: Enum.count(state.entries, fn {_, e} -> e.status in [:starting, :running] end)
 
@@ -230,7 +365,7 @@ defmodule Alto.Runner.Agents do
 
   defp stop_children(state) do
     Enum.each(state.entries, fn {_, entry} ->
-      if entry.handle && entry.status != :completed,
+      if entry.handle && entry.status not in [:completed, :suspended],
         do: Runner.cancel(entry.handle, :parent_finished)
     end)
 
@@ -240,7 +375,7 @@ defmodule Alto.Runner.Agents do
       entry = acc.entries[id]
 
       cond do
-        entry.status == :completed ->
+        entry.status in [:completed, :suspended] ->
           acc
 
         entry.starter != nil ->

@@ -269,15 +269,99 @@ defmodule Alto.Runner.AgentMessagingTest do
     refute_receive {:request, _, _, _}, 30
   end
 
-  test "checkpoint configurations reject live child dispatch before starting workers" do
-    {:ok, handle} = Alto.start("root", options(checkpoint_version: "v1"))
-    assert_receive {:request, "root", _, root}, @timeout
-    tool(root, "start_agents", %{"agents" => [agent("a")]})
-    assert_receive {:request, "root", request, root}, @timeout
-    assert reply(request)["error"] == "async_continuations_unsupported"
-    refute_receive {:request, "a", _, _}, 30
-    answer(root, "done")
-    assert {:ok, _} = Alto.await(handle)
+  defmodule Guarded do
+    use Alto.Tool, name: :guarded, execution_mode: :exclusive, approval: :required
+    def schema(_), do: Alto.Tool.object_schema("guarded", %{}, [])
+    def run(_, _, _), do: {:ok, "approved"}
+  end
+
+  defmodule SelectiveApproval do
+    @behaviour Alto.Approval
+    def decide(%{tool: "guarded"}, _, _), do: :suspend
+    def decide(_, _, _), do: :approve
+  end
+
+  defp wait_paused(sender, attempts \\ 200)
+  defp wait_paused(_, 0), do: flunk("child was not paused")
+
+  defp wait_paused(sender, attempts) do
+    if Alto.Messaging.paused?(sender) != true do
+      Process.sleep(10)
+      wait_paused(sender, attempts - 1)
+    end
+  end
+
+  for transport <- [:memory, :file] do
+    test "#{transport} checkpoint restores paused children, queued sibling, stable addresses and receipts" do
+      directory =
+        Path.join(System.tmp_dir!(), "alto-async-mailboxes-#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> File.rm_rf!(directory) end)
+
+      transport =
+        if unquote(transport) == :file,
+          do: {Alto.Messaging.Transport.File, directory: directory},
+          else: nil
+
+      {:ok, router} = Alto.Messaging.start_link(transport: transport)
+
+      opts =
+        options(
+          checkpoint_version: "v1",
+          approval: SelectiveApproval,
+          tools: Alto.Tools.agents() ++ [Guarded],
+          messaging: router
+        )
+
+      {:ok, handle} = Alto.start("root", opts)
+      assert_receive {:request, "root", _, root}, @timeout
+      tool(root, "start_agents", %{"agents" => [agent("a"), agent("b")]})
+      assert_receive {:request, "root", started, root}, @timeout
+      [%{"agent_id" => a}, %{"agent_id" => b}] = reply(started)["agents"]
+      assert_receive {:request, "a", _, child}, @timeout
+
+      {:ok, receipt} =
+        Alto.Messaging.send(router, a, text: "queued direction", idempotency_key: "steer-1")
+
+      tool(root, "guarded", %{})
+      {:ok, sender} = Alto.Messaging.resolve(router, a)
+      wait_paused(sender)
+      # The in-flight model request settles once; its answer must not be replayed.
+      answer(child, "a finished")
+      assert {:error, :approval_suspended, suspended} = Alto.await(handle)
+      refute_receive {:request, "b", _, _}, 30
+      packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
+      {:ok, restored_router} = Alto.Messaging.start_link(transport: transport)
+
+      {:ok, resumed} =
+        Alto.start(
+          "ignored",
+          opts
+          |> Keyword.put(:messaging, restored_router)
+          |> Keyword.put(:checkpoint, {packet, :approve})
+        )
+
+      assert_receive {:request, "root", _, root}, @timeout
+      assert_receive {:request, "a", request, child}, @timeout
+      assert List.last(request.messages)["content"] == "queued direction"
+
+      assert {:ok, %{message_id: id, status: :consumed}} =
+               Alto.Messaging.send(restored_router, a,
+                 text: "queued direction",
+                 idempotency_key: "steer-1"
+               )
+
+      assert id == receipt.message_id
+      answer(child, "a resumed")
+      assert_receive {:request, "b", _, child}, @timeout
+      answer(child, "b done")
+      tool(root, "wait_agents", %{"agents" => [a, b]})
+      assert_receive {:request, "root", joined, root}, @timeout
+      assert Enum.map(reply(joined)["agents"], & &1["agent_id"]) == [a, b]
+      answer(root, "done")
+      assert {:ok, result} = Alto.await(resumed)
+      assert :ok = Alto.Context.Transcript.validate(result.messages)
+    end
   end
 
   test "cancellation during child startup preserves uncertainty and stops an unreturned handle" do

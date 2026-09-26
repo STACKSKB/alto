@@ -321,16 +321,18 @@ defmodule Alto.FrontEnd.Registry do
   @impl true
   def handle_call({:start_run, config_name, task, opts}, _from, state) do
     owner = Keyword.get(opts, :owner, self())
+    run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 
     with :ok <- validate_owner(owner),
          :ok <- active_capacity(state),
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
-         {:ok, session_opts} <- execution_session_opts(opts, config_opts, state) do
-      run_id = "run-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+         {:ok, session_opts} <- execution_session_opts(opts, config_opts, state),
+         {:ok, input} <- Alto.Input.open(transport: config_opts[:messaging_transport], id: run_id) do
       me = self()
-      {:ok, input} = Alto.Input.start_link()
-      {:ok, messaging} = Alto.Messaging.start_link(owner: self())
+
+      {:ok, messaging} =
+        Alto.Messaging.start_link(owner: self(), transport: config_opts[:messaging_transport])
 
       run_opts =
         config_opts
@@ -367,7 +369,7 @@ defmodule Alto.FrontEnd.Registry do
 
         {:error, reason} ->
           GenServer.stop(messaging)
-          GenServer.stop(input)
+          Alto.Input.close(input)
           {:reply, {:error, reason}, state}
       end
     else
@@ -856,9 +858,8 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp close_channels(run) do
-    Enum.each([run.messaging, run.input], fn pid ->
-      if is_pid(pid) and Process.alive?(pid), do: GenServer.stop(pid)
-    end)
+    if Process.alive?(run.messaging), do: GenServer.stop(run.messaging)
+    Alto.Input.close(run.input)
   end
 
   defp model_requests_of(nil), do: 0
