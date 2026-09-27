@@ -6,11 +6,16 @@ defmodule Alto.Command do
 
   @default_output_bytes 64_000
   @fields [
-    program: [type: :string, required: true, doc: "Nonempty executable name or path."],
+    program: [
+      type: :string,
+      required: true,
+      doc: "Executable name or path only, e.g. make. Do not put the full command here."
+    ],
     args: [
       type: Arguments.list(:string, 0, 128),
       default: [],
-      doc: "Arguments passed directly to the executable."
+      doc:
+        "Arguments after the executable; do not repeat program. For make all, use program=make and args=[all]. For make alone, use args=[]."
     ],
     timeout_ms: [type: {:in, 1..120_000}, default: 30_000, doc: "Deadline in milliseconds."],
     max_output_bytes: [
@@ -43,7 +48,7 @@ defmodule Alto.Command do
     with {:ok, values} <- Arguments.validate(arguments, @fields),
          %{"program" => program, "args" => args} = values,
          :ok <- validate_argv(program, args),
-         executable when is_binary(executable) <- System.find_executable(program) do
+         executable when is_binary(executable) <- find_executable(program, context.cwd) do
       {:ok,
        %{
          requested_program: program,
@@ -57,6 +62,16 @@ defmodule Alto.Command do
       nil -> {:error, {:executable_not_found, arguments["program"]}}
       {:error, _} = error -> error
     end
+  end
+
+  defp find_executable(program, cwd) do
+    # Explicit relative paths belong to the task workspace, not the host VM's cwd.
+    candidate =
+      if Path.type(program) == :relative and length(Path.split(program)) > 1,
+        do: Path.expand(program, cwd),
+        else: program
+
+    System.find_executable(candidate)
   end
 
   defp validate_argv(program, args) do

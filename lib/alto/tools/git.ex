@@ -188,7 +188,7 @@ defmodule Alto.Tools.GitMutate do
 
   @impl true
   def arguments(_opts) do
-    {"Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval.",
+    {"Stage files, unstage files, commit, create a branch, or switch branches through Git. Every call requires approval. create_branch requires an initial commit; unstage also works before the first commit.",
      [
        action: [type: {:in, @actions}, required: true],
        paths: [type: Arguments.list(:string, 1, 200)],

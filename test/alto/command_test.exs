@@ -101,6 +101,25 @@ defmodule Alto.CommandTest do
     assert {:ok, %{output: "first", exit_status: 0}} = Alto.Command.execute(prepared)
   end
 
+  test "relative executable paths resolve against the task workspace before approval" do
+    root = Path.join(System.tmp_dir!(), "alto-relative-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(root, "build"))
+    on_exit(fn -> File.rm_rf!(root) end)
+    executable = Path.join(root, "build/probe")
+    write_executable(executable, "workspace")
+    context = %{session_id: "test", cwd: root}
+
+    for program <- ["./build/probe", "build/probe"] do
+      assert {:ok, prepared} = Alto.Command.prepare(%{"program" => program}, context)
+      assert prepared.approval_details.command.executable == executable
+      assert prepared.approval_details.command.requested_program == program
+      assert {:ok, %{output: "workspace", exit_status: 0}} = Alto.Command.execute(prepared)
+    end
+
+    assert {:error, {:executable_not_found, "./build/missing"}} =
+             Alto.Command.prepare(%{"program" => "./build/missing"}, context)
+  end
+
   test "command policy can reject before an executor is called", %{context: context} do
     assert {:error, :locked_down} =
              Alto.Command.run(%{"program" => "printf"}, context,
