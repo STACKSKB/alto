@@ -42,7 +42,11 @@ defmodule Alto.RecoveryTest do
     queue = start_queue!(context.queue_dir)
     ledger = start_ledger!(context.ledger_dir)
     parent = self()
-    consumer = start_consumer!(queue, ledger, fn _, _ -> {:park, :lost_response} end)
+
+    consumer =
+      start_consumer!(queue, ledger, fn _, _ ->
+        {:outcome, :requires_operator, %{reason: :lost_response}}
+      end)
 
     {:ok, _} = Queue.request(queue, {:admit, "src:delivery-1", %{document: 7}, []})
     assert {:handled, [:parked]} = Consumer.poll(consumer)
@@ -75,7 +79,7 @@ defmodule Alto.RecoveryTest do
     consumer =
       start_consumer!(queue, ledger, fn _, _ ->
         send(parent, :unexpected_dispatch)
-        :done
+        {:outcome, :completed, %{}}
       end)
 
     assert :idle = Consumer.poll(consumer)
@@ -85,7 +89,11 @@ defmodule Alto.RecoveryTest do
   test "retry permission is version fenced and restores the original operation", context do
     queue = start_queue!(context.queue_dir)
     ledger = start_ledger!(context.ledger_dir)
-    consumer = start_consumer!(queue, ledger, fn _, _ -> {:park, :needs_lookup} end)
+
+    consumer =
+      start_consumer!(queue, ledger, fn _, _ ->
+        {:outcome, :requires_operator, %{reason: :needs_lookup}}
+      end)
 
     {:ok, _} = Queue.request(queue, {:admit, "src:delivery-2", %{document: 8}, []})
     assert {:handled, [:parked]} = Consumer.poll(consumer)
@@ -119,7 +127,7 @@ defmodule Alto.RecoveryTest do
     retry_consumer =
       start_consumer!(queue, ledger, fn payload, context ->
         send(parent, {:retried, payload, context.operation_key})
-        :done
+        {:outcome, :completed, %{}}
       end)
 
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(retry_consumer)

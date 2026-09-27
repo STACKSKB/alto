@@ -15,12 +15,11 @@ defmodule Alto.Consumer do
   A handler returns:
 
       handler.(payload, %{operation_key: key, claim_id: id, attempt: n}) ::
-        :done | {:done, evidence} | {:failed, reason} |
-        {:retry, reason} | {:park, reason} | {:run, runner_result} |
-        {:outcome, outcome_class, evidence}
+        {:outcome, outcome_class, evidence} | {:checkpoint, packet} |
+        :retry | %Alto.Runner.Result{}
 
-  `evidence` is a map scrubbed by the ledger. `{:run, result}` retains the
-  runner's authoritative verdict after its events have been evicted.
+  `evidence` is a map scrubbed by the ledger. Use `:requires_operator` to park.
+  A runner result retains its authoritative verdict after events have been evicted.
   """
 
   use GenServer
@@ -211,122 +210,92 @@ defmodule Alto.Consumer do
   end
 
   defp apply_verdict(op, claim_id, verdict, state) do
-    case normalize_verdict(verdict) do
-      {:decide, class, evidence} -> decide(op, claim_id, class, evidence, state)
-      :retry -> retry(op, claim_id, state)
-      {:checkpoint, data} -> checkpoint(op, claim_id, data, state)
-      {:park, reason, evidence} -> park(op, claim_id, reason, evidence, state)
+    {command, action, success} =
+      case normalize_verdict(verdict) do
+        :retry ->
+          {{:release, op, claim_id}, :release, :released}
+
+        {:checkpoint, data} ->
+          {{:checkpoint, op, claim_id, data}, :ack, :checkpointed}
+
+        {:outcome, class, evidence} ->
+          success = if class == :requires_operator, do: :parked, else: {:decided, class}
+          {{:outcome, op, claim_id, class, evidence}, :ack, success}
+      end
+
+    case ledger_call(fn -> Alto.OperationLog.request(state.ledger, command) end) do
+      :ok -> {action, success}
+      error when action == :release -> {:retain, error}
+      error -> error
     end
   end
 
-  defp normalize_verdict(:done), do: {:decide, :completed, %{}}
+  defp normalize_verdict({:outcome, class, evidence} = verdict)
+       when class in [
+              :completed,
+              :rejected_before_dispatch,
+              :failed_known,
+              :unknown,
+              :requires_operator
+            ] and is_map(evidence),
+       do: verdict
 
-  defp normalize_verdict({:done, evidence}) when is_map(evidence),
-    do: {:decide, :completed, evidence}
+  defp normalize_verdict(:retry), do: :retry
+  defp normalize_verdict({:checkpoint, data} = verdict) when is_map(data), do: verdict
 
-  defp normalize_verdict({:failed, reason}),
-    do: {:decide, :failed_known, %{reason: inspect(reason, limit: 5)}}
-
-  defp normalize_verdict({:outcome, class, evidence})
-       when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] and
-              is_map(evidence),
-       do: {:decide, class, evidence}
-
-  defp normalize_verdict({:retry, _reason}), do: :retry
-  defp normalize_verdict({:checkpoint, data}) when is_map(data), do: {:checkpoint, data}
-
-  defp normalize_verdict({:park, reason}),
-    do: {:park, :parked_by_handler, %{reason: inspect(reason, limit: 5)}}
-
-  defp normalize_verdict({:run, %Alto.Runner.Result{} = result}) do
+  defp normalize_verdict(%Alto.Runner.Result{} = result) do
     evidence = %{run_id: result.run_id, events_dropped: result.events_dropped}
 
-    case result.verdict do
-      class when class in [:completed, :rejected_before_dispatch, :failed_known, :unknown] ->
-        {:decide, class, evidence}
-
-      :empty ->
-        {:park, :empty_run_verdict, evidence}
-    end
+    if result.verdict == :empty,
+      do: {:outcome, :requires_operator, Map.put(evidence, :park_reason, :empty_run_verdict)},
+      else: normalize_verdict({:outcome, result.verdict, evidence})
   end
 
   defp normalize_verdict(other),
-    do: {:park, :invalid_verdict, %{verdict: inspect(other, limit: 3)}}
+    do:
+      {:outcome, :requires_operator,
+       %{park_reason: :invalid_verdict, verdict: inspect(other, limit: 3)}}
 
-  defp checkpoint(op, claim_id, data, state) do
-    settle_ledger(:checkpointed, fn ->
-      Alto.OperationLog.request(state.ledger, {:checkpoint, op, claim_id, data})
-    end)
-  end
-
-  # Terminal: outcome first, ack second. Ack failures only strand work the
-  # ledger already describes, so they log and move on.
-  defp decide(op, claim_id, class, evidence, state) do
-    settle_ledger({:decided, class}, fn ->
-      Alto.OperationLog.request(state.ledger, {:outcome, op, claim_id, class, evidence})
-    end)
-  end
-
-  # An unknown prior dispatch belongs to its original attempt. Other parked
-  # outcomes belong to the current claim, which first needs an attempt line.
+  # A prior unknown dispatch keeps its original attempt. All other parked work
+  # first ensures the current counted attempt, including exhaustion before handling.
   defp park(op, claim_id, reason, evidence, state, original_attempt \\ nil) do
     attempt = original_attempt || claim_id
 
-    settle_ledger(:parked, fn ->
-      with :ok <-
-             if(original_attempt,
+    with :ok <-
+           ledger_call(fn ->
+             if original_attempt,
                do: :ok,
                else: Alto.OperationLog.request(state.ledger, {:attempt, op, claim_id})
-             ) do
-        Alto.OperationLog.request(
-          state.ledger,
-          {:outcome, op, attempt, :requires_operator, Map.put(evidence, :park_reason, reason)}
-        )
-      end
-    end)
-  end
-
-  defp retry(op, claim_id, state) do
-    case ledger_call(fn -> Alto.OperationLog.request(state.ledger, {:release, op, claim_id}) end) do
-      :ok -> {:release, :released}
-      error -> {:retain, error}
+           end) do
+      apply_verdict(
+        op,
+        attempt,
+        {:outcome, :requires_operator, Map.put(evidence, :park_reason, reason)},
+        state
+      )
     end
-  end
-
-  defp queue_quietly(state, claim_id, action) do
-    case queue_call(fn -> Alto.Queue.request(state.queue, {:settle, claim_id, action, []}) end) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("alto consumer: #{action} failed: #{inspect(reason, limit: 3)}")
-    end
-
-    :ok
-  end
-
-  defp settle_ledger(success, fun) do
-    with :ok <- ledger_call(fun), do: {:ack, success}
   end
 
   defp settle_claim({:retain, result}, _claim_id, _state), do: result
 
-  defp settle_claim({:release, :released}, claim_id, state) do
-    with :ok <-
-           queue_call(fn ->
-             Alto.Queue.request(state.queue, {:settle, claim_id, :release, []})
-           end),
-         do: :released
-  end
+  defp settle_claim(result, claim_id, state) do
+    {action, success} =
+      case result do
+        {:error, _} -> {:release, result}
+        {action, success} -> {action, success}
+      end
 
-  defp settle_claim({action, success}, claim_id, state) when action in [:ack, :release] do
-    queue_quietly(state, claim_id, action)
-    success
-  end
+    case queue_call(fn -> Alto.Queue.request(state.queue, {:settle, claim_id, action, []}) end) do
+      :ok ->
+        success
 
-  defp settle_claim({:error, _} = error, claim_id, state) do
-    queue_quietly(state, claim_id, :release)
-    error
+      error when success == :released ->
+        error
+
+      {:error, reason} ->
+        Logger.warning("alto consumer: #{action} failed: #{inspect(reason, limit: 3)}")
+        success
+    end
   end
 
   defp ledger_call(fun) do

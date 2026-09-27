@@ -30,6 +30,7 @@ defmodule Alto.Runner.Checkpoint do
 
   @authority_fields Alto.Config.authority_fields()
   @packet_fields ~w(format continuation_format kind state session_id messaging_id transcript_revision request)
+  @state_fields ~w(run loop binding frame budget version fingerprint session_id messaging_id)a
 
   def capture(run, pending, remaining, terminal),
     do: capture_snapshot(run, nil, pending.job, remaining, terminal, pending.request)
@@ -132,20 +133,10 @@ defmodule Alto.Runner.Checkpoint do
          true <- packet["kind"] == kind,
          true <- kind not in [nil, "child"] or decision in [:approve, :deny],
          true <- Codec.valid?(packet, max_bytes: 2 * @limit),
-         {:ok,
-          %{
-            run: saved,
-            loop: _,
-            binding: _,
-            frame: frame,
-            budget: _,
-            version: _,
-            fingerprint: _,
-            session_id: _,
-            messaging_id: _
-          } = data} <-
-           decode(packet["state"]),
-         true <- map_size(data) == 9 and is_map(saved) and is_map(data.budget),
+         {:ok, data} <- decode(packet["state"]),
+         true <- is_map(data) and Enum.sort(Map.keys(data)) == Enum.sort(@state_fields),
+         true <- is_map(data.run) and is_map(data.budget),
+         frame <- data.frame,
          %{pending: _, remaining: _, terminal: _} <- frame,
          true <- map_size(frame) == 3,
          true <- data.version == run.checkpoint_version and is_binary(data.version),
@@ -226,42 +217,18 @@ defmodule Alto.Runner.Checkpoint do
   defp validate_binding(kind, run, data) when kind in ["parent", "child"] do
     binding = data.binding
 
-    with :ok <- binding_capabilities(kind, run),
-         %{store: _, authority: authority, expires_at_ms: _} <- binding,
+    with %{authority: authority, expires_at_ms: expiry} <- binding,
          true <- valid_authority?(authority),
+         {:ok, expected} <- capture_binding(kind, run),
+         true <-
+           Map.drop(binding, [:authority, :expires_at_ms]) ==
+             Map.drop(expected, [:authority, :expires_at_ms]),
+         true <- data.session_id == run.session,
          true <- Alto.AgentIdentity.valid?(Map.get(data.run, :agent_identity)),
-         {:ok, store} <- store_identity(kind, run),
-         true <- binding.store == store and data.session_id == run.session,
+         true <- length(data.run.agent_identity.path) == run.agent_depth,
          :ok <- parent_budget_binding(run, data.budget),
-         :ok <- unexpired(binding.expires_at_ms) do
-      valid =
-        if kind == "parent" do
-          map_size(binding) == 3 and data.run.agent_identity.path == []
-        else
-          ticket = run.subagent_ticket
-
-          Enum.sort(Map.keys(binding)) ==
-            Enum.sort([
-              :store,
-              :authority,
-              :expires_at_ms,
-              :journal,
-              :id,
-              :attempt,
-              :profile,
-              :agent_depth,
-              :cwd,
-              :resume_snapshot
-            ]) and
-            binding.journal == Alto.Subagents.Continuation.identity(ticket.batch) and
-            binding.id == ticket.id and binding.attempt == ticket.attempt and
-            binding.agent_depth == run.agent_depth and
-            length(data.run.agent_identity.path) == binding.agent_depth and
-            binding.profile == run.child_profile and binding.cwd == run.cwd and
-            binding.resume_snapshot == run.resume_snapshot
-        end
-
-      if valid, do: :ok, else: {:error, :checkpoint_mismatch}
+         :ok <- unexpired(expiry) do
+      :ok
     else
       {:error, _} = error -> error
       _ -> {:error, :checkpoint_mismatch}

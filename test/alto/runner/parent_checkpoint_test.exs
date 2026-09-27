@@ -249,6 +249,10 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, saved} = Checkpoint.decode(packet["state"])
 
     for changed <- [
+          Map.delete(saved, :loop),
+          Map.put(saved, :unexpected, true),
+          update_in(saved.run, &Map.delete(&1, :agent_identity)),
+          put_in(saved, [:binding, :unexpected], true),
           put_in(saved, [:frame, :pending, :kind], :invalid),
           put_in(saved, [:budget, "effects_used"], 0.5),
           Map.put(saved, :budget, 7),

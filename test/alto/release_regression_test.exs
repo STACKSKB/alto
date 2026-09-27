@@ -98,7 +98,7 @@ defmodule Alto.ReleaseRegressionTest do
       Consumer.start_link(
         queue: queue,
         ledger: ledger,
-        handler: fn _, _ -> :done end,
+        handler: fn _, _ -> {:outcome, :completed, %{}} end,
         name: nil,
         autostart: false
       )

@@ -33,6 +33,12 @@ There are no background timers per record, automatic recurrences, new database,
 or application-level task concepts. Consumer polling and configured capacity
 remain the admission-to-execution mechanism.
 
+Consumer handlers return a ledger action: `{:outcome, class, evidence}`,
+`{:checkpoint, packet}`, or `:retry`. Outcome classes include `:completed`,
+`:failed_known`, `:rejected_before_dispatch`, `:unknown`, and `:requires_operator`
+(for parked work). Returning an `Alto.Runner.Result` directly uses its verdict,
+independent of retained events. Consumer persists the action before settling the
+queue claim; a failed retry write retains the claim.
 
 ## Retained queue state
 

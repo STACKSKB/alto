@@ -40,7 +40,7 @@ defmodule Alto.ConsumerTest do
   defp done_handler(test_pid \\ nil) do
     fn _payload, _ctx ->
       if test_pid, do: send(test_pid, :handled)
-      :done
+      {:outcome, :completed, %{}}
     end
   end
 
@@ -61,7 +61,7 @@ defmodule Alto.ConsumerTest do
 
     handler = fn _payload, ctx ->
       send(test_pid, {:ran, ctx.attempt})
-      {:retry, :downstream_busy}
+      :retry
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
@@ -84,7 +84,7 @@ defmodule Alto.ConsumerTest do
       start_consumer!(
         queue: q,
         ledger: l,
-        handler: fn _, _ -> {:retry, :busy} end,
+        handler: fn _, _ -> :retry end,
         max_attempts: 2,
         by: "w-1"
       )
@@ -96,6 +96,52 @@ defmodule Alto.ConsumerTest do
     assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
     assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
     assert {:decided, :requires_operator, _} = OperationLog.request(l, {:status, "src:del-1"})
+  end
+
+  test "a failed retry ledger write keeps the claim live", %{queue: q, ledger: l} do
+    {:ok, %{"dir" => dir, "id" => id}} = OperationLog.request(l, :identity)
+    {:ok, _} = Queue.request(q, {:admit, "retry-write-failure", %{}, []})
+
+    handler = fn _, _ ->
+      File.rm!(Path.join(dir, id <> ".jsonl"))
+      :retry
+    end
+
+    consumer = start_consumer!(queue: q, ledger: l, handler: handler)
+    assert {:handled, [{:error, {:ledger_write_failed, :enoent}}]} = Consumer.poll(consumer)
+    assert %{pending: 0, claimed: 1} = Queue.request(q, :count)
+    assert {:dispatched, _} = OperationLog.request(l, {:status, "retry-write-failure"})
+    assert 1 = OperationLog.request(l, {:attempts, "retry-write-failure"})
+  end
+
+  test "retry propagates a failed queue release after persisting its intent", %{
+    dir: dir,
+    ledger: l
+  } do
+    clock = :atomics.new(1, [])
+    :atomics.put(clock, 1, 1_000)
+
+    {:ok, queue} =
+      Queue.start_link(
+        id: "retry-expiry",
+        dir: Path.join(dir, "retry-expiry"),
+        name: nil,
+        lease_ms: 30,
+        clock: fn -> :atomics.get(clock, 1) end
+      )
+
+    {:ok, _} = Queue.request(queue, {:admit, "retry-expiry", %{}, []})
+
+    handler = fn _, _ ->
+      :atomics.add(clock, 1, 150)
+      :retry
+    end
+
+    consumer = start_consumer!(queue: queue, ledger: l, handler: handler)
+    assert {:handled, [{:error, :lease_expired}]} = Consumer.poll(consumer)
+    assert {:intended} = OperationLog.request(l, {:status, "retry-expiry"})
+    assert 1 = OperationLog.request(l, {:attempts, "retry-expiry"})
+    assert %{pending: 1, claimed: 0} = Queue.request(queue, :count)
   end
 
   test "unknown short-run outcomes park before any repeat", %{queue: q, ledger: l} do
@@ -138,10 +184,10 @@ defmodule Alto.ConsumerTest do
         )
 
       case result.verdict do
-        :unknown -> {:park, :unknown_tool_outcome}
-        class when class in [:failed_known, :rejected_before_dispatch] -> {:failed, :known}
-        :completed -> :done
-        :empty -> {:failed, :no_tools_ran}
+        :unknown -> {:outcome, :requires_operator, %{reason: :unknown_tool_outcome}}
+        class when class in [:failed_known, :rejected_before_dispatch] -> {:outcome, class, %{}}
+        :completed -> {:outcome, :completed, %{}}
+        :empty -> {:outcome, :failed_known, %{reason: :no_tools_ran}}
       end
     end
 
@@ -179,7 +225,7 @@ defmodule Alto.ConsumerTest do
     slow = fn _payload, _ctx ->
       :atomics.add(clock, 1, 150)
       send(test_pid, :slow_ran)
-      :done
+      {:outcome, :completed, %{}}
     end
 
     c1 = start_consumer!(queue: q2, ledger: l, handler: slow, by: "slow", handle_timeout: 5_000)
@@ -208,7 +254,7 @@ defmodule Alto.ConsumerTest do
 
     handler = fn _payload, %{claim_id: claim_id} ->
       send(test_pid, {:ran, claim_id})
-      :done
+      {:outcome, :completed, %{}}
     end
 
     a = start_consumer!(queue: q, ledger: l, handler: handler, by: "a")
@@ -282,7 +328,7 @@ defmodule Alto.ConsumerTest do
         ledger: lname,
         handler: fn payload, _ ->
           send(parent, {:ran, payload})
-          :done
+          {:outcome, :completed, %{}}
         end
       )
 
@@ -297,7 +343,7 @@ defmodule Alto.ConsumerTest do
 
     handler = fn payload, _ctx ->
       send(test_pid, {:handled_payload, payload})
-      :done
+      {:outcome, :completed, %{}}
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
@@ -315,7 +361,7 @@ defmodule Alto.ConsumerTest do
 
     handler = fn _payload, context ->
       send(parent, {:context, context})
-      :done
+      {:outcome, :completed, %{}}
     end
 
     c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
@@ -348,7 +394,7 @@ defmodule Alto.ConsumerTest do
     blocker = fn _payload, _ctx ->
       send(test_pid, {:work_started, self()})
       Process.sleep(5_000)
-      :done
+      {:outcome, :completed, %{}}
     end
 
     c1 =
@@ -423,7 +469,7 @@ defmodule Alto.ConsumerTest do
     }
 
     {:ok, _} = Queue.request(q, {:admit, "src:unknown", %{}, []})
-    c = start_consumer!(queue: q, ledger: l, handler: fn _, _ -> {:run, result} end)
+    c = start_consumer!(queue: q, ledger: l, handler: fn _, _ -> result end)
 
     assert {:handled, [{:decided, :unknown}]} = Consumer.poll(c)
     assert {:decided, :unknown, evidence} = OperationLog.request(l, {:status, "src:unknown"})
