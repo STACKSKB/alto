@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.0.2 — 2026-09-27
+
+Source-only Linux alpha release. Build the CLI or optional TUI from this tag.
+
+- Restore failed-task and subagent history; preserve model choices across tasks,
+  restarts, and provider credential edits.
+- Add a subagent activity inspector and discoverable queued-message steering.
+- Improve exact-edit, argument, and unknown-tool recovery diagnostics.
+- Add explicit shell execution; show unsuccessful command exits as errors.
+- Respect bounded provider retry timing and explain blocked compaction.
+
+Compatibility notes: failed exact edits and HTTP errors with retry hints carry
+additional structured diagnostic data. Consumers matching error tuples exactly
+should allow these documented variants. Existing saved history remains readable.
+
+Known limits: queued TUI input is held in memory; provider failure cancels owned
+children; model-generated compaction handoffs can fail validation. Failures remain
+visible and saved work can be resumed. Physical terminal/platform coverage is
+Linux-focused. This release does not include HotLimit or prebuilt executables.
+
 
 - Confine project instruction files to the workspace and bound reads before loading.
 - Reject oversized compaction inputs intact, support pinned initial messages, and

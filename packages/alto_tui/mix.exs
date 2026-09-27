@@ -8,18 +8,18 @@ defmodule AltoTUI.MixProject do
       if File.exists?(Path.join(alto_path, "mix.exs")) do
         {:alto, path: alto_path}
       else
-        {:alto, "~> 0.0.1"}
+        {:alto, "~> 0.0.2"}
       end
 
     [
       app: :alto_tui,
-      version: "0.0.1",
+      version: "0.0.2",
       description: "Optional terminal UI for Alto",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       package: [
         licenses: ["MIT"],
-        links: %{"Source" => "https://github.com/STACKSKB/alto/tree/v0.0.1/packages/alto_tui"},
+        links: %{"Source" => "https://github.com/STACKSKB/alto/tree/v0.0.2/packages/alto_tui"},
         files: ["lib", "build", "mix.exs", "README.md", "LICENSE"]
       ],
       deps: [

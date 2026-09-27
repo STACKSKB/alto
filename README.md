@@ -1,4 +1,4 @@
-# Alto v0.0.1
+# Alto v0.0.2
 
 Alto is a composable BEAM-native harness for bounded coding-agent workflows.
 It provides a serial model/tool runner, durable sessions and event logs,
@@ -10,9 +10,11 @@ policy, executor, and resource limits as ordinary Elixir configuration.
 
 This release targets Linux with Elixir 1.18 and OTP 27. Durable storage
 requires the host `flock` utility; sandboxed commands additionally require
-Bubblewrap. From a checkout:
+Bubblewrap. Releases contain source only; no prebuilt binaries are published.
 
 ```sh
+git clone --branch v0.0.2 https://github.com/STACKSKB/alto.git
+cd alto
 mix deps.get
 mix alto --help
 ```
@@ -46,12 +48,11 @@ mix escript.build
 ```
 
 The public source is [github.com/STACKSKB/alto](https://github.com/STACKSKB/alto).
-Once the tagged release is available, a library application can depend on it
-with:
+A library application can depend on the tagged source with:
 
 ```elixir
 defp deps do
-  [{:alto, git: "https://github.com/STACKSKB/alto.git", tag: "v0.0.1"}]
+  [{:alto, git: "https://github.com/STACKSKB/alto.git", tag: "v0.0.2"}]
 end
 ```
 

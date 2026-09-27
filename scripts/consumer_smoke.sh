@@ -33,7 +33,7 @@ EOF
       def run(arguments, _context, _opts), do: {:ok, arguments}
     end
 
-    {:ok, result} =
+    %Alto.Runner.Result{status: :ok} = result =
       Alto.run(%{"message" => "consumer"},
         loop: Alto.rule_loop(steps: ["echo"]),
         tools: [ConsumerSmoke.Echo]

@@ -4,7 +4,7 @@ defmodule Alto.MixProject do
   def project do
     [
       app: :alto,
-      version: "0.0.1",
+      version: "0.0.2",
       description: "A bounded, composable BEAM-native coding-agent harness",
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
