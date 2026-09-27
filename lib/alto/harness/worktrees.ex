@@ -25,7 +25,7 @@ defmodule Alto.Harness.Worktrees do
         }
 
         with {:ok, prepared, _} <-
-               Alto.Tools.CreateWorktree.prepare(arguments, context, manager: manager),
+               Alto.Tool.prepare(Alto.Tools.CreateWorktree, arguments, context, manager: manager),
              {:ok, result} <- Alto.Tools.CreateWorktree.run(prepared, context, []),
              {:ok, project} <-
                Alto.Harness.Catalog.register_project(

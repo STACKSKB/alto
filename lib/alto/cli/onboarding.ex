@@ -110,17 +110,12 @@ defmodule Alto.CLI.Onboarding do
 
       provider_options = Keyword.put(provider_options, :api_key, opts[:api_key])
 
-      with true <-
-             Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),
-           {:ok, models} <- provider.list_models(Alto.Provider.options(provider_options)),
+      with {:ok, models} <- Alto.Provider.list_models({provider, provider_options}),
            {:ok, model} <- select_model(models, opts[:input], opts[:output]),
            {:ok, _credentials} <-
              Credentials.put(credentials, @provider_id, %{"model" => model}) do
         IO.puts(opts[:output], "Selected #{model}")
         {:ok, model}
-      else
-        false -> {:error, {:model_discovery_not_supported, provider}}
-        {:error, reason} -> {:error, reason}
       end
     else
       {:error, "model required; set ALTO_MODEL, or run `alto --setup` in a terminal"}

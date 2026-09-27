@@ -1,25 +1,26 @@
 defmodule Alto.Tools.CreateWorktree do
   @moduledoc "Create a retained local worktree using a host-configured workspace manager."
-  use Alto.Tool, name: :create_worktree, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :create_worktree,
+    execution_mode: :exclusive,
+    approval: :required,
+    arguments: true
+
+  alias Alto.Tool.Arguments
   alias Alto.Workspaces
 
   @impl true
-  def schema(_opts) do
-    Alto.Tool.object_schema(
-      "Create a local Git worktree from a committed ref, leaving current files untouched. Returns its cwd and workspace ID; does not switch this agent's cwd. Detached by default; branch creates a new branch. Reuse name within this session to identify the same creation.",
-      %{
-        name: %{type: "string", maxLength: 128},
-        ref: %{type: "string"},
-        branch: %{type: "string"}
-      },
-      ["name"]
-    )
+  def arguments(_opts) do
+    {"Create a local Git worktree from a committed ref, leaving current files untouched. Returns its cwd and workspace ID; does not switch this agent's cwd. Detached by default; branch creates a new branch. Reuse name within this session to identify the same creation.",
+     name: [type: Arguments.text(1, 128), required: true],
+     ref: [type: :string],
+     branch: [type: {:or, [:string, {:in, [nil]}]}]}
   end
 
   @impl true
   def prepare(%{"name" => name} = args, context, opts) do
     with true <-
-           (valid_name?(name) and Map.keys(args) -- ~w(name ref branch) == []) or
+           not String.contains?(name, ["\n", "\r", <<0>>]) or
              {:error, :invalid_worktree_arguments},
          %Workspaces{backend: Alto.Workspaces.GitWorktree} = manager <- opts[:manager],
          {:ok, snapshot} <- Workspaces.prepare(manager, context.cwd, snapshot_options(args)) do
@@ -33,8 +34,6 @@ defmodule Alto.Tools.CreateWorktree do
       _ -> {:error, :worktree_manager_required}
     end
   end
-
-  def prepare(_, _, _), do: {:error, :invalid_worktree_arguments}
 
   @impl true
   def run(%{manager: manager, snapshot: snapshot, identity: identity}, _context, _opts) do
@@ -50,11 +49,6 @@ defmodule Alto.Tools.CreateWorktree do
        }}
     end
   end
-
-  defp valid_name?(name),
-    do:
-      is_binary(name) and byte_size(name) in 1..128 and String.valid?(name) and
-        not String.contains?(name, ["\n", "\r", <<0>>])
 
   defp snapshot_options(args) do
     Enum.flat_map([ref: "ref", branch: "branch"], fn {key, field} ->

@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,755 lines**, a **24.4% reduction**, with **2,297 lines remaining**.
+Current: **30,742 lines**, a **24.4% reduction**, with **2,284 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -47,21 +47,21 @@ changes and historical test counts. Contracts belong in the component guides.
 - File writes and edits share preparation and commit. File/diff previews share
   bounded iodata traversal. Command output retains one bounded first/last buffer.
   Context policies and tokenizer adapters use existing tuple/function contracts.
-  Eighteen tools share argument contracts for schema projection, defaults and
+  Nineteen tools share argument contracts for schema projection, defaults and
   validation; domain callbacks retain file freezing, Git confinement and authority.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Child startup reuses the canonical prompt configuration and inherited timeouts.
-Model, tool, approval and workspace calls clamp against the shared budget when
-executed; startup no longer pre-clamps the same limits. Saved budget caps,
-account bindings and parent deadlines still fence resumed children.
-Operator inspection catches store exits once in the collection flow shared by
-listing and lookup. The outage test now exercises ledger failure before queue
-failure, rather than stopping both and only reaching the queue.
-This pass removes **34 production lines**: **32 code/type/declaration lines**,
-**2 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+CLI onboarding and provider profiles share optional model discovery through
+`Alto.Provider.list_models/1`, including module loading and observer-option
+filtering. Provider storage reuses the HTTP endpoint validator. CreateWorktree
+uses the shared argument contract for schema generation and validation; its
+remaining checks cover control characters, Git rules and frozen workspace
+preparation. The harness now enters that same preparation boundary.
+This pass removes **13 production lines**: **13 code/type/declaration lines**
+and **1 blank**, offset by **1 added documentation line**. Historical pass notes
+remain in Git.
 
 ## Remaining work
 

@@ -26,7 +26,7 @@ defmodule Alto.Workspaces.GitWorktreeTest do
 
   test "tool freezes its commit before approval, creates once and preserves dirty source", c do
     assert {:ok, prepared, details} =
-             CreateWorktree.prepare(%{"name" => "task"}, c.context, manager: c.manager)
+             Alto.Tool.prepare(CreateWorktree, %{"name" => "task"}, c.context, manager: c.manager)
 
     old_head = String.trim(git!(c.source, ["rev-parse", "HEAD"]))
     assert details["base_commit"] == old_head
@@ -167,8 +167,23 @@ defmodule Alto.Workspaces.GitWorktreeTest do
     git!(c.source, ["config", "filter.test.clean", "false"])
     assert {:error, :source_filters_unsupported} = GitWorktree.snapshot(c.source)
 
-    assert {:error, :invalid_worktree_arguments} =
-             CreateWorktree.prepare(%{"name" => "x", "path" => "/tmp/arbitrary"}, c.context,
+    for name <- ["bad\nname", "bad\rname", "bad" <> <<0>> <> "name"] do
+      assert {:error, :invalid_worktree_arguments} =
+               Alto.Tool.prepare(CreateWorktree, %{"name" => name}, c.context, manager: c.manager)
+    end
+
+    assert {:error, %NimbleOptions.ValidationError{key: :name}} =
+             Alto.Tool.prepare(CreateWorktree, %{"name" => String.duplicate("x", 129)}, c.context,
+               manager: c.manager
+             )
+
+    refute File.exists?(c.manager.root)
+
+    assert {:error, :unknown_tool_argument} =
+             Alto.Tool.prepare(
+               CreateWorktree,
+               %{"name" => "x", "path" => "/tmp/arbitrary"},
+               c.context,
                manager: c.manager
              )
   end

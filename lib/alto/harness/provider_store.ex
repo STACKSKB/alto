@@ -131,12 +131,9 @@ defmodule Alto.Harness.ProviderStore do
   defp validate_label(_label), do: {:error, :provider_name_required}
 
   defp validate_url(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) ->
-        :ok
-
-      _other ->
-        {:error, :provider_base_url_must_be_http}
+    case Alto.Providers.HTTPOptions.endpoint(url) do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, :provider_base_url_must_be_http}
     end
   end
 

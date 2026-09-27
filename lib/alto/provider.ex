@@ -28,6 +28,13 @@ defmodule Alto.Provider do
     provider.stream(request, sink, opts)
   end
 
+  @doc "Discover models through the optional provider callback, without host observers."
+  def list_models({module, opts}) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :list_models, 1),
+      do: module.list_models(options(opts)),
+      else: {:error, {:model_discovery_not_supported, module}}
+  end
+
   alias Alto.Event
 
   @type sink :: (Event.t() -> any())
