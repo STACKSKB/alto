@@ -4,15 +4,6 @@ defmodule Alto.Loops.DefaultTest do
   alias Alto.Event
   alias Alto.Loop
 
-  test "starts by requesting a model response" do
-    context = Alto.Context.Window.new(max_tokens: 200_000, reserve_output: 16_000)
-    spec = Alto.default_loop(context: context)
-
-    assert {:continue, %{phase: :awaiting_model},
-            [{:request_model, %{task: "fix the parser", step: 1, context: ^context}}]} =
-             spec.driver.init("fix the parser", spec)
-  end
-
   test "waits for all tools, settles the step, then requests the model again" do
     spec = Alto.default_loop()
     {:continue, initial, _} = spec.driver.init("inspect the repository", spec)

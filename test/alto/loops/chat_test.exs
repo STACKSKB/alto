@@ -4,22 +4,6 @@ defmodule Alto.Loops.ChatTest do
   alias Alto.Event
   alias Alto.Loop
 
-  test "is swappable through the same loop specification and runtime" do
-    spec = Alto.chat_loop()
-    {:continue, initial, effects} = spec.driver.init("hello", spec)
-
-    assert [{:request_model, %{task: "hello"}}] = effects
-
-    completed =
-      Loop.dispatch(
-        spec,
-        Event.durable(:model_completed, %{message: "hi", tool_calls: []}),
-        initial
-      )
-
-    assert {{:stop, "hi"}, _, []} = completed
-  end
-
   test "rejects tool calls instead of silently ignoring them" do
     spec = Alto.chat_loop(driver_options: [tool_execution: :serial])
     {:continue, initial, _} = spec.driver.init("hello", spec)

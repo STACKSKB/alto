@@ -292,7 +292,10 @@ removed only five lines while adding a reconstruction step. A native Inspect
 diagnostic renderer was also discarded: preserving redaction and media handling
 left two recursive paths and only 23 lines saved before required fixes. Workspace lifecycle
 and listener audits likewise found no large duplicate flow beyond the existing
-shared storage, HTTP and connection mechanisms.
+shared storage, HTTP and connection mechanisms. A persistent native model-picker
+prototype was discarded: action rows erased its formatted production savings;
+keyboard shortcuts saved only 10 lines while changing interaction and adding state
+handling. No picker behavior changes from that prototype remain.
 
 Preserve append-before-dispatch durability, single-use grants, bounded retention,
 frozen approval values, and the distinction between rejection and uncertain
@@ -309,7 +312,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current core check passes **1,074 tests** with application modules preloaded.
+The current core check passes **1,073 tests** with application modules preloaded.
 The TUI suite passes **145 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,
