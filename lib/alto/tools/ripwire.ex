@@ -13,7 +13,6 @@ defmodule Alto.Tools.Ripwire do
   use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never
 
   alias Alto.Command
-  alias Alto.Command.Invocation
   alias Alto.Tool.Context
 
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
@@ -47,7 +46,7 @@ defmodule Alto.Tools.Ripwire do
                "args" => args,
                "timeout_ms" => Keyword.get(opts, :timeout_ms, 60_000),
                "max_output_bytes" =>
-                 Keyword.get(opts, :max_output_bytes, Invocation.default_output_bytes())
+                 Keyword.get(opts, :max_output_bytes, Alto.Command.default_output_bytes())
              },
              context,
              Keyword.take(opts, [:executor, :policy])

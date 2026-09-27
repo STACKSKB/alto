@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,546 lines**, a **22.4% reduction**, with **3,088 lines remaining**.
+Current: **31,430 lines**, a **22.7% reduction**, with **2,972 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,18 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Command schema projection and default validation now share one argument contract.
+Command policies are functions, portable MFA callbacks or literal rejections;
+Invocation, Prepared, Policy and the two policy implementation modules are deleted.
+Prepared commands and Bubblewrap execution use plain frozen maps, retaining PATH
+resolution before approval and the same executor/stdio boundary. Explicit narrowed
+child profiles can persist MFA policies and resume an approved command. NUL and
+aggregate-byte checks, binary argv, process cleanup and sandbox authority remain.
+This pass removes **116 production lines**: **89 code/typespec**, **23 blank**, and
+**4 source documentation/comment** lines. The old and new command validators agree
+on **35 boundary and binary-argument cases**. All **1,075 core tests** and
+**145 TUI tests** pass; no dependency or migration was added.
 
 Loop configuration is a plain driver/options/policy map. The Spec and Runtime
 modules are deleted; Loop owns middleware composition and the execution host

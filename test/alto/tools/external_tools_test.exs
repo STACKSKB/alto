@@ -1,7 +1,6 @@
 defmodule Alto.Tools.ExternalToolsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Command.Prepared
   alias Alto.Tool.Context
   alias Alto.Tools.GitInspect
   alias Alto.Tools.GitMutate
@@ -74,7 +73,7 @@ defmodule Alto.Tools.ExternalToolsTest do
   end
 
   test "Git mutation freezes a narrow command before approval", %{context: context} do
-    assert {:ok, %Prepared{} = prepared, details} =
+    assert {:ok, %{executor: _, execution: _, approval_details: _} = prepared, details} =
              Alto.Tool.prepare(
                GitMutate,
                %{"action" => "stage", "paths" => ["sample.txt"]},

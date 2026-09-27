@@ -207,6 +207,36 @@ defmodule Alto.Runner.ChildContinuationTest do
     entry
   end
 
+  def command_policy(arguments, context, allowed) do
+    if arguments["program"] in allowed,
+      do: Alto.Command.resolve(arguments, context),
+      else: {:error, :program_not_allowed}
+  end
+
+  test "a narrowed command policy survives a durable child approval", context do
+    command = {Alto.Tools.RunCommand, policy: {__MODULE__, :command_policy, [["printf"]]}}
+    options = Keyword.update!(opts(context, Alto.Runner.Serial), :tools, &[command | &1])
+
+    child = %{
+      id: "command",
+      task: %{"program" => "printf", "args" => ["%s", "frozen"]},
+      tools: [command],
+      loop: Alto.rule_loop(steps: ["run_command"])
+    }
+
+    assert %Alto.Runner.Result{status: :suspended} =
+             parked = Alto.run(%{agents: [child]}, options)
+
+    {identity, batch} = journal(context, parked)
+    decide(batch, "command", :approve)
+
+    assert %Alto.Runner.Result{
+             status: :ok,
+             output: [%{status: :ok, output: [%{output: "frozen", exit_status: 0}]}]
+           } =
+             Alto.run(:ignored, Keyword.put(options, :continuation, identity))
+  end
+
   for sessions <- [:separate, :shared] do
     test "Serial resumes only decided sibling with #{sessions} transcript ownership",
          context do

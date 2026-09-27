@@ -180,10 +180,36 @@ provider-specific setup outside the core execution contract.
 
 ## Composable isolation and protected paths
 
-Command `:policy` and `:executor` options use `{module, keyword_options}`. These
-are trusted host callbacks: contract violations raise; policy rejection and
-execution failures return errors. Command preparation resolves the requested
-program and freezes its invocation before approval.
+Command `:policy` is a function `(arguments, context)` returning
+`{:ok, invocation_map}` or `{:error, reason}`, a portable `{module, function,
+extra_arguments}` tuple, or a literal `{:error, reason}` denial. MFA callbacks
+receive arguments and context before the extra arguments. Use this data form
+when a narrowed child tool profile must survive a durable checkpoint. The default is
+`&Alto.Command.resolve/2`, which validates bounded arguments and resolves the
+requested program before approval. Capture options in a closure to restrict it:
+
+```elixir
+allowed = ["git", "printf"]
+policy = fn arguments, context ->
+  if arguments["program"] in allowed,
+    do: Alto.Command.resolve(arguments, context),
+    else: {:error, :program_not_allowed}
+end
+```
+
+The invocation map contains `requested_program`, the resolved `executable`,
+`args`, `cwd`, `timeout_ms`, and `max_output_bytes`. Command preparation freezes
+this map and asks the configured executor to prepare it before approval.
+`:executor` remains `{module, keyword_options}`. The prepared map contains
+`executor`, its opaque `execution` value, and display-safe `approval_details`;
+execution uses that frozen value without resolving PATH again. Bubblewrap's
+execution value is a map containing `invocation` and `sandbox`.
+
+These are trusted host callbacks: contract violations raise; policy rejection
+and execution failures return errors. RunCommand's schema and default resolution
+share the argument contract. Scalar and list validation returns
+`NimbleOptions.ValidationError`; executable lookup, NUL bytes, and aggregate argv
+size retain their command-specific errors.
 
 The library keeps executor selection explicit. `Alto.Command` still defaults to
 `Unsandboxed` for trusted host workflows. CLI configurations opt in by including

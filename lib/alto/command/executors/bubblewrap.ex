@@ -9,21 +9,13 @@ defmodule Alto.Command.Executors.Bubblewrap do
   @behaviour Alto.Command.Executor
 
   alias Alto.Command.Executors.Unsandboxed
-  alias Alto.Command.Invocation
-
-  defmodule Execution do
-    @moduledoc false
-
-    @enforce_keys [:invocation, :sandbox]
-    defstruct [:invocation, :sandbox]
-  end
 
   @default_path "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   @system_paths ["/usr", "/etc"]
   @reserved_destinations ["/usr", "/etc", "/proc", "/dev", "/tmp"]
 
   @impl true
-  def prepare(%Invocation{} = invocation, opts) do
+  def prepare(invocation, opts) do
     with {:ok, bubblewrap} <- resolve_bubblewrap(opts),
          {:ok, network} <- validate_network(Keyword.get(opts, :network, :disabled)),
          {:ok, workspace_mode} <-
@@ -45,7 +37,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
           environment_args(environment) ++
           ["--", invocation.executable | invocation.args]
 
-      wrapped = %Invocation{
+      wrapped = %{
         invocation
         | requested_program: bubblewrap,
           executable: bubblewrap,
@@ -65,12 +57,12 @@ defmodule Alto.Command.Executors.Bubblewrap do
       }
 
       sandbox = Map.take(approval_details, [:backend, :network, :workspace])
-      {:ok, %Execution{invocation: wrapped, sandbox: sandbox}, approval_details}
+      {:ok, %{invocation: wrapped, sandbox: sandbox}, approval_details}
     end
   end
 
   @impl true
-  def execute(%Execution{invocation: invocation, sandbox: sandbox}) do
+  def execute(%{invocation: invocation, sandbox: sandbox}) do
     case Unsandboxed.execute(invocation) do
       {:ok, result} -> {:ok, Map.put(result, :sandbox, sandbox)}
       {:error, reason} -> {:error, reason}
@@ -78,7 +70,7 @@ defmodule Alto.Command.Executors.Bubblewrap do
   end
 
   @impl true
-  def open(%Execution{invocation: invocation}, opts) do
+  def open(%{invocation: invocation}, opts) do
     # Target environment is fixed by prepare/2 inside --clearenv. A stdio host
     # cannot inject new environment authority after preparation.
     if Keyword.get(opts, :env, %{}) == %{},

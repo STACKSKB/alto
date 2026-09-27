@@ -3,16 +3,15 @@ defmodule Alto.Command.Executors.Unsandboxed do
 
   @behaviour Alto.Command.Executor
 
-  alias Alto.Command.Invocation
   alias Alto.External.Process, as: ExternalProcess
 
   @impl true
-  def prepare(%Invocation{} = invocation, _opts) do
+  def prepare(invocation, _opts) do
     {:ok, invocation, %{backend: :unsandboxed, isolation: :none}}
   end
 
   @impl true
-  def open(%Invocation{} = invocation, opts) do
+  def open(invocation, opts) do
     ExternalProcess.open(
       invocation.executable,
       invocation.args,
@@ -21,7 +20,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
   end
 
   @impl true
-  def execute(%Invocation{} = invocation) do
+  def execute(invocation) do
     started_ms = System.monotonic_time(:millisecond)
 
     case ExternalProcess.open(invocation.executable, invocation.args,

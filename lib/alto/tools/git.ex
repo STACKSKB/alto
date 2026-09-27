@@ -2,7 +2,6 @@ defmodule Alto.Tools.Git do
   @moduledoc false
 
   alias Alto.Command
-  alias Alto.Command.Invocation
   alias Alto.Tool.Context
 
   @spec run([String.t()], Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -19,7 +18,7 @@ defmodule Alto.Tools.Git do
       "args" => command_args(args, opts),
       "timeout_ms" => Keyword.get(opts, :timeout_ms, 30_000),
       "max_output_bytes" =>
-        Keyword.get(opts, :max_output_bytes, Invocation.default_output_bytes())
+        Keyword.get(opts, :max_output_bytes, Alto.Command.default_output_bytes())
     }
 
     Command.prepare(command, context, Keyword.take(opts, [:executor, :policy]))

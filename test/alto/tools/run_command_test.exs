@@ -234,7 +234,7 @@ defmodule Alto.Tools.RunCommandTest do
     """
 
     {output, status} =
-      System.cmd(System.find_executable("elixir"), ["-pa", ebin_path(), "-e", script],
+      System.cmd(System.find_executable("elixir"), code_paths() ++ ["-e", script],
         env: [{"PATH", bin}],
         stderr_to_stdout: true
       )
@@ -294,7 +294,7 @@ defmodule Alto.Tools.RunCommandTest do
     """
 
     {output, status} =
-      System.cmd(System.find_executable("elixir"), ["-pa", ebin_path(), "-e", script],
+      System.cmd(System.find_executable("elixir"), code_paths() ++ ["-e", script],
         env: [{"PATH", bin}],
         stderr_to_stdout: true
       )
@@ -323,7 +323,6 @@ defmodule Alto.Tools.RunCommandTest do
     status == 0
   end
 
-  defp ebin_path do
-    Application.app_dir(:alto, "ebin")
-  end
+  defp code_paths,
+    do: Enum.flat_map([:alto, :nimble_options], &["-pa", Application.app_dir(&1, "ebin")])
 end

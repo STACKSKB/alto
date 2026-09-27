@@ -1,7 +1,6 @@
 defmodule Alto.CommandTest do
   use ExUnit.Case, async: false
 
-  alias Alto.Command.Invocation
   alias Alto.Tool.Context
 
   defmodule RecordingExecutor do
@@ -25,14 +24,25 @@ defmodule Alto.CommandTest do
     %{context: context}
   end
 
-  test "a policy prepares a resolved invocation for a replaceable executor", %{context: context} do
+  test "a captured policy prepares a resolved invocation for a replaceable executor", %{
+    context: context
+  } do
+    allowed_programs = ["printf"]
+
+    policy = fn arguments, context ->
+      if arguments["program"] in allowed_programs,
+        do: Alto.Command.resolve(arguments, context),
+        else: {:error, :program_not_allowed}
+    end
+
     assert {:ok, %{backend: :recording}} =
              Alto.Command.run(%{"program" => "printf", "args" => ["hello"]}, context,
+               policy: policy,
                executor: {RecordingExecutor, test_pid: self()}
              )
 
     assert_receive {:execute,
-                    %Invocation{
+                    %{
                       requested_program: "printf",
                       executable: executable,
                       args: ["hello"],
@@ -64,7 +74,7 @@ defmodule Alto.CommandTest do
     refute_receive {:execute, _invocation}
 
     assert {:ok, %{backend: :recording}} = Alto.Command.execute(prepared)
-    assert_receive {:execute, %Invocation{executable: ^executable}}
+    assert_receive {:execute, %{executable: ^executable}}
   end
 
   test "execution does not resolve PATH again after approval", %{context: context} do
@@ -96,7 +106,7 @@ defmodule Alto.CommandTest do
   test "command policy can reject before an executor is called", %{context: context} do
     assert {:error, :locked_down} =
              Alto.Command.run(%{"program" => "printf"}, context,
-               policy: {Alto.Command.Policies.DenyAll, reason: :locked_down},
+               policy: {:error, :locked_down},
                executor: {RecordingExecutor, test_pid: self()}
              )
 
@@ -105,7 +115,7 @@ defmodule Alto.CommandTest do
   end
 
   test "rejects a non-list args value before reaching the executor", %{context: context} do
-    assert {:error, :arguments_must_be_list} =
+    assert {:error, %NimbleOptions.ValidationError{key: :args}} =
              Alto.Command.run(%{"program" => "printf", "args" => "not-a-list"}, context,
                executor: {RecordingExecutor, test_pid: self()}
              )

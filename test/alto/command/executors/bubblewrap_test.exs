@@ -2,7 +2,6 @@ defmodule Alto.Command.Executors.BubblewrapTest do
   use ExUnit.Case, async: true
 
   alias Alto.Command.Executors.Bubblewrap
-  alias Alto.Command.Invocation
   alias Alto.Tool.Context
 
   @bwrap_path System.find_executable("bwrap")
@@ -276,7 +275,7 @@ defmodule Alto.Command.Executors.BubblewrapTest do
   end
 
   defp invocation(cwd) do
-    %Invocation{
+    %{
       requested_program: "printf",
       executable: System.find_executable("printf") || "/usr/bin/printf",
       args: ["hello"],
