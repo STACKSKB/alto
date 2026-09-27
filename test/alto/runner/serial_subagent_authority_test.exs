@@ -130,7 +130,15 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     do: Alto.loop(driver, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
 
   test "child tools are an exact normalized subset and cannot add or replace capabilities" do
-    for child_tools <- [[ExtraTool], [ReplacementSafeTool]] do
+    guarded = Alto.Tool.transform(SafeTool, fn _args, _context -> {:error, :blocked} end)
+    replacement = Alto.Tool.transform(SafeTool, fn args, _context -> args end)
+
+    for {parent_tools, child_tools} <- [
+          {[SafeTool], [ExtraTool]},
+          {[SafeTool], [ReplacementSafeTool]},
+          {[guarded], [SafeTool]},
+          {[guarded], [replacement]}
+        ] do
       request = %{
         id: "child",
         task: %{name: :safe},
@@ -146,7 +154,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
                Alto.run(
                  %{spawn: request},
                  loop: parent_loop(1),
-                 tools: [SafeTool]
+                 tools: parent_tools
                )
     end
 

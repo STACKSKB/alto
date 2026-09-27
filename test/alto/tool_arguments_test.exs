@@ -110,11 +110,12 @@ defmodule Alto.ToolArgumentsTest do
     caps: caps
   } do
     {module, opts} =
-      Alto.Tools.Transform.wrap(FrozenTool, fn arguments, _ ->
+      Alto.Tool.transform(FrozenTool, fn arguments, _ ->
         Map.update!(arguments, "value", &(&1 + 1))
       end)
 
-    tool = %{module: module, opts: opts}
+    assert {:ok, tools} = Alto.Tool.Registry.build([{module, opts}])
+    tool = tools[to_string(module.name(Alto.Tool.configure(module, opts)))]
     assert {:error, _} = ExecutionTool.prepare(tool, %{"value" => -1}, caps)
     refute_received {:prepared, _}
 

@@ -6,6 +6,7 @@ defmodule Alto.Tool.Registry do
   def build(modules, child_limits) when is_list(modules) do
     Alto.Result.reduce(modules, %{}, fn tool_spec, tools ->
       {module, tool_opts} = Alto.Capabilities.normalize(tool_spec)
+      transforms = tool_opts[:alto_transform] || []
       tool_opts = Alto.Tool.configure(module, tool_opts)
       string_name = module.name(tool_opts) |> Atom.to_string()
       schema = module.schema(schema_opts(module, tool_opts, child_limits))
@@ -29,6 +30,7 @@ defmodule Alto.Tool.Registry do
         tool = %{
           module: module,
           opts: tool_opts,
+          transforms: transforms,
           execution_mode: mode,
           approval: approval,
           definition: definition

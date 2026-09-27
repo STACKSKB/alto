@@ -3,18 +3,19 @@ defmodule Alto.Tools.TransformTest do
 
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Tool, as: ExecutionTool
-  alias Alto.Tools.Transform
 
   defmodule PreparedTool do
     use Alto.Tool, name: :freeze, execution_mode: :exclusive, approval: :required
 
     def schema(_), do: %{description: "Freeze input.", parameters: %{type: "object"}}
 
-    def prepare(arguments, _context, _opts) do
+    def prepare(arguments, _context, opts) do
+      if opts[:owner], do: send(opts[:owner], {:prepared_opts, opts})
       {:ok, {:prepared, arguments}, %{approved: arguments}}
     end
 
-    def run({:prepared, arguments}, _context, _opts) do
+    def run({:prepared, arguments}, _context, opts) do
+      if opts[:owner], do: send(opts[:owner], {:executed_opts, opts})
       {:ok, arguments}
     end
   end
@@ -58,9 +59,13 @@ defmodule Alto.Tools.TransformTest do
     parent = self()
 
     spec =
-      Transform.wrap(PreparedTool, fn arguments, context ->
+      Alto.Tool.transform({PreparedTool, owner: parent}, fn arguments, context ->
         send(parent, {:transformed, arguments, context})
         {:ok, Map.put(arguments, "path", Path.join(context.cwd, arguments["path"]))}
+      end)
+      |> Alto.Tool.transform(fn arguments, _context ->
+        send(parent, {:outer_transform, arguments})
+        Map.update!(arguments, "path", &("outer/" <> &1))
       end)
 
     assert {:ok, tools} = Alto.Tool.Registry.build([spec])
@@ -73,8 +78,10 @@ defmodule Alto.Tools.TransformTest do
     original = %{"path" => "file.txt"}
 
     assert {:ok, prepared, details} = ExecutionTool.prepare(tool, original, caps)
-    assert details["alto_transformed_arguments"] == %{"path" => "/tmp/file.txt"}
-    assert_received {:transformed, ^original, tool_context}
+    assert details["alto_transformed_arguments"] == %{"path" => "/tmp/outer/file.txt"}
+    assert_received {:outer_transform, ^original}
+    assert_received {:transformed, %{"path" => "outer/file.txt"}, tool_context}
+    assert_received {:prepared_opts, [owner: ^parent]}
     assert %{cwd: "/tmp", session_id: "transform-run", input: nil, messaging: nil} = tool_context
     refute Map.has_key?(tool_context, :provider)
     refute Map.has_key?(tool_context, :approval)
@@ -94,35 +101,34 @@ defmodule Alto.Tools.TransformTest do
 
     assert_received {:approval, request}
     assert request.arguments == original
-    assert request.details["alto_transformed_arguments"] == %{"path" => "/tmp/file.txt"}
+    assert request.details["alto_transformed_arguments"] == %{"path" => "/tmp/outer/file.txt"}
 
-    assert {:ok, [{:completed, %{"path" => "/tmp/file.txt"}}]} =
+    assert {:ok, [{:completed, %{"path" => "/tmp/outer/file.txt"}}]} =
              Alto.Runner.ToolBatch.run([{tool, prepared}], caps)
 
+    assert_received {:executed_opts, [owner: ^parent]}
+    refute_received {:outer_transform, _}
     refute_received {:transformed, _, _}
   end
 
-  test "a stale prepared value runs unchanged and raw tools use wrapper preparation" do
+  test "raw tools transform at the shared boundary with map options" do
     spec =
-      Transform.wrap(PreparedTool, fn args, _context ->
-        Map.put(args, "version", args["version"])
+      Alto.Tool.transform({RawTool, %{}}, fn args, _context ->
+        Map.put(args, "normalized", true)
       end)
 
-    assert {:ok, prepared_one, _} = Transform.prepare(%{"version" => 1}, context(), elem(spec, 1))
+    assert {:ok, tools} = Alto.Tool.Registry.build([spec])
+    tool = tools["raw"]
+    assert {:ok, prepared, details} = ExecutionTool.prepare(tool, %{"value" => 1}, caps([]))
+    assert details["alto_transformed_arguments"] == %{"value" => 1, "normalized" => true}
 
-    assert {:ok, _prepared_two, _} =
-             Transform.prepare(%{"version" => 2}, context(), elem(spec, 1))
+    assert {:ok, [{:completed, %{"value" => 1, "normalized" => true}}]} =
+             Alto.Runner.ToolBatch.run([{tool, prepared}], caps([]))
 
-    assert {:ok, %{"version" => 1}} =
-             Transform.run(prepared_one, context(), elem(spec, 1))
+    {module, opts} = spec
 
-    raw_spec = Transform.wrap(RawTool, fn args, _context -> Map.put(args, "normalized", true) end)
-
-    assert {:ok, raw_prepared, %{}} =
-             Transform.prepare(%{"value" => 1}, context(), elem(raw_spec, 1))
-
-    assert {:ok, %{"value" => 1, "normalized" => true}} =
-             Transform.run(raw_prepared, context(), elem(raw_spec, 1))
+    assert {:ok, %{"value" => 2, "normalized" => true}} =
+             Alto.Tool.run(module, %{"value" => 2}, context(), opts)
   end
 
   test "protected-path composition blocks direct and symlink writes while preserving approvals" do
@@ -137,21 +143,31 @@ defmodule Alto.Tools.TransformTest do
 
     for path <- [".git/config", "alias/config", Path.join(root, ".git/config")] do
       assert {:error, {:protected_path, ^path}} =
-               module.prepare(%{"path" => path, "content" => "bad"}, context, opts)
+               Alto.Tool.prepare(module, %{"path" => path, "content" => "bad"}, context, opts)
     end
 
     assert {:ok, prepared, _} =
-             module.prepare(%{"path" => ".gitignore", "content" => "ignored"}, context, opts)
+             Alto.Tool.prepare(
+               module,
+               %{"path" => ".gitignore", "content" => "ignored"},
+               context,
+               opts
+             )
 
-    assert {:ok, _} = module.run(prepared, context, opts)
+    assert {:ok, _} = module.run(prepared, context, Alto.Tool.configure(module, opts))
     assert File.read!(Path.join(root, ".gitignore")) == "ignored"
     assert File.read!(Path.join(root, ".git/config")) == "original"
     {module, opts} = Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [])
 
     assert {:ok, prepared, _} =
-             module.prepare(%{"path" => ".git/config", "content" => "explicit"}, context, opts)
+             Alto.Tool.prepare(
+               module,
+               %{"path" => ".git/config", "content" => "explicit"},
+               context,
+               opts
+             )
 
-    assert {:ok, _} = module.run(prepared, context, opts)
+    assert {:ok, _} = module.run(prepared, context, Alto.Tool.configure(module, opts))
     assert File.read!(Path.join(root, ".git/config")) == "explicit"
   end
 end

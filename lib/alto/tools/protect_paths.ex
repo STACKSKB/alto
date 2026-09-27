@@ -11,7 +11,7 @@ defmodule Alto.Tools.ProtectPaths do
            end),
            do: raise(ArgumentError, "protected paths must be workspace-relative")
 
-    Alto.Tools.Transform.wrap(tool, fn arguments, context ->
+    Alto.Tool.transform(tool, fn arguments, context ->
       with {:ok, resolved} <- SafePath.resolve(arguments["path"], context.cwd),
            {:ok, roots} <- protected_roots(paths, context.cwd) do
         lexical = Path.expand(arguments["path"], context.cwd)

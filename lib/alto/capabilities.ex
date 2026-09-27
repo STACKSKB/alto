@@ -65,6 +65,7 @@ defmodule Alto.Capabilities do
         module -> {module, []}
       end
 
+    transformed? = (opts[:alto_transform] || []) != []
     opts = Alto.Tool.configure(module, opts)
 
     %{
@@ -72,7 +73,7 @@ defmodule Alto.Capabilities do
       module: module_name(module),
       approval: Alto.Tool.requirement(module, opts),
       execution_mode: module.execution_mode(opts),
-      prepared: function_exported?(module, :prepare, 3)
+      prepared: transformed? or function_exported?(module, :prepare, 3)
     }
   end
 

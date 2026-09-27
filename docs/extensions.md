@@ -46,7 +46,7 @@ and credentials pass through to the wrapped provider.
 
 ## Transforming tool input
 
-`Alto.Tools.Transform` is a host-side input adapter. It wraps a normal tool
+`Alto.Tool.transform/2` configures a host-side input transform on a normal tool
 specification and applies a two argument function `(arguments, context)` once,
 when the invocation is prepared. The transformed arguments are included in the
 approval details and the resulting opaque value is passed unchanged through
@@ -58,14 +58,15 @@ path_transform = fn args, context ->
 end
 
 tools = [
-  Alto.Tools.Transform.wrap(Alto.Tools.ReadFile, path_transform)
+  Alto.Tool.transform(Alto.Tools.ReadFile, path_transform)
 ]
 ```
 
 The wrapped tool retains its name, schema, approval requirement, and execution
 mode. Prepared tools keep their own `prepare` and `run` callbacks. A
-run-only tool receives the transformed argument map through the wrapper's
-preparation boundary. Keep transforms deterministic and local; authorization
+run-only tool receives the transformed argument map through the same
+preparation boundary. Nested transforms run outermost first; approval details
+show the final transformed arguments. Keep transforms deterministic and local; authorization
 should describe the value that will be executed.
 
 Built-in argument contracts use `use Alto.Tool, arguments: true` and an

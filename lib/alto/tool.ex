@@ -25,7 +25,7 @@ defmodule Alto.Tool do
   @type approval_requirement :: :never | :required
   @type approval_details :: map()
   @type options :: keyword() | map()
-  @type spec :: module() | {module(), keyword()}
+  @type spec :: module() | {module(), options()}
   @type result :: {:ok, term()} | {:error, term()} | {:unknown, term()}
 
   @doc "Trusted defaults for tools receiving canonical map options. Host overrides are merged before registration or standalone execution."
@@ -106,14 +106,21 @@ defmodule Alto.Tool do
     %{description: description, parameters: parameters}
   end
 
-  def configure(_module, opts) when is_map(opts), do: opts
+  @doc "Apply a host-side input transform once before validation and preparation. Nested transforms run outermost first."
+  def transform(spec, transform) when is_function(transform, 2) do
+    {module, opts} = Alto.Capabilities.normalize(spec)
+    transforms = [transform | opts[:alto_transform] || []]
+    opts = put_in(opts[:alto_transform], transforms)
+    {module, opts}
+  end
 
   def configure(module, opts) do
+    opts = elem(Access.pop(opts, :alto_transform), 1)
     Code.ensure_loaded!(module)
 
-    if function_exported?(module, :options, 0),
-      do: Map.merge(module.options(), Map.new(opts)),
-      else: opts
+    if is_map(opts) or not function_exported?(module, :options, 0),
+      do: opts,
+      else: Map.merge(module.options(), Map.new(opts))
   end
 
   def requirement(module, opts) do
@@ -121,29 +128,51 @@ defmodule Alto.Tool do
   end
 
   @doc "Prepare a tool input and validate its return contract without executing it."
-  def prepare(module, arguments, context, opts \\ []) do
+  def prepare(module, arguments, context, opts \\ [], transforms \\ nil) do
     Code.ensure_loaded!(module)
+    transforms = transforms || opts[:alto_transform] || []
     opts = configure(module, opts)
 
-    with {:ok, arguments} <- validate_arguments(module, arguments, opts) do
+    with {:ok, transformed} <- transform_arguments(arguments, context, transforms),
+         {:ok, arguments} <- validate_arguments(module, transformed, opts) do
       result =
         if function_exported?(module, :prepare, 3),
           do: module.prepare(arguments, context, opts),
           else: {:ok, arguments, %{}}
 
       case result do
-        {:ok, _value, details} when is_map(details) -> result
-        {:error, _} -> result
+        {:ok, value, details} when is_map(details) ->
+          details =
+            if transforms == [],
+              do: details,
+              else: Map.put(details, "alto_transformed_arguments", transformed)
+
+          {:ok, value, details}
+
+        {:error, _} ->
+          result
       end
     end
   end
 
   @doc "Prepare and execute in the caller. Runner hosts separately supply approval, supervision, and cancellation."
   def run(module, arguments, context, opts \\ []) do
+    transforms = opts[:alto_transform] || []
     opts = configure(module, opts)
 
-    with {:ok, prepared, _details} <- prepare(module, arguments, context, opts),
+    with {:ok, prepared, _details} <- prepare(module, arguments, context, opts, transforms),
          do: module.run(prepared, context, opts)
+  end
+
+  defp transform_arguments(arguments, context, transforms) do
+    Alto.Result.reduce(transforms, arguments, fn transform, arguments ->
+      case transform.(arguments, context) do
+        {:ok, transformed} when is_map(transformed) -> {:ok, transformed}
+        transformed when is_map(transformed) -> {:ok, transformed}
+        {:error, _} = error -> error
+        other -> {:error, {:invalid_transform_return, other}}
+      end
+    end)
   end
 
   defp validate_arguments(module, arguments, opts) do

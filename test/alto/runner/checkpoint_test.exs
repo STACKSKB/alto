@@ -102,6 +102,15 @@ defmodule Alto.Runner.CheckpointTest do
     dir: dir,
     opts: opts
   } do
+    transform = fn suffix ->
+      fn arguments, context ->
+        File.write!(Path.join(context.cwd, "transforms"), suffix, [:append])
+        arguments
+      end
+    end
+
+    opts = Keyword.put(opts, :tools, [First, Alto.Tool.transform(Guarded, transform.("1"))])
+
     assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
              suspended = Serial.run("{}", opts)
 
@@ -109,6 +118,13 @@ defmodule Alto.Runner.CheckpointTest do
     refute File.exists?(Path.join(dir, "guarded"))
     packet = suspended.checkpoint |> JSON.encode!() |> JSON.decode!()
     File.write!(Path.join(dir, "input"), "changed after preparation")
+
+    changed = Keyword.put(opts, :tools, [First, Alto.Tool.transform(Guarded, transform.("2"))])
+
+    assert %Alto.Runner.Result{status: :error, reason: :checkpoint_mismatch} =
+             Serial.run("{}", Keyword.put(changed, :checkpoint, {packet, :approve}))
+
+    refute File.exists?(Path.join(dir, "guarded"))
 
     assert %Alto.Runner.Result{status: :ok} =
              result = Serial.run("{}", Keyword.put(opts, :checkpoint, {packet, :approve}))
@@ -118,6 +134,7 @@ defmodule Alto.Runner.CheckpointTest do
     assert File.read!(Path.join(dir, "guarded")) == "original"
     assert File.read!(Path.join(dir, "first")) == "1"
     assert File.read!(Path.join(dir, "preparations")) == "1"
+    assert File.read!(Path.join(dir, "transforms")) == "1"
   end
 
   test "model tool batches resume pending calls without requesting the model again", %{

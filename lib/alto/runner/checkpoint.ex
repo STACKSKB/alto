@@ -474,7 +474,8 @@ defmodule Alto.Runner.Checkpoint do
   defp fingerprint_data_for(run) do
     tools =
       Enum.map(run.tools, fn {name, tool} ->
-        {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.approval}
+        {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.transforms,
+         tool.approval}
       end)
       |> Enum.sort()
 

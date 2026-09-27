@@ -12,11 +12,16 @@ defmodule Alto.Runner.Execution.Tool do
   alias Alto.Runner.Execution.Call
 
   @doc "Prepare one invocation and return the opaque value and display-safe details."
-  def prepare(%{module: module, opts: opts}, arguments, caps) do
-    if function_exported?(module, :prepare, 3) or function_exported?(module, :arguments, 1) do
+  def prepare(%{module: module, opts: opts} = tool, arguments, caps) do
+    transforms = Map.get(tool, :transforms, [])
+
+    if transforms != [] or function_exported?(module, :prepare, 3) or
+         function_exported?(module, :arguments, 1) do
       outcome =
         Call.run(
-          fn -> Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts) end,
+          fn ->
+            Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts, transforms)
+          end,
           Budget.timeout(caps.budget, caps.tool_timeout),
           caps.cancel_ref
         )
