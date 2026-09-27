@@ -56,6 +56,30 @@ Validation after those fixes:
 
 1. **Provider/parent resilience:** the remote coordinator twice timed out (120 seconds, then 300 seconds); parent failure cancels owned children. A richer recovery policy needs deliberate design. The failed history and partial artifacts remain available.
 2. **Model efficiency and test quality:** integration consumed 75 provider requests, and its passing tests missed important cases. In one redo test the model reset the canvas between phases, masking a broken transition. The independent regression now checks undo → redo → undo directly.
-3. **Activity after restart:** the new TUI inspector retains bounded live activity for the current UI session; historical child sessions are durable, but reconstructing the inspector from them is not implemented.
-4. **Timing-sensitive tests:** the existing 10 ms mailbox lock and 600 ms tool-start tests failed under parallel contention. The complete serial core run passed. These should be stabilized separately rather than changing production behavior to satisfy wall-clock assertions.
+3. **Activity after restart:** addressed in the follow-up below; the inspector now reconstructs saved child activity.
+4. **Timing-sensitive tests:** addressed in the follow-up below; the full suite now passes with ordinary parallelism.
 
+## Follow-up: Alto reliability under the manga workload
+
+The user clarified that HotLimit is a realistic test workload; Alto reliability remains the priority. Multiple/blended brush tips (not parallel tracks) are the intended app direction. Layers and the editing UI remain future workload steps.
+
+### Fixed in this follow-up
+
+- **Saved subagent inspector:** native tasks reconstruct child/grandchild activity, results and session IDs after restart. Separate child sessions are discovered independently of the recent-100 session list; shared-session child runs are also supported. Failed/cancelled results remain readable behind an execution resume fence. A missing completion is marked `no saved completion`, without assuming the process is running or finished. Discovery is bounded to 4,096 headers and 256 child entries, with truncation/read-error notices. Uncommitted streaming fragments cannot be recovered.
+- **Real history verification:** reopening coordinator session `sess-4z26z4ngti6et6q` restored both `core` and `shell` with cancelled statuses and retained activity, without warnings.
+- **Streaming deadlines:** HTTP adapters now accept an optional `idle_timeout`. Existing `timeout` remains a hard total deadline; existing configurations retain their previous behavior when the new field is absent. The agentic profile uses 120 seconds of silence, 600 seconds total and a 610-second runner deadline (the remaining run budget can end it sooner). Tests use a real local HTTP stream to verify continued activity, silence timeout and an unextendable total deadline.
+- **Recoverable addressing mistakes:** Space Bunny dropped the `agent-` prefix three times and misreported this as a router failure. The tool now explains the exact-address requirement and suggests the complete registered address when the prefix was omitted. It never reroutes automatically. In live session `sess-ovecm7q6nzglbyy`, the model corrected the address and delivered exactly one `RECOVERY_ACK` in four requests.
+- **Closed stdin for finite commands:** the review worker twice ran `grep` without a file target and waited for a 30-second timeout. Although the missing target was a model mistake, a noninteractive executor should supply EOF. Finite commands now receive `/dev/null` after the startup handshake, including sandboxed execution and the degraded process-group fallback. Retained stdio clients keep their writable input. Regression tests cover `cat`, `grep`, degraded startup and sandboxed commands; existing interactive handshake/MCP tests remain passing.
+- **Timing-sensitive tests:** file-lock tests no longer compete with the async suite for a 10 ms subprocess startup window; the mailbox timeout check uses 100 ms. The serial tool-start test allows a bounded 5 seconds for startup while retaining its serialization assertions. Production locking/scheduling semantics were not relaxed.
+
+### Validation
+
+The final complete core suite passed with ordinary parallelism: **1,094 tests**, `ERL_FLAGS='+S 4:4' mix test` (8 cases). The full TUI suite passed **174 tests**. A subsequent inspector change also reports truncation for shared-session children; that regression and all application tests passed together (**60 tests**). The focused command/process/sandbox suite passed **37 tests**, including retained stdio behavior. `git diff --check` passed.
+
+### Live workload and remaining limits
+
+Space Bunny implemented a retained manga-ink engine in `HotLimit/src/ink.c` and its tests. Session `sess-27ciha4rpee427i` completed successfully in 30 requests, with 884 checks reported passing. Independent review found additional app defects despite those tests: color alpha was ignored, straight-alpha erasing darkened RGB, self-clone destroyed the source, short two-point strokes disappeared, huge finite inputs could overflow arithmetic, and general monotonic pressure curves were not guaranteed monotonic. The second bounded Alto workload, session `sess-jh325uw5tvqdwei`, fixed those cases and completed successfully in **34 requests** with successful persistence. It also removed an invented straight shortcut when the subdivision budget was exhausted.
+
+Independent host validation passed `make all test smoke`: the original 256 checks, the separate regression suite, **3,926 ink checks**, BMP/undo/redo self-test and SDL synthetic mouse/pen smoke tests. A fresh build of the ink suite also passed all 3,926 checks under AddressSanitizer, UndefinedBehaviorSanitizer and float-cast-overflow instrumentation. Both workload sessions are registered in the HotLimit task catalog.
+
+The engine remains separate from the window. Layers, a vector-editing UI, mixed brush tips, physical-tablet tuning and G-pen feel are not claimed complete. Parent failure still cancels its owned children; automatic orphan recovery or replay of uncertain tools is not introduced. New timeout settings reduce avoidable two-minute total timeouts but do not make a stalled remote provider reliable. Partial work remains inspectable.

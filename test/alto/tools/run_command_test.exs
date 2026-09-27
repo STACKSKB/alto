@@ -48,6 +48,18 @@ defmodule Alto.Tools.RunCommandTest do
              )
   end
 
+  test "finite commands see stdin EOF instead of waiting until the deadline", %{context: context} do
+    assert {:ok, %{exit_status: 0, timed_out: false, output: ""}} =
+             prepared_run(RunCommand, %{"program" => "cat", "timeout_ms" => 5_000}, context)
+
+    assert {:ok, %{exit_status: 1, timed_out: false}} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "grep", "args" => ["main"], "timeout_ms" => 5_000},
+               context
+             )
+  end
+
   test "drains after the output limit while retaining bounded head and tail", %{context: context} do
     assert {:ok,
             %{
@@ -230,6 +242,8 @@ defmodule Alto.Tools.RunCommandTest do
       )
 
     IO.inspect(Alto.Tools.RunCommand.run(prepared, context), limit: :infinity)
+    {:ok, eof_result} = Alto.Command.run(%{"program" => #{inspect(System.find_executable("cat"))}, "timeout_ms" => 2_000}, context)
+    IO.inspect(eof_result, label: "fallback_stdin_eof")
     """
 
     {output, status} =
@@ -241,6 +255,9 @@ defmodule Alto.Tools.RunCommandTest do
     assert status == 0, "fallback probe failed: #{output}"
     assert output =~ "termination: :timeout"
     assert output =~ "process-group cleanup"
+    assert output =~ "fallback_stdin_eof"
+    assert output =~ "exit_status: 0"
+    assert output =~ "timed_out: false"
   end
 
   # The os_pid of a port is assigned asynchronously after Port.open, so a child

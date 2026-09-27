@@ -2,6 +2,109 @@ defmodule Alto.TUI.Subagents do
   @moduledoc "Bounded per-task child activity, separate from the parent conversation."
   alias Alto.Event
 
+  @doc "Rebuild bounded child activity from durable sessions without requiring resumability."
+  def load(session_id, opts) do
+    opts = Keyword.take(opts, [:session_dir])
+
+    case Alto.Session.Children.list(session_id, opts) do
+      {:ok, %{sessions: children, truncated: truncated}} ->
+        {agents, warnings} =
+          Enum.reduce([%{id: session_id} | children], {%{}, []}, fn child, {agents, warnings} ->
+            case Alto.Session.read(child.id, opts) do
+              {:ok, records} ->
+                starts =
+                  Enum.filter(records, &(&1["type"] == "started" and &1["subagent"] == true))
+
+                Enum.reduce(starts, {agents, warnings}, fn start, {acc, notices} ->
+                  key = start["agent_id"] || child.id <> ":" <> to_string(start["run_id"])
+
+                  if map_size(acc) < 256 or Map.has_key?(acc, key) do
+                    {Map.put(acc, key, saved_agent(child.id, start, records)), notices}
+                  else
+                    {acc, Enum.uniq(["Saved child history was truncated" | notices])}
+                  end
+                end)
+
+              {:error, _} ->
+                {agents, ["Some saved child activity could not be read" | warnings]}
+            end
+          end)
+
+        {agents,
+         if(truncated, do: ["Saved child history was truncated" | warnings], else: warnings)}
+
+      {:error, _} ->
+        {%{}, ["Saved child history could not be discovered"]}
+    end
+  end
+
+  defp saved_agent(session, start, records) do
+    run_id = start["run_id"]
+    records = Enum.filter(records, &(&1["run_id"] == run_id))
+    completed = Enum.find(Enum.reverse(records), &(&1["type"] == "completed"))
+    identity = if is_map(start["agent_identity"]), do: start["agent_identity"], else: %{}
+    path = identity["path"]
+    label = if is_list(path) and Enum.all?(path, &is_binary/1), do: Enum.join(path, "/"), else: ""
+    status = if completed, do: completed["status"], else: "unknown"
+
+    result =
+      if completed,
+        do: saved_value(completed["output"]) <> "\n" <> saved_value(completed["reason"]),
+        else:
+          "No saved completion. Another process may still be running, or may have stopped before recording its result."
+
+    activity = Enum.reduce(records, "", fn record, acc -> tail(acc <> saved_activity(record)) end)
+
+    %{
+      agent_id: start["agent_id"] || session <> ":" <> to_string(run_id),
+      id: if(label == "", do: start["task"] || "child", else: label),
+      parent: start["parent_session_id"],
+      session_id: session,
+      model: start["model"],
+      backend: start["provider"],
+      status: status,
+      phase: if(completed, do: status, else: "no saved completion"),
+      activity: activity,
+      result: tail(result)
+    }
+  end
+
+  defp saved_value(nil), do: ""
+
+  defp saved_value(encoded) do
+    case Alto.Session.decode_term(encoded) do
+      {:ok, value} -> Alto.Display.error(value)
+      _ -> "[saved value unavailable]"
+    end
+  end
+
+  defp saved_activity(%{"type" => "event", "event" => event} = record) do
+    data = if is_map(record["wire_data"]), do: record["wire_data"], else: %{}
+
+    value = if is_map(data["value"]), do: data["value"], else: %{}
+    output = text_value(value["output"]) |> String.slice(-4_000, 4_000)
+
+    case event do
+      "model_completed" ->
+        text_value(data["message"]) <> "\n"
+
+      type when type in ["tool_started", "tool_completed", "tool_failed"] ->
+        "\n" <>
+          type <>
+          " › " <>
+          text_value(data["summary"] || data["name"]) <>
+          if(type == "tool_failed", do: " " <> inspect(data["error"], limit: 10), else: "") <>
+          "\n" <> output <> "\n"
+
+      _ ->
+        ""
+    end
+  end
+
+  defp saved_activity(_), do: ""
+  defp text_value(value) when is_binary(value), do: value
+  defp text_value(_), do: ""
+
   def list(state),
     do:
       state.subagents
@@ -49,7 +152,14 @@ defmodule Alto.TUI.Subagents do
       status = if result, do: to_string(result.status), else: to_string(data.status)
       output = if result && result[:output], do: Alto.Display.error(result.output), else: ""
       reason = if result && result[:reason], do: Alto.Display.error(result.reason), else: ""
-      %{agent | status: status, phase: status, result: tail(output <> "\n" <> reason)}
+
+      %{
+        agent
+        | status: status,
+          phase: status,
+          result: tail(output <> "\n" <> reason),
+          session_id: (result && result[:session_id]) || agent.session_id
+      }
     end)
   end
 
@@ -64,6 +174,7 @@ defmodule Alto.TUI.Subagents do
         parent: data[:parent],
         model: data[:model],
         backend: data[:backend],
+        session_id: nil,
         status: "running",
         phase: "working",
         activity: "",
@@ -94,7 +205,7 @@ defmodule Alto.TUI.Subagents do
 
       agent ->
         {" subagent #{agent.id} · ^G U agents · Esc back ",
-         "#{agent.agent_id}\nParent: #{agent.parent}\n#{label(agent)}\n\n" <>
+         "#{agent.agent_id}\nParent: #{agent.parent}\nSession: #{agent[:session_id] || "live"}\n#{label(agent)}\n\n" <>
            agent.activity <> "\n\n" <> agent.result}
     end
   end

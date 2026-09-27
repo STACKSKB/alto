@@ -1663,6 +1663,97 @@ defmodule Alto.TUI.AppTest do
              Alto.Session.transcript(id, session_dir: session_dir)
   end
 
+  test "reopening a failed task restores separate and shared child activity", context do
+    opts = [session_dir: Path.join(context.root, "sessions")]
+    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, parent} = Alto.Session.create("parent", %{}, opts)
+
+    {:ok, _} =
+      Alto.Session.persist_settled(parent, [%{"role" => "user", "content" => "task"}], 20, opts)
+
+    child = Alto.Session.generate_id()
+
+    for {session, run, agent} <- [
+          {child, "run-child", "agent-child"},
+          {parent, "run-shared", "agent-shared"}
+        ] do
+      start =
+        Alto.Session.started_record(%{
+          run_id: run,
+          subagent: true,
+          parent_session_id: parent,
+          agent_id: agent,
+          agent_identity: %{path: ["same label"]},
+          model: "saved-model"
+        })
+
+      :ok = Alto.Session.append(session, start, opts)
+
+      :ok =
+        Alto.Session.append(
+          session,
+          Alto.Session.event_record(
+            run,
+            Alto.Event.durable(:model_completed, %{message: "Recovered child finding"})
+          ),
+          opts
+        )
+
+      :ok =
+        Alto.Session.append(
+          session,
+          Alto.Session.completed_record(%{
+            run_id: run,
+            status: :cancelled,
+            output: "Partial work saved",
+            reason: :parent_finished,
+            subagent: true
+          }),
+          opts
+        )
+    end
+
+    unfinished = Alto.Session.generate_id()
+
+    :ok =
+      Alto.Session.append(
+        unfinished,
+        Alto.Session.started_record(%{
+          run_id: "run-lost",
+          subagent: true,
+          parent_session_id: child,
+          agent_identity: %{path: ["nested"]}
+        }),
+        opts
+      )
+
+    {:ok, task} =
+      Alto.Harness.Catalog.create_task(project["id"], "failed parent",
+        path: context.catalog,
+        conversation_id: parent
+      )
+
+    {:ok, _} =
+      Alto.Harness.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+
+    {:ok, _} = Alto.Session.mark_dispatched(parent, ["unsettled"], opts)
+    state = state!(context, opts)
+    agents = Alto.TUI.Subagents.list(state)
+    assert length(agents) == 3
+    assert Enum.count(agents, &(&1.id == "same label")) == 2
+    assert Enum.any?(agents, &(&1.phase == "no saved completion"))
+    child = Enum.find(agents, &(&1.agent_id == "agent-child"))
+    assert child.phase == "cancelled"
+    assert child.activity =~ "Recovered child finding"
+    assert child.result =~ "Partial work saved"
+    assert child.result =~ "Parent finished"
+    selected = %{state | selected_agent_id: child.agent_id}
+    assert {_, text} = Alto.TUI.Subagents.details(selected)
+    assert text =~ child.session_id
+    restarted = state!(context, opts)
+    assert Alto.TUI.Subagents.list(restarted) == agents
+  end
+
   test "model choice survives task selection, new tasks, backend switching and restart",
        context do
     state = state!(context)

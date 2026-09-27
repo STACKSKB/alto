@@ -263,5 +263,11 @@ model, parent ID, current stage, streamed activity, tool summaries and final res
 in the context pane (a drawer on narrow terminals). **Esc** returns to context;
 it does not stop the parent while inspecting a child. Repeated labels remain
 separate because the list uses stable agent IDs. Approvals keep priority.
-Activity is bounded and retained in memory during this TUI session; child session
-logs remain the durable source after restarting the TUI.
+Live activity is bounded. Reopening a native task rebuilds child and grandchild
+activity from durable session logs, including failed/cancelled children and
+shared-session children. The inspector shows the saved session ID and completion
+reason. Missing completion records are marked **no saved completion**, not assumed
+running or successful. This read-only inspection also works behind a resume fence.
+Discovery scans at most 4,096 session headers and retains 256 children; a notice
+reports truncation or unreadable discovered sessions. Transient streaming fragments
+that were never committed to history cannot be reconstructed.

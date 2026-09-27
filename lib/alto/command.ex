@@ -39,7 +39,7 @@ defmodule Alto.Command do
 
   @doc false
   def arguments do
-    {"Run one executable through the harness-configured command executor using an argument vector. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
+    {"Run one executable through the harness-configured command executor using an argument vector. Standard input is closed (EOF); provide input via files or explicit shell redirection. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
      @fields}
   end
 

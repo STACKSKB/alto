@@ -1012,7 +1012,7 @@ defmodule Alto.TUI.App do
 
     if items == [],
       do: {:error, "No subagent activity for this task yet"},
-      else: {:ok, "subagents · select to view live activity", items, nil}
+      else: {:ok, "subagents · select to view activity and results", items, nil}
   end
 
   defp overlay_items(state, :effort) do

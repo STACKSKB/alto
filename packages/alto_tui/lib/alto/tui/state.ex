@@ -620,7 +620,24 @@ defmodule Alto.TUI.State do
            else: Usage.new()
       end)
 
-    %{state | entries: entries, usage: usage} |> evict_inactive_caches()
+    state = %{state | entries: entries, usage: usage}
+
+    state =
+      if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend) and
+           not Map.has_key?(state.subagents, state.selected_task_id) do
+        {agents, warnings} = Alto.TUI.Subagents.load(session_id, state.catalog_opts)
+
+        %{
+          state
+          | subagents: Map.put(state.subagents, state.selected_task_id, agents),
+            notice:
+              if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
+        }
+      else
+        state
+      end
+
+    evict_inactive_caches(state)
   end
 
   defp load_session_entries(session_id, opts) do

@@ -200,7 +200,7 @@ defmodule Alto.Runner.ToolBatchTest do
         )
       )
 
-    assert_receive {:started, 1, one}
+    assert_receive {:started, 1, one}, 5_000
     refute_receive {:started, 2, _}, 30
     send(one, :release)
     assert %Alto.Runner.Result{status: :ok} = Alto.await(handle)

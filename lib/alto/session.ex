@@ -316,6 +316,7 @@ defmodule Alto.Session do
       "parent_run_id" => Map.get(fields, :parent_run_id),
       "parent_session_id" => Map.get(fields, :parent_session_id),
       "agent_identity" => Alto.Protocol.encode_term(Map.get(fields, :agent_identity)),
+      "agent_id" => Map.get(fields, :agent_id),
       "subagent" => Map.get(fields, :subagent, false),
       "session_owner" => Map.get(fields, :session_owner, not Map.get(fields, :subagent, false)),
       "task" => preview_task(Map.get(fields, :task)),

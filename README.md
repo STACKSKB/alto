@@ -32,7 +32,11 @@ file with mode `0600`; credentials are never written to the workspace or session
 startup metadata. Select other providers, models, transports, prompts, tools and
 limits through `mix alto --config FILE`. A configured provider is used as supplied,
 including its model and transport timeout; `provider_timeout` separately bounds
-the runner call.
+the runner call. HTTP providers accept an optional `idle_timeout` for gaps between
+received data; `timeout` remains the hard total HTTP deadline. Without
+`idle_timeout`, both limits retain the `timeout` value. The agentic profile uses
+120 seconds of silence, 600 seconds total, and a 610-second runner deadline;
+the remaining run budget can end a call sooner. Cancellation still applies.
 
 Build a standalone CLI with:
 

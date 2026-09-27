@@ -6,6 +6,8 @@ defmodule Alto.Providers.HTTPOptions do
       model: [type: {:custom, __MODULE__, :nonempty_string, []}, required: true],
       endpoint: [type: {:custom, __MODULE__, :endpoint, []}, required: true],
       timeout: [type: :pos_integer, default: 120_000],
+      # Optional silence deadline; timeout remains the total request deadline.
+      idle_timeout: [type: :pos_integer],
       max_event_bytes: [type: :pos_integer, default: 1_000_000],
       max_response_bytes: [type: :pos_integer, default: 2_000_000],
       supports_images: [type: :boolean, default: false]
@@ -37,7 +39,7 @@ defmodule Alto.Providers.HTTPOptions do
           headers: headers,
           raw: true,
           retry: false,
-          receive_timeout: config.timeout,
+          receive_timeout: Map.get(config, :idle_timeout, config.timeout),
           request_timeout: config.timeout
         ]
     )

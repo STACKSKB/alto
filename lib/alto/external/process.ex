@@ -7,6 +7,9 @@ defmodule Alto.External.Process do
   we verify that the child is its own process-group leader before enabling group
   signals. No signal is sent to an unverified process group.
 
+  `stdin: :null` gives finite commands EOF after the startup handshake; retained
+  stdio clients keep the default writable pipe.
+
   The linked watchdog cleans up on owner exit while the VM is alive. This is not
   a guarantee against a hard VM or machine crash; use an OS-managed sandbox or
   service boundary when descendants must not outlive such failures.
@@ -38,7 +41,9 @@ defmodule Alto.External.Process do
     started_ms = System.monotonic_time(:millisecond)
     timeout = Keyword.get(opts, :startup_timeout, 30_000)
     deadline_ms = started_ms + timeout
-    {port_executable, port_args, group_kill} = trampoline(executable, args)
+
+    {port_executable, port_args, group_kill} =
+      trampoline(executable, args, Keyword.get(opts, :stdin, :pipe))
 
     port_opts =
       [
@@ -97,17 +102,32 @@ defmodule Alto.External.Process do
 
   defp encode_env(_), do: []
 
-  defp trampoline(executable, args) do
+  defp trampoline(executable, args, stdin) do
     case {System.find_executable("sh"), System.find_executable("kill")} do
       {shell, kill} when is_binary(shell) and is_binary(kill) ->
         script =
           "printf 'alto-process-ready\\n'; IFS= read -r release || exit; [ \"$release\" = release ] || exit; exec \"$@\""
 
+        script = if stdin == :null, do: script <> " </dev/null", else: script
         {shell, ["-c", script, "alto-process", executable | args], kill}
 
       _ ->
         warn_degraded_once()
-        {executable, args, nil}
+
+        if stdin == :null do
+          # A read-only port still inherits stdin on Unix. Use a shell solely
+          # for EOF redirection even when process-group tools are unavailable.
+          shell =
+            System.find_executable("sh") || System.find_executable("/bin/sh") ||
+              System.find_executable("/usr/bin/sh")
+
+          if is_nil(shell),
+            do: raise(ArgumentError, "closing command stdin requires a POSIX shell")
+
+          {shell, ["-c", "exec \"$@\" </dev/null", "alto-process", executable | args], nil}
+        else
+          {executable, args, nil}
+        end
     end
   end
 

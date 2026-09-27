@@ -26,6 +26,7 @@ defmodule Alto.Command.Executors.Unsandboxed do
     case ExternalProcess.open(invocation.executable, invocation.args,
            cwd: invocation.cwd,
            startup_timeout: min(invocation.timeout_ms, 30_000),
+           stdin: :null,
            stderr_to_stdout: true
          ) do
       {:ok, process} ->

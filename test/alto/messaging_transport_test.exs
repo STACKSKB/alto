@@ -1,5 +1,7 @@
 defmodule Alto.MessagingTransportTest do
-  use ExUnit.Case, async: true
+  # OS flock subprocess startup is not the behavior under test. Avoid
+  # competing with the async suite for a deliberately short lock deadline.
+  use ExUnit.Case, async: false
   alias Alto.{Input, Messaging}
 
   defmodule Custom do
@@ -186,8 +188,8 @@ defmodule Alto.MessagingTransportTest do
     {:ok, lock} = Alto.Storage.acquire(lock_path)
 
     try do
-      assert {:error, {:storage_lock_timeout, ^lock_path, 10}} =
-               Input.request(channel, {:take, :any}, 10)
+      assert {:error, {:storage_lock_timeout, ^lock_path, 100}} =
+               Input.request(channel, {:take, :any}, 100)
     after
       Alto.Storage.release(lock)
     end

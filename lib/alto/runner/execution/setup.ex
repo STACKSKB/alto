@@ -265,6 +265,7 @@ defmodule Alto.Runner.Execution.Setup do
             parent_run_id: Keyword.get(opts, :parent_run_id),
             parent_session_id: Keyword.get(opts, :parent_session_id),
             agent_identity: run.agent_identity,
+            agent_id: run.messaging && run.messaging.id,
             subagent: run.agent_depth > 0,
             session_owner: run.agent_depth == 0 or run.resume_snapshot,
             task: task,

@@ -29,6 +29,16 @@ defmodule Alto.Command.Executors.BubblewrapTest do
   end
 
   @tag skip: @bwrap_skip
+  test "sandboxed finite commands also receive stdin EOF", %{context: context} do
+    assert {:ok, %{exit_status: 1, timed_out: false}} =
+             Alto.Command.run(
+               %{"program" => "grep", "args" => ["main"], "timeout_ms" => 5_000},
+               context,
+               executor: {Bubblewrap, network: :disabled}
+             )
+  end
+
+  @tag skip: @bwrap_skip
   test "mounts the workspace but hides unrelated host paths", context do
     secret = Path.join(context.outside, "secret")
 

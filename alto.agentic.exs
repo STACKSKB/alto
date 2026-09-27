@@ -25,7 +25,9 @@ openrouter_options =
   [
     base_url: "https://openrouter.ai/api/v1",
     model: openrouter_model,
-    timeout: 120_000,
+    # Reasoning may stream for minutes; silence is still bounded independently.
+    timeout: 600_000,
+    idle_timeout: 120_000,
     supports_images: vision_enabled,
     model_query: [supported_parameters: "tools", sort: "most-popular"]
   ]
@@ -130,6 +132,7 @@ tools =
       {module, opts} -> module.name(opts)
       module -> module.name([])
     end),
+  provider_timeout: 610_000,
   tool_timeout: 120_000,
   tui_backends: [
     alto: {Alto.TUI.Backends.Native, label: "Alto native"},
