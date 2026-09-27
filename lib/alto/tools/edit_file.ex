@@ -119,8 +119,15 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp select_matches(_content, [], _replace_all?, _edit_index),
-    do: {:error, :text_not_found}
+  defp select_matches(_content, [], _replace_all?, edit_index) do
+    {:error,
+     {:text_not_found,
+      %{
+        edit_index: edit_index,
+        hint:
+          "No exact match was found for this edit in the current file. Re-read the current file and use exact surrounding context from its latest contents; no edit was applied."
+      }}}
+  end
 
   defp select_matches(content, matches, false, edit_index) when length(matches) > 1 do
     locations = Enum.take(matches, 9)

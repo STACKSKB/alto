@@ -603,16 +603,21 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                context
              )
 
-    assert {:error, :text_not_found} =
+    assert {:error, {:text_not_found, %{edit_index: 2, hint: hint}}} =
              Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
-                 "edits" => [%{"old_text" => "abc def", "new_text" => "x"}]
+                 "edits" => [
+                   %{"old_text" => "abc", "new_text" => "x"},
+                   %{"old_text" => "abc def", "new_text" => "y"}
+                 ]
                },
                context
              )
 
+    assert hint =~ "Re-read the current file"
+    assert hint =~ "exact surrounding context"
     assert File.read!(path) == "abcdef\n"
   end
 
