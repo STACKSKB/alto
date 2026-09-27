@@ -3,7 +3,7 @@ defmodule Alto.TUI.ApprovalView do
 
   @doc "Present the actual prepared action, including its folder and execution constraints."
   def text(request) do
-    request = normalize(request)
+    request = Alto.Protocol.encode_term(request)
     args = Map.get(request, "arguments") || %{}
     details = Map.get(request, "details") || %{}
     tool = Map.get(request, "tool", "Action")
@@ -20,7 +20,8 @@ defmodule Alto.TUI.ApprovalView do
         file_text(tool, details, args)
 
       true ->
-        human_label(tool) <> sections([{"Requested action", args}, {"Details", details}])
+        Alto.Display.label(tool) <>
+          sections([{"Requested action", args} | Enum.sort(Map.to_list(details))])
     end
   end
 
@@ -130,38 +131,12 @@ defmodule Alto.TUI.ApprovalView do
   defp sections(items) do
     items
     |> Enum.reject(fn {_, v} -> v in [nil, "", %{}, []] end)
-    |> Enum.map_join(fn {label, v} -> "\n\n" <> human_label(label) <> "\n" <> value(v) end)
+    |> Enum.map_join(fn {label, v} -> "\n\n" <> Alto.Display.label(label) <> "\n" <> value(v) end)
   end
 
   defp value(value) when is_binary(value), do: visible(value)
 
-  defp value(value) when is_map(value) do
-    value
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map_join("\n", fn {k, v} ->
-      human_label(k) <> ": " <> (value(v) |> String.replace("\n", "\n  "))
-    end)
-  end
-
-  defp value(value) when is_list(value), do: Enum.map_join(value, "\n", &("• " <> value(&1)))
-  defp value(nil), do: "Not specified"
-  defp value(value) when is_atom(value), do: value |> Atom.to_string() |> String.replace("_", " ")
-  defp value(value) when is_number(value), do: to_string(value)
-  defp value(_), do: "Not available"
-
-  defp human_label(label) do
-    label
-    |> to_string()
-    |> String.replace("_", " ")
-    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
-    |> String.replace_prefix("Codex ", "")
-    |> then(fn text ->
-      case String.next_grapheme(text) do
-        {first, rest} -> String.upcase(first) <> rest
-        nil -> "Action"
-      end
-    end)
-  end
+  defp value(value), do: JSON.encode!(value)
 
   # Keep control characters visible instead of allowing them to alter the display.
   defp visible(text),
@@ -174,17 +149,4 @@ defmodule Alto.TUI.ApprovalView do
            |> String.downcase()
            |> String.pad_leading(4, "0"))
       end)
-
-  defp normalize(%_{} = struct), do: struct |> Map.from_struct() |> normalize()
-
-  defp normalize(map) when is_map(map),
-    do: Map.new(map, fn {k, v} -> {to_string(k), normalize(v)} end)
-
-  defp normalize(list) when is_list(list), do: Enum.map(list, &normalize/1)
-  defp normalize(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> normalize()
-
-  defp normalize(atom) when is_atom(atom) and atom not in [nil, true, false],
-    do: Atom.to_string(atom)
-
-  defp normalize(value), do: value
 end

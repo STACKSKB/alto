@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,157 lines**, a **23.4% reduction**, with **2,699 lines remaining**.
+Current: **31,119 lines**, a **23.5% reduction**, with **2,661 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,16 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Approval presentation now shares the protocol term encoder and display labels.
+The duplicate normalizer and recursive nested-value formatter are removed;
+nested data uses JSON while top-level text sections retain literal newlines.
+Prepared argv quoting, visible control escapes, complete long previews and
+secret-like command arguments remain intact. The full TUI suite caught and
+prevented a preview scrolling regression during consolidation. This pass removes
+**38 production lines**: **31 code**, **7 blank**, and **0 documentation/comment**
+lines. All **145 TUI tests** pass. Core code is unchanged; no dependencies,
+migrations or compatibility wrappers were added.
 
 Context in the TUI now has one full-screen presentation, selected by focus,
 instead of separate persistent-sidebar, drawer and full-screen state machines.
