@@ -129,6 +129,7 @@ defmodule Alto.Tool do
 
   @doc "Prepare a tool input and validate its return contract without executing it."
   def prepare(module, arguments, context, opts \\ [], transforms \\ nil) do
+    original_arguments = arguments
     transforms = transforms || opts[:alto_transform] || []
     opts = configure(module, opts)
 
@@ -142,7 +143,7 @@ defmodule Alto.Tool do
       case result do
         {:ok, value, details} when is_map(details) ->
           details =
-            if transforms == [],
+            if transforms == [] or transformed == original_arguments,
               do: details,
               else: Map.put(details, "alto_transformed_arguments", transformed)
 
