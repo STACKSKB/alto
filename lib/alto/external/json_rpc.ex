@@ -64,22 +64,24 @@ defmodule Alto.External.JSONRPC do
     }
   end
 
-  def ensure_started(module, opts) do
-    # Keyword lookup uses the first occurrence; option order is not client identity.
-    identity = opts |> Enum.reverse() |> Map.new() |> :erlang.term_to_binary([:deterministic])
-    key = {module, :crypto.hash(:sha256, identity)}
-    name = {:via, Registry, {Alto.External.Registry, key}}
-    child = child_spec(module, Keyword.put(opts, :name, name))
+  def ensure_started(module, opts, schema) do
+    with {:ok, opts} <- normalize_options(opts, schema) do
+      # Keyword lookup uses the first occurrence; option order is not client identity.
+      identity = opts |> Enum.reverse() |> Map.new() |> :erlang.term_to_binary([:deterministic])
+      key = {module, :crypto.hash(:sha256, identity)}
+      name = {:via, Registry, {Alto.External.Registry, key}}
+      child = child_spec(module, Keyword.put(opts, :name, name))
 
-    case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
-      {:ok, pid} ->
-        await_startup(pid, opts, module)
+      case DynamicSupervisor.start_child(Alto.External.Supervisor, child) do
+        {:ok, pid} ->
+          await_startup(pid, opts, module)
 
-      {:error, {:already_started, pid}} ->
-        await_startup(pid, opts, module)
+        {:error, {:already_started, pid}} ->
+          await_startup(pid, opts, module)
 
-      {:error, reason} ->
-        {:error, {:external_client_failed, module, :start, reason}}
+        {:error, reason} ->
+          {:error, {:external_client_failed, module, :start, reason}}
+      end
     end
   catch
     :exit, reason -> {:error, {:external_client_failed, module, :supervisor, reason}}
@@ -89,6 +91,13 @@ defmodule Alto.External.JSONRPC do
     GenServer.call(pid, :await_ready, call_timeout(Keyword.fetch!(opts, :startup_timeout)))
   catch
     :exit, reason -> {:error, {:external_client_failed, module, :ready, reason}}
+  end
+
+  def call(client, message, timeout \\ 5_000, failure_class \\ :error) do
+    GenServer.call(client, message, timeout)
+  catch
+    :exit, {:noproc, _} = reason -> {:error, {:json_rpc_client_unavailable, reason}}
+    :exit, reason -> {failure_class, {:json_rpc_client_unavailable, reason}}
   end
 
   def call_timeout(:infinity), do: :infinity

@@ -26,10 +26,12 @@ defmodule Alto.PromptTest do
   test "coding prompts use the configured name/1 tool contract" do
     assert Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [NamedTool]}) =~ "read-only"
 
-    assert Alto.Prompts.Coding.build(%{
-             cwd: "/workspace",
-             tools: [{NamedTool, name: :write_file}]
-           }) =~ "Workspace editing tools are enabled"
+    for opts <- [[name: :write_file], %{name: :write_file}] do
+      assert Alto.Prompts.Coding.build(%{
+               cwd: "/workspace",
+               tools: [{NamedTool, opts}]
+             }) =~ "Workspace editing tools are enabled"
+    end
   end
 
   test "describes capabilities from the actual tool registry" do

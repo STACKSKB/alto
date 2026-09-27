@@ -12,27 +12,36 @@ defmodule Alto.Codex.AppServer.Client do
 
   @default_turn_timeout 120_000
 
+  @options_schema [
+    command: [type: :string, default: "codex"],
+    args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
+    experimental_api: [type: :boolean, default: false],
+    instance: [type: :any, default: :shared],
+    owner: [type: :pid],
+    request_timeout: [type: :pos_integer, default: @default_turn_timeout],
+    max_message_bytes: [type: :pos_integer, default: 8_000_000],
+    max_subscribers: [type: :pos_integer, default: 128]
+  ]
+
   @type options :: keyword()
 
   @doc "Start or reuse the configured App Server and complete its handshake."
   @spec ensure_started(options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts \\ []) when is_list(opts) do
-    with {:ok, opts} <- normalize_options(opts) do
-      JSONRPC.ensure_started(__MODULE__, opts)
-    end
+    JSONRPC.ensure_started(__MODULE__, opts, @options_schema)
   end
 
   @doc "Receive App Server notifications and server requests in the calling process."
   @spec subscribe(pid(), pid()) :: :ok | {:error, term()}
   def subscribe(client, subscriber \\ self()) when is_pid(subscriber) do
-    call(client, {:subscribe, subscriber})
+    JSONRPC.call(client, {:subscribe, subscriber})
   end
 
   @doc "Issue a supported App Server JSON-RPC request."
   @spec request(pid(), String.t(), map(), timeout()) :: {:ok, map()} | {:error, term()}
   def request(client, method, params \\ %{}, timeout \\ @default_turn_timeout)
       when is_binary(method) and is_map(params) do
-    call(
+    JSONRPC.call(
       client,
       {:request, method, params, JSONRPC.deadline(timeout)},
       JSONRPC.call_timeout(timeout)
@@ -42,20 +51,14 @@ defmodule Alto.Codex.AppServer.Client do
   @doc "Reply to a server-initiated request such as an approval prompt."
   @spec respond(pid(), String.t() | integer(), map()) :: :ok | {:error, term()}
   def respond(client, id, result) when (is_binary(id) or is_integer(id)) and is_map(result) do
-    call(client, {:respond, id, result})
+    JSONRPC.call(client, {:respond, id, result})
   end
 
   @doc "Reject a server-initiated request that Alto cannot safely service."
   @spec reject(pid(), String.t() | integer(), integer(), String.t()) :: :ok | {:error, term()}
   def reject(client, id, code \\ -32601, message \\ "unsupported by Alto")
       when (is_binary(id) or is_integer(id)) and is_integer(code) and is_binary(message) do
-    call(client, {:reject, id, code, message})
-  end
-
-  defp call(client, message, timeout \\ 5_000) do
-    GenServer.call(client, message, timeout)
-  catch
-    :exit, reason -> {:error, {:codex_app_server_unavailable, reason}}
+    JSONRPC.call(client, {:reject, id, code, message})
   end
 
   def account(client), do: request(client, "account/read", %{"refreshToken" => false})
@@ -142,19 +145,6 @@ defmodule Alto.Codex.AppServer.Client do
       state
       | subscribers: Map.reject(state.subscribers, fn {_pid, ref} -> ref == monitor end)
     }
-
-  @options_schema [
-    command: [type: :string, default: "codex"],
-    args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
-    experimental_api: [type: :boolean, default: false],
-    instance: [type: :any, default: :shared],
-    owner: [type: :pid],
-    request_timeout: [type: :pos_integer, default: @default_turn_timeout],
-    max_message_bytes: [type: :pos_integer, default: 8_000_000],
-    max_subscribers: [type: :pos_integer, default: 128]
-  ]
-
-  defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.

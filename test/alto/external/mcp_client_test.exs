@@ -343,7 +343,10 @@ defmodule Alto.External.MCP.ClientTest do
     task = Task.async(fn -> Client.call_tool(client, "echo", %{}, 5_000) end)
     assert eventually(fn -> map_size(:sys.get_state(client).pending) == 1 end)
     Process.exit(client, :kill)
-    assert {:unknown, {:mcp_client_unavailable, _}} = Task.await(task)
+    assert {:unknown, {:json_rpc_client_unavailable, _}} = Task.await(task)
+
+    assert {:error, {:json_rpc_client_unavailable, {:noproc, _}}} =
+             Client.call_tool(client, "echo", %{}, 5_000)
   end
 
   defp eventually(fun, attempts \\ 40)

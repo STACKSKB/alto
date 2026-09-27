@@ -29,11 +29,10 @@ defmodule Alto.Prompts.Coding do
     "You are a coding agent running in the Alto harness.\nThe workspace root is #{cwd}."
   end
 
-  defp tool_name({module, opts}) when is_atom(module) and is_list(opts) do
+  defp tool_name(spec) do
+    {module, opts} = Alto.Capabilities.normalize(spec)
     module.name(Alto.Tool.configure(module, opts))
   end
-
-  defp tool_name(module) when is_atom(module), do: tool_name({module, []})
 
   defp workspace_capability(names) do
     cond do

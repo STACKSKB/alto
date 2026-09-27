@@ -59,11 +59,7 @@ defmodule Alto.Capabilities do
   defp subagents(_), do: :custom
 
   defp tool(spec) do
-    {module, opts} =
-      case spec do
-        {module, opts} -> {module, opts}
-        module -> {module, []}
-      end
+    {module, opts} = normalize(spec)
 
     transformed? = (opts[:alto_transform] || []) != []
     opts = Alto.Tool.configure(module, opts)

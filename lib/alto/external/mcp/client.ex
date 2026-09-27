@@ -13,26 +13,29 @@ defmodule Alto.External.MCP.Client do
   @protocol_version "2025-11-25"
   @default_timeout 30_000
 
+  @options_schema [
+    command: [type: :string, required: true],
+    protocol_version: [type: :any, default: @protocol_version],
+    request_timeout: [type: :pos_integer, default: @default_timeout],
+    max_message_bytes: [type: :pos_integer, default: 2_000_000]
+  ]
+
   @type server_options :: keyword()
 
   @doc "Start or reuse one supervised client for the exact resolved server options."
   @spec ensure_started(server_options()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(opts) when is_list(opts) do
-    with {:ok, opts} <- normalize_options(opts) do
-      JSONRPC.ensure_started(__MODULE__, opts)
-    end
+    JSONRPC.ensure_started(__MODULE__, opts, @options_schema)
   end
 
   @doc "List the external server's tools, using its cached catalog after the first call."
   @spec list_tools(pid(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_tools(pid, timeout \\ @default_timeout) do
-    GenServer.call(
+    JSONRPC.call(
       pid,
       {:list_tools, %{}, JSONRPC.deadline(timeout)},
       JSONRPC.call_timeout(timeout)
     )
-  catch
-    :exit, reason -> {:error, {:mcp_client_unavailable, reason}}
   end
 
   @doc "Invoke one external tool with JSON-compatible arguments."
@@ -40,14 +43,12 @@ defmodule Alto.External.MCP.Client do
           {:ok, term()} | {:error, term()} | {:unknown, term()}
   def call_tool(pid, name, arguments, timeout \\ @default_timeout)
       when is_binary(name) and is_map(arguments) do
-    GenServer.call(
+    JSONRPC.call(
       pid,
       {:call_tool, %{"name" => name, "arguments" => arguments}, JSONRPC.deadline(timeout)},
-      JSONRPC.call_timeout(timeout)
+      JSONRPC.call_timeout(timeout),
+      :unknown
     )
-  catch
-    :exit, {:noproc, _} = reason -> {:error, {:mcp_client_unavailable, reason}}
-    :exit, reason -> {:unknown, {:mcp_client_unavailable, reason}}
   end
 
   @doc "Stop a retained external server. Primarily useful for host shutdown and tests."
@@ -84,15 +85,6 @@ defmodule Alto.External.MCP.Client do
 
   def handle_call(_request, _from, state),
     do: {:reply, {:error, {:mcp_not_ready, state.phase}}, state}
-
-  @options_schema [
-    command: [type: :string, required: true],
-    protocol_version: [type: :any, default: @protocol_version],
-    request_timeout: [type: :pos_integer, default: @default_timeout],
-    max_message_bytes: [type: :pos_integer, default: 2_000_000]
-  ]
-
-  defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   def initialized(result, state) do
     expected = Keyword.fetch!(state.opts, :protocol_version)
