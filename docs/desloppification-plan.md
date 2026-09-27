@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,851 lines**, a **24.1% reduction**, with **2,393 lines remaining**.
+Current: **30,833 lines**, a **24.2% reduction**, with **2,375 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -47,21 +47,21 @@ changes and historical test counts. Contracts belong in the component guides.
 - File writes and edits share preparation and commit. File/diff previews share
   bounded iodata traversal. Command output retains one bounded first/last buffer.
   Context policies and tokenizer adapters use existing tuple/function contracts.
-  Seventeen tools share argument contracts for schema projection, defaults and
+  Eighteen tools share argument contracts for schema projection, defaults and
   validation; domain callbacks retain file freezing, Git confinement and authority.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Request observers compose through `Alto.Provider.observe/2` and the existing
-supervised streaming boundary. The Observe wrapper, recursive unwrapping and
-metadata forwarding are deleted. Provider identity remains the actual adapter;
-description and discovery receive clean domain options. Nested order, retries,
-independent observer failures and standalone streaming remain supported. Profile
-coverage now exercises discovery, selection, context checks and an observed run
-instead of only inspecting the constructed options.
-This pass removes **34 production lines**: **20 code/type/declaration lines**,
-**5 blank**, and **9 documentation lines**. Historical pass notes remain in Git.
+Ripwire uses the shared tool argument contract for its schema and input
+validation. Its separate action/top-k validation and argv-builder flow are
+removed; the adapter retains action-specific query requirements and gate exit
+status interpretation. Invalid input is checked against an executable fixture
+to prove it never dispatches. Redundant provider-profile constructor assertions
+were pruned while discovery, context inspection and execution still receive the
+configured connection options.
+This pass removes **18 production lines**: **13 code/type/declaration lines**,
+**5 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 

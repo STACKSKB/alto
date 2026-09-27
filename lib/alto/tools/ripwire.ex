@@ -10,39 +10,38 @@ defmodule Alto.Tools.Ripwire do
 
   # Every exposed action is analytical. Ripwire may maintain its own index or
   # cache, but it receives no edit verb through this adapter.
-  use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never
+  use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never, arguments: true
 
   alias Alto.Command
+  alias Alto.Tool.Arguments
 
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
 
   @impl true
-  def schema(_opts \\ []) do
-    Alto.Tool.object_schema(
-      "Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
-      %{
-        action: %{type: "string", enum: @actions},
-        query: %{
-          type: "string",
-          description:
-            "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
-        },
-        top_k: %{type: "integer", minimum: 1, maximum: 100}
-      },
-      ["action"]
-    )
+  def arguments(_opts) do
+    {"Use the external Ripwire code map for task orientation, blast radius, callers, tests, and change-quality checks.",
+     [
+       action: [type: {:in, @actions}, required: true],
+       query: [
+         type: Arguments.text(1, :infinity),
+         doc:
+           "Task text for pack_task/context, symbol for impact/callers/edit_check, or ref for pr_context."
+       ],
+       top_k: [type: {:in, 1..100}]
+     ]}
   end
 
   @impl true
   def run(arguments, %{} = context, opts \\ []) do
     action = Map.get(arguments, "action")
+    top_k = for value <- List.wrap(arguments["top_k"]), do: "--top-k=#{value}"
 
-    with {:ok, args} <- build_args(arguments),
+    with {:ok, flag} <- action_flag(action, arguments["query"]),
          {:ok, result} <-
            Command.run(
              %{
                "program" => Keyword.get(opts, :executable, "ripwire"),
-               "args" => args,
+               "args" => [".", flag] ++ top_k,
                "timeout_ms" => Keyword.get(opts, :timeout_ms, 60_000),
                "max_output_bytes" =>
                  Keyword.get(opts, :max_output_bytes, Alto.Command.default_output_bytes())
@@ -53,16 +52,6 @@ defmodule Alto.Tools.Ripwire do
       command_result(action, result)
     end
   end
-
-  defp build_args(%{"action" => action} = arguments) when action in @actions do
-    with {:ok, flag} <- action_flag(action, Map.get(arguments, "query")),
-         {:ok, top_k} <- top_k_flag(Map.get(arguments, "top_k")) do
-      {:ok, [".", flag] ++ top_k}
-    end
-  end
-
-  defp build_args(%{"action" => action}), do: {:error, {:unknown_ripwire_action, action}}
-  defp build_args(_arguments), do: {:error, :ripwire_action_required}
 
   defp action_flag(action, nil) when action in ~w(situ test_gate quality_delta),
     do: {:ok, "--" <> String.replace(action, "_", "-")}
@@ -77,13 +66,6 @@ defmodule Alto.Tools.Ripwire do
   end
 
   defp action_flag(action, _query), do: {:error, {:ripwire_query_required, action}}
-
-  defp top_k_flag(nil), do: {:ok, []}
-
-  defp top_k_flag(value) when is_integer(value) and value in 1..100,
-    do: {:ok, ["--top-k=#{value}"]}
-
-  defp top_k_flag(value), do: {:error, {:invalid_top_k, value}}
 
   defp command_result(_action, %{termination: :timeout}), do: {:error, :ripwire_timeout}
 

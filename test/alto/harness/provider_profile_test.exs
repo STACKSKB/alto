@@ -28,7 +28,7 @@ defmodule Alto.Harness.ProviderProfileTest do
 
   test "discovery and runtime model selection preserve connection options" do
     owner = self()
-    connection = [base_url: "http://local", owner: owner]
+    connection = [base_url: "http://local", owner: owner, timeout: 500]
 
     opts = [
       provider_profiles: [
@@ -58,27 +58,22 @@ defmodule Alto.Harness.ProviderProfileTest do
     assert_received {:observed, %{messages: [_ | _]}}
   end
 
-  test "profile structs share defaults without losing options or catalog metadata" do
+  test "configured model catalogs are returned without discovery" do
     catalog = [%{id: "small", name: "Small", context_length: 123}]
 
-    assert {:ok, [plain, configured]} =
+    assert {:ok, [profile]} =
              ProviderProfile.from_run_options(
                provider_profiles: [
-                 %ProviderProfile{id: "plain", provider: {Provider, []}, models: catalog},
                  %ProviderProfile{
-                   id: "configured",
-                   provider: {Provider, model: "large", timeout: 500}
+                   id: "plain",
+                   provider: {Provider, owner: self()},
+                   models: catalog
                  }
                ]
              )
 
-    assert plain.label == "plain"
-    assert plain.credential_id == "plain"
-    assert {:ok, ^catalog} = ProviderProfile.models(plain)
-    assert configured.default_model == "large"
-    assert {Provider, options} = ProviderProfile.runtime_provider(configured, "selected")
-    assert options[:timeout] == 500
-    assert options[:model] == "selected"
+    assert {:ok, ^catalog} = ProviderProfile.models(profile)
+    refute_received {:models, _}
   end
 
   test "rejects duplicate ids" do

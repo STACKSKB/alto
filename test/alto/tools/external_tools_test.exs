@@ -127,11 +127,26 @@ defmodule Alto.Tools.ExternalToolsTest do
          context: context
        } do
     executable = Path.join(root, "fake-ripwire")
-    File.write!(executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    File.write!(executable, "#!/bin/sh\ntouch ripwire-invoked\nprintf '%s\\n' \"$@\"\n")
     File.chmod!(executable, 0o755)
 
+    for arguments <- [
+          %{},
+          %{"action" => "edit"},
+          %{"action" => "situ", "top_k" => 0},
+          %{"action" => "situ", "top_k" => 101},
+          %{"action" => "situ", "query" => "unexpected"},
+          %{"action" => "pack_task"},
+          %{"action" => "pack_task", "query" => <<255>>}
+        ] do
+      assert {:error, _} = Alto.Tool.run(Ripwire, arguments, context, executable: executable)
+    end
+
+    refute File.exists?(Path.join(root, "ripwire-invoked"))
+
     assert {:ok, %{output: output}} =
-             Ripwire.run(
+             Alto.Tool.run(
+               Ripwire,
                %{"action" => "pack_task", "query" => "add mcp", "top_k" => 12},
                context,
                executable: executable
@@ -158,9 +173,11 @@ defmodule Alto.Tools.ExternalToolsTest do
     File.chmod!(executable, 0o755)
 
     assert {:ok, %{gate: :obligations, exit_status: 4, output: "tests required\n"}} =
-             Ripwire.run(%{"action" => "test_gate"}, context, executable: executable)
+             Alto.Tool.run(Ripwire, %{"action" => "test_gate"}, context, executable: executable)
 
     assert {:ok, %{gate: :regressions, exit_status: 2, output: "regressions found\n"}} =
-             Ripwire.run(%{"action" => "quality_delta"}, context, executable: executable)
+             Alto.Tool.run(Ripwire, %{"action" => "quality_delta"}, context,
+               executable: executable
+             )
   end
 end
