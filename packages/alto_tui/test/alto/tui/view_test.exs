@@ -6,7 +6,7 @@ defmodule Alto.TUI.ViewTest do
 
   test "tool output and metadata remain visible in the transcript and context" do
     state =
-      %{base_state(%{}) | overlay: nil}
+      %{base_state(%{}) | overlay: nil, details_visible?: true}
       |> State.append_entry(nil, %{
         kind: :tool,
         text: "build completed",
@@ -44,6 +44,35 @@ defmodule Alto.TUI.ViewTest do
     screen = ExRatatui.get_buffer_content(terminal)
     assert screen =~ "API key"
     assert screen =~ "(saved — leave blank to keep)"
+  end
+
+  test "context and transcript show a failed action's cause without execution stack frames" do
+    reason =
+      {:participant_failed,
+       {%RuntimeError{message: "File change failed"},
+        [
+          {Alto.Runner.Execution, :prepare_tool_job, 5,
+           [file: ~c"lib/alto/runner/execution.ex", line: 1258]}
+        ]}}
+
+    state =
+      %{base_state(%{}) | overlay: nil, details_visible?: true}
+      |> State.append_entry(nil, %{kind: :error, text: Alto.TUI.App.human_error(reason)})
+
+    widgets = View.widgets(state, frame())
+    context_rect = View.layout(state, 120, 36).details
+    {%Paragraph{text: context}, _} = Enum.find(widgets, fn {_, rect} -> rect == context_rect end)
+    assert context =~ "Action failed: File change failed"
+    refute context =~ "Alto.Runner"
+    refute context =~ "1258"
+    refute context =~ "• 116"
+
+    terminal = ExRatatui.init_test_terminal(120, 36)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "File change failed"
+    refute screen =~ "Prepare tool job"
+    refute screen =~ "• 116"
   end
 
   test "shows field choices while another field is edited" do

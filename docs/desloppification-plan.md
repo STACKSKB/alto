@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,842 lines**, a **24.1% reduction**, with **2,384 lines remaining**.
+Current: **31,437 lines**, a **22.7% reduction**, with **2,979 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -67,9 +67,18 @@ file descriptors retain their original bytes. The loader has been rebuilt for
 this checkout's dev and test environments; other existing checkouts need the
 one-time dependency rebuild documented in the TUI README. The original screenshot
 has no matching crash dump, so the exact incident cannot be proven from it alone.
+Conversation search is integrated with the restored pane/drawer geometry and
+approval priority. Prepared file approvals display actual text and truncation
+notices instead of JSON preview wrappers. User-facing process errors retain their
+cause and omit stack frames; raw results and existing diagnostic logging remain
+intact. Tests cover native rendering and both raw and encoded failure shapes.
 Historical pass notes remain in Git.
 
 ## Remaining work
+
+**Paused at the user’s request for UX and stability review.** Do not resume
+simplification until the user asks. UX and stability take priority over the
+line-count target.
 
 The target is not met. Prioritize deleting duplicate workflows through functional
 composition and canonical state. The “Analyze code duplication” findings have
@@ -101,8 +110,8 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current core check passes **1,078 tests** with application modules preloaded.
-The TUI suite passes **153 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
+The current core check passes **1,079 tests** with application modules preloaded.
+The TUI suite passes **169 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,
 resume, crash recovery, frozen dispatches, bounds and provider normalization.

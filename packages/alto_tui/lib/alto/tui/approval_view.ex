@@ -80,9 +80,22 @@ defmodule Alto.TUI.ApprovalView do
           {"Size before", bytes(details["bytes_before"])},
           {"Size after", bytes(details["bytes_after"])},
           {"Replacements", details["replacements"]}
-        ] ++ edit_sections(args["edits"]) ++ [{"Preview", details["preview"] || args["content"]}]
+        ] ++
+          edit_sections(args["edits"]) ++
+          [{"Preview", preview(details["preview"] || args["content"])}]
       )
   end
+
+  defp preview(%{"content" => content} = preview) when is_binary(content) do
+    content <>
+      if(preview["truncated"] == true,
+        do: "\n\n[Preview truncated; showing the first #{byte_size(content)} bytes.]",
+        else: ""
+      )
+  end
+
+  defp preview(content) when is_binary(content) or is_nil(content), do: content
+  defp preview(other), do: Alto.Display.result(other)
 
   defp edit_sections([edit]), do: [{"Find", edit["old_text"]}, {"Replace with", edit["new_text"]}]
 

@@ -126,4 +126,30 @@ defmodule Alto.DisplayTest do
     assert String.length(Display.result(deep)) < 300
     assert String.length(Display.error(%{a: String.duplicate("x", 40_000)}, limit: 240)) <= 241
   end
+
+  test "process failures show their cause without dumping stack frames or charlist filenames" do
+    stack = [
+      {Alto.Runner.Execution, :prepare_tool_job, 5,
+       [file: ~c"lib/alto/runner/execution.ex", line: 1258]}
+    ]
+
+    reason =
+      {:run_process_failed, {%RuntimeError{message: "Could not prepare the file change"}, stack}}
+
+    encoded = Alto.Protocol.encode_term(reason)
+
+    for value <- [reason, encoded, JSON.encode!(encoded)] do
+      assert Display.error(value) == "Run failed: Could not prepare the file change"
+    end
+
+    assert Display.error({:participant_failed, {{:badmatch, {:error, :eacces}}, stack}}) ==
+             "Action failed: Unexpected result: Permission denied"
+
+    assert Display.error({:run_process_failed, {:undef, stack}}) ==
+             "Run failed: A required function is unavailable"
+
+    # An ordinary list of tuples is data, not a stacktrace.
+    assert Display.error({:rejected, [{"path", "/tmp/file"}]}) =~ "/tmp/file"
+    assert Display.result([116, 111, 47]) == "• 116\n• 111\n• 47"
+  end
 end

@@ -13,6 +13,12 @@ defmodule Alto.Display do
     "api_key_missing" => "API key is missing. Configure this provider's credentials.",
     "model_discovery_not_supported" => "This provider does not support model discovery.",
     "timeout" => "The request timed out",
+    "participant_failed" => "Action failed",
+    "run_process_failed" => "Run failed",
+    "badarg" => "Invalid argument",
+    "badmatch" => "Unexpected result",
+    "function_clause" => "Unsupported input",
+    "undef" => "A required function is unavailable",
     "eacces" => "Permission denied",
     "eperm" => "Operation not permitted",
     "folder_already_exists" => "Folder already exists. Use Open folder.",
@@ -86,6 +92,10 @@ defmodule Alto.Display do
   defp render(%{__exception__: true, message: message}, mode, depth) when is_binary(message),
     do: render(message, mode, depth + 1)
 
+  defp render(%{"__exception__" => true, "message" => message}, mode, depth)
+       when is_binary(message),
+       do: render(message, mode, depth + 1)
+
   defp render(%Alto.Credentials{}, _, _), do: "Credentials hidden"
 
   defp render(%Alto.Content{blocks: blocks}, mode, depth) do
@@ -156,7 +166,38 @@ defmodule Alto.Display do
   defp render({tag, code, detail}, mode, depth) when tag in [:server, "server"],
     do: reason_label(code) <> "\n" <> render(detail, mode, depth + 1)
 
-  defp render(value, mode, depth) when is_tuple(value) do
+  # OTP process exits carry {reason, stacktrace}. Keep the actionable cause;
+  # frames (including charlist filenames) belong in diagnostics, not the UI.
+  defp render({reason, [frame | _]} = value, :error, depth) do
+    if stack_frame?(frame),
+      do: render(reason, :error, depth + 1),
+      else: render_tuple(value, :error, depth)
+  end
+
+  defp render(value, mode, depth) when is_tuple(value), do: render_tuple(value, mode, depth)
+
+  defp render(value, mode, depth) when is_list(value) do
+    if Keyword.keyword?(value) and value != [] do
+      render(Map.new(value), mode, depth + 1)
+    else
+      entries(value, &("• " <> render(&1, mode, depth + 1)))
+    end
+  end
+
+  defp render(_, _, _), do: "Details unavailable"
+
+  defp stack_frame?(%{"$tuple" => [module, function, arity, location]}),
+    do: stack_frame?({module, function, arity, location})
+
+  defp stack_frame?({module, function, arity, location})
+       when (is_atom(module) or is_binary(module)) and
+              (is_atom(function) or is_binary(function)) and
+              (is_integer(arity) or is_list(arity)) and is_list(location),
+       do: true
+
+  defp stack_frame?(_), do: false
+
+  defp render_tuple(value, mode, depth) do
     case Tuple.to_list(value) do
       [tag | details] when is_atom(tag) or is_binary(tag) ->
         reason_label(tag) <>
@@ -169,16 +210,6 @@ defmodule Alto.Display do
         render(items, mode, depth + 1)
     end
   end
-
-  defp render(value, mode, depth) when is_list(value) do
-    if Keyword.keyword?(value) and value != [] do
-      render(Map.new(value), mode, depth + 1)
-    else
-      entries(value, &("• " <> render(&1, mode, depth + 1)))
-    end
-  end
-
-  defp render(_, _, _), do: "Details unavailable"
 
   defp entries(items, fun) do
     {lines, _} =
