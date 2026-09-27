@@ -164,7 +164,7 @@ defmodule Alto.Listeners.Webhook do
     key = endpoint.source <> ":" <> delivery_id
     payload = %{"delivery_id" => delivery_id, "body" => body}
 
-    case admit(fn -> endpoint.on_event.(key, payload) end) do
+    case endpoint.on_event.(key, payload) do
       {:ok, _record} -> respond(conn, 200, "accepted")
       {:error, reason} -> enqueue_error(conn, endpoint, reason)
     end
@@ -191,40 +191,28 @@ defmodule Alto.Listeners.Webhook do
     case Plug.Conn.get_req_header(conn, "content-length") do
       [value] ->
         case Integer.parse(value, 10) do
-          {length, ""} when length >= 0 and length <= max -> read_body_chunks(conn, max)
+          {length, ""} when length >= 0 and length <= max -> read_bounded_body(conn, max)
           {length, ""} when length > max -> {:error, :too_large, conn}
           _other -> {:error, :bad_length, conn}
         end
 
       [] ->
-        read_body_chunks(conn, max)
+        read_bounded_body(conn, max)
 
       _other ->
         {:error, :bad_length, conn}
     end
   end
 
-  defp read_body_chunks(conn, max),
-    do: read_body_chunks(conn, max, [], 0, System.monotonic_time(:millisecond) + @recv_timeout)
-
-  defp read_body_chunks(conn, max, chunks, total, deadline) do
+  defp read_bounded_body(conn, max) do
     case Plug.Conn.read_body(conn,
-           length: max - total + 1,
-           read_length: min(max - total + 1, 64_000),
-           read_timeout: max(deadline - System.monotonic_time(:millisecond), 1)
+           length: max + 1,
+           read_length: min(max + 1, 64_000),
+           read_timeout: @recv_timeout
          ) do
-      {status, body, conn} when status in [:ok, :more] ->
-        total = total + byte_size(body)
-
-        cond do
-          total > max -> {:error, :too_large, conn}
-          status == :ok -> {:ok, IO.iodata_to_binary([chunks, body]), conn}
-          System.monotonic_time(:millisecond) >= deadline -> {:error, :bad_length, conn}
-          true -> read_body_chunks(conn, max, [chunks, body], total, deadline)
-        end
-
-      {:error, _reason} ->
-        {:error, :bad_length, conn}
+      {:ok, body, conn} when byte_size(body) <= max -> {:ok, body, conn}
+      {status, _body, conn} when status in [:ok, :more] -> {:error, :too_large, conn}
+      {:error, _reason} -> {:error, :bad_length, conn}
     end
   end
 
@@ -267,20 +255,6 @@ defmodule Alto.Listeners.Webhook do
                else: {:error, :invalid_max_body_bytes}
            end),
          do: {:ok, Map.new(entries)}
-  end
-
-  # Admission success acknowledges external work, so failures and malformed
-  # replies must remain HTTP failures rather than cross the acceptance boundary.
-  defp admit(fun) do
-    case fun.() do
-      {:ok, _} = ok -> ok
-      {:error, _} = error -> error
-      other -> {:error, {:invalid_admission_result, other}}
-    end
-  rescue
-    error -> {:error, Exception.message(error)}
-  catch
-    kind, reason -> {:error, {kind, reason}}
   end
 
   defp log_rejected(%{path: path}, detail) do

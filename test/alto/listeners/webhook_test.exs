@@ -175,7 +175,10 @@ defmodule Alto.Listeners.WebhookTest do
       |> Enum.join("\r\n")
 
     chunked_body =
-      Integer.to_string(byte_size(body), 16) <> "\r\n" <> body <> "\r\n0\r\n\r\n"
+      body
+      |> :binary.bin_to_list()
+      |> Enum.map_join(fn byte -> "1\r\n" <> <<byte>> <> "\r\n" end)
+      |> Kernel.<>("0\r\n\r\n")
 
     request =
       "POST #{path} HTTP/1.1\r\nHost: x\r\n#{header_lines}\r\n" <>
@@ -284,16 +287,27 @@ defmodule Alto.Listeners.WebhookTest do
     listener: listener,
     registry: registry
   } do
-    port = start_listener(listener, registry, %{"/hooks/events" => endpoint("job")})
     body = ~s({"id": 9})
 
-    headers = [
-      {"X-Signature", signature(body)},
-      {"X-Delivery-ID", "chunked-1"}
-    ]
+    port =
+      start_listener(listener, registry, %{
+        "/hooks/events" => Map.put(endpoint("job"), :max_body_bytes, byte_size(body))
+      })
 
-    assert post_chunked(port, "/hooks/events", body, headers) =~ "200 OK"
+    for {request_body, id, status} <- [
+          {body, "chunked-at-limit", "200 OK"},
+          {body <> " ", "chunked-over-limit", "413"}
+        ] do
+      headers = [
+        {"X-Signature", signature(request_body)},
+        {"X-Delivery-ID", id}
+      ]
+
+      assert post_chunked(port, "/hooks/events", request_body, headers) =~ status
+    end
+
     assert_receive {:rule_ran, %{"id" => 9}}, 2_000
+    refute_received {:rule_ran, _}
   end
 
   test "missing delivery id and bad lengths are bad requests", %{

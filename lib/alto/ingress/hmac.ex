@@ -5,47 +5,19 @@ defmodule Alto.Ingress.HMAC do
 
   @doc "Verify a configured signature header over the exact request body."
   @spec verify(binary(), headers(), keyword()) :: :ok | {:error, term()}
-  def verify(body, headers, opts) when is_binary(body) and is_list(headers) and is_list(opts) do
-    with {:ok, secret} <- secret(opts),
-         {:ok, header} <- header(opts),
-         {:ok, encoding} <- encoding(opts),
-         {:ok, prefix} <- prefix(opts),
-         {:ok, signature} <- single_header(headers, header) do
-      expected = prefix <> encode(:crypto.mac(:hmac, :sha256, secret, body), encoding)
+  def verify(body, headers, opts) do
+    with secret when is_binary(secret) and secret != "" and byte_size(secret) <= 65_536 <-
+           Keyword.fetch!(opts, :secret),
+         {:ok, signature} <-
+           single_header(headers, String.downcase(Keyword.get(opts, :header, "x-signature"))) do
+      expected =
+        Keyword.get(opts, :prefix, "") <>
+          encode(:crypto.mac(:hmac, :sha256, secret, body), Keyword.get(opts, :encoding, :base64))
+
       if Plug.Crypto.secure_compare(signature, expected), do: :ok, else: {:error, :bad_signature}
-    end
-  end
-
-  def verify(_body, _headers, _opts), do: {:error, :invalid_hmac_arguments}
-
-  defp secret(opts) do
-    case Keyword.get(opts, :secret) do
-      value when is_binary(value) and value != "" and byte_size(value) <= 65_536 -> {:ok, value}
-      _other -> {:error, :invalid_hmac_secret}
-    end
-  end
-
-  defp header(opts) do
-    case Keyword.get(opts, :header, "x-signature") do
-      value when is_binary(value) and value != "" and byte_size(value) <= 256 ->
-        {:ok, String.downcase(value)}
-
-      _other ->
-        {:error, :invalid_hmac_header}
-    end
-  end
-
-  defp encoding(opts) do
-    case Keyword.get(opts, :encoding, :base64) do
-      encoding when encoding in [:base64, :hex] -> {:ok, encoding}
-      _other -> {:error, :invalid_hmac_encoding}
-    end
-  end
-
-  defp prefix(opts) do
-    case Keyword.get(opts, :prefix, "") do
-      value when is_binary(value) and byte_size(value) <= 256 -> {:ok, value}
-      _other -> {:error, :invalid_hmac_prefix}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_hmac_secret}
     end
   end
 

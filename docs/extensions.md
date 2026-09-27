@@ -413,10 +413,16 @@ The listener bounds body size and delivery identity. `source` defaults to the
 endpoint path; admission receives `source <> ":" <> delivery_id` and
 `%{"delivery_id" => delivery_id, "body" => body}`.
 
+Bandit assembles chunked bodies under the supplied byte limit and applies the
+socket read timeout. Ingress helpers trust their configuration; malformed
+configuration can raise, while request signatures and delivery IDs remain
+validated. HMAC secrets must be nonempty binaries.
+
 An admission function returns `{:ok, record}` only after durably establishing
 identity and work, or `{:error, reason}`. A duplicate is acknowledged with HTTP
 200; full admission returns 503 and oversized payloads return 413. Exceptions,
 exits, and malformed admission replies remain failures rather than acceptance.
+Bandit handles these failures at the HTTP boundary.
 The host owns I/O timeouts, supervision, retention, and worker retries. A database
 host may commit the identity row and execution job in one transaction, as the
 [Oban example](../examples/oban_backend/README.md) does. Successful admission is
