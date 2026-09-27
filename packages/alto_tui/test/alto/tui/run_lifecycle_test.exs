@@ -304,7 +304,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert hd(state(app).pending_approvals).local_id == local_id
     assert State.run_label(state(app)) =~ "waiting for approval"
 
-    # The approval can focus the details pane; click/Tab back to the composer.
+    # Context can focus the approval; return to the composer to queue input.
     :sys.replace_state(app, fn runtime ->
       %{runtime | user_state: %{runtime.user_state | focus: :composer}}
     end)
@@ -313,7 +313,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     terminal = ExRatatui.init_test_terminal(160, 40)
     ExRatatui.draw(terminal, View.widgets(state(app), %{width: 160, height: 40}))
     screen = ExRatatui.get_buffer_content(terminal)
-    assert screen =~ "approval required"
+    assert screen =~ "D:REQ"
     assert screen =~ "waiting for approval"
     assert screen =~ "1 queued"
     key(app, "esc")

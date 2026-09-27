@@ -703,7 +703,6 @@ defmodule Alto.TUI.AppTest do
     for rect <- [
           layout.rail,
           layout.transcript,
-          layout.details,
           layout.settings,
           layout.composer,
           layout.status
@@ -1190,6 +1189,22 @@ defmodule Alto.TUI.AppTest do
     assert state.overlay.kind == :provider_form
     input = Alto.TUI.Menu.field(state.overlay, :api_key).input
     ExRatatui.text_input_set_value(input, "never-copy-this-secret")
+    form = state.overlay
+
+    state =
+      App.show_pending_approval(
+        state,
+        %{
+          local_id: "background",
+          request: %{id: "approval", tool: "test", arguments: %{}},
+          respond: fn _ -> :ok end
+        },
+        "waiting for approval"
+      )
+
+    assert state.overlay == form
+    assert state.focus == :details
+    assert Alto.TUI.Menu.field(state.overlay, :api_key).input == input
     state = put_in(state.overlay.index, 3)
     {:noreply, selected} = App.handle_event(%Key{code: "a", modifiers: ["ctrl", "shift"]}, state)
     {:noreply, copied} = App.handle_event(%Key{code: "c", modifiers: ["ctrl"]}, selected)
@@ -1550,46 +1565,37 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.textarea_get_value(clicked.textarea) == "draft with a long line"
   end
 
-  test "focus traversal skips panes collapsed by the responsive layout", context do
-    state = state!(context)
-    state = %{state | dimensions: {80, 24}, focus: :transcript, details_visible?: true}
-
-    assert State.visible_focuses(state) == [:rail, :transcript, :composer]
-    assert State.focus_next(state).focus == :composer
-
-    hidden = %{state | focus: :details}
-    assert State.focus_next(hidden).focus == :composer
-    assert State.focus_next(hidden, :previous).focus == :transcript
-    assert State.ensure_visible_focus(hidden).focus == :transcript
+  test "focus traversal keeps context available and skips a collapsed rail", context do
+    state = %{state!(context) | dimensions: {60, 24}, focus: :transcript}
+    assert State.visible_focuses(state) == [:transcript, :details, :composer]
+    assert State.focus_next(state).focus == :details
+    assert State.focus_next(%{state | focus: :details}).focus == :composer
+    assert State.ensure_visible_focus(%{state | focus: :rail}).focus == :transcript
   end
 
-  test "focused context becomes a drawer on resize and hiding a pane restores focus", context do
-    state = state!(context)
-    state = %{state | dimensions: {150, 42}, focus: :details}
+  test "focused context stays full-screen on resize and closes through keyboard", context do
+    state = %{state!(context) | dimensions: {150, 42}, focus: :details}
 
     assert {:noreply, resized} =
              App.handle_event(%ExRatatui.Event.Resize{width: 80, height: 24}, state)
 
     assert resized.focus == :details
-    assert resized.details_return_focus
-    assert State.visible_focuses(resized) == [:details]
+    assert View.layout(resized, 80, 24).details.width == 80
+
+    for key <- ["esc", "tab", "back_tab"] do
+      assert {:noreply, closed} = App.handle_event(%Key{code: key}, resized)
+      assert closed.focus == :composer
+    end
 
     assert {:noreply, leader} =
              App.handle_event(%Key{code: "g", kind: "press", modifiers: ["ctrl"]}, state)
 
     assert {:noreply, hidden} = App.handle_event(%Key{code: "d", kind: "press"}, leader)
-    refute hidden.details_visible?
-    assert hidden.focus == :transcript
+    assert hidden.focus == :composer
   end
 
-  test "narrow context is a mouse-aware drawer and becomes full-screen when tiny", context do
-    state = state!(context)
-    state = %{state | dimensions: {80, 24}, focus: :composer}
-
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, %{width: 80, height: 24}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "D:CTX"
-
+  test "context opens from its setting and its header closes it at every width", context do
+    state = %{state!(context) | dimensions: {80, 24}, focus: :composer}
     segments = View.settings_segments(state)
     context_index = Enum.find_index(segments, &(&1.target == {:setting, :details}))
     layout = View.layout(state, 80, 24)
@@ -1598,58 +1604,39 @@ defmodule Alto.TUI.AppTest do
       layout.settings.x +
         Enum.sum(Enum.map(Enum.take(segments, context_index), &String.length(&1.text)))
 
-    assert {:noreply, drawer} =
+    assert {:noreply, opened} =
              App.handle_event(
-               %Mouse{
-                 kind: "down",
-                 button: "left",
-                 x: context_x,
-                 y: layout.settings.y
-               },
+               %Mouse{kind: "down", button: "left", x: context_x, y: layout.settings.y},
                state
              )
 
-    {:noreply, drawer} =
+    {:noreply, opened} =
       App.handle_event(
         %Mouse{kind: "up", button: "left", x: context_x, y: layout.settings.y},
-        drawer
+        opened
       )
 
-    assert drawer.details_return_focus == :composer
-    assert drawer.focus == :details
+    assert opened.focus == :details
 
-    assert %ExRatatui.Layout.Rect{x: 20, y: 0, width: 60, height: 23} =
-             View.context_overlay_rect(drawer, 80, 24)
+    for width <- [60, 80, 150] do
+      opened = %{opened | dimensions: {width, 24}}
 
-    assert State.focus_next(drawer).focus == :details
+      assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: ^width, height: 23} =
+               View.layout(opened, width, 24).details
 
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(drawer, %{width: 80, height: 24}))
-    buffer = ExRatatui.get_buffer_content(terminal)
-    assert buffer =~ "click header / Esc close"
+      terminal = ExRatatui.init_test_terminal(width, 24)
+      assert :ok = ExRatatui.draw(terminal, View.widgets(opened, %{width: width, height: 24}))
+      assert ExRatatui.get_buffer_content(terminal) =~ "click header / Esc / Tab close"
+      assert View.activity_widgets(opened, %{width: width, height: 24}) == []
 
-    assert {:noreply, closed} =
-             App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 10}, drawer)
+      assert {:noreply, closed} =
+               App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 0}, opened)
 
-    {:noreply, closed} = App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 10}, closed)
+      {:noreply, closed} =
+        App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 0}, closed)
 
-    refute closed.details_return_focus
-    assert closed.focus == :composer
-
-    fullscreen = %{drawer | dimensions: {60, 24}}
-
-    assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 60, height: 23} =
-             View.context_overlay_rect(fullscreen, 60, 24)
-
-    forced_drawer = %{fullscreen | narrow_context: :drawer}
-
-    assert %ExRatatui.Layout.Rect{x: 15, y: 0, width: 45, height: 23} =
-             View.context_overlay_rect(forced_drawer, 60, 24)
-
-    forced_fullscreen = %{drawer | narrow_context: :fullscreen}
-
-    assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 23} =
-             View.context_overlay_rect(forced_fullscreen, 80, 24)
+      assert closed.focus == :composer
+    end
 
     tiny = %{state | dimensions: {40, 20}}
     tiny_settings = View.settings_segments(tiny)

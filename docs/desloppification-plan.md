@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,305 lines**, a **23.0% reduction**, with **2,847 lines remaining**.
+Current: **31,157 lines**, a **23.4% reduction**, with **2,699 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,19 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Context in the TUI now has one full-screen presentation, selected by focus,
+instead of separate persistent-sidebar, drawer and full-screen state machines.
+Context content, approval decisions, scrolling, selection, clipboard access and
+form overlays remain; Esc or Tab returns to the composer. The old sidebar width
+and narrow-layout settings are removed, with no compatibility wrapper. Background
+run completion leaves manually opened context alone, and open credential forms
+retain input and masking when an approval arrives. This pass removes **148
+production lines**: **117 code/typespec**, **26 blank**, and **5 source
+documentation/comment** lines. All **145 TUI tests** pass, including real
+rendering, mouse decisions, selection autoscroll, resize and queued-input flows.
+Core code is unchanged; its last full run passed **1,075 tests**. No dependency
+or migration was added.
 
 Child admission now uses one schema for types, defaults and bounds, replacing a
 second constraints pass. Native tasks retain arbitrary terms except nil/empty;

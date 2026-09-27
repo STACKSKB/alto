@@ -215,7 +215,6 @@ defmodule Alto.TUI.ViewTest do
       catalog_opts: [],
       dimensions: {120, 36},
       rail_visible?: false,
-      details_visible?: false,
       selected_backend: :alto,
       selected_model: nil,
       backend_state: %{Alto.TUI.Backends.Codex => %{account: nil}},

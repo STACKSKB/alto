@@ -40,9 +40,10 @@ When delivered, their queue notice disappears and each message becomes a separat
 The status bar shows whether Alto is waiting for the model, executing a tool, or
 waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,
 to answer a pending request. Esc stops the selected task's run and preserves your
-draft. If a popup or the compact details
-drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
-failure pauses the queued follow-up; press Enter with an empty composer to send it.
+draft. If a popup or full-screen context is open, the first Esc closes it.
+Open context with **Ctrl+G, D** or its settings indicator; Esc or Tab returns to
+the composer. Context always occupies the full screen above the status bar.
+Cancellation, failure, or a session-save failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
 Host configuration uses `%Alto.Harness.ProviderProfile{}` entries in
 `provider_profiles`, with a `{module, options}` provider and either `:discover`
