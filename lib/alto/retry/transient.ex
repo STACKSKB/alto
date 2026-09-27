@@ -7,25 +7,25 @@ defmodule Alto.Retry.Transient do
   @max_server_wait_ms 60_000
 
   def rate_limit_metadata(headers, detail, now_ms \\ System.system_time(:millisecond)) do
-    header_map =
+    metadata =
       [headers, body_headers(detail)]
       |> Enum.flat_map(&header_pairs/1)
       |> Enum.reduce(%{}, fn {key, value}, acc ->
-        key = normalize_key(key)
-        value = normalize_value(value)
+        case normalize_key(key) do
+          "retry-after" ->
+            put_valid_hint(
+              acc,
+              :retry_after_ms,
+              parse_retry_after(normalize_value(value), now_ms)
+            )
 
-        if key in ["retry-after", "x-ratelimit-reset"] and not Map.has_key?(acc, key),
-          do: Map.put(acc, key, value),
-          else: acc
+          "x-ratelimit-reset" ->
+            put_valid_hint(acc, :rate_limit_reset_ms, parse_reset(normalize_value(value), now_ms))
+
+          _ ->
+            acc
+        end
       end)
-
-    metadata =
-      %{}
-      |> maybe_put(:retry_after_ms, parse_retry_after(Map.get(header_map, "retry-after"), now_ms))
-      |> maybe_put(
-        :rate_limit_reset_ms,
-        parse_reset(Map.get(header_map, "x-ratelimit-reset"), now_ms)
-      )
 
     if map_size(metadata) == 0, do: nil, else: metadata
   end
@@ -77,9 +77,7 @@ defmodule Alto.Retry.Transient do
 
   defp server_delay({:http_error, status, detail, metadata}, opts)
        when (status == 429 or status >= 500) and is_map(metadata) do
-    [metadata[:retry_after_ms], metadata[:rate_limit_reset_ms]]
-    |> Enum.filter(&(is_integer(&1) and &1 >= 0))
-    |> Enum.max(fn -> derived_server_delay(detail, opts) end)
+    metadata_delay(metadata) || derived_server_delay(detail, opts)
   end
 
   defp server_delay({:http_error, status, detail}, opts) when status == 429 or status >= 500,
@@ -89,15 +87,15 @@ defmodule Alto.Retry.Transient do
 
   defp derived_server_delay(detail, opts) do
     rate_limit_metadata([], detail, Keyword.get(opts, :now_ms, System.system_time(:millisecond)))
-    |> case do
-      nil ->
-        nil
+    |> metadata_delay()
+  end
 
-      metadata ->
-        [metadata[:retry_after_ms], metadata[:rate_limit_reset_ms]]
-        |> Enum.filter(&(is_integer(&1) and &1 >= 0))
-        |> Enum.max(fn -> nil end)
-    end
+  defp metadata_delay(nil), do: nil
+
+  defp metadata_delay(metadata) do
+    [metadata[:retry_after_ms], metadata[:rate_limit_reset_ms]]
+    |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+    |> Enum.max(fn -> nil end)
   end
 
   defp body_headers(%{"metadata" => %{"headers" => headers}}), do: headers
@@ -105,7 +103,7 @@ defmodule Alto.Retry.Transient do
 
   defp header_pairs(headers) when is_list(headers) do
     Enum.flat_map(headers, fn
-      {key, value} -> [{normalize_key(key), value}]
+      {key, value} -> [{key, value}]
       _ -> []
     end)
   end
@@ -167,8 +165,8 @@ defmodule Alto.Retry.Transient do
   defp bounded_string(value) when is_integer(value) and value >= 0, do: Integer.to_string(value)
   defp bounded_string(_), do: nil
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  defp put_valid_hint(map, _key, nil), do: map
+  defp put_valid_hint(map, key, value), do: Map.put_new(map, key, value)
 
   defp jitter(delay, opts) do
     if Keyword.get(opts, :jitter, true) do

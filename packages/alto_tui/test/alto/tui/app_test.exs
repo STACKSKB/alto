@@ -2262,6 +2262,58 @@ defmodule Alto.TUI.AppTest do
     refute Keyword.has_key?(options, :api_key)
   end
 
+  test "provider credential edits preserve the chosen model and explicit default edits select it",
+       context do
+    config =
+      Alto.Test.TUI.config(
+        provider_profiles: [
+          %Alto.Harness.ProviderProfile{
+            id: "local",
+            label: "Local",
+            provider: {Alto.Providers.OpenAICompatible, base_url: "http://local.test/v1"},
+            models: [%{id: "original"}, %{id: "chosen"}],
+            default_model: "original"
+          }
+        ]
+      )
+
+    context = %{context | config: config}
+    state = state!(context, credentials_path: context.credentials)
+    state = State.remember_selection(%{state | selected_model: "chosen"})
+
+    configure = fn state ->
+      state = App.open_overlay(state, :provider)
+      index = Enum.find_index(state.overlay.items, &(&1.value == {:configure_provider, "local"}))
+
+      {:noreply, state} =
+        App.handle_event(%Key{code: "enter"}, put_in(state.overlay.index, index))
+
+      assert state.overlay.kind == :provider_form
+      state
+    end
+
+    form = configure.(state)
+
+    for field <- form.overlay.items, field[:key] in [:label, :api_key] do
+      value = if field.key == :label, do: "Renamed", else: "new-private-key"
+      ExRatatui.text_input_set_value(field.input, value)
+    end
+
+    {:noreply, saved} = App.handle_event(%Key{code: "s", modifiers: ["ctrl"]}, form)
+    assert saved.overlay == nil
+    assert saved.selected_model == "chosen"
+    assert state!(context, credentials_path: context.credentials).selected_model == "chosen"
+    assert {:ok, credentials} = Alto.Credentials.load(context.credentials)
+    assert Alto.Credentials.get(credentials, "local", "api_key") == "new-private-key"
+
+    form = configure.(saved)
+    field = Enum.find(form.overlay.items, &(&1[:key] == :model))
+    ExRatatui.text_input_set_value(field.input, "new-default")
+    {:noreply, saved} = App.handle_event(%Key{code: "s", modifiers: ["ctrl"]}, form)
+    assert saved.selected_model == "new-default"
+    assert state!(context, credentials_path: context.credentials).selected_model == "new-default"
+  end
+
   test "provider setup masks and privately persists API keys", context do
     config =
       Alto.Test.TUI.config(

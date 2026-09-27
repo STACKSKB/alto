@@ -110,6 +110,16 @@ defmodule Alto.RetryTest do
            )
   end
 
+  test "malformed HTTP hint does not suppress valid body fallback" do
+    body = %{"metadata" => %{"headers" => %{"Retry-After" => "30"}}}
+
+    assert %{retry_after_ms: 30_000} =
+             Alto.Retry.Transient.rate_limit_metadata(%{"retry-after" => ["invalid"]}, body, 0)
+
+    assert %{retry_after_ms: 20_000} =
+             Alto.Retry.Transient.rate_limit_metadata(%{"retry-after" => ["20"]}, body, 0)
+  end
+
   test "malformed timing hints are ignored without exposing unrelated headers" do
     for value <- [<<255>>, String.duplicate("x", 129), %{}, [123], "NaN", "1e999"] do
       assert nil ==

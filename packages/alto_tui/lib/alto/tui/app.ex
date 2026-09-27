@@ -1802,6 +1802,22 @@ defmodule Alto.TUI.App do
             notice: "provider saved"
         }
 
+        previous = Enum.find(state.profiles, &(&1.id == profile.id))
+
+        # Changing the default model explicitly selects it. Credential and label
+        # edits preserve the current choice, or restore this provider's choice.
+        next =
+          cond do
+            previous && previous.default_model != profile.default_model ->
+              next
+
+            state.selected_provider_id == profile.id ->
+              %{next | selected_model: state.selected_model || profile.default_model}
+
+            true ->
+              State.restore_model(next)
+          end
+
         next = State.remember_selection(next)
         if state.overlay.after_save == :model, do: open_overlay(next, :model), else: next
 
