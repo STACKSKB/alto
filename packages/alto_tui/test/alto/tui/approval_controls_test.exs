@@ -264,7 +264,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
   test "disabled auto-open leaves a narrow approval queued behind the context indicator",
        context do
     config =
-      context.config.run_options
+      context.config
       |> Keyword.put(:tui, approval_auto_open: false)
       |> Alto.Test.TUI.config()
 

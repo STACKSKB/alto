@@ -15,7 +15,7 @@ defmodule Alto.Runner.Execution.Children do
                   task: [type: :any, required: true],
                   max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
                   tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
-                  loop: [type: {:or, [nil, {:struct, Alto.Loop.Spec}]}, default: nil],
+                  loop: [type: {:or, [nil, :map]}, default: nil],
                   model: [type: {:or, [nil, :string]}, default: nil],
                   profile_key: [type: {:or, [nil, :string]}, default: nil],
                   system_prompt: [type: {:or, [nil, :string]}, default: nil],

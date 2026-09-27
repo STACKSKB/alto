@@ -6,30 +6,39 @@ defmodule Alto do
   control policy and composes middleware around typed lifecycle events.
   """
 
-  alias Alto.Loop.Spec
   alias Alto.Loops.Default
   alias Alto.Loops.Rule
   alias Alto.Runner
 
   @doc "Build the shipped default loop as an ordinary, composable value."
-  @spec default_loop(keyword()) :: Spec.t()
+  @spec default_loop(keyword()) :: Alto.Loop.t()
   def default_loop(opts \\ []) do
     opts
     |> Keyword.put_new(:context, Alto.Context.Window.new())
     |> Keyword.put_new(:subagents, Alto.Subagents.bounded())
-    |> then(&Spec.new(Default, &1))
+    |> then(&loop(Default, &1))
   end
 
   @doc "Build the tool-free, one-request conversational loop."
-  @spec chat_loop(keyword()) :: Spec.t()
+  @spec chat_loop(keyword()) :: Alto.Loop.t()
   def chat_loop(opts \\ []) do
-    spec = Spec.new(Default, Keyword.put_new(opts, :context, Alto.Context.Window.new()))
+    spec = loop(Default, Keyword.put_new(opts, :context, Alto.Context.Window.new()))
     %{spec | driver_options: Keyword.put(spec.driver_options, :tool_execution, :disabled)}
   end
 
   @doc "Build a loop specification around a user-supplied loop module."
-  @spec loop(module(), keyword()) :: Spec.t()
-  def loop(driver, opts \\ []) when is_atom(driver), do: Spec.new(driver, opts)
+  @spec loop(module(), keyword()) :: Alto.Loop.t()
+  def loop(driver, opts \\ []) when is_atom(driver) do
+    {known, options} = Keyword.split(opts, [:context, :subagents, :middleware, :driver_options])
+
+    %{
+      driver: driver,
+      context: Keyword.get(known, :context),
+      subagents: Keyword.get(known, :subagents),
+      middleware: Keyword.get(known, :middleware, []),
+      driver_options: Keyword.get(known, :driver_options, []) ++ options
+    }
+  end
 
   @doc """
   Build a provider-less scripted rule loop (see `Alto.Loops.Rule`).
@@ -38,8 +47,12 @@ defmodule Alto do
   entries; the task carries the run's payload. Anything that is not a step
   script fails closed at run construction.
   """
-  @spec rule_loop(keyword()) :: Spec.t()
-  def rule_loop(opts \\ []), do: Spec.new(Rule, opts)
+  @spec rule_loop(keyword()) :: Alto.Loop.t()
+  def rule_loop(opts \\ []) do
+    spec = loop(Rule, opts)
+    steps = Rule.compile_steps(Keyword.get(spec.driver_options, :steps))
+    %{spec | driver_options: Keyword.put(spec.driver_options, :steps, steps)}
+  end
 
   @doc "Run a task with the configured execution host."
   @spec run(term(), keyword()) :: Runner.outcome()

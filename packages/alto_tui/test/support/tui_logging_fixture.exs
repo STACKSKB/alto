@@ -9,12 +9,12 @@ original = :logger.get_handler_config()
 fixture = self()
 
 config =
-  Alto.Config.new(
+  [
     tui_backends: [alto: {Alto.TUI.Backends.Native, []}],
     provider_profiles: [],
     tools: [],
     loop: Alto.chat_loop()
-  )
+  ]
 
 if scenario != "startup_failure" do
   spawn(fn ->

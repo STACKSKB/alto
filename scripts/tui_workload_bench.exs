@@ -3,7 +3,7 @@ alias ExRatatui.Event.Mouse
 
 state = %State{
   textarea: ExRatatui.textarea_new(),
-  config: Alto.Config.new(),
+  config: [],
   run_options: [],
   catalog_opts: [],
   dimensions: {240, 70}

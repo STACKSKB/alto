@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,646 lines**, a **22.2% reduction**, with **3,188 lines remaining**.
+Current: **31,546 lines**, a **22.4% reduction**, with **3,088 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,6 +53,20 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
+Loop configuration is a plain driver/options/policy map. The Spec and Runtime
+modules are deleted; Loop owns middleware composition and the execution host
+calls module initialization directly. Rule scripts compile once to indexed data,
+share one event-correlation path and retain native results across checkpoints.
+Configuration files return keyword lists consumed directly by CLI, TUI and
+runner; the Config constructor, struct and projection are deleted. Malformed
+rule scripts now fail at construction. Module callback and durable child-resume
+capabilities remain; no migration or compatibility wrapper is introduced.
+This pass removes **100 production lines**: **68 code/typespec**, **15 blank**,
+and **17 source documentation/comment** lines. Constructor-only coverage is
+removed; restored-rule correlation and result propagation are exercised instead.
+All **1,074 core tests** and **145 TUI tests** pass. The three offline Oban
+example tests pass; its database test remains excluded.
+
 Approval policies are now decision literals or two-argument functions. Six
 policy modules are deleted; the interactive, resident and delegated front ends
 share ordinary functions and exact-ID decision waiting. Frozen requests,
@@ -90,8 +104,9 @@ and **34 source documentation/comment** lines. Fixtures and benchmarks now use t
 same values as production; no compatibility layer or migration was added. All
 1,077 core tests and 145 TUI tests pass.
 
-The CLI now uses `Config.run_options` for execution settings instead of a parallel
-flag-to-provider/tool/prompt/sandbox compiler. Execution override flags are removed;
+The CLI now consumes the keyword list returned by `Config.load` for execution
+settings instead of a parallel flag-to-provider/tool/prompt/sandbox compiler.
+Execution override flags are removed;
 all their capabilities remain available in trusted configuration. Setup, default
 OpenRouter onboarding, tasks/stdin, sessions, listener controls and serving remain.
 Configured workspace, persistence and approval choices are honored; served runs

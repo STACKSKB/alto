@@ -81,7 +81,7 @@ defmodule Alto.Bench.OfflineToolBatches do
 
       result =
         Alto.run(%{"benchmark" => true},
-          loop: Alto.Loop.Spec.new(Alto.Bench.OfflineBatchLoop, mode: mode, count: @calls),
+          loop: Alto.loop(Alto.Bench.OfflineBatchLoop, mode: mode, count: @calls),
           tools: [{Alto.Bench.OfflineReadTool, counter: counter, delay_ms: @delay_ms}],
           provider: nil,
           approval: {:deny, :policy_denied},

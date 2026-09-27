@@ -25,7 +25,7 @@ defmodule Alto.TUI.App do
 
   @impl true
   def mount(opts) do
-    with %Alto.Config{} = config <- Keyword.get(opts, :config),
+    with config when is_list(config) <- Keyword.get(opts, :config),
          {:ok, state} <- State.new(config, opts) do
       dimensions =
         case Keyword.get(opts, :test_mode) do

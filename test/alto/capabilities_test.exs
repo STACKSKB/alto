@@ -3,7 +3,7 @@ defmodule Alto.CapabilitiesTest do
 
   test "inspection excludes secrets and reflects option-based tools and hidden capabilities" do
     config =
-      Alto.Config.new(
+      [
         provider: {Alto.Providers.OpenAICompatible, api_key: "private-key"},
         tools: [
           {Alto.Tools.MCP, name: :custom, server: [command: "must-not-start"]},
@@ -11,7 +11,7 @@ defmodule Alto.CapabilitiesTest do
         ],
         model_tools: [:read_file],
         max_effects: 25
-      )
+      ]
 
     description = Alto.Capabilities.describe(config)
 

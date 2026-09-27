@@ -36,7 +36,7 @@ defmodule Alto.Runner.ContractTest do
   end
 
   test "public lifecycle dispatches opaque non-process handles to the selected runner" do
-    opts = Alto.Config.new(runner: ExternalRunner) |> Alto.Config.run_options()
+    opts = [runner: ExternalRunner]
     assert {:ok, %Handle{} = handle} = Alto.start("external result", opts)
     assert %Alto.Runner.Result{status: :ok} = result = Alto.await(handle)
     assert result.output == "external result"

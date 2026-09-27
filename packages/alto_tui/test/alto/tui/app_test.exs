@@ -1206,9 +1206,11 @@ defmodule Alto.TUI.AppTest do
   test "backend recovery offers only configured alternatives and selects them", context do
     for alternatives <- [[], [local: {Alto.TUI.Backends.Native, label: "Local runner"}]] do
       config =
-        context.config.run_options
-        |> Keyword.put(:tui_backends, [codex: {Alto.TUI.Backends.Codex, []}] ++ alternatives)
-        |> Alto.Config.new()
+        Keyword.put(
+          context.config,
+          :tui_backends,
+          [codex: {Alto.TUI.Backends.Codex, []}] ++ alternatives
+        )
 
       assert {:ok, state} = State.new(config, project: context.root, path: context.catalog)
       assert {:noreply, state} = App.handle_info({:codex_connected, {:error, :offline}}, state)
@@ -1224,11 +1226,7 @@ defmodule Alto.TUI.AppTest do
   end
 
   test "Codex login lifecycle keeps prepare inert and stores login in status", context do
-    config =
-      context.config
-      |> Map.update!(:run_options, fn options ->
-        Keyword.put(options, :tui_backends, codex: {Codex, []})
-      end)
+    config = Keyword.put(context.config, :tui_backends, codex: {Codex, []})
 
     assert {:ok, state} = State.new(config, project: context.root, path: context.catalog)
     test_owner = self()
@@ -1677,7 +1675,7 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.textarea_get_value(pasted.textarea) == "xpaste"
 
     config =
-      context.config.run_options
+      context.config
       |> Keyword.put(:tui, type_to_compose: false)
       |> Alto.Test.TUI.config()
 

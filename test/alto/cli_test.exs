@@ -115,11 +115,11 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -139,11 +139,11 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLITest.NoToolsProvider,
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -158,10 +158,10 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLITest.DefaultToolsProvider,
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -176,11 +176,11 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLITest.StreamingProvider,
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -195,11 +195,11 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: {Alto.CLITest.ModelReportingProvider, model: "configured-model"},
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -216,12 +216,12 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: nil,
         loop: Alto.rule_loop(steps: ["providerless_echo"]),
         tools: [Alto.CLITest.ProviderlessTool],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -281,14 +281,14 @@ defmodule Alto.CLITest do
       approval_option = if @approval, do: "approval: #{inspect(@approval)},", else: ""
 
       File.write!(path, """
-      Alto.Config.new(
+      [
         #{approval_option}
         provider: nil,
         cwd: #{inspect(root)},
         tools: [Alto.Tools.WriteFile],
         listeners: [{Alto.CLITest.CaptureListener, []}],
         runs: %{"rule" => [loop: Alto.rule_loop(steps: ["write_file"])]}
-      )
+      ]
       """)
 
       {server, monitor} = spawn_monitor(fn -> Alto.CLI.run(["--config", path, "--serve"]) end)
@@ -342,14 +342,14 @@ defmodule Alto.CLITest do
     path = Path.join(root, "write.exs")
 
     File.write!(path, """
-    Alto.Config.new(
+    [
       provider: nil,
       cwd: #{inspect(root)},
       session: nil,
       loop: Alto.rule_loop(steps: ["write_file"]),
       tools: [Alto.Tools.WriteFile],
       approval: :approve
-    )
+    ]
     """)
 
     stderr =
@@ -373,7 +373,7 @@ defmodule Alto.CLITest do
     File.write!(path, ":not_a_config\n")
 
     assert {:error, message} = Alto.CLI.run(["--config", path, "task"])
-    assert message =~ "must return %Alto.Config{}"
+    assert message =~ "must return a keyword list"
   end
 
   test "serve does not accept a task" do
@@ -392,11 +392,11 @@ defmodule Alto.CLITest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLITest.AnswerProvider,
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
@@ -409,7 +409,7 @@ defmodule Alto.CLITest do
 
     File.write!(
       path,
-      "Alto.Config.new(provider: Alto.CLITest.AnswerProvider, listeners: [{Alto.CLITest.CustomListener, []}])"
+      "[provider: Alto.CLITest.AnswerProvider, listeners: [{Alto.CLITest.CustomListener, []}]]"
     )
 
     assert {:error, "Custom listener reached"} =

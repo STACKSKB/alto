@@ -10,7 +10,7 @@ inbox_options = [
 
 :ok = AltoObanExample.Inbox.validate_options(inbox_options)
 
-Alto.Config.new(
+[
   provider: nil,
   runs: %{"event_flow" => event_flow},
   listeners: [
@@ -30,4 +30,4 @@ Alto.Config.new(
        }
      }}
   ]
-)
+]

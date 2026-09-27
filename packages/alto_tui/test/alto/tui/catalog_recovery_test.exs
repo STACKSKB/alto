@@ -59,7 +59,7 @@ defmodule Alto.TUI.CatalogRecoveryTest do
     config = Path.join(root, "config.exs")
     invalid = ~s({"version":2,"projects":[],"tasks":[{"title":42}]})
     File.write!(catalog, invalid)
-    File.write!(config, "Alto.Config.new()")
+    File.write!(config, "[]")
 
     warning =
       capture_io(:stderr, fn ->

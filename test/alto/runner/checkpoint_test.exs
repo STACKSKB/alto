@@ -196,7 +196,7 @@ defmodule Alto.Runner.CheckpointTest do
   } do
     opts =
       opts
-      |> Keyword.put(:loop, Alto.loop(HangingLoop, steps: ["guarded"]))
+      |> Keyword.put(:loop, %{Alto.rule_loop(steps: ["guarded"]) | driver: HangingLoop})
       |> Keyword.put(:run_timeout, 100)
 
     assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
@@ -208,7 +208,8 @@ defmodule Alto.Runner.CheckpointTest do
   test "a programmer error in checkpoint restore is not relabeled invalid_checkpoint", %{
     opts: opts
   } do
-    opts = Keyword.put(opts, :loop, Alto.loop(RaisingLoadLoop, steps: ["guarded"]))
+    opts =
+      Keyword.put(opts, :loop, %{Alto.rule_loop(steps: ["guarded"]) | driver: RaisingLoadLoop})
 
     assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
              suspended = Serial.run("{}", opts)

@@ -12,7 +12,7 @@ or a function receiving the prompt context. For example, use
 `prompt: "Answer concisely"` or `prompt: &Alto.Prompts.Coding.build/1`.
 Capture options in a closure, such as
 `prompt: &Alto.Prompts.Chat.build(&1, identity: "Answer concisely.")`.
-CLI runs read this option from the selected `Alto.Config`.
+CLI runs read this option from the selected configuration file.
 A resumed conversation retains its stored system message.
 
 ## Request diagnostics by composition
@@ -31,7 +31,7 @@ provider =
   end)
 ```
 
-Use this `{module, options}` provider specification in `Alto.Config.new/1` or a
+Use this `{module, options}` provider specification in the run options or a
 provider profile. A bare module means `{module, []}`; provider options belong
 inside the tuple.
 Omit the wrapper to omit diagnostics; nest wrappers to compose observers.

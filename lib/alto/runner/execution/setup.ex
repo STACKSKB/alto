@@ -13,7 +13,7 @@ defmodule Alto.Runner.Execution.Setup do
                     session_dir retry_policy tool_presenter)a
 
   def open(task, opts) do
-    %Alto.Loop.Spec{} = spec = Keyword.get(opts, :loop, Alto.default_loop())
+    %{} = spec = Keyword.get(opts, :loop, Alto.default_loop())
 
     provider = normalize_provider(Keyword.get(opts, :provider))
 

@@ -2,7 +2,7 @@ defmodule Alto.TUI do
   @moduledoc "Entry point for Alto's local terminal coding harness."
 
   @doc "Run the TUI until the user exits."
-  @spec run(Alto.Config.t() | Path.t(), keyword()) :: :ok | {:error, term()}
+  @spec run(keyword() | Path.t(), keyword()) :: :ok | {:error, term()}
   def run(config_or_path, opts \\ []) do
     with {:ok, _apps} <- Application.ensure_all_started(:alto),
          {:ok, config} <- resolve_config(config_or_path),
@@ -12,7 +12,7 @@ defmodule Alto.TUI do
   end
 
   @doc false
-  def prepare_catalog(%Alto.Config{} = config, opts \\ []) do
+  def prepare_catalog(config, opts \\ []) do
     catalog_opts = Alto.TUI.State.catalog_options(config, opts)
 
     case Alto.Harness.Catalog.read(catalog_opts) do
@@ -103,7 +103,10 @@ defmodule Alto.TUI do
     end
   end
 
-  defp resolve_config(%Alto.Config{} = config), do: {:ok, config}
+  defp resolve_config(config) when is_list(config) do
+    if Keyword.keyword?(config), do: {:ok, config}, else: {:error, {:invalid_tui_config, config}}
+  end
+
   defp resolve_config(path) when is_binary(path), do: Alto.Config.load(path)
   defp resolve_config(other), do: {:error, {:invalid_tui_config, other}}
 end

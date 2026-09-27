@@ -22,154 +22,112 @@ defmodule Alto.Loops.Rule do
   """
 
   @behaviour Alto.Loop
-
   alias Alto.Event
-  alias Alto.Loop.Spec
 
-  defstruct [:arguments, index: 1, results: []]
+  @type t :: {pos_integer(), map(), [term()]}
 
-  @type step :: binary() | %{optional(:tool) => binary(), optional(:arguments) => term()}
-  @type t :: %__MODULE__{
-          arguments: map(),
-          index: pos_integer(),
-          results: [term()]
-        }
+  @doc false
+  def compile_steps([_ | _] = steps), do: steps |> Enum.map(&compile_step/1) |> List.to_tuple()
+  def compile_steps(_), do: raise(ArgumentError, "rule steps must be a nonempty list")
+
+  defp compile_step(tool) when is_binary(tool) and tool != "", do: {tool, :task}
+
+  defp compile_step(%{tool: tool} = step) when is_binary(tool) and tool != "" do
+    case Map.get(step, :arguments, :task) do
+      nil ->
+        {tool, :task}
+
+      arguments when is_map(arguments) or is_function(arguments, 2) or arguments == :task ->
+        {tool, arguments}
+
+      _ ->
+        raise ArgumentError, "invalid rule step arguments"
+    end
+  end
+
+  defp compile_step(_), do: raise(ArgumentError, "invalid rule step")
 
   @impl true
-  def init(task, %Spec{} = spec) do
-    with {:ok, steps} <- steps(spec),
-         {:ok, arguments} <- decode_task(task) do
-      state = %__MODULE__{arguments: arguments}
-      {:continue, state, [invoke(state, hd(steps))]}
-    else
-      {:error, reason} -> {{:error, reason}, %__MODULE__{}, []}
+  def init(task, spec) do
+    case decode_task(task) do
+      {:ok, arguments} ->
+        state = {1, arguments, []}
+        {:continue, state, [invoke(state, spec.driver_options[:steps])]}
+
+      {:error, reason} ->
+        {{:error, reason}, nil, []}
     end
   end
 
   @impl true
   def handle_event(
-        %Event{type: :tool_completed, data: %{call_id: call_id, value: value}},
-        %__MODULE__{} = state,
+        %Event{type: type, data: %{call_id: id} = data},
+        {index, arguments, results} = state,
         spec
-      ) do
-    if call_id == call_id(state) do
-      state = %{state | results: [value | state.results]}
+      )
+      when type in [:tool_completed, :tool_failed] do
+    steps = spec.driver_options[:steps]
 
-      case Enum.at(spec.driver_options[:steps], state.index) do
-        nil ->
-          {{:stop, Enum.reverse(state.results)}, state, []}
+    cond do
+      id != call_id(index) ->
+        {:continue, state, []}
 
-        step ->
-          next = %{state | index: state.index + 1}
-          {:continue, next, [invoke(next, step)]}
-      end
-    else
-      {:continue, state, []}
+      type == :tool_failed ->
+        {tool, _} = elem(steps, index - 1)
+        {{:error, {:rule_step_failed, index, tool, data.error}}, state, []}
+
+      true ->
+        results = [data.value | results]
+        state = {index, arguments, results}
+
+        if index == tuple_size(steps) do
+          {{:stop, Enum.reverse(results)}, state, []}
+        else
+          next = {index + 1, arguments, results}
+          {:continue, next, [invoke(next, steps)]}
+        end
     end
   end
 
-  def handle_event(
-        %Event{type: :tool_failed, data: %{call_id: call_id, error: error}},
-        %__MODULE__{} = state,
-        spec
-      ) do
-    if call_id == call_id(state) do
-      {{:error,
-        {:rule_step_failed, state.index,
-         current_tool(Enum.at(spec.driver_options[:steps], state.index - 1)), error}}, state, []}
-    else
-      {:continue, state, []}
-    end
-  end
-
-  def handle_event(%Event{}, %__MODULE__{} = state, _spec), do: {:continue, state, []}
+  def handle_event(%Event{}, state, _spec), do: {:continue, state, []}
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{} = spec) when map_size(state) == 4 do
-    with {:ok, steps} <- steps(spec),
-         true <- is_integer(state.index) and state.index >= 1 and state.index <= length(steps),
-         true <- is_map(state.arguments) and is_list(state.results) do
-      {:ok, state}
-    else
-      _ -> {:error, :invalid_checkpoint}
-    end
+  def dump_checkpoint({index, arguments, results} = state, spec) do
+    if is_integer(index) and index >= 1 and index <= tuple_size(spec.driver_options[:steps]) and
+         is_map(arguments) and is_list(results),
+       do: {:ok, state},
+       else: {:error, :invalid_checkpoint}
   end
 
-  def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
+  def dump_checkpoint(_, _), do: {:error, :invalid_checkpoint}
 
   @impl true
   def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
-  ## Internals
-
-  defp steps(%Spec{} = spec) do
-    case Keyword.get(spec.driver_options, :steps) do
-      steps when is_list(steps) and steps != [] ->
-        if Enum.all?(steps, &valid_step?/1), do: {:ok, steps}, else: {:error, :invalid_steps}
-
-      _other ->
-        {:error, :invalid_steps}
-    end
-  end
-
-  defp valid_step?(name) when is_binary(name) and name != "", do: true
-
-  # A map step may carry `:arguments` as a map, the `:task` marker, or
-  # nothing at all (the two-key clause must precede the one-key clause:
-  # every map pattern also matches maps with extra keys).
-  defp valid_step?(%{tool: tool, arguments: arguments}) when is_binary(tool) and tool != "",
-    do: step_arguments_valid?(arguments)
-
-  defp valid_step?(%{tool: tool}) when is_binary(tool) and tool != "", do: true
-
-  defp valid_step?(_other), do: false
-
-  defp step_arguments_valid?(arguments) when is_map(arguments), do: true
-  defp step_arguments_valid?(arguments) when is_function(arguments, 2), do: true
-  defp step_arguments_valid?(:task), do: true
-  defp step_arguments_valid?(nil), do: true
-  defp step_arguments_valid?(_other), do: false
-
-  # The task is the run's payload: a JSON object string (a webhook body) or
-  # an already-decoded map. Anything else fails closed — a rule run without
-  # a structured payload has nothing to act on.
+  # The task is the structured run payload; argument functions see it and prior
+  # native results in script order. Plain compiled steps remain portable data.
   defp decode_task(task) when is_binary(task) do
     case JSON.decode(task) do
       {:ok, %{} = arguments} -> {:ok, arguments}
-      _other -> {:error, :invalid_task}
+      _ -> {:error, :invalid_task}
     end
   end
 
   defp decode_task(task) when is_map(task), do: {:ok, task}
-  defp decode_task(_task), do: {:error, :invalid_task}
+  defp decode_task(_), do: {:error, :invalid_task}
 
-  defp invoke(%__MODULE__{} = state, step) do
-    {:invoke_tool,
-     %{
-       id: call_id(state),
-       name: current_tool(step),
-       arguments: current_arguments(step, state)
-     }}
+  defp invoke({index, task, results}, steps) do
+    {tool, arguments} = elem(steps, index - 1)
+
+    arguments =
+      case arguments do
+        :task -> task
+        resolve when is_function(resolve, 2) -> resolve.(task, Enum.reverse(results))
+        arguments -> arguments
+      end
+
+    {:invoke_tool, %{id: call_id(index), name: tool, arguments: arguments}}
   end
 
-  defp call_id(%__MODULE__{index: index}), do: "rule-" <> Integer.to_string(index)
-
-  defp current_tool(step) when is_binary(step), do: step
-  defp current_tool(%{tool: tool}), do: tool
-
-  defp current_arguments(step, %__MODULE__{arguments: task_arguments} = state) do
-    case step do
-      %{arguments: :task} ->
-        task_arguments
-
-      %{arguments: arguments} when is_map(arguments) ->
-        arguments
-
-      %{arguments: arguments} when is_function(arguments, 2) ->
-        arguments.(task_arguments, Enum.reverse(state.results))
-
-      _other ->
-        task_arguments
-    end
-  end
+  defp call_id(index), do: "rule-" <> Integer.to_string(index)
 end

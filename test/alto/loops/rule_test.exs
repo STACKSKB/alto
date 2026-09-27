@@ -115,11 +115,9 @@ defmodule Alto.Loops.RuleTest do
       assert result.output == nil
     end
 
-    test "an empty or malformed step script fails at init" do
+    test "an empty or malformed step script fails at construction" do
       for steps <- [[], "queue_put", [%{tool: 42}], [%{tool: "echo", arguments: "no"}]] do
-        assert %Alto.Runner.Result{status: :error, reason: :invalid_steps} =
-                 _result =
-                 Alto.run(%{}, loop: Alto.rule_loop(steps: steps), tools: [EchoTool])
+        assert_raise ArgumentError, fn -> Alto.rule_loop(steps: steps) end
       end
     end
 

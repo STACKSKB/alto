@@ -22,20 +22,14 @@ defmodule Alto.ConfigTest do
 
   test "loads execution limits and defers their validation to the runner", %{root: root} do
     path = Path.join(root, "config.exs")
-    File.write!(path, "Alto.Config.new(max_steps: 0)\n")
+    File.write!(path, "[max_steps: 0]\n")
 
-    assert {:ok, config} = Config.load(path)
+    assert {:ok, options} = Config.load(path)
 
     assert %Alto.Runner.Result{
              status: :error,
              reason: {:invalid_option, :max_steps, 0}
-           } = Alto.run("task", Config.run_options(config))
-  end
-
-  test "requires only a keyword-list container" do
-    assert_raise ArgumentError, ~r/keyword list/, fn ->
-      Config.new([:not_a_pair])
-    end
+           } = Alto.run("task", options)
   end
 
   test "loaded loop and tool options drive an actual run", %{root: root} do
@@ -43,14 +37,14 @@ defmodule Alto.ConfigTest do
 
     File.write!(
       path,
-      "Alto.Config.new(loop: Alto.rule_loop(steps: [\"configured_echo\"]), " <>
-        "tools: [{Alto.ConfigTest.ConfiguredTool, suffix: \"!\"}])\n"
+      "[loop: Alto.rule_loop(steps: [\"configured_echo\"]), " <>
+        "tools: [{Alto.ConfigTest.ConfiguredTool, suffix: \"!\"}]]\n"
     )
 
-    assert {:ok, config} = Config.load(path)
+    assert {:ok, options} = Config.load(path)
 
     assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
-             Alto.run(%{"value" => "configured"}, Config.run_options(config))
+             Alto.run(%{"value" => "configured"}, options)
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do

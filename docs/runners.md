@@ -1,11 +1,11 @@
 # Execution hosts and reusable components
 
 `Alto.Runner` is the host behaviour and dispatcher. Use `runner: MyRunner` in
-`Alto.Config.new/1`, `Alto.run/2`, or `Alto.start/2`; Serial remains the default.
+the keyword run options passed to `Alto.run/2` or `Alto.start/2`; Serial remains the default.
 `runner_options:` carries trusted host-specific configuration. Both are
 inherited by child runs. A runner owns scheduling and its private handle.
 
-Host configuration is trusted Elixir: `loop:` is an `Alto.Loop.Spec`, supplied
+Host configuration is trusted Elixir: `loop:` is a map of driver and policy options, supplied
 `budget:` values are `Alto.Runner.Budget` structs, project instruction options
 are `nil`, `:auto`, or keywords, and compaction is `false`, `true`, or keywords.
 Directory options are binary paths or `nil`. Malformed host configuration can

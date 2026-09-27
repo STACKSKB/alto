@@ -3,7 +3,7 @@
 Compaction is composed from a trigger, a reducer, and an allowance:
 
 ```elixir
-Alto.Config.new(
+[
   loop: Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.85)),
   compaction: [
     strategy: {Alto.Context.Reducers.Handoff, []},
@@ -13,7 +13,7 @@ Alto.Config.new(
     max_input_bytes: 1_000_000
   ],
   sessions: true
-)
+]
 ```
 
 `compact_at` is an optional fraction of the model's input budget (after output

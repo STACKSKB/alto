@@ -76,11 +76,10 @@ defmodule Alto.TUI.State do
   @type t :: %__MODULE__{}
 
   @doc "Build TUI state and register the initial project root."
-  @spec new(Alto.Config.t(), keyword()) :: {:ok, t()} | {:error, term()}
-  def new(%Alto.Config{} = config, opts \\ []) do
-    run_options = Alto.Config.run_options(config)
+  @spec new(keyword(), keyword()) :: {:ok, t()} | {:error, term()}
+  def new(run_options, opts \\ []) when is_list(run_options) do
     tui_options = run_options |> Keyword.get(:tui, []) |> NimbleOptions.validate!(@tui_options)
-    catalog_opts = catalog_options(config, opts)
+    catalog_opts = catalog_options(run_options, opts)
 
     root = opts |> Keyword.get(:project, File.cwd!()) |> Path.expand()
 
@@ -137,11 +136,11 @@ defmodule Alto.TUI.State do
   end
 
   @doc false
-  def catalog_options(%Alto.Config{} = config, opts) do
+  def catalog_options(run_options, opts) do
     opts
     |> Keyword.take([:path, :session_dir])
     |> Keyword.put_new_lazy(:session_dir, fn ->
-      Keyword.get(Alto.Config.run_options(config), :session_dir)
+      Keyword.get(run_options, :session_dir)
     end)
     |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
   end

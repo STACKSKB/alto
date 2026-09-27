@@ -3,7 +3,11 @@
 A loop implements `Alto.Loop.init/2` and `handle_event/3`. It receives typed
 `Alto.Event` values and returns plain tuples describing the next state and work.
 The runtime executes that work; loops and middleware do not call providers or
-tools directly. Configure a loop with `Alto.loop(MyLoop, options)`.
+tools directly. Configure a loop with `Alto.loop(MyLoop, options)`. Its plain map
+contains the driver, driver options, context, subagent policy and middleware.
+`Alto.rule_loop/1` compiles its script once when constructed; malformed steps
+raise immediately. Module callbacks and data-only scripts remain portable across
+durable child checkpoints.
 
 ## Transitions
 

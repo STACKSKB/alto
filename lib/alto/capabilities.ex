@@ -14,8 +14,6 @@ defmodule Alto.Capabilities do
     max_tool_result_bytes: 64_000
   ]
 
-  def describe(%Alto.Config{run_options: opts}), do: describe(opts)
-
   def describe(opts) when is_list(opts) do
     loop = Keyword.get(opts, :loop, Alto.default_loop())
     tools = Enum.map(Keyword.get(opts, :tools, []), &tool/1)

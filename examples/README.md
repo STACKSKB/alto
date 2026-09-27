@@ -15,7 +15,7 @@ approval, and resource limits.
   worker that sends unknown external outcomes to explicit reconciliation.
 - [`alto.agentic.exs`](../alto.agentic.exs) is a full local coding profile for
   the optional terminal UI and one-shot CLI. It keeps command execution,
-  approvals, provider settings, and bounds visible in compiled configuration.
+  approvals, provider settings, and bounds visible in its keyword config.
 - [Extension boundaries](../docs/extensions.md) shows host-side input
   transforms, provider-aware context estimates, hooks, trusted commands, and
   optional renderers and provider adapters.

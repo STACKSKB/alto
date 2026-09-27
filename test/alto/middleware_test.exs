@@ -3,7 +3,6 @@ defmodule Alto.MiddlewareTest do
 
   alias Alto.Event
   alias Alto.Loop
-  alias Alto.Runtime
 
   test "middleware enters in declaration order and unwinds in reverse" do
     owner = self()
@@ -19,9 +18,9 @@ defmodule Alto.MiddlewareTest do
 
     spec = Alto.default_loop(middleware: Enum.map([:first, :second], trace))
 
-    {:continue, initial, _} = Runtime.init(spec, "answer")
+    {:continue, initial, _} = spec.driver.init("answer", spec)
 
-    Runtime.dispatch(
+    Loop.dispatch(
       spec,
       Event.durable(:model_completed, %{message: "done", tool_calls: []}),
       initial
@@ -52,10 +51,10 @@ defmodule Alto.MiddlewareTest do
       Alto.default_loop()
       |> Loop.after_event(:step_settled, commit_hook)
 
-    {:continue, initial, _} = Runtime.init(spec, "change a file")
+    {:continue, initial, _} = spec.driver.init("change a file", spec)
 
     {:continue, tools, _} =
-      Runtime.dispatch(
+      Loop.dispatch(
         spec,
         Event.durable(:model_completed, %{
           message: nil,
@@ -65,14 +64,14 @@ defmodule Alto.MiddlewareTest do
       )
 
     {:continue, completed, [{:emit, settled}]} =
-      Runtime.dispatch(
+      Loop.dispatch(
         spec,
         Event.durable(:tool_completed, %{call_id: "edit", result: :ok}),
         tools
       )
 
     {:continue, _, effects} =
-      Runtime.dispatch(spec, settled, completed, %{workspace: "/repo"})
+      Loop.dispatch(spec, settled, completed, %{workspace: "/repo"})
 
     assert [
              {:invoke_tool, %{name: "git_commit"}},

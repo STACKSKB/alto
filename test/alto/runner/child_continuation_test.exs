@@ -307,7 +307,11 @@ defmodule Alto.Runner.ChildContinuationTest do
 
   test "a losing child resume cannot retain over the winner after both validate", context do
     options = opts(context, Alto.Runner.Serial)
-    agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
+
+    agent = %{
+      agent("one")
+      | loop: %{Alto.rule_loop(steps: ["first", "guarded"]) | driver: ChildLoop}
+    }
 
     assert %Alto.Runner.Result{status: :suspended, reason: {:children_pending, _}} =
              parked = Alto.run(%{agents: [agent]}, options)
@@ -432,7 +436,10 @@ defmodule Alto.Runner.ChildContinuationTest do
     loop = %{loop | subagents: %{loop.subagents | workspaces: manager}}
     options = Keyword.put(options, :loop, loop)
 
-    agent = %{agent("one") | loop: Alto.loop(ChildLoop, steps: ["first", "guarded"])}
+    agent = %{
+      agent("one")
+      | loop: %{Alto.rule_loop(steps: ["first", "guarded"]) | driver: ChildLoop}
+    }
 
     assert %Alto.Runner.Result{status: :suspended, reason: {:children_pending, _}} =
              parked = Alto.run(%{agents: [agent]}, options)

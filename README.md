@@ -78,10 +78,10 @@ result.output
 # [%{"message" => "hello"}]
 ```
 
-For model-driven work, pass a provider module or a compiled `Alto.Config`.
-Configuration files are trusted Elixir: `Config.new/1` accepts a keyword list,
-and components own their defaults and domain checks. Malformed host configuration
-may raise. Duplicate keys follow ordinary keyword-list semantics; there is no
+For model-driven work, pass a provider module or a keyword list of run options.
+Configuration files are trusted Elixir and return keyword lists directly.
+Components own their defaults and domain checks. Malformed host configuration may raise.
+Duplicate keys follow ordinary keyword-list semantics; there is no
 second registry of run options. Provider, tool, loop, command-executor, and
 search-backend behaviours are extension contracts; webhook admission, middleware,
 and hooks compose functions. `Alto.Capabilities` can describe the effective
@@ -93,7 +93,7 @@ Listing, reading, and bounded literal search are available by default. Enable
 writes and commands in a trusted config file, for example `coding.exs`:
 
 ```elixir
-Alto.Config.new(
+[
   tools: [
     Alto.Tools.ListFiles,
     Alto.Tools.ReadFile,
@@ -103,7 +103,7 @@ Alto.Config.new(
     {Alto.Tools.RunCommand,
      executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}}
   ]
-)
+]
 ```
 
 Run it with `mix alto --config coding.exs "Run the focused tests"`. The Bubblewrap
@@ -113,7 +113,7 @@ protects `.git` from commands and native file edits. The full
 [`alto.agentic.exs`](./alto.agentic.exs) profile adds approved Git mutations and
 other coding tools.
 
-Execution settings live in `Alto.Config`: use `tools: []` to disable tools,
+Execution settings live in the configuration keyword list: use `tools: []` to disable tools,
 `prompt: nil` to omit the system prompt, `project_instructions: nil` to skip
 workspace instructions, and `max_steps:` to bound model calls. An executor's
 `network: :inherit` enables network access; `Alto.Command.Executors.Unsandboxed`
@@ -230,7 +230,7 @@ bounded to 1 MB. Symlink paths and repository filters remain unsupported.
 
 ### Replaceable execution hosts
 
-The default `Alto.Runner.Serial` composes shared execution components. Select a host with `runner:` in `Alto.Config` or
+The default `Alto.Runner.Serial` composes shared execution components. Select a host with `runner:` in the configuration keyword list or
 run options. Handles are opaque and results use `Alto.Runner.Result`; registry
 and TUI integrations consume completion notifications instead of inspecting
 Tasks. Serial can optionally wait for a one-use admission ticket before each effect.

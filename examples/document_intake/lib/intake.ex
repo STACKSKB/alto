@@ -280,8 +280,8 @@ defmodule DocumentIntake do
 
   defp configured_provider(opts) do
     case Keyword.get(opts, :config) do
-      %Alto.Config{} = config ->
-        Keyword.get(opts, :provider) || Keyword.get(Alto.Config.run_options(config), :provider)
+      config when is_list(config) ->
+        Keyword.get(opts, :provider) || Keyword.get(config, :provider)
 
       _ ->
         Keyword.get(opts, :provider)

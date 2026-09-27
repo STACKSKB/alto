@@ -100,7 +100,7 @@ tools =
     ripwire_tools ++
     [codex_agent] ++ Alto.Tools.agents()
 
-Alto.Config.new(
+[
   provider_profiles: [
     %Alto.Harness.ProviderProfile{
       id: "openrouter",
@@ -164,4 +164,4 @@ Alto.Config.new(
   ],
   retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 500, max_delay: 5_000),
   provider_retries: 3
-)
+]

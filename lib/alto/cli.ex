@@ -179,14 +179,12 @@ defmodule Alto.CLI do
   # Without it, served runs stay unpersisted; `session_dir:` alone selects
   # the directory resume reads from.
   defp serve_registry_opts(config, queue, base_options) do
-    run_options = Config.run_options(config)
-
     [
-      config_resolver: serve_resolver(base_options, Keyword.get(run_options, :runs, %{})),
+      config_resolver: serve_resolver(base_options, Keyword.get(config, :runs, %{})),
       cwd: File.cwd!(),
       queue: queue,
-      sessions: Keyword.get(run_options, :sessions) || false,
-      session_dir: Keyword.get(run_options, :session_dir)
+      sessions: Keyword.get(config, :sessions) || false,
+      session_dir: Keyword.get(config, :session_dir)
     ]
     |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
   end
@@ -208,7 +206,7 @@ defmodule Alto.CLI do
   # via the compiled configuration's `queue:` key (Alto.Queue start options).
   # Without it, the queue commands answer `unsupported`.
   defp start_serve_queue(config) do
-    case Config.run_options(config) |> Keyword.get(:queue) do
+    case Keyword.get(config, :queue) do
       nil ->
         {:ok, nil}
 
@@ -240,10 +238,7 @@ defmodule Alto.CLI do
   # {Alto.Listeners.WebServer, port: 4747}]`. Without it, serve starts both
   # transports with flag overrides applied.
   defp serve_listener_specs(config, options) do
-    specs =
-      config
-      |> Config.run_options()
-      |> Keyword.get(:listeners, [{UnixSocket, []}, {WebServer, []}])
+    specs = Keyword.get(config, :listeners, [{UnixSocket, []}, {WebServer, []}])
 
     defaults = %{
       UnixSocket => [path: default_socket_path()],
@@ -349,7 +344,7 @@ defmodule Alto.CLI do
         {:error, "choose either --config or --no-config, not both"}
 
       disabled? ->
-        {:ok, Config.new()}
+        {:ok, []}
 
       explicit ->
         Config.load(explicit)
@@ -361,7 +356,7 @@ defmodule Alto.CLI do
         Config.load(Config.default_path())
 
       true ->
-        {:ok, Config.new()}
+        {:ok, []}
     end
   end
 
@@ -381,7 +376,7 @@ defmodule Alto.CLI do
   end
 
   defp common_run_options(config) do
-    configured = config |> Config.run_options() |> Keyword.drop([:tui])
+    configured = Keyword.drop(config, [:tui])
 
     provider =
       case Keyword.fetch(configured, :provider) do
@@ -453,7 +448,7 @@ defmodule Alto.CLI do
     do: "socket #{path} is already served by another Alto process"
 
   defp format_reason({:invalid_config_return, path}),
-    do: "config #{path} must return %Alto.Config{}"
+    do: "config #{path} must return a keyword list"
 
   defp format_reason({:session_not_found, id}), do: "no such session #{id}"
 

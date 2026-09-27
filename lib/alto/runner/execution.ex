@@ -25,7 +25,6 @@ defmodule Alto.Runner.Execution do
   alias Alto.Event
   alias Alto.Runner.Result
   alias Alto.Runner.Execution.History
-  alias Alto.Runtime
   alias Alto.Session
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
@@ -126,7 +125,7 @@ defmodule Alto.Runner.Execution do
                   |> parent_outcome()
 
                 {nil, nil} ->
-                  case call_policy(fn -> Runtime.init(run.spec, task) end, run) do
+                  case call_policy(fn -> run.spec.driver.init(task, run.spec) end, run) do
                     {:ok, transition} -> drive(transition, run, [])
                     {:error, reason} -> abort(run, reason)
                   end
@@ -963,7 +962,7 @@ defmodule Alto.Runner.Execution do
 
   defp dispatch_batch([event | events], run, effects, rest, terminal) do
     case call_policy(
-           fn -> Runtime.dispatch(run.spec, event, run.loop_state, runtime_context(run)) end,
+           fn -> Alto.Loop.dispatch(run.spec, event, run.loop_state, runtime_context(run)) end,
            run
          ) do
       {:ok, {status, state, requested}} ->

@@ -3,7 +3,7 @@ defmodule Alto.InputFaultTest do
 
   test "input ownership is released without misclassifying scheduler exits" do
     {:ok, input} = Alto.Input.start_link()
-    opts = [input: input, loop: Alto.rule_loop(steps: [])]
+    opts = [input: input, loop: Alto.rule_loop(steps: ["unused"])]
 
     assert catch_exit(Alto.Runner.Execution.run(%{}, opts, fn _, _ -> exit(:scheduler_down) end)) ==
              :scheduler_down

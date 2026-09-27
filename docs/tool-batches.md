@@ -3,11 +3,11 @@
 The coding loop can request bounded concurrent calls as ordinary configuration:
 
 ```elixir
-Alto.Config.new(
+[
   loop: Alto.default_loop(tool_execution: {:parallel, 4}),
   tools: tools,
   provider: provider
-)
+]
 ```
 
 `{:run_tools, %{calls: calls, max_concurrency: concurrency}}` exposes the same mechanism to other

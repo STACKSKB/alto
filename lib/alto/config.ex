@@ -2,7 +2,7 @@ defmodule Alto.Config do
   @moduledoc """
   Trusted, compiled Elixir configuration for an Alto run.
 
-  A configuration file evaluates to this struct. The CLI owns its renderer and
+  A configuration file evaluates to a keyword list. The CLI owns its renderer and
   cancellation handle; configuration composes the working directory,
   loop, provider, tools, prompt, approval policy, and bounded runner options.
   """
@@ -29,42 +29,22 @@ defmodule Alto.Config do
                         max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
                       ]
 
-  @enforce_keys [:run_options]
-  defstruct [:run_options]
-
-  @type t :: %__MODULE__{run_options: keyword()}
-
   @doc false
   def execution_limits, do: @execution_limits
   @doc false
   def authority_fields, do: Keyword.keys(@authority_limits) ++ [:max_agent_depth]
 
-  @doc "Build a trusted run configuration from a keyword list."
-  @spec new(keyword()) :: t()
-  def new(run_options \\ []) do
-    unless Keyword.keyword?(run_options),
-      do: raise(ArgumentError, "configuration must be a keyword list")
-
-    %__MODULE__{run_options: run_options}
-  end
-
-  @doc "Return the validated runner options stored in a configuration."
-  @spec run_options(t()) :: keyword()
-  def run_options(%__MODULE__{run_options: run_options}), do: run_options
-
   @doc "Evaluate a trusted Elixir configuration file."
-  @spec load(Path.t()) :: {:ok, t()} | {:error, term()}
+  @spec load(Path.t()) :: {:ok, keyword()} | {:error, term()}
   def load(path) when is_binary(path) do
     expanded = Path.expand(path)
 
     try do
-      case Code.eval_file(expanded) do
-        {%__MODULE__{} = config, _binding} ->
-          {:ok, config}
+      {options, _binding} = Code.eval_file(expanded)
 
-        {_other, _binding} ->
-          {:error, {:invalid_config_return, expanded}}
-      end
+      if Keyword.keyword?(options),
+        do: {:ok, options},
+        else: {:error, {:invalid_config_return, expanded}}
     rescue
       error -> {:error, {:config_load_failed, expanded, Exception.message(error)}}
     catch

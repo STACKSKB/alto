@@ -10,7 +10,6 @@ defmodule Alto.Loops.Default do
   @behaviour Alto.Loop
 
   alias Alto.Event
-  alias Alto.Loop.Spec
 
   defstruct [:task, :phase, step: 1, observations: []]
 
@@ -27,7 +26,7 @@ defmodule Alto.Loops.Default do
         }
 
   @impl true
-  def init(task, %Spec{} = spec) do
+  def init(task, spec) do
     state = %__MODULE__{task: task, phase: :awaiting_model}
     {:continue, state, [model_request(state, spec)]}
   end
@@ -154,7 +153,7 @@ defmodule Alto.Loops.Default do
   end
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, %Spec{}) when map_size(state) == 5 do
+  def dump_checkpoint(%__MODULE__{} = state, _spec) when map_size(state) == 5 do
     with :ok <- validate_checkpoint_state(state), do: {:ok, state}
   end
 

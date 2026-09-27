@@ -22,7 +22,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
     test_pid = self()
 
     resolver = fn
-      "fast" -> {:ok, [loop: Alto.rule_loop(steps: [])]}
+      "fast" -> {:ok, [loop: Alto.rule_loop(steps: ["unused"])]}
       "blocking" -> {:ok, [provider: {BlockingProvider, test_pid: test_pid}, max_steps: 1]}
       _ -> {:error, :unused}
     end
@@ -86,7 +86,7 @@ defmodule Alto.FrontEnd.RegistryHooksTest do
 
     assert %Alto.Runner.Result{
              status: :error,
-             reason: :invalid_steps,
+             reason: :invalid_task,
              run_id: ^run_id,
              verdict: :rejected_before_dispatch
            } =

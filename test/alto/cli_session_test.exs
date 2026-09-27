@@ -39,11 +39,11 @@ defmodule Alto.CLISessionTest do
     File.write!(
       path,
       """
-      Alto.Config.new(
+      [
         provider: Alto.CLISessionTest.AnswerProvider,
         tools: [],
         prompt: nil
-      )
+      ]
       """
     )
 
