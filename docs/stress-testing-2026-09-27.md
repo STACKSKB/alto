@@ -83,3 +83,15 @@ Space Bunny implemented a retained manga-ink engine in `HotLimit/src/ink.c` and 
 Independent host validation passed `make all test smoke`: the original 256 checks, the separate regression suite, **3,926 ink checks**, BMP/undo/redo self-test and SDL synthetic mouse/pen smoke tests. A fresh build of the ink suite also passed all 3,926 checks under AddressSanitizer, UndefinedBehaviorSanitizer and float-cast-overflow instrumentation. Both workload sessions are registered in the HotLimit task catalog.
 
 The engine remains separate from the window. Layers, a vector-editing UI, mixed brush tips, physical-tablet tuning and G-pen feel are not claimed complete. Parent failure still cancels its owned children; automatic orphan recovery or replay of uncertain tools is not introduced. New timeout settings reduce avoidable two-minute total timeouts but do not make a stalled remote provider reliable. Partial work remains inspectable.
+
+## Continued workload: tool ergonomics
+
+The next document/layer and ink-input workers repeatedly used byte offsets as line numbers, split a grep pattern across argv items, and duplicated the executable in args. Treating these only as model mistakes misses an interface problem: file search returns line numbers while file reading previously only accepted bytes, and displayed offsets omitted the unit. Both workers were cancelled with saved sessions (`sess-o2aeausnapm3bhq`, `sess-lg3fyglbzmmmw7q`) before continuing on improved Alto.
+
+General fixes, independent of model/workspace/run:
+
+- `read_file` accepts 1-based `start_line` and `line_count`, matching search results. Existing byte reads remain compatible. Both modes retain the output byte ceiling; line scans also have a bounded host-configurable ceiling. Results state their units and return continuation positions; partial lines continue by byte offset without silently skipping their remainder. Conflicting units fail clearly.
+- Tool titles label byte offsets versus line ranges and show command argument boundaries faithfully.
+- The coding prompt and schemas explain one argv item per argument, literal search phrases, explicit shell syntax, and checking executable availability. Capability-specific instructions appear only when the corresponding tool exists. Commands are not silently rewritten.
+
+Validation: 1,097 core tests passed, including line-range continuation, byte ceilings, scan boundaries and binary data. Targeted prompt/display tests passed. Live verification with restarted workers follows.

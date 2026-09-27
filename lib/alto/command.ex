@@ -9,13 +9,14 @@ defmodule Alto.Command do
     program: [
       type: :string,
       required: true,
-      doc: "Executable name or path only, e.g. make. Do not put the full command here."
+      doc:
+        "Executable name or path only, e.g. make. Do not put arguments here; each args item is one separate argument."
     ],
     args: [
       type: Arguments.list(:string, 0, 128),
       default: [],
       doc:
-        "Arguments after the executable; do not repeat program. For make all, use program=make and args=[all]. For make alone, use args=[]."
+        "Each list item is exactly one argument, including spaces within that argument. Do not repeat program. For make all, use program=make and args=[all]; for a filename with spaces, pass the whole filename as one item. For make alone, use args=[]."
     ],
     timeout_ms: [type: {:in, 1..120_000}, default: 30_000, doc: "Deadline in milliseconds."],
     max_output_bytes: [
@@ -39,7 +40,7 @@ defmodule Alto.Command do
 
   @doc false
   def arguments do
-    {"Run one executable through the harness-configured command executor using an argument vector. Standard input is closed (EOF); provide input via files or explicit shell redirection. Shell syntax is not interpreted unless a shell is explicitly selected as the program.",
+    {"Run one executable through the harness-configured command executor using an argument vector: program names the executable and every args item is one exact argument. This does not run shell syntax such as pipes, redirects, globbing, or &&. For a pipeline or other shell syntax, explicitly select a shell, for example program=bash and args=[-lc, 'make test | tail -20']. Standard input is closed (EOF) unless the selected shell opens or redirects it.",
      @fields}
   end
 

@@ -21,9 +21,13 @@ defmodule Alto.Tools.SearchFiles do
 
   @impl true
   def arguments(opts) do
-    {"Recursively search workspace text files for a literal string. The search is bounded and skips common generated directories.",
+    {"Recursively search workspace text files for one literal substring (not a regex or glob). Keep the entire search phrase, including spaces and punctuation, in the single query string. Matching is case-sensitive by default. Results include file paths and line numbers. The bounded search skips common generated directories.",
      [
-       query: [type: Arguments.text(1, opts.max_query_bytes), required: true],
+       query: [
+         type: Arguments.text(1, opts.max_query_bytes),
+         required: true,
+         doc: "One literal substring, including any spaces; not a regex or glob."
+       ],
        path: [type: :string, default: "."],
        case_sensitive: [type: :boolean, default: true]
      ]}

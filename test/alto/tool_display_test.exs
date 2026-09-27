@@ -10,13 +10,24 @@ defmodule Alto.ToolDisplayTest do
 
   test "tool titles identify files, commands and revisions without argument dumps" do
     assert ToolDisplay.summary("read_file", ~s({"path":"lib/a.ex","offset":20})) ==
-             "read_file lib/a.ex (from 20)"
+             "read_file lib/a.ex (byte 20)"
 
     assert ToolDisplay.summary("git_inspect", %{"action" => "show", "ref" => "HEAD"}) ==
              "git show HEAD"
 
     assert ToolDisplay.summary("run_command", %{"program" => "ls", "args" => ["-la", "src"]}) ==
-             "ls -la src"
+             ~s(argv: ls ["-la","src"])
+
+    assert ToolDisplay.summary("run_command", %{
+             "program" => "cat",
+             "args" => ["file name.txt"]
+           }) == ~s(argv: cat ["file name.txt"])
+
+    assert ToolDisplay.summary("read_file", %{
+             "path" => "lib/a.ex",
+             "start_line" => 20,
+             "line_count" => 10
+           }) == "read_file lib/a.ex (lines 20–29)"
 
     refute ToolDisplay.summary("custom", %{"api_key" => "secret"}) =~ "secret"
   end

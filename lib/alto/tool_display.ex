@@ -12,7 +12,9 @@ defmodule Alto.ToolDisplay do
           ["git", get(args, :action), get(args, :ref), target, get(args, :branch)]
 
         "run_command" ->
-          [first(args, ~w(program command)a) || name | List.wrap(get(args, :args))]
+          program = first(args, ~w(program command)a) || name
+          argv = [program | List.wrap(get(args, :args))]
+          ["argv:", program, JSON.encode!(Enum.drop(argv, 1))]
 
         _ ->
           [name, target, range(args)]
@@ -112,8 +114,20 @@ defmodule Alto.ToolDisplay do
   defp transcript_entry(_, calls), do: {[], calls}
 
   defp range(args) do
-    first = first(args, ~w(offset line_start)a)
-    if first, do: "(from #{first})"
+    case {get(args, :start_line), get(args, :line_count), get(args, :offset)} do
+      {start_line, line_count, _offset} when is_integer(start_line) and is_integer(line_count) ->
+        last_line = start_line + line_count - 1
+        "(lines #{start_line}–#{last_line})"
+
+      {start_line, _line_count, _offset} when is_integer(start_line) ->
+        "(from line #{start_line})"
+
+      {_start_line, _line_count, offset} when is_integer(offset) ->
+        "(byte #{offset})"
+
+      _ ->
+        nil
+    end
   end
 
   defp first(data, keys), do: Enum.find_value(keys, &get(data, &1))
