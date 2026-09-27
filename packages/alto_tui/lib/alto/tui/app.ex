@@ -5,7 +5,7 @@ defmodule Alto.TUI.App do
 
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Menu, Backend, Selection, State, View}
+  alias Alto.TUI.{Menu, Backend, Search, Selection, State, View}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -139,7 +139,12 @@ defmodule Alto.TUI.App do
       {:noreply,
        state
        |> Map.put(:dimensions, {width, height})
-       |> State.reconcile_responsive_focus()}
+       |> State.reconcile_responsive_focus()
+       |> View.reveal_search()}
+
+  defp route_event(%Paste{content: content}, %{overlay: nil, search: search} = state)
+       when not is_nil(search),
+       do: {:noreply, state |> Search.paste(content) |> View.reveal_search()}
 
   defp route_event(%Paste{content: content}, %{overlay: nil, focus: :composer} = state) do
     ExRatatui.textarea_insert_str(state.textarea, content)
@@ -166,6 +171,12 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{} = key, %{overlay: overlay} = state) when not is_nil(overlay),
     do: {:noreply, overlay_key(state, key)}
+
+  defp route_event(%Key{code: "f", modifiers: ["ctrl"]}, state),
+    do: {:noreply, state |> Search.open() |> View.reveal_search()}
+
+  defp route_event(%Key{code: "esc"}, %{search: search} = state) when not is_nil(search),
+    do: {:noreply, Search.close(state)}
 
   defp route_event(%Key{code: "esc"}, %{details_return_focus: focus} = state)
        when not is_nil(focus),
@@ -195,6 +206,10 @@ defmodule Alto.TUI.App do
   end
 
   defp route_event(%Key{code: "f2"}, state), do: {:noreply, open_overlay(state, :approval)}
+
+  defp route_event(%Key{code: "f3"} = key, %{search: search} = state) when not is_nil(search),
+    do: {:noreply, search_key(state, key)}
+
   defp route_event(%Key{code: "f3"}, state), do: {:noreply, open_overlay(state, :provider)}
   defp route_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
   defp route_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
@@ -203,6 +218,9 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{code: "f9"}, state),
     do: {:noreply, decide_approval(state, {:deny, :user_denied})}
+
+  defp route_event(%Key{} = key, %{search: search} = state) when not is_nil(search),
+    do: {:noreply, search_key(state, key)}
 
   defp route_event(%Key{code: "tab"}, state), do: {:noreply, State.focus_next(state)}
 
@@ -829,6 +847,7 @@ defmodule Alto.TUI.App do
 
   defp clear_approvals(state, predicate) do
     pending = Enum.reject(state.pending_approvals, predicate)
+    state = if pending != state.pending_approvals, do: Search.close(state), else: state
     state = reset_approval_view(state, pending)
 
     if pending == [] and state.details_drawer_auto_opened?,
@@ -1163,11 +1182,25 @@ defmodule Alto.TUI.App do
     case View.hit_target(state, width, height, x, y) do
       :transcript -> scroll_transcript(state, delta)
       :details -> scroll_details(state, delta)
+      {:search_result, _} -> search_move(state, delta)
+      :search_results -> search_move(state, delta)
       _other -> state
     end
   end
 
   defp handle_mouse(state, _mouse), do: state
+
+  defp activate_target(state, :search_prev, _x), do: search_move(state, -1)
+  defp activate_target(state, :search_next, _x), do: search_move(state, 1)
+  defp activate_target(state, :search_close, _x), do: Search.close(state)
+
+  defp activate_target(state, {:search_result, index}, _x),
+    do:
+      state
+      |> Search.select(index)
+      |> State.close_details_drawer()
+      |> Map.put(:focus, :transcript)
+      |> View.reveal_search()
 
   defp activate_target(state, seam, _x) when seam in [:left_seam, :right_seam],
     do: %{state | dragging: seam}
@@ -1234,11 +1267,51 @@ defmodule Alto.TUI.App do
 
   defp navigate(state, _key), do: state
 
+  defp search_key(state, %Key{code: code, modifiers: modifiers}) do
+    cond do
+      code in ["tab", "back_tab"] ->
+        cond do
+          State.details_pane_visible?(state) ->
+            %{state | focus: if(state.focus == :details, do: :transcript, else: :details)}
+
+          state.details_return_focus ->
+            State.close_details_drawer(state)
+
+          true ->
+            State.open_details_drawer(state)
+        end
+
+      code in ["enter", "f3"] ->
+        search_move(state, if("shift" in modifiers, do: -1, else: 1))
+
+      code == "down" ->
+        search_move(state, 1)
+
+      code == "up" ->
+        search_move(state, -1)
+
+      code == "u" and modifiers == ["ctrl"] ->
+        state |> Search.edit(:clear) |> View.reveal_search()
+
+      Enum.all?(modifiers, &(&1 == "shift")) and
+          (String.length(code || "") == 1 or code in ~w(backspace delete left right home end)) ->
+        state |> Search.edit(code) |> View.reveal_search()
+
+      true ->
+        state
+    end
+  end
+
+  defp search_move(state, delta), do: state |> Search.move(delta) |> View.reveal_search()
+
   defp printable_key?(%Key{code: code, modifiers: modifiers}) when is_binary(code) do
     String.length(code) == 1 and Enum.all?(modifiers, &(&1 == "shift"))
   end
 
   defp printable_key?(_key), do: false
+
+  defp toggle_details(%{search: search} = state) when not is_nil(search),
+    do: search_key(%{state | leader?: false}, %Key{code: "tab"})
 
   defp toggle_details(state) do
     state = %{state | leader?: false}
@@ -1297,6 +1370,7 @@ defmodule Alto.TUI.App do
   defp decide_approval(%{pending_approvals: [pending | rest]} = state, decision) do
     pending.respond.(decision)
 
+    state = Search.close(state)
     next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
     if rest == [] and next.details_drawer_auto_opened? do
@@ -1307,6 +1381,8 @@ defmodule Alto.TUI.App do
   end
 
   def show_pending_approval(state, pending, notice) do
+    state = Search.close(state)
+
     next = %{
       reset_approval_view(state, state.pending_approvals ++ [pending])
       | details_visible?: true,

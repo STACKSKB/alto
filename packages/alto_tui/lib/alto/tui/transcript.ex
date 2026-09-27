@@ -4,6 +4,10 @@ defmodule Alto.TUI.Transcript do
   alias ExRatatui.Text.{Line, Span}
 
   def render(entries, width, assistant \\ "alto") do
+    document(entries, width, assistant).text
+  end
+
+  def document(entries, width, assistant \\ "alto") do
     key = {__MODULE__, :document}
 
     case Process.get(key) do
@@ -29,7 +33,11 @@ defmodule Alto.TUI.Transcript do
       end)
 
     Process.put(key, next)
-    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten())
+
+    %{
+      text: Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten()),
+      groups: groups
+    }
   end
 
   defp entry_rows(entry, width, assistant) do

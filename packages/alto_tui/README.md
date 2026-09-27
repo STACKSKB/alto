@@ -52,6 +52,25 @@ draft. If a popup or the compact details
 drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
 failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
+**Ctrl+F** searches the current loaded conversation, including user messages,
+assistant replies, code, and tool/edit details. Matching is literal and
+case-insensitive; punctuation has no special meaning. Type or paste a query,
+then use **Enter / Shift+Enter**, **F3 / Shift+F3**, or **↓ / ↑** for next/previous
+occurrence, wrapping at the ends. **Ctrl+U** clears the query; **Esc** closes
+search without sending the draft or stopping a run.
+
+During search the context side panel shows matching excerpts beside the
+conversation and draft. **Tab** or **Ctrl+G, D** moves between results and the
+conversation; on narrow terminals it opens or closes a results drawer. Clicking
+an excerpt jumps to its position and closes the narrow drawer. Esc restores the
+previous context visibility and focus. Pending approvals keep priority over search;
+a new approval closes search while respecting the automatic-opening preference. The bottom bar always shows **Prev / Next / current/total**
+controls, including when context is hidden or the terminal is narrow. Visible
+matches are highlighted; matches in Markdown source syntax that has no visible
+glyph remain available as excerpts in the results. Resizing does not change
+the occurrence count. Search is temporary TUI state, clears when switching
+tasks, and never becomes agent input or a persisted session event.
+
 Host configuration uses `%Alto.Harness.ProviderProfile{}` entries in
 `provider_profiles`, with a `{module, options}` provider and either `:discover`
 or atom-keyed catalog maps:

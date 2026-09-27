@@ -28,6 +28,7 @@ defmodule Alto.TUI.State do
     :selected_model,
     :selected_backend,
     :overlay,
+    :search,
     :worktree_creation,
     :dragging,
     :notice,
@@ -305,10 +306,13 @@ defmodule Alto.TUI.State do
         state
 
       _project ->
+        state = Alto.TUI.Search.close(state)
+
         %{
           state
           | selected_project_id: id,
             selected_task_id: nil,
+            search: nil,
             transcript_scroll: 0,
             transcript_follow?: true
         }
@@ -322,7 +326,9 @@ defmodule Alto.TUI.State do
 
       task ->
         state
+        |> Alto.TUI.Search.close()
         |> Map.put(:selected_task_id, id)
+        |> Map.put(:search, nil)
         |> Map.put(:transcript_follow?, true)
         |> sync_backend(task)
         |> hydrate_selected()
@@ -331,9 +337,12 @@ defmodule Alto.TUI.State do
 
   @doc "Leave the current task selected project intact and compose a new task."
   def new_task(%__MODULE__{} = state) do
+    state = Alto.TUI.Search.close(state)
+
     %{
       state
       | selected_task_id: nil,
+        search: nil,
         overlay: nil,
         leader?: false,
         notice: "new task — your draft is preserved",

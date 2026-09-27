@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{Menu, State}
+  alias Alto.TUI.{Menu, Search, State}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -24,10 +24,12 @@ defmodule Alto.TUI.View do
     |> add(transcript_widget(state, layout.transcript), layout.transcript)
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
-    |> add(status_widget(state, width), layout.status)
+    |> add_status(state, layout.status)
     |> add_details(state, details_layout(state, width, height, layout.details))
     |> add_overlay(state.overlay, layout.root)
   end
+
+  def activity_widgets(%State{search: search}, _frame) when not is_nil(search), do: []
 
   def activity_widgets(%State{overlay: overlay}, _frame) when not is_nil(overlay), do: []
   def activity_widgets(%State{details_return_focus: focus}, _frame) when not is_nil(focus), do: []
@@ -129,6 +131,16 @@ defmodule Alto.TUI.View do
     details = details_layout(state, width, height, layout.details)
 
     cond do
+      not is_nil(state.search) and PaneLayout.contains?(layout.status, x, y) ->
+        search_bar_target(state, layout.status, x)
+
+      not is_nil(state.search) and state.pending_approvals == [] and not is_nil(details) and
+          PaneLayout.contains?(details.content, x, y) ->
+        matches = Search.matches(state)
+        offset = max(Search.index(state, matches) - details.content.height + 1, 0)
+        index = y - details.content.y + offset
+        if index < length(matches), do: {:search_result, index}, else: :search_results
+
       details && details.presentation == :drawer && PaneLayout.contains?(details.rect, x, y) ->
         details_target(details, x, y)
 
@@ -208,7 +220,9 @@ defmodule Alto.TUI.View do
     rect = drawer || pane
 
     if rect do
-      controls = if state.pending_approvals == [], do: [], else: approval_controls(rect)
+      controls =
+        if state.pending_approvals == [], do: [], else: approval_controls(rect)
+
       content = content_rect(rect)
 
       %{
@@ -304,9 +318,9 @@ defmodule Alto.TUI.View do
     Alto.TUI.View.Composer.widget(%{
       textarea: state.textarea,
       mode: state.composer_mode,
-      focused?: state.focus == :composer,
+      focused?: state.focus == :composer and is_nil(state.search),
       size: composer_inner_size(state),
-      block: block(title, state.focus == :composer),
+      block: block(title, state.focus == :composer and is_nil(state.search)),
       styles: %{
         body: style(fg: :white, bg: @panel),
         muted: style(fg: @muted),
@@ -321,6 +335,9 @@ defmodule Alto.TUI.View do
     composer = layout(state, width, height).composer
     {max(composer.width - 2, 1), max(composer.height - 2, 1)}
   end
+
+  defp composer_title(%{search: search}) when not is_nil(search),
+    do: " draft · Esc closes search "
 
   defp composer_title(%{composer_mode: :code} = state),
     do: " code entry · NOWRAP · F6 prose" <> composer_activity_hint(state) <> " "
@@ -346,6 +363,18 @@ defmodule Alto.TUI.View do
     end
   end
 
+  def reveal_search(%{search: nil} = state), do: state
+
+  def reveal_search(state) do
+    {width, height} = state.dimensions
+    rect = layout(state, width, height).transcript
+
+    case Search.target_row(state, max(rect.width - 2, 1)) do
+      nil -> state
+      row -> %{state | transcript_scroll: max(row - 2, 0), transcript_follow?: false}
+    end
+  end
+
   @doc "Largest useful vertical transcript offset for the current viewport."
   def transcript_bottom_scroll(state) do
     {width, height} = state.dimensions
@@ -355,6 +384,10 @@ defmodule Alto.TUI.View do
 
   defp transcript_bottom(text, rect),
     do: Alto.TUI.Viewport.bottom(text, max(rect.width - 2, 1), max(rect.height - 2, 1))
+
+  defp transcript_text(%{search: search} = state, rect) when not is_nil(search) do
+    Search.highlighted(state, max(rect.width - 2, 1))
+  end
 
   defp transcript_text(state, rect) do
     case State.visible_entries(state) do
@@ -368,6 +401,9 @@ defmodule Alto.TUI.View do
   end
 
   @doc "Largest useful context offset, including the approval button rows."
+  def details_bottom_scroll(%{search: search, pending_approvals: []}) when not is_nil(search),
+    do: 0
+
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
     details = details_layout(state, width, height, layout(state, width, height).details)
@@ -377,6 +413,31 @@ defmodule Alto.TUI.View do
       Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
     else
       0
+    end
+  end
+
+  defp details_widget(%{search: search, pending_approvals: []} = state, details)
+       when not is_nil(search) do
+    matches = Search.matches(state)
+
+    if matches == [] do
+      %Paragraph{
+        text:
+          if(Search.query(state) == "",
+            do: "Type to search this conversation",
+            else: "No matches"
+          ),
+        block: block(" search results · #{Search.count(state)} · Tab view conversation ", true)
+      }
+    else
+      %List{
+        items: Enum.with_index(matches, &Search.result_line(&1, &2, details.content.width)),
+        selected: Search.index(state, matches),
+        highlight_symbol: "› ",
+        highlight_style: style(bg: @panel_alt),
+        style: style(fg: :white, bg: @panel),
+        block: block(" search results · #{Search.count(state)} · Tab view conversation ", true)
+      }
     end
   end
 
@@ -445,6 +506,51 @@ defmodule Alto.TUI.View do
   end
 
   defp approval_controls(_rect), do: []
+
+  defp add_status(widgets, %{search: nil} = state, rect),
+    do: add(widgets, status_widget(state, rect.width), rect)
+
+  defp add_status(widgets, state, rect) do
+    {controls, input} = search_bar(state, rect)
+
+    widgets ++
+      Enum.map(controls, fn {label, _action, area} ->
+        {%Paragraph{text: label, style: style(fg: :black, bg: @accent)}, area}
+      end) ++
+      [
+        {%TextInput{
+           state: state.search.input,
+           placeholder: "Find · Esc close",
+           style: style(fg: :white, bg: @panel_alt),
+           cursor_style: style(modifiers: [:reversed])
+         }, input}
+      ]
+  end
+
+  defp search_bar(state, rect) do
+    labels = [
+      {"[Prev]", :search_prev},
+      {"[Next]", :search_next},
+      {" #{Search.count(state)} ", :search_input},
+      {"[×] ", :search_close}
+    ]
+
+    {controls, x} =
+      Enum.map_reduce(labels, rect.x, fn {label, action}, x ->
+        width = min(String.length(label), max(rect.x + rect.width - x, 0))
+        {{label, action, %{rect | x: x, width: width}}, x + width}
+      end)
+
+    {controls, %{rect | x: x, width: max(rect.x + rect.width - x, 0)}}
+  end
+
+  defp search_bar_target(state, rect, x) do
+    {controls, _} = search_bar(state, rect)
+
+    Enum.find_value(controls, :search_input, fn {_label, action, area} ->
+      if x >= area.x and x < area.x + area.width, do: action
+    end)
+  end
 
   defp status_widget(state, width) do
     usage = State.current_usage(state)
