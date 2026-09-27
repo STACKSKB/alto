@@ -277,6 +277,25 @@ defmodule Alto.Tools.CodexAgentTest do
     end
   end
 
+  test "standalone contexts can omit input and messaging capabilities", context do
+    {module, options} = context.tool
+    tool_context = %{session_id: "standalone", cwd: context.root}
+
+    assert {:ok, %{messages: %{"answer" => "Review complete"}}} =
+             Alto.Tool.run(module, %{"task" => "review"}, tool_context, options)
+
+    assert {:error, :invalid_sender} = Alto.Tool.run(Alto.Tools.ListAgents, %{}, tool_context)
+
+    assert {:error, :invalid_sender} =
+             Alto.Tool.run(
+               Alto.Tools.SendMessage,
+               %{"to" => "peer", "text" => "hello"},
+               tool_context
+             )
+
+    assert_stopped(context.log)
+  end
+
   test "output bounds stop oversized agents", context do
     {module, config} = context.tool
     context = %{context | tool: {module, Keyword.put(config, :max_output_bytes, 64)}}

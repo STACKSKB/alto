@@ -102,7 +102,7 @@ defmodule Alto.External.MCP.Client do
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
 
   def open_port(opts) do
-    context = %Alto.Tool.Context{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
+    context = %{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
 
     result =
       with {:ok, prepared} <-

@@ -2,10 +2,9 @@ defmodule Alto.Tools.Git do
   @moduledoc false
 
   alias Alto.Command
-  alias Alto.Tool.Context
 
-  @spec run([String.t()], Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def run(args, %Context{} = context, opts) do
+  @spec run([String.t()], Alto.Tool.context(), keyword()) :: {:ok, map()} | {:error, term()}
+  def run(args, %{} = context, opts) do
     with {:ok, prepared} <- prepare(args, context, opts),
          {:ok, result} <- Command.execute(prepared) do
       normalize_result(result)
@@ -89,7 +88,6 @@ defmodule Alto.Tools.GitInspect do
 
   use Alto.Tool, name: :git_inspect, execution_mode: :parallel, approval: :never, arguments: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.Git
 
   @actions ~w(status diff log show branches blame)
@@ -109,7 +107,7 @@ defmodule Alto.Tools.GitInspect do
   end
 
   @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
+  def run(arguments, %{} = context, opts \\ []) do
     with {:ok, args} <- args(arguments) do
       Git.run(inspect_args(args), context, Keyword.put(opts, :read_only, true))
     end
@@ -184,7 +182,6 @@ defmodule Alto.Tools.GitMutate do
 
   alias Alto.Tool.Arguments
   alias Alto.Command
-  alias Alto.Tool.Context
   alias Alto.Tools.Git
 
   @actions ~w(stage unstage commit create_branch switch_branch)
@@ -201,7 +198,7 @@ defmodule Alto.Tools.GitMutate do
   end
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts \\ []) do
+  def prepare(arguments, %{} = context, opts \\ []) do
     with {:ok, args} <- args(arguments),
          {:ok, prepared} <- Git.prepare(args, context, opts) do
       {:ok, prepared, prepared.approval_details}
@@ -209,7 +206,7 @@ defmodule Alto.Tools.GitMutate do
   end
 
   @impl true
-  def run(prepared, %Context{}, _opts \\ []) do
+  def run(prepared, %{}, _opts \\ []) do
     case Command.execute(prepared) do
       {:ok, %{termination: :timeout}} ->
         {:unknown, :git_timeout}

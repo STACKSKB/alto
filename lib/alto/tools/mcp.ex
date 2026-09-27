@@ -12,7 +12,6 @@ defmodule Alto.Tools.MCP do
   @behaviour Alto.Tool
 
   alias Alto.External.MCP.Client
-  alias Alto.Tool.Context
 
   @impl true
   def name(opts), do: Keyword.fetch!(opts, :name)
@@ -38,7 +37,7 @@ defmodule Alto.Tools.MCP do
   def approval(opts), do: Keyword.get(opts, :approval, :required)
 
   @impl true
-  def run(arguments, %Context{} = context, opts) do
+  def run(arguments, %{} = context, opts) do
     server_opts = resolve_server!(opts, context.cwd)
 
     timeout =

@@ -6,14 +6,26 @@ defmodule Alto.Approval do
   options for `interactive/3` or `delegated/3`. The execution host freezes the
   prepared request and supervises every decision with timeout and cancellation;
   front ends receive display-safe details and reply to the exact request ID.
+
+  Requests are maps with all seven fields in `request/0`. `run_id` identifies the
+  owning run; `call_id` is correlation only and may repeat or be nil. The globally
+  unique `id` ("<run_id>:op-<seq>") authorizes exactly one prepared value. Front
+  ends answer with that ID, never the bare call ID.
   """
 
-  alias Alto.Approval.Request
-  alias Alto.Tool.Context
+  @type request :: %{
+          id: String.t() | nil,
+          run_id: String.t() | nil,
+          call_id: String.t() | nil,
+          tool: String.t(),
+          arguments: map(),
+          execution_mode: Alto.Tool.execution_mode(),
+          details: map()
+        }
 
   @type decision :: :approve | :suspend | {:deny, term()}
 
-  @type policy :: decision() | (Request.t(), Context.t() -> decision())
+  @type policy :: decision() | (request(), Alto.Tool.context() -> decision())
 
   @doc "Ask for one invocation's approval over line-oriented input."
   def interactive(request, context, opts \\ []) do
@@ -45,10 +57,10 @@ defmodule Alto.Approval do
 
   @doc "Ask a trusted local front end, using its inherited sink and owning-run route."
   def delegated(request, context, opts \\ []) do
-    sink = Keyword.get(opts, :sink) || get_in(context.metadata, [:approval_sink])
+    sink = Keyword.get(opts, :sink) || get_in(context[:metadata], [:approval_sink])
 
     if is_pid(sink) do
-      route = get_in(context.metadata, [:approval_route]) || context.session_id
+      route = get_in(context[:metadata], [:approval_route]) || context.session_id
       send(sink, {:alto_approval_request, route, request, self()})
       await_decision(request.id)
     else
@@ -57,11 +69,11 @@ defmodule Alto.Approval do
   end
 
   @doc "Ask attached resident front ends; unavailable registries deny immediately."
-  def socket(%Request{id: nil}, _context), do: {:deny, :approval_request_unaddressable}
+  def socket(%{id: nil}, _context), do: {:deny, :approval_request_unaddressable}
 
-  def socket(%Request{} = request, context) do
+  def socket(%{id: _} = request, context) do
     registry =
-      Map.get(Map.get(context, :metadata, %{}), :front_end_registry, Alto.FrontEnd.Registry)
+      Map.get(context[:metadata] || %{}, :front_end_registry, Alto.FrontEnd.Registry)
 
     case Alto.FrontEnd.Registry.request(
            registry,

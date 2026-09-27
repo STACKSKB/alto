@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,988 lines**, a **23.8% reduction**, with **2,530 lines remaining**.
+Current: **30,933 lines**, a **23.9% reduction**, with **2,475 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,11 +53,14 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Transcript and context share entry text formatting, including tool metadata.
-Custom WebSocket authenticators are unary functions; token checks and fail-closed
-handling remain. Execution initialization no longer passes through a general
-transition wrapper that had no other callers. This pass removes **19 production
-lines**: **15 code** and **4 blank**. Historical pass-by-pass notes remain in Git.
+Approval requests and tool contexts are plain maps; both struct modules and
+caller aliases are deleted. The seven request fields and distinct operation/run/
+correlation identities remain explicit. `Alto.Tool.context/1` projects the same
+nine runtime fields with nil defaults, excluding provider and approval settings.
+Standalone Codex and messaging tools tolerate absent optional capabilities.
+This pass removes **55 production lines**: **37 code/type/declaration lines**,
+**4 blank**, and **14 documentation lines**. Most savings are declarations and
+aliases rather than executable flow. Historical pass notes remain in Git.
 
 ## Remaining work
 
@@ -91,7 +94,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current core check passes **1,075 tests** with application modules preloaded.
+The current core check passes **1,076 tests** with application modules preloaded.
 The TUI suite passes **146 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

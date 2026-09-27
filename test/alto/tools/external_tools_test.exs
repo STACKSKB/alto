@@ -1,7 +1,6 @@
 defmodule Alto.Tools.ExternalToolsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.GitInspect
   alias Alto.Tools.GitMutate
   alias Alto.Tools.Ripwire
@@ -22,7 +21,7 @@ defmodule Alto.Tools.ExternalToolsTest do
     File.mkdir_p!(root)
     System.cmd("git", ["init", "--quiet"], cd: root)
     File.write!(Path.join(root, "sample.txt"), "hello\n")
-    context = %Context{session_id: "test", cwd: root}
+    context = %{session_id: "test", cwd: root}
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, context: context}
   end

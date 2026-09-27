@@ -4,7 +4,6 @@ defmodule Alto.Workspaces.Git do
   @behaviour Alto.Workspaces.Backend
 
   alias Alto.Command
-  alias Alto.Tool.Context
 
   @options_schema NimbleOptions.new!(
                     max_source_bytes: [type: :pos_integer, default: 512 * 1_024 * 1_024],
@@ -586,7 +585,7 @@ defmodule Alto.Workspaces.Git do
           "max_output_bytes" => Keyword.get(extra, :max_output_bytes, 64_000)
         }
 
-        case Command.run(command, %Context{session_id: "alto-workspace-git", cwd: cwd}) do
+        case Command.run(command, %{session_id: "alto-workspace-git", cwd: cwd}) do
           {:ok, %{termination: :timeout}} -> {:error, :git_timeout}
           {:ok, %{termination: :output_limit}} -> {:error, :git_output_limit}
           {:ok, %{truncated: true}} -> {:error, :git_output_limit}

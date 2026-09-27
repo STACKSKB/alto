@@ -387,7 +387,7 @@ defmodule Alto.Runner.SerialTest do
     assert_receive {:tool_prepared, prepared}
 
     assert_receive {:approval_decision,
-                    %Alto.Approval.Request{
+                    %{
                       arguments: %{"value" => "hello"},
                       details: %{canonical_value: "HELLO"}
                     }}
@@ -642,7 +642,7 @@ defmodule Alto.Runner.SerialTest do
     assert Enum.any?(result.events, &(&1.type == :tool_completed))
 
     assert_receive {:approval_decision,
-                    %Alto.Approval.Request{
+                    %{
                       arguments: %{"value" => "hello"},
                       details: %{}
                     }}

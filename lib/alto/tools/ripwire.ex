@@ -13,7 +13,6 @@ defmodule Alto.Tools.Ripwire do
   use Alto.Tool, name: :ripwire, execution_mode: :parallel, approval: :never
 
   alias Alto.Command
-  alias Alto.Tool.Context
 
   @actions ~w(pack_task context situ impact callers test_gate edit_check quality_delta pr_context)
 
@@ -35,7 +34,7 @@ defmodule Alto.Tools.Ripwire do
   end
 
   @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
+  def run(arguments, %{} = context, opts \\ []) do
     action = Map.get(arguments, "action")
 
     with {:ok, args} <- build_args(arguments),

@@ -18,7 +18,7 @@ defmodule Alto.Tools.Transform do
   """
   @behaviour Alto.Tool
 
-  @type transform :: (map(), Alto.Tool.Context.t() -> map() | {:ok, map()} | {:error, term()})
+  @type transform :: (map(), Alto.Tool.context() -> map() | {:ok, map()} | {:error, term()})
   @type t :: {module(), keyword()}
 
   @doc "Return a configured wrapper specification for a tool module or spec."

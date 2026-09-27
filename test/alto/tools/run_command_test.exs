@@ -1,7 +1,6 @@
 defmodule Alto.Tools.RunCommandTest do
   use ExUnit.Case, async: false
 
-  alias Alto.Tool.Context
   alias Alto.Tools.RunCommand
 
   @stop_observer File.regular?("/proc/self/status") || System.find_executable("ps")
@@ -25,7 +24,7 @@ defmodule Alto.Tools.RunCommandTest do
     root = Path.join(System.tmp_dir!(), "alto-command-#{System.unique_integer([:positive])}")
     File.mkdir!(root)
     on_exit(fn -> File.rm_rf!(root) end)
-    %{root: root, context: %Context{session_id: "test", cwd: root}}
+    %{root: root, context: %{session_id: "test", cwd: root}}
   end
 
   defp prepared_run(tool, arguments, context, opts \\ []) do
@@ -223,7 +222,7 @@ defmodule Alto.Tools.RunCommandTest do
 
     script = """
     {:ok, _} = Application.ensure_all_started(:logger)
-    context = %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
+    context = %{session_id: "probe", cwd: #{inspect(root)}}
 
     {:ok, prepared, _details} =
       Alto.Tools.RunCommand.prepare(
@@ -283,7 +282,7 @@ defmodule Alto.Tools.RunCommandTest do
 
     script = """
     {:ok, _} = Application.ensure_all_started(:logger)
-    context = %Alto.Tool.Context{session_id: "probe", cwd: #{inspect(root)}}
+    context = %{session_id: "probe", cwd: #{inspect(root)}}
 
     {:ok, prepared, _details} =
       Alto.Tools.RunCommand.prepare(

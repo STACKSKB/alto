@@ -94,10 +94,17 @@ callbacks in the caller; runner execution supplies approval and supervision.
 
 The `approval` run option accepts a decision literal (`:approve`, `:suspend`, or
 `{:deny, reason}`) or a two-argument function receiving the display-safe
-`%Alto.Approval.Request{}` and `%Alto.Tool.Context{}`. Use closures to bind
+approval request and tool context maps. Use closures to bind
 options. Built-in prompts are `&Alto.Approval.interactive/2` and
 `&Alto.Approval.socket/2`. `Alto.Approval.delegated/3` can be wrapped in a
 closure when it needs options.
+
+The runtime projects tool contexts through `Alto.Tool.context/1`: `session_id`,
+`cwd`, `metadata`, `agent_identity`, `messaging`, `input`, `input_reader`,
+`messaging_tools`, and `budget`. Absent optional capabilities are nil; provider
+configuration is excluded. Standalone callers can supply a map containing the
+fields needed by the tool. Approval requests carry all fields of
+`Alto.Approval.request()`, including their distinct operation and correlation IDs.
 
 ```elixir
 approval = fn request, context -> MyPolicy.decide(request, context, policy_opts) end

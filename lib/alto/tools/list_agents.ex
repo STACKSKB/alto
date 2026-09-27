@@ -9,6 +9,6 @@ defmodule Alto.Tools.ListAgents do
 
   @impl true
   def run(_args, context, _) do
-    with {:ok, agents} <- Alto.Messaging.list(context.messaging), do: {:ok, %{agents: agents}}
+    with {:ok, agents} <- Alto.Messaging.list(context[:messaging]), do: {:ok, %{agents: agents}}
   end
 end

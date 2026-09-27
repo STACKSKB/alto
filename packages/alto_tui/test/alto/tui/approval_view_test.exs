@@ -3,8 +3,10 @@ defmodule Alto.TUI.ApprovalViewTest do
   alias Alto.TUI.ApprovalView
 
   test "commands show prepared argv and folder, not Elixir arguments" do
-    request = %Alto.Approval.Request{
+    request = %{
       id: "command",
+      run_id: nil,
+      call_id: nil,
       execution_mode: :exclusive,
       tool: "run_command",
       arguments: %{"program" => "echo", "args" => ["unprepared"]},

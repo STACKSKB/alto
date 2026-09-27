@@ -19,7 +19,7 @@ defmodule Alto.Workspaces.GitWorktreeTest do
     manager =
       Workspaces.new(root: Path.join(root, "workspaces"), ledger: ledger, backend: GitWorktree)
 
-    context = %Alto.Tool.Context{session_id: "test", cwd: source}
+    context = %{session_id: "test", cwd: source}
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, source: source, manager: manager, context: context, ledger_opts: ledger_opts}
   end

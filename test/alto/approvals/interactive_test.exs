@@ -1,15 +1,15 @@
 defmodule Alto.Approval.InteractiveTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Approval.Request
   alias Alto.Approval, as: Approval
-  alias Alto.Tool.Context
 
-  @context %Context{session_id: "test-session", cwd: "/home/three/work"}
+  @context %{session_id: "test-session", cwd: "/home/three/work"}
 
   defp plain_request(details \\ %{}) do
-    %Request{
+    %{
       id: "call-1",
+      run_id: nil,
+      call_id: nil,
       tool: "read_file",
       arguments: %{"path" => "a.txt", "offset" => 0, "limit" => 100},
       execution_mode: :parallel,
@@ -131,7 +131,7 @@ defmodule Alto.Approval.InteractiveTest do
     end
 
     test "real unsandboxed preparation surfaces the canonical executable and limits" do
-      context = %Context{session_id: "test", cwd: "/home/three/work"}
+      context = %{session_id: "test", cwd: "/home/three/work"}
 
       {:ok, prepared} =
         Alto.Command.prepare(%{"program" => "true", "args" => ["--hello"]}, context)

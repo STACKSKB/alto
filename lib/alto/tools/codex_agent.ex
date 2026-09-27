@@ -36,6 +36,8 @@ defmodule Alto.Tools.CodexAgent do
 
   @impl true
   def run(%{task: task, model: model}, context, opts) do
+    context = Alto.Tool.context(context)
+
     with_client(context, opts, fn client ->
       with :ok <- Client.subscribe(client),
            {:ok, turn} <-

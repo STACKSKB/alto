@@ -3,13 +3,11 @@ defmodule Alto.Tools.RunCommand do
 
   use Alto.Tool, name: :run_command, execution_mode: :exclusive, approval: :required
 
-  alias Alto.Tool.Context
-
   @impl true
   def schema(_opts \\ []), do: Alto.Tool.Arguments.schema(Alto.Command.arguments())
 
   @impl true
-  def prepare(arguments, %Context{} = context, opts \\ []) do
+  def prepare(arguments, %{} = context, opts \\ []) do
     case Alto.Command.prepare(arguments, context, opts) do
       {:ok, prepared} -> {:ok, prepared, prepared.approval_details}
       {:error, reason} -> {:error, reason}
@@ -17,5 +15,5 @@ defmodule Alto.Tools.RunCommand do
   end
 
   @impl true
-  def run(prepared, %Context{}, _opts \\ []), do: Alto.Command.execute(prepared)
+  def run(prepared, %{}, _opts \\ []), do: Alto.Command.execute(prepared)
 end

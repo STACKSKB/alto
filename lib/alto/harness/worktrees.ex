@@ -19,7 +19,7 @@ defmodule Alto.Harness.Worktrees do
             backend: Alto.Workspaces.GitWorktree
           )
 
-        context = %Alto.Tool.Context{
+        context = %{
           cwd: source,
           session_id: "harness-worktree-" <> Base.encode16(:crypto.hash(:sha256, source))
         }

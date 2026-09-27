@@ -11,8 +11,6 @@ defmodule Alto.Loops.RuleTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.Tool.Context
-
   defmodule EchoTool do
     use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
@@ -178,7 +176,7 @@ defmodule Alto.Loops.RuleTest do
     end
 
     test "queue_put updates a pending key in place (revision bumps)", %{queue: queue} do
-      context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
+      context = %{session_id: "test", cwd: File.cwd!(), metadata: %{}}
 
       assert {:ok, %{id: id, revision: 1}} =
                Alto.Tool.run(Alto.Tools.QueuePut, %{"key" => "k", "payload" => %{v: 1}}, context,
@@ -194,7 +192,7 @@ defmodule Alto.Loops.RuleTest do
     end
 
     test "queue_cancel of an unknown key is a no-op success", %{queue: queue} do
-      context = %Context{session_id: "test", cwd: File.cwd!(), metadata: %{}}
+      context = %{session_id: "test", cwd: File.cwd!(), metadata: %{}}
 
       assert {:ok, %{cancelled: false}} =
                Alto.Tool.run(Alto.Tools.QueueCancel, %{"key" => "ghost"}, context, queue: queue)

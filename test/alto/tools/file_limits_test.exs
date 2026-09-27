@@ -1,14 +1,13 @@
 defmodule Alto.Tools.FileLimitsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.{ListFiles, ReadFile}
 
   setup do
     root = Path.join(System.tmp_dir!(), "alto-file-limits-#{System.unique_integer([:positive])}")
     File.mkdir!(root)
     on_exit(fn -> File.rm_rf!(root) end)
-    %{root: root, context: %Context{session_id: "limits", cwd: root}}
+    %{root: root, context: %{session_id: "limits", cwd: root}}
   end
 
   test "write previews preserve UTF-8 at configured byte boundaries", %{context: context} do

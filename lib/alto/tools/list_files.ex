@@ -3,7 +3,6 @@ defmodule Alto.Tools.ListFiles do
 
   use Alto.Tool, name: :list_files, execution_mode: :parallel, approval: :never, arguments: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
   @impl true
@@ -16,7 +15,7 @@ defmodule Alto.Tools.ListFiles do
   end
 
   @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
+  def run(arguments, %{} = context, opts \\ []) do
     path = arguments["path"]
 
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),

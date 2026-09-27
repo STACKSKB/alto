@@ -90,7 +90,7 @@ defmodule Alto.External.MCP.ClientTest do
     specs = Alto.Tools.FFF.tools(command: server, startup_timeout: 5_000, request_timeout: 5_000)
     assert {:ok, tools} = Alto.Tool.Registry.build(specs)
     assert Enum.sort(Map.keys(tools)) == ["fff_find_files", "fff_grep", "fff_multi_grep"]
-    context = %Alto.Tool.Context{session_id: "fff", cwd: root}
+    context = %{session_id: "fff", cwd: root}
 
     for {module, opts} <- specs do
       arguments =

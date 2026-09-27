@@ -24,7 +24,7 @@ defmodule Alto.Tools.SendMessage do
   def run(args, context, _opts) do
     mode = if args["delivery"] == "steer", do: :steer, else: :follow_up
 
-    Alto.Messaging.send(context.messaging, args["to"],
+    Alto.Messaging.send(context[:messaging], args["to"],
       text: args["text"],
       delivery: mode,
       idempotency_key: args["idempotency_key"],

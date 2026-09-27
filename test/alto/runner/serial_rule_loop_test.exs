@@ -14,8 +14,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.Approval.Request, as: ApprovalRequest
-
   alias Alto.Event
 
   defmodule RuleEchoTool do
@@ -325,7 +323,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     assert result.output == [%{echo: "hello"}]
 
     assert_receive {:approval_decision,
-                    %ApprovalRequest{
+                    %{
                       call_id: "rule-1",
                       tool: "echo",
                       arguments: %{"value" => "hello"},
@@ -389,7 +387,7 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
     # Approval receives the display-safe details from prepare, not the opaque value.
     assert_receive {:approval_decision,
-                    %ApprovalRequest{
+                    %{
                       call_id: "rule-stamp",
                       tool: "stamp",
                       arguments: %{"value" => "frozen"},

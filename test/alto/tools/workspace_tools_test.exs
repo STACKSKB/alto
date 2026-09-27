@@ -1,7 +1,6 @@
 defmodule Alto.Tools.WorkspaceToolsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.EditFile
   alias Alto.Tools.ListFiles
   alias Alto.Tools.ReadFile
@@ -29,7 +28,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     root = Path.join(System.tmp_dir!(), "alto-tools-#{System.unique_integer([:positive])}")
     File.mkdir!(root)
     on_exit(fn -> File.rm_rf!(root) end)
-    %{root: root, context: %Context{session_id: "test", cwd: root}}
+    %{root: root, context: %{session_id: "test", cwd: root}}
   end
 
   test "reads and writes only bounded workspace paths", %{root: root, context: context} do

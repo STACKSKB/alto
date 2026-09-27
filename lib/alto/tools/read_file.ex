@@ -3,7 +3,6 @@ defmodule Alto.Tools.ReadFile do
 
   use Alto.Tool, name: :read_file, execution_mode: :parallel, approval: :never, arguments: true
 
-  alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
   # The result includes path/offset/metadata and invalid UTF-8 is base64
@@ -36,7 +35,7 @@ defmodule Alto.Tools.ReadFile do
   end
 
   @impl true
-  def run(arguments, %Context{} = context, _opts \\ []) do
+  def run(arguments, %{} = context, _opts \\ []) do
     path = Map.get(arguments, "path")
     offset = arguments["offset"]
 

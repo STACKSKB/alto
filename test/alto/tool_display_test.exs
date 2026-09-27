@@ -26,7 +26,7 @@ defmodule Alto.ToolDisplayTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
     File.write!(Path.join(root, "a.txt"), "before\n")
-    context = %Alto.Tool.Context{cwd: root, session_id: "diff-test"}
+    context = %{cwd: root, session_id: "diff-test"}
 
     assert {:ok, result} =
              run_tool(

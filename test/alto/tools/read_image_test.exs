@@ -2,7 +2,6 @@ defmodule Alto.Tools.ReadImageTest do
   use ExUnit.Case, async: true
 
   alias Alto.Content
-  alias Alto.Tool.Context
   alias Alto.Tools.ReadImage
 
   defmodule Processor do
@@ -16,7 +15,7 @@ defmodule Alto.Tools.ReadImageTest do
     root = Path.join(System.tmp_dir!(), "alto-images-#{System.unique_integer([:positive])}")
     File.mkdir!(root)
     on_exit(fn -> File.rm_rf!(root) end)
-    %{root: root, context: %Context{session_id: "test", cwd: root}}
+    %{root: root, context: %{session_id: "test", cwd: root}}
   end
 
   test "reads PNG bytes into typed image content", %{root: root, context: context} do

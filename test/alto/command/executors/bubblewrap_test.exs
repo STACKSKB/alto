@@ -2,7 +2,6 @@ defmodule Alto.Command.Executors.BubblewrapTest do
   use ExUnit.Case, async: true
 
   alias Alto.Command.Executors.Bubblewrap
-  alias Alto.Tool.Context
 
   @bwrap_path System.find_executable("bwrap")
 
@@ -26,7 +25,7 @@ defmodule Alto.Command.Executors.BubblewrapTest do
       File.rm_rf!(outside)
     end)
 
-    %{root: root, outside: outside, context: %Context{session_id: "test", cwd: root}}
+    %{root: root, outside: outside, context: %{session_id: "test", cwd: root}}
   end
 
   @tag skip: @bwrap_skip
@@ -268,7 +267,7 @@ defmodule Alto.Command.Executors.BubblewrapTest do
     refute File.exists?(marker)
   end
 
-  defp prepare_with_opts(%Context{} = context, opts) do
+  defp prepare_with_opts(%{} = context, opts) do
     healthy = System.find_executable("true") || raise "true executable required"
 
     Bubblewrap.prepare(invocation(context.cwd), Keyword.put_new(opts, :bubblewrap, healthy))

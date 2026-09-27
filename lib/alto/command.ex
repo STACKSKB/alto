@@ -2,7 +2,7 @@ defmodule Alto.Command do
   @moduledoc "Compose a command preparation function with its execution backend."
 
   alias Alto.Command.Executors.Unsandboxed
-  alias Alto.Tool.{Arguments, Context}
+  alias Alto.Tool.Arguments
 
   @default_output_bytes 64_000
   @fields [
@@ -39,7 +39,7 @@ defmodule Alto.Command do
   end
 
   @doc "Validate bounded argv and resolve the executable before approval."
-  def resolve(arguments, %Context{} = context) do
+  def resolve(arguments, %{} = context) do
     with {:ok, values} <- Arguments.validate(arguments, @fields),
          %{"program" => program, "args" => args} = values,
          :ok <- validate_argv(program, args),
@@ -69,8 +69,8 @@ defmodule Alto.Command do
     end
   end
 
-  @spec prepare(map(), Context.t(), keyword()) :: {:ok, prepared()} | {:error, term()}
-  def prepare(arguments, %Context{} = context, opts \\ []) do
+  @spec prepare(map(), Alto.Tool.context(), keyword()) :: {:ok, prepared()} | {:error, term()}
+  def prepare(arguments, %{} = context, opts \\ []) do
     invocation =
       case Keyword.get(opts, :policy, &resolve/2) do
         prepare when is_function(prepare, 2) -> prepare.(arguments, context)
@@ -102,8 +102,8 @@ defmodule Alto.Command do
       else: {:error, {:executor_stdio_unsupported, executor}}
   end
 
-  @spec run(map(), Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def run(arguments, %Context{} = context, opts \\ []) do
+  @spec run(map(), Alto.Tool.context(), keyword()) :: {:ok, map()} | {:error, term()}
+  def run(arguments, %{} = context, opts \\ []) do
     with {:ok, prepared} <- prepare(arguments, context, opts), do: execute(prepared)
   end
 end

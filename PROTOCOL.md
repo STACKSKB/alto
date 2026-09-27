@@ -19,7 +19,7 @@ protocol deliberately does not make.
    widen what the host is willing to do.
 2. **Serialize existing contracts; invent as little as possible.** Events on
    the wire are the existing `Alto.Event` values; approval requests are the
-   existing display-safe `Alto.Approval.Request`. No second event model.
+   existing display-safe `Alto.Approval.request()` map. No second event model.
 3. **The durable log is the source of truth; the wire may be lossy.** Event
    payloads contain Elixir terms (atoms, tuples) that JSON cannot carry
    exactly. The encoding below is deliberately lossy-but-stable for display.
@@ -165,7 +165,7 @@ bounded buffer; the replay starts at the earliest retained `seq` instead, and
 the client knows it is missing history.
 
 **`approval_request`** / **`approval_resolved`** — the display-safe approval
-surface, from `Alto.Approval.Request`.
+surface, from `Alto.Approval.request()` map.
 
 ```json
 {"v": 1, "type": "approval_request", "id": "s-5", "run_id": "run-41",

@@ -599,13 +599,14 @@ defmodule Alto.FrontEnd.RegistryTest do
   end
 
   test "the socket approval policy denies when no registry answers", %{root: root} do
-    request = %Alto.Approval.Request{
+    request = %{
       id: "run-missing:op-1",
       run_id: "run-missing",
       call_id: "call-1",
       tool: "echo",
       arguments: %{"value" => "hello"},
-      execution_mode: :exclusive
+      execution_mode: :exclusive,
+      details: %{}
     }
 
     context = %{session_id: "run-missing", cwd: root}
@@ -615,11 +616,14 @@ defmodule Alto.FrontEnd.RegistryTest do
   end
 
   test "the socket approval policy denies unaddressable requests", %{root: root} do
-    request = %Alto.Approval.Request{
+    request = %{
       id: nil,
+      run_id: nil,
+      call_id: nil,
       tool: "echo",
       arguments: %{},
-      execution_mode: :exclusive
+      execution_mode: :exclusive,
+      details: %{}
     }
 
     assert {:deny, :approval_request_unaddressable} =

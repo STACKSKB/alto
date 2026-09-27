@@ -1,7 +1,6 @@
 defmodule Alto.ProtocolTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Approval.Request, as: ApprovalRequest
   alias Alto.Event
   alias Alto.Protocol
 
@@ -97,7 +96,7 @@ defmodule Alto.ProtocolTest do
     end
 
     test "approval messages encode the display-safe request" do
-      request = %ApprovalRequest{
+      request = %{
         id: "run-41:op-1",
         run_id: "run-41",
         call_id: "call-1",

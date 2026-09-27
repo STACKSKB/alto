@@ -7,7 +7,6 @@ defmodule Alto.Runner.Execution.Tool do
   policy callbacks receive only their explicit context and arguments.
   """
 
-  alias Alto.Approval.Request
   alias Alto.Event
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
@@ -17,7 +16,7 @@ defmodule Alto.Runner.Execution.Tool do
     if function_exported?(module, :prepare, 3) or function_exported?(module, :arguments, 1) do
       outcome =
         Call.run(
-          fn -> Alto.Tool.prepare(module, arguments, Alto.Tool.Context.from_run(caps), opts) end,
+          fn -> Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts) end,
           Budget.timeout(caps.budget, caps.tool_timeout),
           caps.cancel_ref
         )
@@ -39,9 +38,9 @@ defmodule Alto.Runner.Execution.Tool do
     do: :ok
 
   def authorize(job, details, caps) do
-    context = Alto.Tool.Context.from_run(caps)
+    context = Alto.Tool.context(caps)
 
-    request = %Request{
+    request = %{
       id: job.op_id,
       run_id: context.session_id,
       call_id: job.id,
@@ -114,7 +113,7 @@ defmodule Alto.Runner.Execution.Tool do
     do: Alto.Subagents.Models.list(prepared, caps, opts)
 
   def invoke_tool(%{module: module, opts: opts}, arguments, caps),
-    do: module.run(arguments, Alto.Tool.Context.from_run(caps), opts)
+    do: module.run(arguments, Alto.Tool.context(caps), opts)
 
   defp bound_details(prepared, details, limit) do
     if :erlang.external_size(details) <= limit,

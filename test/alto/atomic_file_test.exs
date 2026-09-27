@@ -32,7 +32,7 @@ defmodule Alto.AtomicFileTest do
     assert File.read!(path) == "published"
     assert Path.wildcard(Path.join(dir, ".state.txt.alto-*.tmp")) == []
 
-    context = %Alto.Tool.Context{session_id: "test", cwd: dir}
+    context = %{session_id: "test", cwd: dir}
 
     for {tool, arguments, expected} <- [
           {Alto.Tools.WriteFile, %{"path" => "state.txt", "content" => "written"}, "written"},

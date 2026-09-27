@@ -1,8 +1,6 @@
 defmodule Alto.CommandTest do
   use ExUnit.Case, async: false
 
-  alias Alto.Tool.Context
-
   defmodule RecordingExecutor do
     @behaviour Alto.Command.Executor
 
@@ -20,7 +18,7 @@ defmodule Alto.CommandTest do
   end
 
   setup do
-    context = %Context{session_id: "test", cwd: File.cwd!()}
+    context = %{session_id: "test", cwd: File.cwd!()}
     %{context: context}
   end
 

@@ -142,7 +142,7 @@ defmodule Alto.Subagents.Models do
     do: {:ok, Enum.map(Map.fetch!(policy, id), &%{id: &1})}
 
   defp discover({:codex, opts}, _id, :all, run),
-    do: Alto.Tools.CodexAgent.models(Alto.Tool.Context.from_run(run), opts)
+    do: Alto.Tools.CodexAgent.models(Alto.Tool.context(run), opts)
 
   defp discover(profile, _id, :all, run), do: ProviderProfile.models(profile, credentials(run))
 

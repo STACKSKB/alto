@@ -1,7 +1,25 @@
 defmodule Alto.Tool do
   @moduledoc "Contract for model-facing tools. Tools do not share the provider contract."
 
-  alias Alto.Tool.Context
+  @context_fields [
+    :session_id,
+    :cwd,
+    :metadata,
+    :agent_identity,
+    :messaging,
+    :input,
+    :input_reader,
+    :messaging_tools,
+    :budget
+  ]
+  @type context :: %{
+          required(:session_id) => String.t(),
+          required(:cwd) => String.t(),
+          optional(atom()) => term()
+        }
+
+  @doc "Project runtime-issued tool fields; provider configuration never enters the context."
+  def context(run), do: Map.new(@context_fields, &{&1, Map.get(run, &1)})
 
   @type execution_mode :: :parallel | :exclusive
   @type approval_requirement :: :never | :required
@@ -36,11 +54,11 @@ defmodule Alto.Tool do
   resolve names and policy, but must not produce the external effect being
   authorized. Without this callback, `run` receives arguments with contract defaults.
   """
-  @callback prepare(arguments :: map(), Context.t(), options()) ::
+  @callback prepare(arguments :: map(), Alto.Tool.context(), options()) ::
               {:ok, prepared :: term(), approval_details()} | {:error, term()}
 
   @doc "Execute the prepared value, or validated arguments when preparation is omitted. Return `{:unknown, reason}` when dispatch occurred but commit cannot be established."
-  @callback run(value :: term(), Context.t(), options()) :: result()
+  @callback run(value :: term(), Alto.Tool.context(), options()) :: result()
 
   @doc "Optional built-in argument contract. Tools opting in validate at `Alto.Tool.prepare/4`; their prepare/run functions are callbacks receiving validated or frozen input."
   @callback arguments(options()) :: {String.t(), keyword()}

@@ -4,7 +4,6 @@ defmodule Alto.Tools.SearchFiles do
   use Alto.Tool, name: :search_files, execution_mode: :parallel, approval: :never, arguments: true
   alias Alto.Tool.Arguments
 
-  alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
   @impl true
@@ -31,7 +30,7 @@ defmodule Alto.Tools.SearchFiles do
   end
 
   @impl true
-  def run(arguments, %Context{} = context, opts \\ []) do
+  def run(arguments, %{} = context, opts \\ []) do
     query = Map.get(arguments, "query")
     path = arguments["path"]
     case_sensitive? = arguments["case_sensitive"]
@@ -46,7 +45,7 @@ defmodule Alto.Tools.SearchFiles do
 
   def search(
         %{query: query, path: path, case_sensitive: case_sensitive?},
-        %Context{} = context,
+        %{} = context,
         %{backend: nil} = opts
       ) do
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),

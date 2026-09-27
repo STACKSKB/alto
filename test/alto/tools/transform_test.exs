@@ -3,7 +3,6 @@ defmodule Alto.Tools.TransformTest do
 
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Tool, as: ExecutionTool
-  alias Alto.Tool.Context
   alias Alto.Tools.Transform
 
   defmodule PreparedTool do
@@ -34,7 +33,7 @@ defmodule Alto.Tools.TransformTest do
     end
   end
 
-  defp context, do: %Context{session_id: "transform-run", cwd: "/tmp", metadata: %{}}
+  defp context, do: %{session_id: "transform-run", cwd: "/tmp", metadata: %{}}
 
   defp caps(opts) do
     {:ok, budget} = Budget.new(max_model_requests: 10, run_timeout: 30_000)
@@ -60,7 +59,7 @@ defmodule Alto.Tools.TransformTest do
 
     spec =
       Transform.wrap(PreparedTool, fn arguments, context ->
-        send(parent, {:transformed, arguments, context.cwd})
+        send(parent, {:transformed, arguments, context})
         {:ok, Map.put(arguments, "path", Path.join(context.cwd, arguments["path"]))}
       end)
 
@@ -70,12 +69,15 @@ defmodule Alto.Tools.TransformTest do
     assert tool.approval == :required
 
     approval = fn request, context -> CaptureApproval.decide(request, context, owner: parent) end
-    caps = caps(approval: approval)
+    caps = Map.put(caps(approval: approval), :provider, {ExampleProvider, api_key: "private"})
     original = %{"path" => "file.txt"}
 
     assert {:ok, prepared, details} = ExecutionTool.prepare(tool, original, caps)
     assert details["alto_transformed_arguments"] == %{"path" => "/tmp/file.txt"}
-    assert_received {:transformed, ^original, "/tmp"}
+    assert_received {:transformed, ^original, tool_context}
+    assert %{cwd: "/tmp", session_id: "transform-run", input: nil, messaging: nil} = tool_context
+    refute Map.has_key?(tool_context, :provider)
+    refute Map.has_key?(tool_context, :approval)
 
     assert :ok =
              ExecutionTool.authorize(
@@ -129,7 +131,7 @@ defmodule Alto.Tools.TransformTest do
     File.write!(Path.join(root, ".git/config"), "original")
     File.ln_s!(".git", Path.join(root, "alias"))
     on_exit(fn -> File.rm_rf!(root) end)
-    context = %Context{session_id: "protect", cwd: root}
+    context = %{session_id: "protect", cwd: root}
     {module, opts} = Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"])
     assert module.approval(opts) == :required
 

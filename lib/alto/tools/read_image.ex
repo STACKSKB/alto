@@ -6,7 +6,6 @@ defmodule Alto.Tools.ReadImage do
   alias Alto.Content
   alias Alto.BoundedFile
   alias Alto.Image.Metadata
-  alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
 
   @hard_max_dimension 16_384
@@ -33,7 +32,7 @@ defmodule Alto.Tools.ReadImage do
   @impl true
   def run(arguments, context, opts \\ [])
 
-  def run(arguments, %Context{} = context, opts) when is_map(arguments) do
+  def run(arguments, %{} = context, opts) when is_map(arguments) do
     path = Map.get(arguments, "path")
     requested_width = Map.get(arguments, "max_width")
     requested_height = Map.get(arguments, "max_height")

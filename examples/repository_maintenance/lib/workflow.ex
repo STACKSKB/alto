@@ -2,7 +2,6 @@ defmodule RepositoryMaintenance.Workflow do
   @moduledoc "Durable CI failure intake, isolated repair, review manifest, and explicit apply."
 
   alias Alto.Command
-  alias Alto.Tool.Context
   alias Alto.AtomicFile
   alias Alto.Tools.Git
 
@@ -238,7 +237,7 @@ defmodule RepositoryMaintenance.Workflow do
               "timeout_ms" => Keyword.get(opts, :test_timeout_ms, 120_000),
               "max_output_bytes" => 64_000
             },
-            %Context{session_id: "maintenance-tests", cwd: checkout}
+            %{session_id: "maintenance-tests", cwd: checkout}
           )
           |> normalize_test_result()
         else
@@ -484,7 +483,7 @@ defmodule RepositoryMaintenance.Workflow do
   defp git(repo, args, opts \\ []) do
     case Git.run(
            args,
-           %Context{session_id: "maintenance-git", cwd: repo},
+           %{session_id: "maintenance-git", cwd: repo},
            Keyword.merge([max_output_bytes: 64_000], opts)
          ) do
       {:ok, result} -> {:ok, Map.get(result, :output, "")}

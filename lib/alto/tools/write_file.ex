@@ -9,7 +9,6 @@ defmodule Alto.Tools.WriteFile do
 
   alias Alto.Tool.Arguments
 
-  alias Alto.Tool.Context
   alias Alto.Tools.FileChange
 
   @preview_bytes 4_096
@@ -31,7 +30,7 @@ defmodule Alto.Tools.WriteFile do
   end
 
   @impl true
-  def prepare(arguments, %Context{} = context, limits) do
+  def prepare(arguments, %{} = context, limits) do
     FileChange.prepare(
       :write_file,
       Map.get(arguments, "path"),
@@ -42,6 +41,6 @@ defmodule Alto.Tools.WriteFile do
   end
 
   @impl true
-  def run(prepared, %Context{} = context, _opts \\ []),
+  def run(prepared, %{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
 end

@@ -9,7 +9,6 @@ defmodule Alto.Tools.EditFile do
 
   alias Alto.Tool.Arguments
 
-  alias Alto.Tool.Context
   alias Alto.Tools.FileChange
 
   @max_file_bytes 1_000_000
@@ -52,7 +51,7 @@ defmodule Alto.Tools.EditFile do
   @impl true
   def prepare(arguments, context, opts \\ [])
 
-  def prepare(arguments, %Context{} = context, opts)
+  def prepare(arguments, %{} = context, opts)
       when is_map(arguments) do
     with edits = arguments["edits"],
          true <-
@@ -76,7 +75,7 @@ defmodule Alto.Tools.EditFile do
   def prepare(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   @impl true
-  def run(prepared, %Context{} = context, _opts \\ []),
+  def run(prepared, %{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
 
   defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok

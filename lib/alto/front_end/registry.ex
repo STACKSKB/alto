@@ -9,7 +9,6 @@ defmodule Alto.FrontEnd.Registry do
 
   use GenServer
 
-  alias Alto.Approval.Request, as: ApprovalRequest
   alias Alto.Event
   alias Alto.Runner
 
@@ -81,7 +80,7 @@ defmodule Alto.FrontEnd.Registry do
           | {:list_agents, String.t()}
           | {:input_status, String.t()}
           | {:cancel, String.t(), term()}
-          | {:request_approval, String.t(), ApprovalRequest.t(), pid()}
+          | {:request_approval, String.t(), Alto.Approval.request(), pid()}
           | {:approval_response, String.t(), :approve | {:deny, term()}}
           | {:queue_claim, pos_integer(), term(), non_neg_integer() | nil}
           | {:queue_ack, String.t()}
@@ -406,7 +405,9 @@ defmodule Alto.FrontEnd.Registry do
   # key; `call_id` is correlation only. A duplicate handle is a caller bug
   # and is rejected instead of silently replacing the waiter.
   def handle_call(
-        {:request_approval, session_id, %ApprovalRequest{id: id} = request, waiter},
+        {:request_approval, session_id,
+         %{id: id, tool: _, arguments: _, execution_mode: _, run_id: _, call_id: _, details: _} =
+           request, waiter},
         _from,
         state
       )
@@ -585,7 +586,7 @@ defmodule Alto.FrontEnd.Registry do
     # call, so an observed approval_request always has a pending waiter.
     state =
       case {event.type, event.data} do
-        {:approval_resolved, %{request: %ApprovalRequest{} = request, decision: decision}} ->
+        {:approval_resolved, %{request: %{id: _} = request, decision: decision}} ->
           state
           |> clear_pending(request.id)
           |> publish(run.id, {:approval_resolved, run.id, request, decision}, :approval)
