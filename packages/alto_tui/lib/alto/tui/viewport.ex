@@ -56,24 +56,22 @@ defmodule Alto.TUI.Viewport do
         chunks = text |> String.split("\n", trim: false) |> Enum.chunk_every(128)
         cache = Process.get({__MODULE__, :chunks}, %{})
 
-        {groups, next} =
-          Enum.map_reduce(chunks, %{}, fn lines, next ->
+        {rows, next} =
+          Enum.flat_map_reduce(chunks, %{}, fn lines, next ->
             chunk = Enum.join(lines, "\n")
             chunk_key = {width, chunk}
 
             rows =
               Map.get_lazy(cache, chunk_key, fn ->
-                lines
-                |> Enum.chunk_by(
+                ascii_fits_width? =
                   &(byte_size(&1) <= width and not Regex.match?(~r/[^\x20-\x7E]/, &1))
-                )
-                |> Enum.flat_map(fn group ->
-                  if Enum.all?(
-                       group,
-                       &(byte_size(&1) <= width and not Regex.match?(~r/[^\x20-\x7E]/, &1))
-                     ),
-                     do: Enum.map(group, &String.trim_leading(&1, " ")),
-                     else: wrap(Enum.join(group, "\n"), width)
+
+                lines
+                |> Enum.chunk_by(ascii_fits_width?)
+                |> Enum.flat_map(fn [first | _] = group ->
+                  if ascii_fits_width?.(first),
+                    do: Enum.map(group, &String.trim_leading(&1, " ")),
+                    else: wrap(Enum.join(group, "\n"), width)
                 end)
               end)
 
@@ -88,7 +86,7 @@ defmodule Alto.TUI.Viewport do
           if(map_size(retained) <= 512, do: retained, else: next)
         )
 
-        rows = groups |> List.flatten() |> List.to_tuple()
+        rows = List.to_tuple(rows)
         Process.put(key, Enum.take([{text, width, rows} | documents], 4))
         rows
     end

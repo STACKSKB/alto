@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,592 lines**, a **24.8% reduction**, with **2,134 lines remaining**.
+Current: **30,575 lines**, a **24.8% reduction**, with **2,117 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,16 +53,17 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Tool preparation relies on configuration's existing module-load boundary rather
-than loading the module twice. The supervised preparation result is matched
-directly, and its approval-detail size check sits in the success branch instead
-of a single-use forwarding helper. The callback deadline, cancellation and
-approval-data limits remain unchanged. TUI form values use a pattern-filtered
-comprehension to build the field map without first constructing a filtered list.
-Existing regressions cover transform ordering, frozen preparation, oversized
-details, callback failures and form submission.
-This pass removes **9 production lines**: **7 code lines** and **2 blanks**, with
-**no documentation lines removed**. No dependencies or compatibility layers were added.
+TUI rendering passes its calculated rectangles into transcript and details
+helpers instead of recalculating the pane layout. Workspace close buttons use
+one sliced, pattern-filtered projection, retaining their original row indices.
+Viewport caching captures the ASCII-width predicate once per uncached chunk and
+checks the head of each homogeneous group instead of checking every line again.
+`Enum.flat_map_reduce` accumulates visible rows without a later flatten pass.
+Native-rendering comparisons cover chunk boundaries, Unicode, blanks, scrolling
+and borders; interaction tests retain workspace close and selection behavior.
+This pass removes **17 production lines**: **16 code lines** and **1 blank**, with
+**no documentation lines removed**. Only TUI production code changed; no
+dependencies or compatibility layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work

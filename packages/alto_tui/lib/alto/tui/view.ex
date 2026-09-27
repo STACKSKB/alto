@@ -25,7 +25,7 @@ defmodule Alto.TUI.View do
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
     |> add(status_widget(state, width), layout.status)
-    |> add_details(state, details_layout(state, width, height))
+    |> add_details(state, details_layout(state, layout.details))
     |> add_overlay(state.overlay, layout.root)
   end
 
@@ -71,11 +71,10 @@ defmodule Alto.TUI.View do
 
   def selection_content(state, width, height) do
     layout = layout(state, width, height)
-    details = details_layout(state, width, height)
-    details_content = if details, do: [details.content], else: []
+    details = details_layout(state, layout.details)
 
     if details do
-      details_content
+      [details.content]
     else
       transcript =
         if State.visible_entries(state) == [], do: [], else: [content_rect(layout.transcript)]
@@ -85,7 +84,7 @@ defmodule Alto.TUI.View do
           do: [],
           else: [content_rect(layout.composer)]
 
-      transcript ++ composer ++ details_content
+      transcript ++ composer
     end
   end
 
@@ -118,7 +117,7 @@ defmodule Alto.TUI.View do
 
   def hit_target(%State{} = state, width, height, x, y) do
     layout = layout(state, width, height)
-    details = details_layout(state, width, height)
+    details = details_layout(state, layout.details)
 
     cond do
       details && PaneLayout.contains?(details.rect, x, y) ->
@@ -166,9 +165,7 @@ defmodule Alto.TUI.View do
     end
   end
 
-  defp details_layout(state, width, height) do
-    rect = layout(state, width, height).details
-
+  defp details_layout(state, rect) do
     if rect do
       controls = if state.pending_approvals == [], do: [], else: approval_controls(rect)
       content = content_rect(rect)
@@ -206,20 +203,10 @@ defmodule Alto.TUI.View do
   defp close_workspace_buttons(rows, selected, rect, inner) do
     offset = max((selected || 0) - inner.height + 1, 0)
 
-    rows
-    |> Enum.drop(offset)
-    |> Enum.take(inner.height)
-    |> Enum.with_index()
-    |> Enum.flat_map(fn
-      {%{kind: :project}, row} ->
-        [
-          {%Paragraph{text: "×", style: style(fg: @muted, bg: @panel)},
-           %Rect{x: rect.x + rect.width - 2, y: inner.y + row, width: 1, height: 1}}
-        ]
-
-      _ ->
-        []
-    end)
+    for {%{kind: :project}, row} <- rows |> Enum.slice(offset, inner.height) |> Enum.with_index() do
+      {%Paragraph{text: "×", style: style(fg: @muted, bg: @panel)},
+       %Rect{x: rect.x + rect.width - 2, y: inner.y + row, width: 1, height: 1}}
+    end
   end
 
   defp rail_widget(rows, selected) do
@@ -234,7 +221,7 @@ defmodule Alto.TUI.View do
   end
 
   defp transcript_widget(state, rect) do
-    text = transcript_text(state)
+    text = transcript_text(state, rect)
     bottom = transcript_bottom(text, rect)
     scroll = if state.transcript_follow?, do: bottom, else: min(state.transcript_scroll, bottom)
 
@@ -321,21 +308,19 @@ defmodule Alto.TUI.View do
   def transcript_bottom_scroll(state) do
     {width, height} = state.dimensions
     transcript = layout(state, width, height).transcript
-    transcript_bottom(transcript_text(state), transcript)
+    transcript_bottom(transcript_text(state, transcript), transcript)
   end
 
   defp transcript_bottom(text, rect),
     do: Alto.TUI.Viewport.bottom(text, max(rect.width - 2, 1), max(rect.height - 2, 1))
 
-  defp transcript_text(state) do
+  defp transcript_text(state, rect) do
     case State.visible_entries(state) do
       [] ->
         "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
           "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
 
       entries ->
-        {width, height} = state.dimensions
-        rect = layout(state, width, height).transcript
         Alto.TUI.Transcript.render(entries, max(rect.width - 2, 1))
     end
   end
@@ -343,7 +328,7 @@ defmodule Alto.TUI.View do
   @doc "Largest useful context offset, including the approval button rows."
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
-    details = details_layout(state, width, height)
+    details = details_layout(state, layout(state, width, height).details)
 
     if details do
       {_, text} = details_content(state)
