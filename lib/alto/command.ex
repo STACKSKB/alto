@@ -10,15 +10,19 @@ defmodule Alto.Command do
       type: :string,
       required: true,
       doc:
-        "Executable name or path only, e.g. make. Do not put arguments here; each args item is one separate argument."
+        "Executable name or path only. Do not put arguments here; each args item is one separate argument. For example, run a compiled program as {\"program\":\"./build/test\",\"args\":[]} and make all as {\"program\":\"make\",\"args\":[\"all\"]}."
     ],
     args: [
       type: Arguments.list(:string, 0, 128),
       default: [],
       doc:
-        "Each list item is exactly one argument, including spaces within that argument. Do not repeat program. For make all, use program=make and args=[all]; for a filename with spaces, pass the whole filename as one item. For make alone, use args=[]."
+        "Each list item is exactly one argument; keep spaces inside that string and do not add shell quote characters. Do not repeat program. A filename with spaces is one item, e.g. {\"program\":\"cat\",\"args\":[\"file name.txt\"]}. Use an empty list when there are no arguments."
     ],
-    timeout_ms: [type: {:in, 1..120_000}, default: 30_000, doc: "Deadline in milliseconds."],
+    timeout_ms: [
+      type: {:in, 1..120_000},
+      default: 30_000,
+      doc: "Deadline in milliseconds (1..120000; default 30000)."
+    ],
     max_output_bytes: [
       type: {:in, 1..1_000_000},
       default: @default_output_bytes,
@@ -40,7 +44,7 @@ defmodule Alto.Command do
 
   @doc false
   def arguments do
-    {"Run one executable through the harness-configured command executor using an argument vector: program names the executable and every args item is one exact argument. This does not run shell syntax such as pipes, redirects, globbing, or &&. For a pipeline or other shell syntax, explicitly select a shell, for example program=bash and args=[-lc, 'make test | tail -20']. Standard input is closed (EOF) unless the selected shell opens or redirects it.",
+    {"Run one executable through the harness-configured command executor using an argument vector. `program` is the executable; each `args` item is exactly one argument. Example JSON: {\"program\":\"./build/test\",\"args\":[]} runs that executable directly. This is not a shell: pipes, redirects, globbing, and && are not interpreted. Prefer running tests directly and inspecting their full exit status/output; do not append tail or echo in a way that hides failure. If a pipeline is necessary, select Bash explicitly and use args [\"-o\",\"pipefail\",\"-lc\",\"make test | tail -20\"] so a failing test still produces a failing command. Standard input is closed (EOF) unless the selected shell opens or redirects it.",
      @fields}
   end
 

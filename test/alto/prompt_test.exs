@@ -49,10 +49,15 @@ defmodule Alto.PromptTest do
 
     assert writable =~ "Workspace editing tools are enabled"
     assert writable =~ "command executor configured by the harness"
+    assert writable =~ ~s({"program":"./build/test","args":[]})
+    assert writable =~ "pipefail"
+    assert writable =~ "do not append tail or echo"
+    assert writable =~ "timeout_ms` accepts 1..120000 and defaults to 30000"
 
     command_only = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [RunCommand]})
     refute command_only =~ "read-only"
     assert command_only =~ "command executor configured by the harness"
+    refute command_only =~ "program=bash with args=[-lc"
   end
 
   test "chat and coding builders share the same runtime prompt boundary" do
