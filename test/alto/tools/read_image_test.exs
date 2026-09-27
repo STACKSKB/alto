@@ -110,6 +110,16 @@ defmodule Alto.Tools.ReadImageTest do
 
     assert_receive {:resize, "image/png", 100, 50}
 
+    for {output, reason} <- [
+          {png(9_000, 2), {:image_dimensions_too_large, 8_192}},
+          {png(5_000, 5_000), {:image_pixel_count_too_large, 20_000_000}}
+        ] do
+      assert {:error, ^reason} =
+               Alto.Tool.run(ReadImage, %{"path" => "image.png", "max_width" => 100}, context,
+                 processor: {Processor, :resize, [[owner: self(), output: output]]}
+               )
+    end
+
     assert {:error, {:image_processor_exceeded_target, 100, 50}} =
              Alto.Tool.run(
                ReadImage,

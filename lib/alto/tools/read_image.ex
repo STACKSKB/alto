@@ -39,8 +39,7 @@ defmodule Alto.Tools.ReadImage do
 
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, source} <- read_bounded(resolved, opts.max_encoded_bytes),
-         {:ok, media_type, width, height} <- Metadata.inspect(source),
-         :ok <- validate_dimensions(width, height, opts),
+         {:ok, media_type, width, height} <- Metadata.inspect(source, opts),
          {:ok, data, media_type, width, height} <-
            maybe_resize(
              source,
@@ -69,19 +68,6 @@ defmodule Alto.Tools.ReadImage do
       {:ok, %{content: data}} when is_binary(data) -> {:ok, data}
       {:ok, %{content: nil}} -> {:error, {:image_encoded_too_large, max_encoded_bytes}}
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp validate_dimensions(width, height, config) do
-    cond do
-      width > config.max_dimension or height > config.max_dimension ->
-        {:error, {:image_dimensions_too_large, config.max_dimension}}
-
-      width * height > config.max_pixels ->
-        {:error, {:image_pixel_count_too_large, config.max_pixels}}
-
-      true ->
-        :ok
     end
   end
 
@@ -122,8 +108,7 @@ defmodule Alto.Tools.ReadImage do
 
   defp validate_resized(data, target_width, target_height, config) do
     with :ok <- validate_encoded_size(data, config.max_encoded_bytes),
-         {:ok, media_type, width, height} <- Metadata.inspect(data),
-         :ok <- validate_dimensions(width, height, config),
+         {:ok, media_type, width, height} <- Metadata.inspect(data, config),
          true <-
            (width <= target_width and height <= target_height) or
              {:error, {:image_processor_exceeded_target, target_width, target_height}} do

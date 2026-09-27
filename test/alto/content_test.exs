@@ -54,12 +54,34 @@ defmodule Alto.ContentTest do
 
   test "tool and transcript boundaries enforce the same block shape and UTF-8 rules" do
     for {block, reason} <- [
+          {Content.image("image/png", nil, 1, 1), :image_data_must_be_nonempty_base64},
+          {Content.image("image/png", "", 1, 1), :image_data_must_be_nonempty_base64},
+          {Content.image("image/png", 1, 1, 1), :image_data_must_be_nonempty_base64},
+          {Content.image("image/png", Base.encode64(png(16_385, 1)), 16_385, 1),
+           {:image_dimensions_too_large, 16_384}},
+          {Content.image("image/png", Base.encode64(png(8_000, 8_000)), 8_000, 8_000),
+           {:image_pixel_count_too_large, 40_000_000}},
+          {Content.image("image/png", String.duplicate("!", 8_000_001), 1, 1),
+           {:image_encoded_too_large, 8_000_000}},
           {%{"type" => "text", "text" => <<255>>}, :text_must_be_utf8},
           {%{"type" => "text", "text" => "ok", "extra" => true}, :unsupported_block},
           {Map.put(Content.image("image/png", Base.encode64(png(1, 1)), 1, 1), "extra", true),
            :unsupported_block}
         ] do
       expected = {:error, {:invalid_content_block, 0, reason}}
+      assert Content.normalize_tool_result(Content.new([block]), 10_000) == expected
+      assert Content.decode_transcript([block]) == expected
+    end
+
+    for {media, width, height} <- [
+          {"image/gif", 1, 1},
+          {"image/png", 1.0, 1},
+          {"image/png", 1, 1.0},
+          {"image/png", "1", 1},
+          {"image/png", -1, 1}
+        ] do
+      block = Content.image(media, Base.encode64(png(1, 1)), width, height)
+      expected = {:error, {:invalid_content_block, 0, :image_metadata_mismatch}}
       assert Content.normalize_tool_result(Content.new([block]), 10_000) == expected
       assert Content.decode_transcript([block]) == expected
     end

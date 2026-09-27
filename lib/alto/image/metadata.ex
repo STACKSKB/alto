@@ -17,12 +17,27 @@ defmodule Alto.Image.Metadata do
     0xCF
   ]
 
-  @spec inspect(binary()) ::
+  @spec inspect(binary(), map()) ::
           {:ok, binary(), pos_integer(), pos_integer()} | {:error, term()}
-  def inspect(
-        <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13::32, "IHDR", ihdr::binary-size(13), crc::32,
-          _rest::binary>>
-      ) do
+  def inspect(data, %{max_dimension: dimension, max_pixels: pixels}) do
+    with {:ok, _media_type, width, height} = image <- parse(data) do
+      cond do
+        width > dimension or height > dimension ->
+          {:error, {:image_dimensions_too_large, dimension}}
+
+        width * height > pixels ->
+          {:error, {:image_pixel_count_too_large, pixels}}
+
+        true ->
+          image
+      end
+    end
+  end
+
+  defp parse(
+         <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13::32, "IHDR", ihdr::binary-size(13), crc::32,
+           _rest::binary>>
+       ) do
     case ihdr do
       <<width::32, height::32, bit_depth, color_type, 0, 0, interlace>>
       when width > 0 and height > 0 and bit_depth > 0 and color_type in [0, 2, 3, 4, 6] and
@@ -36,9 +51,9 @@ defmodule Alto.Image.Metadata do
     end
   end
 
-  def inspect(<<0x89, "PNG", _rest::binary>>), do: {:error, :malformed_png}
-  def inspect(<<0xFF, 0xD8, rest::binary>>), do: jpeg_marker(rest)
-  def inspect(_data), do: {:error, :unsupported_image_format}
+  defp parse(<<0x89, "PNG", _rest::binary>>), do: {:error, :malformed_png}
+  defp parse(<<0xFF, 0xD8, rest::binary>>), do: jpeg_marker(rest)
+  defp parse(_data), do: {:error, :unsupported_image_format}
 
   defp jpeg_marker(<<0xFF, rest::binary>>) do
     case skip_jpeg_fill(rest) do

@@ -15,10 +15,8 @@ defmodule Alto.Content do
   @type block :: %{required(String.t()) => String.t() | pos_integer()}
   @type t :: %__MODULE__{blocks: [block()]}
 
-  @media_types ["image/png", "image/jpeg"]
   @max_image_encoded_bytes 8_000_000
-  @max_image_dimension 16_384
-  @max_image_pixels 40_000_000
+  @image_limits %{max_dimension: 16_384, max_pixels: 40_000_000}
 
   @spec new([block()]) :: t()
   def new([_ | _] = blocks), do: %__MODULE__{blocks: blocks}
@@ -124,39 +122,18 @@ defmodule Alto.Content do
   defp validate_block(_block), do: {:error, :unsupported_block}
 
   defp validate_image(media_type, data, width, height) do
-    cond do
-      media_type not in @media_types ->
-        {:error, {:unsupported_media_type, media_type}}
-
-      not is_binary(data) or data == "" ->
-        {:error, :image_data_must_be_nonempty_base64}
-
-      byte_size(data) > @max_image_encoded_bytes ->
-        {:error, {:image_encoded_too_large, @max_image_encoded_bytes}}
-
-      not is_integer(width) or width <= 0 or not is_integer(height) or height <= 0 ->
-        {:error, :invalid_image_dimensions}
-
-      width > @max_image_dimension or height > @max_image_dimension ->
-        {:error, {:image_dimensions_too_large, @max_image_dimension}}
-
-      width * height > @max_image_pixels ->
-        {:error, {:image_pixel_count_too_large, @max_image_pixels}}
-
-      true ->
-        validate_encoded_image(data, media_type, width, height)
-    end
-  end
-
-  defp validate_encoded_image(data, expected_media_type, expected_width, expected_height) do
-    with {:ok, decoded} <- decode_image(data),
-         {:ok, media_type, width, height} <- Metadata.inspect(decoded),
+    with true <-
+           (is_binary(data) and data != "") or {:error, :image_data_must_be_nonempty_base64},
          true <-
-           {media_type, width, height} ==
-             {expected_media_type, expected_width, expected_height} or
-             {:error, :image_metadata_mismatch} do
-      :ok
-    end
+           byte_size(data) <= @max_image_encoded_bytes or
+             {:error, {:image_encoded_too_large, @max_image_encoded_bytes}},
+         {:ok, decoded} <- decode_image(data),
+         {:ok, parsed_media, parsed_width, parsed_height} <-
+           Metadata.inspect(decoded, @image_limits),
+         true <-
+           {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
+             {:error, :image_metadata_mismatch},
+         do: :ok
   end
 
   defp decode_image(data) do

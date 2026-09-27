@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,728 lines**, a **24.4% reduction**, with **2,270 lines remaining**.
+Current: **30,705 lines**, a **24.5% reduction**, with **2,247 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,14 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-The retained JSON-RPC lifecycle owns option normalization and client-call exit
-handling. MCP and Codex delete their duplicate normalization and catch wrappers;
-MCP still distinguishes a killed in-flight client (`:unknown`) from a missing
-client (`:error`). Both use `json_rpc_client_unavailable` for call exits.
-Capability inspection and coding prompts reuse the existing tool-spec normalizer.
-Coding prompts now accept map options already supported by the tool runtime;
-the existing configured-name test exercises keyword and map options.
-This pass removes **14 production lines**: **11 code/type/declaration lines**,
-**3 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+Parsed image metadata owns dimension and pixel limits for file reads, processor
+output and typed transcript content. Content compares declared media and
+integer dimensions strictly with the validated bytes instead of separately
+validating the same declarations. Empty/nonbinary and oversized base64 data
+still fail before decoding. Existing boundary tests now exercise forged
+metadata, actual oversized headers and oversized processor output.
+This pass removes **23 production lines**: **16 code/type/declaration lines**,
+**7 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 
