@@ -71,27 +71,22 @@ defmodule Alto.Tools.SearchFiles do
   defp search(path, type, query, case_sensitive?, cwd, limits)
        when type in [:regular, :directory] do
     state = %{matches: [], scanned_files: 0, visited_entries: 0, truncated: false}
-    walk([path], state, query, case_sensitive?, cwd, limits)
+    query = compare_text(query, case_sensitive?)
+    matches? = &String.contains?(compare_text(&1, case_sensitive?), query)
+    walk([path], state, matches?, cwd, limits)
   end
 
   defp search(_path, type, _query, _case_sensitive?, _cwd, _limits),
     do: {:error, {:unsupported_file_type, type}}
 
-  defp walk([], state, _query, _case_sensitive?, _cwd, _limits), do: {:ok, state}
+  defp walk([], state, _matches?, _cwd, _limits), do: {:ok, state}
 
-  defp walk(
-         _queue,
-         %{scanned_files: files, visited_entries: entries, matches: matches} = state,
-         _query,
-         _case_sensitive?,
-         _cwd,
-         limits
-       )
-       when files >= limits.max_files or entries >= limits.max_entries or
-              length(matches) >= limits.max_matches,
+  defp walk(_queue, state, _matches?, _cwd, limits)
+       when state.scanned_files >= limits.max_files or state.visited_entries >= limits.max_entries or
+              length(state.matches) >= limits.max_matches,
        do: {:ok, %{state | truncated: true}}
 
-  defp walk([path | rest], state, query, case_sensitive?, cwd, limits) do
+  defp walk([path | rest], state, matches?, cwd, limits) do
     state = %{state | visited_entries: state.visited_entries + 1}
 
     {children, state} =
@@ -100,13 +95,13 @@ defmodule Alto.Tools.SearchFiles do
           {directory_children(path, limits.excluded_directories), state}
 
         {:ok, %{type: :regular, size: size}} when size <= limits.max_file_bytes ->
-          {[], search_file(path, state, query, case_sensitive?, cwd, limits)}
+          {[], search_file(path, state, matches?, cwd, limits)}
 
         _ ->
           {[], state}
       end
 
-    walk(children ++ rest, state, query, case_sensitive?, cwd, limits)
+    walk(children ++ rest, state, matches?, cwd, limits)
   end
 
   defp directory_children(path, excluded) do
@@ -122,13 +117,13 @@ defmodule Alto.Tools.SearchFiles do
     end
   end
 
-  defp search_file(path, state, query, case_sensitive?, cwd, limits) do
+  defp search_file(path, state, matches?, cwd, limits) do
     state = %{state | scanned_files: state.scanned_files + 1}
 
     case Alto.BoundedFile.read(path, limits.max_file_bytes) do
       {:ok, content} when is_binary(content) ->
         if String.valid?(content) do
-          add_line_matches(content, path, state, query, case_sensitive?, cwd, limits)
+          add_line_matches(content, path, state, matches?, cwd, limits)
         else
           state
         end
@@ -138,18 +133,18 @@ defmodule Alto.Tools.SearchFiles do
     end
   end
 
-  defp add_line_matches(content, path, state, query, case_sensitive?, cwd, limits) do
-    comparable_query = compare_text(query, case_sensitive?)
+  defp add_line_matches(content, path, state, matches?, cwd, limits) do
     relative_path = Path.relative_to(path, cwd)
 
     content
-    |> String.split("\n")
-    |> Enum.with_index(1)
+    |> String.splitter("\n")
+    |> Stream.with_index(1)
     |> Enum.reduce_while(state, fn {line, line_number}, acc ->
-      if length(acc.matches) >= limits.max_matches do
-        {:halt, %{acc | truncated: true}}
-      else
-        if String.contains?(compare_text(line, case_sensitive?), comparable_query) do
+      cond do
+        length(acc.matches) >= limits.max_matches ->
+          {:halt, %{acc | truncated: true}}
+
+        matches?.(line) ->
           match = %{
             path: relative_path,
             line: line_number,
@@ -157,9 +152,9 @@ defmodule Alto.Tools.SearchFiles do
           }
 
           {:cont, %{acc | matches: [match | acc.matches]}}
-        else
+
+        true ->
           {:cont, acc}
-        end
       end
     end)
   end

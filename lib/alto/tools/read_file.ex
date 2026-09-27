@@ -36,33 +36,21 @@ defmodule Alto.Tools.ReadFile do
 
   @impl true
   def run(arguments, %{} = context, _opts \\ []) do
-    path = Map.get(arguments, "path")
+    path = arguments["path"]
     offset = arguments["offset"]
-
     limit = arguments["limit"]
 
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
-         {:ok, content} <- Alto.BoundedFile.range(resolved, offset, limit + 1) do
-      {:ok, encode_content(path, offset, content, limit)}
-    end
-  end
+         {:ok, bytes} <- Alto.BoundedFile.range(resolved, offset, limit + 1) do
+      content = binary_part(bytes, 0, min(byte_size(bytes), limit))
 
-  defp encode_content(path, offset, content, limit) do
-    {content, truncated?} =
-      if byte_size(content) > limit,
-        do: {binary_part(content, 0, limit), true},
-        else: {content, false}
+      encoded =
+        if String.valid?(content),
+          do: %{content: content},
+          else: %{content_base64: Base.encode64(content), encoding: "base64"}
 
-    if String.valid?(content) do
-      %{path: path, offset: offset, content: content, truncated: truncated?}
-    else
-      %{
-        path: path,
-        offset: offset,
-        content_base64: Base.encode64(content),
-        encoding: "base64",
-        truncated: truncated?
-      }
+      {:ok,
+       Map.merge(encoded, %{path: path, offset: offset, truncated: byte_size(bytes) > limit})}
     end
   end
 end

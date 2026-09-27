@@ -253,6 +253,15 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert length(result.matches) == 100
     assert result.truncated
     assert hd(result.matches) == %{path: "sample.txt", line: 1, text: "line 1: .*"}
+
+    for {content, truncated} <- [{".*", false}, {".*\nno match", true}, {".*\n", true}] do
+      File.write!(Path.join(root, "sample.txt"), content)
+
+      assert {:ok, %{matches: [%{line: 1, text: ".*"}], truncated: ^truncated}} =
+               Alto.Tool.run(SearchFiles, %{"path" => "sample.txt", "query" => ".*"}, context,
+                 max_matches: 1
+               )
+    end
   end
 
   test "search truncates long grapheme lines at the configured display bound", %{

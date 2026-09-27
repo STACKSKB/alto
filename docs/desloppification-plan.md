@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,636 lines**, a **24.6% reduction**, with **2,178 lines remaining**.
+Current: **30,619 lines**, a **24.7% reduction**, with **2,161 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,16 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Queue and operation-log requests now validate at the server boundary, with one
-public forwarding clause per store. Queue claim and page caps apply to direct
-GenServer calls too; unsupported requests and invalid ledger filters return
-tagged errors without terminating the store. Existing schedule and recovery
-validators handle malformed options. Lifecycle regressions reject bad requests
-against populated stores, preserve the queue log and live claim, and continue
-valid reads and settlement. The pagination test exercises the server-side cap.
-This pass removes **33 production lines**: **25 code lines**, **8 blanks**, and
-**no documentation lines**. No dependencies or compatibility layers were added.
+File reads build their shared path, offset and truncation metadata once, after
+selecting text or base64 encoding. Search normalizes its query once and passes a
+matching function through traversal, rather than repeatedly passing and processing
+the query and case mode. Lazy line splitting and indexing avoid materializing
+omitted lines once the match limit is reached. Existing bounds, ordering,
+confinement and custom backends remain; cap-edge regressions distinguish an exact
+final match from a match followed by a nonmatching or empty line.
+This pass removes **17 production lines**: **18 code lines removed**, **1 net
+blank line added**, and **no documentation lines removed**. No dependencies or
+compatibility layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work
