@@ -2,6 +2,7 @@ defmodule Alto.Providers.StreamEnvelope do
   @moduledoc false
   alias Alto.Providers.HTTPOptions
   alias Alto.Providers.SSE
+  alias Alto.Retry.Transient
 
   @state_key :alto_stream_envelope
 
@@ -66,7 +67,12 @@ defmodule Alto.Providers.StreamEnvelope do
 
           true ->
             body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
-            {:error, {:http_error, response.status, decode_error_body(body)}}
+            detail = decode_error_body(body)
+            metadata = Transient.rate_limit_metadata(response.headers, detail)
+
+            if metadata && (response.status == 429 or response.status >= 500),
+              do: {:error, {:http_error, response.status, detail, metadata}},
+              else: {:error, {:http_error, response.status, detail}}
         end
 
       {:error, reason} ->

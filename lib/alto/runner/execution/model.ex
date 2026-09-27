@@ -161,6 +161,7 @@ defmodule Alto.Runner.Execution.Model do
                 step: step,
                 attempt: attempt,
                 max_attempts: caps.provider_retries + 1,
+                delay_ms: delay,
                 kind: kind
               })
             )

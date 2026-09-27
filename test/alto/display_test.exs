@@ -47,7 +47,14 @@ defmodule Alto.DisplayTest do
          "request_id" => "req-123"
        }}
 
-    for value <- [error, Alto.Protocol.encode_term(error)] do
+    with_retry = Tuple.insert_at(error, 3, %{retry_after_ms: 1000})
+
+    for value <- [
+          error,
+          Alto.Protocol.encode_term(error),
+          with_retry,
+          Alto.Protocol.encode_term(with_retry)
+        ] do
       text = Display.error(value)
       assert text =~ "Provider returned HTTP 400"
       assert text =~ "This model does not support tools"

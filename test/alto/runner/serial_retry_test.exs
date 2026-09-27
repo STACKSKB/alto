@@ -168,6 +168,40 @@ defmodule Alto.Runner.SerialRetryTest do
              )
   end
 
+  test "run deadline does not shorten a server wait into an early retry", %{agent: agent} do
+    script = fn _ -> {:error, {:http_error, 429, %{}, %{retry_after_ms: 30_000}}} end
+
+    result =
+      Alto.run("retry me",
+        provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
+        provider_retries: 1,
+        run_timeout: 100
+      )
+
+    assert result.status == :error
+    assert attempts(agent) == 1
+  end
+
+  test "server-directed backoff is visible and cancellable", %{agent: agent} do
+    script = fn _ ->
+      {:error, {:http_error, 429, %{"metadata" => %{"headers" => %{"Retry-After" => "30"}}}}}
+    end
+
+    owner = self()
+
+    {:ok, handle} =
+      Alto.start("retry me",
+        provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
+        provider_retries: 1,
+        event_sink: fn event -> send(owner, {:evt, event}) end
+      )
+
+    assert_receive {:evt, %Event{type: :model_retry, data: %{delay_ms: 30_000}}}, 2_000
+    assert :ok = Alto.cancel(handle, :operator_stop)
+    assert %Alto.Runner.Result{status: :cancelled} = Alto.await(handle, 2_000)
+    assert attempts(agent) == 1
+  end
+
   test "cancellation wins during backoff", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :down}} end
     owner = self()

@@ -122,7 +122,7 @@ defmodule Alto.TUI.Subagents do
   def ingest(state, task, %Event{type: :subagent_progress, data: data}) do
     update(state, task, data, fn agent ->
       event = data.event
-      phase = Alto.TUI.Activity.phase(event.type, agent.phase)
+      phase = Alto.TUI.Activity.phase(event, agent.phase)
 
       text =
         case event do

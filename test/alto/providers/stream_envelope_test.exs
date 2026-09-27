@@ -4,10 +4,17 @@ defmodule Alto.Providers.StreamEnvelopeTest do
   alias Alto.Providers.{Anthropic, OpenAICompatible}
 
   defp run(provider, chunks, extra \\ [], status \\ 200) do
+    response_headers = Keyword.get(extra, :response_headers, [])
+    extra = Keyword.delete(extra, :response_headers)
+
     adapter = fn request ->
-      Enum.reduce_while(chunks, {request, Req.Response.new(status: status)}, fn chunk, acc ->
-        request.into.({:data, chunk}, acc)
-      end)
+      Enum.reduce_while(
+        chunks,
+        {request, Req.Response.new(status: status, headers: response_headers)},
+        fn chunk, acc ->
+          request.into.({:data, chunk}, acc)
+        end
+      )
     end
 
     options =
@@ -54,6 +61,22 @@ defmodule Alto.Providers.StreamEnvelopeTest do
 
       assert retained == String.duplicate("x", 64_000)
     end
+  end
+
+  test "valid rate limit hints are whitelisted in error metadata" do
+    assert {:error, {:http_error, 429, "limited", %{retry_after_ms: 30_000}}} =
+             run(
+               :catalog,
+               [~s({"error":"limited"})],
+               [response_headers: [{"Retry-After", "30"}, {"authorization", "private"}]],
+               429
+             )
+
+    assert {:error,
+            {:http_error, 429, %{"metadata" => %{"headers" => _}}, %{retry_after_ms: 30_000}}} =
+             run(:catalog, [~s({"error":{"metadata":{"headers":{"Retry-After":"30"}}}})], [], 429)
+
+    assert {:error, {:http_error, 503, "oops"}} = run(:catalog, ["oops"], [], 503)
   end
 
   test "raw JSON provider errors have the same classification" do

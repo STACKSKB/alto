@@ -247,3 +247,14 @@ run options. Handles are opaque and results use `Alto.Runner.Result`; registry
 and TUI integrations consume completion notifications instead of inspecting
 Tasks. Serial can optionally wait for a one-use admission ticket before each effect.
 See [execution hosts](docs/runners.md) for contracts and examples.
+
+### Provider retry timing
+
+`provider_retries` bounds retries before any model output is delivered (the
+agentic profile enables three). For HTTP 429 and 503, the transient policy
+honors valid `Retry-After` and rate-limit reset timing, including reset metadata
+in provider error bodies. Server-directed delays are never shortened by jitter.
+A delay over 60 seconds stops automatic retry rather than waiting through a
+long quota reset. Waiting remains cancellable and subject to the run deadline;
+the TUI displays the planned wait. Once any model output has streamed, Alto
+never retries that attempt automatically.

@@ -72,6 +72,83 @@ defmodule Alto.RetryTest do
              )
   end
 
+  test "rate limit hints parse bounded delta, HTTP date, and epoch resets" do
+    now_ms = 1_700_000_000_000
+
+    assert %{retry_after_ms: 30_000} =
+             Alto.Retry.Transient.rate_limit_metadata([{"Retry-After", "30"}], nil, now_ms)
+
+    assert %{retry_after_ms: 30_000} =
+             Alto.Retry.Transient.rate_limit_metadata(
+               [],
+               %{
+                 "metadata" => %{"headers" => %{"retry-after" => "Tue, 14 Nov 2023 22:13:50 GMT"}}
+               },
+               now_ms
+             )
+
+    assert %{rate_limit_reset_ms: 30_000} =
+             Alto.Retry.Transient.rate_limit_metadata(
+               %{"X-RateLimit-Reset" => "1700000030"},
+               nil,
+               now_ms
+             )
+
+    assert %{rate_limit_reset_ms: 30_000} =
+             Alto.Retry.Transient.rate_limit_metadata(
+               %{"x-ratelimit-reset" => "1700000030000"},
+               nil,
+               now_ms
+             )
+
+    assert is_nil(
+             Alto.Retry.Transient.rate_limit_metadata(
+               %{"retry-after" => String.duplicate("9", 129), "authorization" => "secret"},
+               nil,
+               now_ms
+             )
+           )
+  end
+
+  test "malformed timing hints are ignored without exposing unrelated headers" do
+    for value <- [<<255>>, String.duplicate("x", 129), %{}, [123], "NaN", "1e999"] do
+      assert nil ==
+               Alto.Retry.Transient.rate_limit_metadata(
+                 %{"retry-after" => value},
+                 "plain error",
+                 1_700_000_000_000
+               )
+    end
+
+    assert nil ==
+             Alto.Retry.Transient.rate_limit_metadata(%{[{}] => "30", <<255>> => "30"}, [], 0)
+
+    assert %{rate_limit_reset_ms: 0} ==
+             Alto.Retry.Transient.rate_limit_metadata(
+               %{"x-ratelimit-reset" => "0"},
+               nil,
+               1_700_000_000_000
+             )
+  end
+
+  test "server retry minimum cannot be shortened and excessive waits stop" do
+    reason = {:http_error, 429, %{}, %{retry_after_ms: 30_000}}
+
+    assert {:retry, 30_000, {:http, 429}} =
+             Alto.Retry.Transient.decide(reason, 1, random_source: fn -> 0.0 end)
+
+    assert :stop =
+             Alto.Retry.Transient.decide(
+               {:http_error, 429, %{}, %{retry_after_ms: 60_001}},
+               1
+             )
+
+    assert {:retry, 30_000, {:http, 503}} =
+             Alto.Retry.Transient.decide({:http_error, 503, nil, %{retry_after_ms: 30_000}}, 1,
+               random_source: fn -> 0.0 end
+             )
+  end
+
   test "policy defects stop actual retries without logging provider content" do
     {:ok, counter} = Agent.start_link(fn -> 0 end)
 

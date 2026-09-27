@@ -158,6 +158,10 @@ defmodule Alto.Display do
        when tag in [:provider_exception, "provider_exception", :exception, "exception"],
        do: "Provider failed: " <> render(error, mode, depth + 1)
 
+  defp render({tag, status, detail, _retry_metadata}, mode, depth)
+       when tag in [:http_error, "http_error"],
+       do: render({tag, status, detail}, mode, depth)
+
   defp render({tag, status, detail}, mode, depth) when tag in [:http_error, "http_error"],
     do:
       "Provider returned HTTP #{render(status, :text, depth + 1)}\n" <>

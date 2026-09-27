@@ -37,5 +37,12 @@ defmodule Alto.TUI.Activity do
     "approval_resolved" => "processing approval"
   }
 
-  def phase(event, fallback \\ "working"), do: Map.get(@phases, to_string(event || ""), fallback)
+  def phase(event, fallback \\ "working")
+
+  def phase(%{type: type, data: %{delay_ms: delay}}, _fallback)
+      when type in [:model_retry, "model_retry"] and is_integer(delay) and delay >= 0,
+      do: "waiting #{div(delay + 999, 1000)}s before provider retry"
+
+  def phase(%{type: type}, fallback), do: phase(type, fallback)
+  def phase(event, fallback), do: Map.get(@phases, to_string(event || ""), fallback)
 end

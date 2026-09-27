@@ -879,7 +879,7 @@ defmodule Alto.TUI.App do
         state
 
       run ->
-        phase = Alto.TUI.Activity.phase(event.type, Map.get(run, :phase, "working"))
+        phase = Alto.TUI.Activity.phase(event, Map.get(run, :phase, "working"))
         run = if run[:phase] == "cancelling", do: run, else: Map.put(run, :phase, phase)
         state = put_in(state.runs[local_id], run)
         do_ingest_event(state, run.task_id, event)

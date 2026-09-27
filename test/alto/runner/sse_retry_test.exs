@@ -38,7 +38,8 @@ defmodule Alto.Runner.SSERetryTest do
     assert_receive {:attempt, ^request}
     assert_receive {:attempt, ^request}
     assert_receive {:event, %Event{type: :model_retry, data: data}}
-    assert data == %{step: 1, attempt: 1, max_attempts: 2, kind: {:provider, 502}}
+    assert %{step: 1, attempt: 1, max_attempts: 2, kind: {:provider, 502}, delay_ms: delay} = data
+    assert is_integer(delay) and delay >= 0 and delay <= 500
     assert_receive {:event, %Event{type: :model_delta, data: %{text: "done"}}}
     refute_receive {:event, %Event{type: :model_delta}}
   end
