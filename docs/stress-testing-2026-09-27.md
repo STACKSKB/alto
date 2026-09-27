@@ -115,3 +115,9 @@ Repeated ambiguous `edit_file` failures exposed insufficient recovery informatio
 Live Space Bunny probe `sess-2ogqblwbfbdh4ea` deliberately submitted an ambiguous edit, received lines 2 and 4, retried with unique context, and verified only the second value changed. It completed successfully in five model requests.
 
 Independent ink verification now passes **3,989 checks** under address, undefined-behavior and float-cast-overflow sanitizers. Direct stationary-contact and stabilized pen-lift reproductions also pass. Document compilation and UI integration remain unfinished; these results do not establish application acceptance.
+
+## Explain byte caps on source-line reads
+
+A resumed workload requested `start_line: 378, limit: 40`, receiving only 40 bytes of the first source line despite schema guidance. Line-mode results now explicitly report returned bytes, the output byte limit, and whether that limit cut the requested range. A conditional recovery hint distinguishes `limit` from `line_count` and explains safe byte continuation without mixing units. Bounds and existing continuation semantics remain unchanged. All **32 workspace tool tests** passed. Live probe `sess-5pgoooqxgiiu3pi` received the diagnostic, retried with `line_count: 2`, retrieved both complete lines, and finished in four requests.
+
+Workers were stopped with saved sessions `sess-wyihfmigwuqjuea` and `sess-iktunyudh6qxsjq` before the fix. The next fresh processes resume those conversations rather than repeating their investigation. An independent fresh document build now succeeds but its suite still reports **716 checks, 40 failures**. UI testing exposes incorrect layer control dispatch, pressure loss on point-drag press, and incomplete live stroke previews; these are application fixes still in progress.

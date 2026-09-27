@@ -76,22 +76,38 @@ defmodule Alto.Tools.ReadFile do
             content = binary_part(rest, 0, size)
             truncated = offset + size < byte_size(bytes) or more
             partial = size > 0 and :binary.last(content) != 10 and truncated
+            byte_limit_truncated = requested > args["limit"]
 
             lines =
               length(:binary.matches(content, "\n")) +
                 if(size > 0 and :binary.last(content) != 10, do: 1, else: 0)
 
-            {:ok, content,
-             %{
-               range_unit: "lines",
-               start_line: start,
-               returned_lines: lines,
-               offset: offset,
-               next_offset: offset + size,
-               next_line: if(truncated and not partial, do: start + lines, else: nil),
-               partial_line: partial,
-               truncated: truncated
-             }}
+            metadata = %{
+              range_unit: "lines",
+              start_line: start,
+              returned_lines: lines,
+              returned_bytes: size,
+              output_limit_bytes: args["limit"],
+              byte_limit_truncated: byte_limit_truncated,
+              offset: offset,
+              next_offset: offset + size,
+              next_line: if(truncated and not partial, do: start + lines, else: nil),
+              partial_line: partial,
+              truncated: truncated
+            }
+
+            metadata =
+              if byte_limit_truncated do
+                Map.put(
+                  metadata,
+                  :hint,
+                  "The requested line range exceeded the output byte limit. limit counts bytes, not lines; use line_count to choose how many lines to read and omit limit for the host default or increase it within the allowed bound to return more text per line. To continue a partial line, read from next_offset in byte mode and omit start_line/line_count."
+                )
+              else
+                metadata
+              end
+
+            {:ok, content, metadata}
         end
       end
     end

@@ -53,6 +53,63 @@ defmodule Alto.Tools.WorkspaceToolsTest do
              Alto.Tool.run(WriteFile, %{"path" => "../outside.txt", "content" => "no"}, context)
   end
 
+  test "line reads explain byte truncation and preserve partial-line continuation", %{
+    root: root,
+    context: context
+  } do
+    long_line = String.duplicate("x", 120) <> "\nshort line\n"
+    File.write!(Path.join(root, "lines.txt"), long_line)
+
+    assert {:ok,
+            %{
+              content: partial,
+              range_unit: "lines",
+              start_line: 1,
+              returned_lines: 1,
+              returned_bytes: 40,
+              output_limit_bytes: 40,
+              byte_limit_truncated: true,
+              partial_line: true,
+              next_line: nil,
+              next_offset: 40,
+              hint: hint
+            }} =
+             Alto.Tool.run(
+               ReadFile,
+               %{"path" => "lines.txt", "start_line" => 1, "limit" => 40},
+               context
+             )
+
+    assert byte_size(partial) == 40
+    assert hint =~ "limit counts bytes, not lines"
+    assert hint =~ "line_count"
+
+    assert {:ok, %{content: remainder, range_unit: "bytes", offset: 40}} =
+             Alto.Tool.run(
+               ReadFile,
+               %{"path" => "lines.txt", "offset" => 40, "limit" => 200},
+               context
+             )
+
+    assert partial <> remainder == long_line
+
+    assert {:ok,
+            %{
+              content: "short line\n",
+              returned_lines: 1,
+              returned_bytes: 11,
+              output_limit_bytes: 40,
+              byte_limit_truncated: false
+            } = complete} =
+             Alto.Tool.run(
+               ReadFile,
+               %{"path" => "lines.txt", "start_line" => 2, "line_count" => 1, "limit" => 40},
+               context
+             )
+
+    refute Map.has_key?(complete, :hint)
+  end
+
   test "host-configured write limits apply during preparation and stay frozen", %{
     context: context
   } do
