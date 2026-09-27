@@ -17,7 +17,7 @@ defmodule Alto.Input do
 
   @doc """
   Send a native operation tuple to the channel. Supported operations are
-  `:claim`, `:release`, `:list`, `:checkpoint`, `:snapshot`,
+  `:claim`, `:release`, `:list`, `:steer_next`, `:checkpoint`, `:snapshot`,
   `{:enqueue, message}`, `{:duplicate, message}`, `{:receipt, id}`,
   `{:pending, modes}`, `{:take, sender_kind}`, `{:restore, snapshot}`,
   `{:read, token, modes}`, `{:settle, token, id}`, and
@@ -178,6 +178,26 @@ defmodule Alto.Input do
   def handle_call({:take, _}, _from, state), do: {:reply, {:error, :input_in_use}, state}
 
   def handle_call(:list, _from, state), do: {:reply, state.entries, state}
+
+  # Promote in place so racing consumption cannot duplicate or drop the message.
+  def handle_call(:steer_next, _from, %{sealed: true} = state),
+    do: {:reply, {:error, :input_checkpointed}, state}
+
+  def handle_call(:steer_next, _from, state) do
+    case Enum.find(state.entries, &(&1.sender.kind == :user and &1.mode == :follow_up)) do
+      nil ->
+        {:reply, {:error, :no_queued_follow_up}, state}
+
+      entry ->
+        promoted = %{entry | mode: :steer}
+
+        entries =
+          Enum.map(state.entries, &if(&1.message_id == entry.message_id, do: promoted, else: &1))
+
+        bytes = state.bytes - entry_bytes(entry) + entry_bytes(promoted)
+        {:reply, :ok, %{state | entries: entries, bytes: bytes}}
+    end
+  end
 
   def handle_call({:enqueue, message}, _from, state) do
     bytes = entry_bytes(message)

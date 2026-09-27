@@ -198,6 +198,7 @@ defmodule Alto.TUI.App do
       "x" -> {:noreply, State.close_workspace(state, state.selected_project_id)}
       "t" -> {:noreply, open_overlay(state, :task)}
       "n" -> {:noreply, state |> State.new_task() |> Map.put(:leader?, false)}
+      "s" -> {:noreply, steer_queued(%{state | leader?: false})}
       "d" -> {:noreply, toggle_details(state)}
       "esc" -> {:noreply, %{state | leader?: false, notice: nil}}
       "q" -> {:stop, state}
@@ -407,6 +408,9 @@ defmodule Alto.TUI.App do
       state.selected_project_id == nil ->
         %{state | notice: "Open a workspace first · ^G W"}
 
+      prompt == "" and mode == :steer and task_running?(state, state.selected_task_id) ->
+        steer_queued(state)
+
       prompt == "" and not task_running?(state, state.selected_task_id) and
           State.input_pending?(state, state.selected_task_id) ->
         send_input(state, state.selected_task_id)
@@ -422,6 +426,35 @@ defmodule Alto.TUI.App do
 
       true ->
         submit_backend(state, prompt)
+    end
+  end
+
+  defp steer_queued(state) do
+    cond do
+      not task_running?(state, state.selected_task_id) ->
+        %{state | notice: "No running task to steer · Enter sends queued input"}
+
+      Backend.ui(state, :steering?) != true ->
+        %{state | notice: "This backend cannot steer · queued message kept"}
+
+      true ->
+        input = Map.get(state.inputs, state.selected_task_id)
+
+        result =
+          if input,
+            do: Alto.Input.request(input, :steer_next),
+            else: {:error, :no_queued_follow_up}
+
+        case result do
+          :ok ->
+            %{state | notice: "Queued message will steer at the next safe boundary"}
+
+          {:error, :no_queued_follow_up} ->
+            %{state | notice: "No queued follow-up to steer"}
+
+          {:error, reason} ->
+            %{state | notice: "Cannot steer queued message: #{human_error(reason)}"}
+        end
     end
   end
 
@@ -468,7 +501,7 @@ defmodule Alto.TUI.App do
   end
 
   defp input_notice(:steer), do: "steering message accepted · Enter queues a follow-up"
-  defp input_notice(:follow_up), do: "message queued for the next turn · Esc stops current run"
+  defp input_notice(:follow_up), do: "message queued · ^G S steer queued · Esc stops current run"
 
   defp input_route_available(state, task_id) do
     if Map.has_key?(state.input_routes, task_id) or map_size(state.input_routes) < 32,
@@ -1104,8 +1137,13 @@ defmodule Alto.TUI.App do
         open_model_form(state, profile_id)
 
       %{value: value} ->
-        with :pass <- Backend.ui(state, {:select, value}),
-             do: apply_selection(state, state.overlay.kind, value)
+        selected =
+          with :pass <- Backend.ui(state, {:select, value}),
+               do: apply_selection(state, state.overlay.kind, value)
+
+        if state.overlay.kind in [:model, :model_error, :provider, :backend],
+          do: State.remember_selection(selected),
+          else: selected
     end
   end
 
@@ -1137,6 +1175,7 @@ defmodule Alto.TUI.App do
         overlay: nil,
         notice: "provider: #{profile.label}"
     }
+    |> State.restore_model()
   end
 
   defp apply_selection(state, :model_error, value), do: apply_selection(state, :model, value)
@@ -1685,7 +1724,7 @@ defmodule Alto.TUI.App do
 
     if model == "",
       do: put_in(state.overlay.error, "model ID is required"),
-      else: apply_selection(state, :model, model)
+      else: state |> apply_selection(:model, model) |> State.remember_selection()
   end
 
   defp save_provider_form(state) do
@@ -1710,6 +1749,7 @@ defmodule Alto.TUI.App do
             notice: "provider saved"
         }
 
+        next = State.remember_selection(next)
         if state.overlay.after_save == :model, do: open_overlay(next, :model), else: next
 
       {:error, reason} ->

@@ -41,9 +41,18 @@ Press Enter to send a message. While a turn is running, Enter queues one follow-
 for that task; it starts after the current turn succeeds. A second follow-up
 stays in the composer until the queued message has started. Queued messages are
 kept in memory for the lifetime of the TUI.
+Press **Ctrl+G, S** to turn the queued follow-up into a steer, delivered at the
+next safe model boundary after dispatched tools settle. This keeps your current
+draft intact. **Ctrl+Enter** sends a draft as a steer; with an empty draft it
+promotes the queued follow-up. Steering requires a backend that supports it.
 Pending messages appear below the current response and in the context pane.
 When delivered, their queue notice disappears and each message becomes a separate
 `you ›` turn before its response, including when native input continues the same run.
+
+Provider and model choices are remembered across tasks, workspace switches, and
+TUI restarts. Each backend/provider pair keeps its own model choice.
+Saved task history remains viewable after a failed run, including when an
+unfinished tool dispatch prevents safely resuming that run.
 
 The status bar shows whether Alto is waiting for the model, executing a tool, or
 waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,

@@ -5,7 +5,8 @@ defmodule Alto.Messaging.Transport do
   Implement `open/1`, `request/3` and `close/1` to use SSH, a database or another
   channel. Requests are the operations in `Alto.Input`: enqueue, duplicate,
   receipt, pending, claim/release, read/acknowledge, list/take, checkpoint,
-  snapshot/restore and external delivery settlement.
+  snapshot/restore, steer_next (promote the first queued user follow-up in place),
+  and external delivery settlement.
   Operations must be atomic, bounded, ordered per mailbox and preserve message
   IDs and idempotency keys. Only the claimed reader (or its opaque reader token)
   may acknowledge input. `:delivered` means an external adapter accepted input;

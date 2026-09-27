@@ -205,6 +205,30 @@ defmodule Alto.TUI.RunLifecycleTest do
     eventually(fn -> state(app).runs == %{} end)
   end
 
+  test "gear S promotes a queued follow-up without losing the draft or duplicating delivery", %{
+    root: root
+  } do
+    app = start_app(root)
+    submit(app, "first")
+    assert_receive {:model_waiting, first, _}, 5_000
+    submit(app, "change direction")
+    input = state(app).inputs[state(app).selected_task_id]
+    assert [%{message_id: id, mode: :follow_up}] = Alto.Input.request(input, :list)
+    assert screen(app) =~ "^G S steer queued"
+    ExRatatui.textarea_set_value(state(app).textarea, "keep my draft")
+    key(app, "g", ["ctrl"])
+    key(app, "s")
+    assert [%{message_id: ^id, mode: :steer}] = Alto.Input.request(input, :list)
+    assert ExRatatui.textarea_get_value(state(app).textarea) == "keep my draft"
+    send(first, {:finish, "done"})
+    assert_receive {:model_waiting, second, messages}, 5_000
+    assert Enum.count(messages, &(&1["content"] == "change direction")) == 1
+    send(second, {:finish, "redirected"})
+    eventually(fn -> state(app).runs == %{} end)
+    assert Alto.Input.request(input, :list) == []
+    refute_receive {:model_waiting, _, _}, 50
+  end
+
   test "ctrl-enter sends steering input through the native channel", %{root: root} do
     app = start_app(root)
     submit(app, "first")

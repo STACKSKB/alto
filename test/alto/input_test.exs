@@ -41,6 +41,26 @@ defmodule Alto.InputTest do
     assert {:ok, _} = Alto.Messaging.send(input, text: "12345")
   end
 
+  test "promotion preserves receipts, snapshot accounting and single delivery" do
+    {:ok, input} = Alto.Input.start_link()
+    message = [text: "redirect", delivery: :follow_up, idempotency_key: "same"]
+    {:ok, %{message_id: id}} = Alto.Messaging.send(input, message)
+    {:ok, token} = Alto.Input.request(input, :claim)
+    assert :ok = Alto.Input.request(input, :steer_next)
+    assert %{message_id: ^id, mode: :steer} = Alto.Input.request(input, {:read, token, [:steer]})
+    assert nil == Alto.Input.request(input, {:read, token, [:follow_up]})
+    assert {:ok, %{message_id: ^id, status: :queued}} = Alto.Messaging.send(input, message)
+    {:ok, snapshot} = Alto.Input.request(input, :snapshot)
+    assert Alto.Input.valid_snapshot?(snapshot)
+    assert :ok = Alto.Input.request(input, {:acknowledge, token, id, :consumed})
+    assert {:error, :no_queued_follow_up} = Alto.Input.request(input, :steer_next)
+    assert {:ok, %{message_id: ^id, status: :consumed}} = Alto.Messaging.send(input, message)
+    assert [] == Alto.Input.request(input, :list)
+    {:ok, _} = Alto.Messaging.send(input, text: "later", delivery: :follow_up)
+    {:ok, _} = Alto.Input.request(input, :checkpoint)
+    assert {:error, :input_checkpointed} = Alto.Input.request(input, :steer_next)
+  end
+
   test "follow-ups continue the same run under the original model budget" do
     {:ok, input} = Alto.Input.start_link()
     opts = [input: input, provider: {Provider, owner: self()}, max_steps: 2]

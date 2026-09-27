@@ -5,6 +5,7 @@ defmodule Alto.TUI.State do
   alias Alto.Harness.{ProviderProfile, ProviderStore}
   alias Alto.Session
   alias Alto.Usage
+  alias Alto.TUI.Preferences
 
   @focuses [:rail, :transcript, :details, :composer]
   @max_entries_per_task 2_000
@@ -44,6 +45,7 @@ defmodule Alto.TUI.State do
     tasks: %{},
     entries: %{},
     profiles: [],
+    preferences: %{},
     models: %{},
     efforts: %{},
     model_loading: MapSet.new(),
@@ -95,12 +97,24 @@ defmodule Alto.TUI.State do
          {:ok, selected_project} <- Catalog.register_project(root, catalog_opts),
          {:ok, projects, tasks} <- Catalog.navigation(catalog_opts) do
       selected_task = tasks |> Map.get(selected_project["id"], []) |> List.first()
-      profile = List.first(profiles)
+
+      preferences =
+        case Preferences.load(catalog_opts) do
+          {:ok, saved} -> saved
+          {:error, _} -> %{}
+        end
+
+      profile = Enum.find(profiles, &(&1.id == preferences["provider"])) || List.first(profiles)
 
       selected_backend =
         if selected_task,
           do: task_backend(selected_task),
-          else: List.first(Keyword.keys(Alto.TUI.Backend.configured(run_options)))
+          else:
+            Enum.find(
+              Keyword.keys(Alto.TUI.Backend.configured(run_options)),
+              &(to_string(&1) == preferences["backend"])
+            ) ||
+              List.first(Keyword.keys(Alto.TUI.Backend.configured(run_options)))
 
       state = %__MODULE__{
         textarea: ExRatatui.textarea_new(),
@@ -119,6 +133,7 @@ defmodule Alto.TUI.State do
         selected_project_id: selected_project["id"],
         selected_task_id: selected_task && selected_task["id"],
         profiles: profiles,
+        preferences: preferences,
         selected_provider_id: profile && profile.id,
         type_to_compose?: Keyword.get(tui_options, :type_to_compose, true),
         narrow_context: Keyword.get(tui_options, :narrow_context, :adaptive),
@@ -132,7 +147,7 @@ defmodule Alto.TUI.State do
       }
 
       state = Alto.TUI.Backend.initialize(state)
-      {:ok, hydrate_selected(state)}
+      {:ok, state |> restore_model() |> hydrate_selected()}
     end
   end
 
@@ -605,9 +620,18 @@ defmodule Alto.TUI.State do
   end
 
   defp load_session_entries(session_id, opts) do
-    case Session.transcript(session_id, Keyword.take(opts, [:session_dir])) do
-      {:ok, %{"messages" => messages}} -> Alto.ToolDisplay.transcript(messages)
-      _error -> []
+    # Viewing a saved revision must not require permission to resume tool execution.
+    case Session.conversation(session_id, :latest, Keyword.take(opts, [:session_dir])) do
+      {:ok, %{"messages" => messages}} ->
+        Alto.ToolDisplay.transcript(messages)
+
+      {:error, reason} ->
+        [
+          %{
+            kind: :system,
+            text: "Could not load saved conversation: #{Alto.Display.error(reason)}"
+          }
+        ]
     end
   end
 
@@ -675,7 +699,26 @@ defmodule Alto.TUI.State do
         profile && profile.default_model
       end
 
-    %{state | selected_model: model}
+    %{state | selected_model: model} |> restore_model()
+  end
+
+  def restore_model(state),
+    do: %{
+      state
+      | selected_model: Preferences.model(state.preferences, state) || state.selected_model
+    }
+
+  def remember_selection(state) do
+    case Preferences.save(state) do
+      {:ok, preferences} ->
+        %{state | preferences: preferences}
+
+      {:error, reason} ->
+        %{
+          state
+          | notice: "Selection applies now but could not be saved: #{Alto.Display.error(reason)}"
+        }
+    end
   end
 
   defp status_marker("completed"), do: "✓"

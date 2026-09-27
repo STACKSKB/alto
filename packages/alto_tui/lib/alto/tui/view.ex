@@ -2,7 +2,7 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{Menu, Search, State}
+  alias Alto.TUI.{Backend, Menu, Search, State}
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
@@ -346,7 +346,12 @@ defmodule Alto.TUI.View do
     do: " message · WRAP · F6 code" <> composer_activity_hint(state) <> " "
 
   defp composer_activity_hint(state) do
-    if active_run?(state), do: " · Enter queue · Esc stop", else: " · Enter send"
+    if active_run?(state) do
+      steer = if Backend.ui(state, :steering?) == true, do: " · ^G S steer queued", else: ""
+      " · Enter queue" <> steer <> " · Esc stop"
+    else
+      " · Enter send"
+    end
   end
 
   defp active_run?(state) do
@@ -357,9 +362,9 @@ defmodule Alto.TUI.View do
     {width, _height} = composer_inner_size(state)
 
     if width < 90 do
-      " gear: B A P M R E W X T N D Q · Esc cancel "
+      " gear: B A P M R E W X T N D Q S · Esc cancel "
     else
-      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · X close workspace · T task · N new · D details · Q quit "
+      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · X close workspace · T task · N new · D details · S steer queued · Q quit "
     end
   end
 
@@ -392,7 +397,7 @@ defmodule Alto.TUI.View do
   defp transcript_text(state, rect) do
     case State.visible_entries(state) do
       [] ->
-        "Welcome to Alto. Start typing below.\n^G N New task · ^G W Change folder\n\n" <>
+        "Welcome to Alto. Start typing below.\n\n" <>
           "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · Q quit"
 
       entries ->

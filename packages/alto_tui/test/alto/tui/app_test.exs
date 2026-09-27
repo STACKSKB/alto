@@ -1563,6 +1563,64 @@ defmodule Alto.TUI.AppTest do
     assert widget.block.title =~ "history · G follow"
   end
 
+  test "failed task history remains visible behind a resume dispatch fence", context do
+    session_dir = Path.join(context.root, "sessions")
+    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, id} = Alto.Session.create("failed run", %{}, session_dir: session_dir)
+
+    messages = [
+      %{"role" => "user", "content" => "stress test"},
+      %{"role" => "assistant", "content" => "Important findings survived"}
+    ]
+
+    {:ok, _} = Alto.Session.persist_settled(id, messages, 100, session_dir: session_dir)
+    {:ok, _} = Alto.Session.mark_dispatched(id, ["unfinished-tool"], session_dir: session_dir)
+
+    {:ok, task} =
+      Alto.Harness.Catalog.create_task(project["id"], "failed run",
+        path: context.catalog,
+        conversation_id: id
+      )
+
+    {:ok, _} =
+      Alto.Harness.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+
+    state = state!(context, session_dir: session_dir)
+    assert Enum.any?(State.current_entries(state), &(&1.text == "Important findings survived"))
+    state = State.close_workspace(state, project["id"])
+    {:ok, state} = State.open_workspace(state, context.root)
+    state = State.select_task(%{state | entries: %{}}, task["id"])
+    assert Enum.any?(State.current_entries(state), &(&1.text == "Important findings survived"))
+
+    assert {:error, {:session_unsettled_tool_dispatch, _}} =
+             Alto.Session.transcript(id, session_dir: session_dir)
+  end
+
+  test "model choice survives task selection, new tasks, backend switching and restart",
+       context do
+    state = state!(context)
+    profiles = Enum.map(state.profiles, &%{&1 | models: [%{id: "chosen/model"}]})
+    state = App.open_overlay(%{state | profiles: profiles}, :model)
+    {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
+    assert state.selected_model == "chosen/model"
+
+    {:ok, task} =
+      Alto.Harness.Catalog.create_task(state.selected_project_id, "existing",
+        path: context.catalog
+      )
+
+    state = State.put_task(state, task) |> State.new_task() |> State.select_task(task["id"])
+    assert state.selected_model == "chosen/model"
+    assert State.new_task(state).selected_model == "chosen/model"
+
+    assert state
+           |> State.sync_backend(:codex)
+           |> State.sync_backend(:alto)
+           |> Map.get(:selected_model) == "chosen/model"
+
+    assert state!(context).selected_model == "chosen/model"
+  end
+
   test "reopening a native task restores durable usage telemetry", context do
     session_dir = Path.join(context.root, "sessions")
 
