@@ -364,7 +364,7 @@ defmodule Alto.External.MCP.ClientTest do
     def execute(_), do: {:error, :stdio_only}
 
     def open({invocation, opts}, transport) do
-      send(opts[:owner], {:executor_opened, opts[:label]})
+      send(opts[:owner], {:executor_opened, opts[:label], invocation, transport})
       Alto.Command.Executors.Unsandboxed.open(invocation, transport)
     end
   end
@@ -383,15 +383,29 @@ defmodule Alto.External.MCP.ClientTest do
     first = Keyword.put(base, :executor, {RecordingExecutor, owner: self(), label: :first})
     second = Keyword.put(base, :executor, {RecordingExecutor, owner: self(), label: :second})
     assert {:ok, one} = Client.ensure_started(first)
-    assert_received {:executor_opened, :first}
+
+    assert_received {:executor_opened, :first,
+                     %{
+                       requested_program: ^server,
+                       executable: ^server,
+                       cwd: ^root,
+                       args: [],
+                       timeout_ms: 30_000,
+                       max_output_bytes: 64_000
+                     }, transport}
+
+    assert transport[:line] == 2_000_000
+    assert transport[:startup_timeout] == 5_000
     assert {:ok, ^one} = Client.ensure_started(first)
-    refute_received {:executor_opened, :first}
+    refute_received {:executor_opened, :first, _, _}
     assert {:ok, two} = Client.ensure_started(second)
-    assert_received {:executor_opened, :second}
+    assert_received {:executor_opened, :second, _, _}
     refute one == two
     Client.stop(one)
     Client.stop(two)
-    assert {:error, _} = Client.ensure_started(Keyword.put(base, :executor, NoStdioExecutor))
+
+    assert {:error, _} =
+             Client.ensure_started(Keyword.put(base, :executor, {NoStdioExecutor, []}))
   end
 
   @tag skip:

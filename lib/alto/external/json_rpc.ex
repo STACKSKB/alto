@@ -4,7 +4,18 @@ defmodule Alto.External.JSONRPC do
 
   alias Alto.External.Process, as: ExternalProcess
 
+  @transport_options [
+    args: [type: {:list, :string}, default: []],
+    cwd: [type: :string],
+    env: [type: {:map, :any, :any}, default: %{}],
+    executor: [type: :any, default: {Alto.Command.Executors.Unsandboxed, []}],
+    startup_timeout: [type: :pos_integer, default: 30_000],
+    max_pending_requests: [type: :pos_integer, default: 128],
+    max_ready_waiters: [type: :pos_integer, default: 128]
+  ]
+
   def normalize_options(opts, schema) do
+    schema = Keyword.merge(@transport_options, schema)
     opts = Keyword.put_new(opts, :cwd, File.cwd!())
 
     with {:ok, opts} <- NimbleOptions.validate(opts, schema),
@@ -85,7 +96,7 @@ defmodule Alto.External.JSONRPC do
 
   @impl true
   def handle_continue(:open, %{protocol: protocol} = state) do
-    case protocol.open_port(state.opts) do
+    case open_process(state.opts) do
       {:ok, process} ->
         state = %{state | process: process}
 
@@ -97,6 +108,30 @@ defmodule Alto.External.JSONRPC do
       {:error, reason} ->
         {:stop, reason, fail_all(state, reason)}
     end
+  end
+
+  defp open_process(opts) do
+    invocation = %{
+      requested_program: opts[:command],
+      executable: opts[:command],
+      args: opts[:args],
+      cwd: opts[:cwd],
+      timeout_ms: 30_000,
+      max_output_bytes: Alto.Command.default_output_bytes()
+    }
+
+    {executor, executor_opts} = opts[:executor]
+
+    with {:ok, execution, details} when is_map(details) <-
+           executor.prepare(invocation, executor_opts) do
+      Alto.Command.open(%{executor: executor, execution: execution},
+        env: opts[:env],
+        line: opts[:max_message_bytes],
+        startup_timeout: opts[:startup_timeout]
+      )
+    end
+  rescue
+    error in ArgumentError -> {:error, {:json_rpc_process_open_failed, Exception.message(error)}}
   end
 
   @impl true

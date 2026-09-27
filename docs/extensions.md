@@ -288,16 +288,18 @@ Use `Alto.Tool.prepare/4` or `Alto.Tool.run/4` for standalone invocations.
 
 ## Retained subprocesses
 
-MCP server options and `Alto.Tools.FFF.tools/1` accept an `executor:` using the same
+MCP and Codex server options, and `Alto.Tools.FFF.tools/1`, accept an `executor:` using the same
 `Alto.Command.Executor` contract as command tools. Executors may implement the
 optional `open(prepared, transport_options)` callback, returning an
 `Alto.External.Process`. Forward transport options, including `:line` for bounded
 OTP line framing. MCP and Codex `max_message_bytes` limits count JSON payload bytes,
 excluding LF or CRLF. They reject oversized or unterminated frames before decoding.
-MCP owns request deadlines and process lifetime. An executor without `open/2`
+The shared JSON-RPC host owns request deadlines and process lifetime. An executor without `open/2`
 fails closed; Alto never falls back to host execution. Client reuse includes the executor and its options in its key.
 Existing custom executors implementing only `prepare/2` and `execute/1` continue
 to work for ordinary command tools.
+Server argv comes from trusted host configuration; model-facing command argument
+limits do not apply.
 
 ```elixir
 sandbox = {Alto.Command.Executors.Bubblewrap,
@@ -310,7 +312,7 @@ Alto.Tools.FFF.tools(command: "/usr/local/bin/fff-mcp", executor: sandbox)
 
 Put sandbox environment variables in the executor's `env:` option. Bubblewrap
 rejects additional transport-level environment overrides after preparation.
-Unsandboxed MCP retains its existing server-level `env:` option. Both adapters
+Unsandboxed servers retain their server-level `env:` option. FFF and Ripwire
 remain unsandboxed unless a host selects an executor; the shipped coding profile
 selects Bubblewrap for both, exposes the selected executable read-only, and gives
 it a temporary home. Additional language runtimes or caches outside `/usr` and

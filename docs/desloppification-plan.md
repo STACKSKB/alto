@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,833 lines**, a **24.2% reduction**, with **2,375 lines remaining**.
+Current: **30,810 lines**, a **24.2% reduction**, with **2,352 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,15 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Ripwire uses the shared tool argument contract for its schema and input
-validation. Its separate action/top-k validation and argv-builder flow are
-removed; the adapter retains action-specific query requirements and gate exit
-status interpretation. Invalid input is checked against an executable fixture
-to prove it never dispatches. Redundant provider-profile constructor assertions
-were pruned while discovery, context inspection and execution still receive the
-configured connection options.
-This pass removes **18 production lines**: **13 code/type/declaration lines**,
-**5 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+MCP and Codex share process opening and transport defaults in the JSON-RPC
+lifecycle owner. Both protocol-specific opening callbacks are deleted; protocol
+handshakes, catalogs, notifications and cancellation remain in their adapters.
+The common flow prepares the configured executor and opens retained stdio while
+preserving transport limits and process cleanup. Trusted server argv bypasses
+model-input command limits. Tests exercise large Codex argv, actual MCP executor
+invocations, reuse partitioning and rejection of executors lacking stdio support.
+This pass removes **23 production lines**: **22 code/type/declaration lines**,
+**1 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 

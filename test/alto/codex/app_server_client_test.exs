@@ -28,6 +28,8 @@ defmodule Alto.Codex.AppServer.ClientTest do
               {nil, state}
             "test/pending" ->
               {nil, state}
+            "test/argv" ->
+              {%{"id" => id, "result" => %{"args" => System.argv()}}, state}
             "$/cancelRequest" ->
               IO.puts(JSON.encode!(%{"method" => "test/cancelled", "params" => message["params"]}))
               {nil, state}
@@ -79,10 +81,11 @@ defmodule Alto.Codex.AppServer.ClientTest do
     server: server
   } do
     secret = "codex-status-secret"
+    args = List.duplicate(String.duplicate("x", 600), 129)
 
     opts = [
       command: server,
-      args: [],
+      args: args,
       cwd: root,
       startup_timeout: 5_000,
       request_timeout: 5_000,
@@ -90,6 +93,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
     ]
 
     assert {:ok, client} = Client.ensure_started(opts)
+    assert {:ok, %{"args" => ^args}} = Client.request(client, "test/argv")
     assert {:ok, ^client} = Client.ensure_started(Enum.reverse(opts))
     refute inspect(:sys.get_status(client), limit: :infinity) =~ secret
     assert {:ok, isolated} = Client.ensure_started(Keyword.put(opts, :instance, :isolated))

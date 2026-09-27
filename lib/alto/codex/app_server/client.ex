@@ -9,7 +9,6 @@ defmodule Alto.Codex.AppServer.Client do
   """
 
   alias Alto.External.JSONRPC
-  alias Alto.External.Process, as: ExternalProcess
 
   @default_turn_timeout 120_000
 
@@ -147,37 +146,15 @@ defmodule Alto.Codex.AppServer.Client do
   @options_schema [
     command: [type: :string, default: "codex"],
     args: [type: {:list, :string}, default: ["app-server", "--stdio"]],
-    cwd: [type: :string],
-    env: [type: {:map, :any, :any}, default: %{}],
     experimental_api: [type: :boolean, default: false],
     instance: [type: :any, default: :shared],
     owner: [type: :pid],
-    startup_timeout: [type: :pos_integer, default: 30_000],
     request_timeout: [type: :pos_integer, default: @default_turn_timeout],
     max_message_bytes: [type: :pos_integer, default: 8_000_000],
-    max_pending_requests: [type: :pos_integer, default: 128],
-    max_ready_waiters: [type: :pos_integer, default: 128],
     max_subscribers: [type: :pos_integer, default: 128]
   ]
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
-
-  def open_port(opts) do
-    command = Keyword.fetch!(opts, :command)
-
-    case ExternalProcess.open(command, Keyword.fetch!(opts, :args),
-           cwd: Keyword.fetch!(opts, :cwd),
-           env: Keyword.fetch!(opts, :env),
-           line: Keyword.fetch!(opts, :max_message_bytes),
-           startup_timeout: Keyword.fetch!(opts, :startup_timeout)
-         ) do
-      {:ok, _process} = ok -> ok
-      {:error, reason} -> {:error, {:codex_app_server_port_open_failed, reason}}
-    end
-  rescue
-    error in ArgumentError ->
-      {:error, {:codex_app_server_port_open_failed, Exception.message(error)}}
-  end
 
   # Server requests carry both method and id. They must be handled before
   # looking up pending response ids, otherwise a request can steal a reply.

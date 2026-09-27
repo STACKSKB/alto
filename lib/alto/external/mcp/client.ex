@@ -87,47 +87,12 @@ defmodule Alto.External.MCP.Client do
 
   @options_schema [
     command: [type: :string, required: true],
-    args: [type: {:list, :string}, default: []],
-    cwd: [type: :string],
-    env: [type: {:map, :any, :any}, default: %{}],
-    executor: [type: :any, default: {Alto.Command.Executors.Unsandboxed, []}],
     protocol_version: [type: :any, default: @protocol_version],
-    startup_timeout: [type: :pos_integer, default: @default_timeout],
     request_timeout: [type: :pos_integer, default: @default_timeout],
-    max_message_bytes: [type: :pos_integer, default: 2_000_000],
-    max_pending_requests: [type: :pos_integer, default: 128],
-    max_ready_waiters: [type: :pos_integer, default: 128]
+    max_message_bytes: [type: :pos_integer, default: 2_000_000]
   ]
 
   defp normalize_options(opts), do: JSONRPC.normalize_options(opts, @options_schema)
-
-  def open_port(opts) do
-    context = %{session_id: "mcp", cwd: Keyword.fetch!(opts, :cwd)}
-
-    result =
-      with {:ok, prepared} <-
-             Alto.Command.prepare(
-               %{
-                 "program" => Keyword.fetch!(opts, :command),
-                 "args" => Keyword.fetch!(opts, :args)
-               },
-               context,
-               executor: Keyword.fetch!(opts, :executor)
-             ) do
-        Alto.Command.open(prepared,
-          env: Keyword.fetch!(opts, :env),
-          line: Keyword.fetch!(opts, :max_message_bytes),
-          startup_timeout: Keyword.fetch!(opts, :startup_timeout)
-        )
-      end
-
-    case result do
-      {:ok, _process} = ok -> ok
-      {:error, reason} -> {:error, {:mcp_port_open_failed, reason}}
-    end
-  rescue
-    error in ArgumentError -> {:error, {:mcp_port_open_failed, Exception.message(error)}}
-  end
 
   def initialized(result, state) do
     expected = Keyword.fetch!(state.opts, :protocol_version)
