@@ -152,29 +152,35 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
       loop: nil,
       profile_key: nil,
       system_prompt: nil,
-      model_tools: nil
+      model_tools: [:read_file, "read_file"]
     }
 
     assert %Alto.Runner.Result{status: :ok} =
              result =
              Alto.run(%{agents: [request]},
                loop: batch_loop([]),
+               tools: [Alto.Tools.ReadFile],
                provider: {CountingProvider, test_pid: self()}
              )
 
     assert {:completed, %{results: [%{status: :ok}]}} = result.output
+    assert_received {:batch_provider_invoked, _}
 
     for invalid <- [
           %{"id" => "child", "task" => "work"},
           %{"extra" => true, id: "child", task: "work"},
           %{id: "", task: "work"},
+          %{id: <<255>>, task: "work"},
           %{id: "child", task: nil},
           %{id: "child", task: ""},
           %{id: "child", task: "work", max_steps: 0},
           %{id: "child", task: "work", provider: nil},
           %{id: "child", task: "work", profile_key: ""},
+          %{id: "child", task: "work", model: String.duplicate("x", 257)},
           %{id: "child", task: "work", system_prompt: String.duplicate("x", 64_001)},
-          %{id: "child", task: "work", model_tools: [""]}
+          %{id: "child", task: "work", model_tools: [""]},
+          %{id: "child", task: "work", model_tools: [<<255>>]},
+          %{id: "child", task: "work", model_tools: [42]}
         ] do
       assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
                Alto.run(%{agents: [invalid]},
@@ -182,6 +188,8 @@ defmodule Alto.Runner.SerialSubagentBatchTest do
                  provider: {CountingProvider, test_pid: self()}
                )
     end
+
+    refute_receive {:batch_provider_invoked, _}, 100
   end
 
   test "parent cancellation stops active children and never starts queued work", %{dir: dir} do

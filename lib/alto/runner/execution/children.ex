@@ -8,18 +8,22 @@ defmodule Alto.Runner.Execution.Children do
   alias Alto.{Event, Usage}
   alias Alto.Runner.{Budget, Result}
   alias Alto.Subagents.Continuation
+  alias Alto.Tool.Arguments
   alias Alto.Runner.Execution.{Events, Operation}
 
   @spawn_schema NimbleOptions.new!(
-                  id: [type: :string, required: true],
-                  task: [type: :any, required: true],
+                  id: [type: Arguments.text(1, :infinity), required: true],
+                  task: [type: {:custom, __MODULE__, :task, []}, required: true],
                   max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
                   tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
                   loop: [type: {:or, [nil, :map]}, default: nil],
-                  model: [type: {:or, [nil, :string]}, default: nil],
-                  profile_key: [type: {:or, [nil, :string]}, default: nil],
-                  system_prompt: [type: {:or, [nil, :string]}, default: nil],
-                  model_tools: [type: {:or, [nil, {:list, :any}]}, default: nil]
+                  model: [type: {:or, [nil, Arguments.text(1, 256)]}, default: nil],
+                  profile_key: [type: {:or, [nil, Arguments.text(1, 256)]}, default: nil],
+                  system_prompt: [type: {:or, [nil, Arguments.text(1, 64_000)]}, default: nil],
+                  model_tools: [
+                    type: {:or, [nil, {:list, {:or, [:atom, Arguments.text(1, :infinity)]}}]},
+                    default: nil
+                  ]
                 )
 
   @inherited_options ~w(provider_profiles credentials_path provider_retries retry_policy tool_presenter checkpoint_version
@@ -35,52 +39,19 @@ defmodule Alto.Runner.Execution.Children do
                           ])
 
   defp validate_spawn(data) when is_map(data) and not is_struct(data) do
-    with true <- Enum.all?(Map.keys(data), &is_atom/1),
-         {:ok, values} <- NimbleOptions.validate(Map.to_list(data), @spawn_schema),
-         spec <- Map.new(values),
-         :ok <- validate_spawn_constraints(spec) do
-      {:ok, spec}
+    if Enum.all?(Map.keys(data), &is_atom/1) do
+      with {:ok, values} <- NimbleOptions.validate(Map.to_list(data), @spawn_schema),
+           do: {:ok, Map.new(values)}
     else
-      false ->
-        {:error, :spawn_fields_must_be_atoms}
-
-      {:error, %NimbleOptions.ValidationError{key: key, value: value}} ->
-        {:error, {:invalid_spawn_field, key, value}}
-
-      {:error, _} = error ->
-        error
+      {:error, :spawn_fields_must_be_atoms}
     end
   end
 
   defp validate_spawn(data), do: {:error, {:not_a_map, data}}
 
-  # Tasks intentionally accept any term except nil and the empty binary. The
-  # selected child loop owns the task shape.
-  defp validate_spawn_constraints(spec) do
-    cond do
-      spec.id == "" ->
-        {:error, {:invalid_spawn_field, :id, spec.id}}
-
-      is_nil(spec.task) or spec.task == "" ->
-        {:error, {:invalid_spawn_field, :task, spec.task}}
-
-      is_binary(spec.model) and byte_size(spec.model) not in 1..256 ->
-        {:error, {:invalid_spawn_field, :model, spec.model}}
-
-      is_binary(spec.profile_key) and byte_size(spec.profile_key) not in 1..256 ->
-        {:error, {:invalid_spawn_field, :profile_key, spec.profile_key}}
-
-      is_binary(spec.system_prompt) and byte_size(spec.system_prompt) not in 1..64_000 ->
-        {:error, {:invalid_spawn_field, :system_prompt, spec.system_prompt}}
-
-      is_list(spec.model_tools) and
-          not Enum.all?(spec.model_tools, &(is_atom(&1) or (is_binary(&1) and &1 != ""))) ->
-        {:error, {:invalid_spawn_field, :model_tools, spec.model_tools}}
-
-      true ->
-        :ok
-    end
-  end
+  # The selected child loop owns the native task shape.
+  def task(value) when value not in [nil, ""], do: {:ok, value}
+  def task(_), do: {:error, "expected a nonnil, nonempty task"}
 
   def run_children(specs, concurrency, run) do
     with {:ok, specs, journal, run} <- prepare_children(specs, run) do

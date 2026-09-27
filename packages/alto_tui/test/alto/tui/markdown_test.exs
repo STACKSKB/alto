@@ -47,17 +47,18 @@ defmodule Alto.TUI.MarkdownTest do
              "Long heading:"
   end
 
-  test "small tables align and large evidence tables become complete labeled records" do
+  test "tables retain every cell at wide and narrow widths" do
     table = "| File | Verdict |\n| --- | --- |\n| `one.ex` | **OK** |\n| `two.ex` | Fix |"
-    wide = Markdown.plain(table, 80)
-    assert wide =~ "File"
-    assert wide =~ "│"
-    assert wide =~ "one.ex"
-    refute wide =~ "**"
-    narrow = Markdown.plain(table, 12)
-    assert narrow =~ "File: one.ex"
-    assert narrow =~ "Verdict: OK"
-    assert narrow =~ "File: two.ex"
+
+    for width <- [12, 80] do
+      rendered = Markdown.plain(table, width)
+
+      for cell <- ["File", "Verdict", "one.ex", "OK", "two.ex", "Fix"],
+          do: assert(rendered =~ cell)
+
+      refute rendered =~ "**"
+    end
+
     evidence = String.duplicate("long evidence ", 50) <> "FINAL EVIDENCE"
     report = "| Finding | Evidence |\n| --- | --- |\n| Bug | #{evidence} |"
     output = Markdown.plain(report, 55)
@@ -69,9 +70,12 @@ defmodule Alto.TUI.MarkdownTest do
 
   test "table parsing keeps escaped pipes and pipes inside inline code" do
     source = "| Expression | Note |\n| --- | --- |\n| `a | b` | left\\|right |"
-    rendered = Markdown.plain(source, 80)
-    assert rendered =~ "a | b"
-    assert rendered =~ "left|right"
+
+    for width <- [12, 80] do
+      rendered = Markdown.plain(source, width)
+      assert rendered =~ "a | b"
+      assert rendered =~ "left|right"
+    end
   end
 
   test "long code and irregular table rows retain their final evidence" do
@@ -82,9 +86,14 @@ defmodule Alto.TUI.MarkdownTest do
     assert rendered =~ "\n    界"
     refute rendered =~ "```"
 
-    table = "| File | Result |\n| --- | --- |\n| one | ok | extra evidence |"
-    rendered = Markdown.plain(table, 80)
-    assert rendered =~ "Column 3: extra evidence"
+    table = "| File | Result |\n| --- | --- |\n| one | ok | extra evidence |\n| two |"
+
+    for width <- [12, 80] do
+      rendered = Markdown.plain(table, width) |> String.replace("\n", " ")
+
+      for cell <- ["File", "Result", "one", "ok", "Column 3", "extra evidence", "two"],
+          do: assert(rendered =~ cell)
+    end
 
     unicode_table = "| 名 | 値 |\n| --- | --- |\n| one | 猫猫猫 |"
     assert Markdown.plain(unicode_table, 15) =~ "値: 猫猫猫"

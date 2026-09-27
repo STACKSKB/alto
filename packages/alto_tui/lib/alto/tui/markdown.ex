@@ -1,5 +1,5 @@
 defmodule Alto.TUI.Markdown do
-  @moduledoc "Streaming-safe native Markdown with responsive evidence tables."
+  @moduledoc "Streaming-safe native Markdown with tables rendered as labeled records."
 
   alias ExRatatui.{CellSession, Style, Text}
   alias ExRatatui.Layout.Rect
@@ -61,10 +61,9 @@ defmodule Alto.TUI.Markdown do
         blocks(rest, [{:code, "", code} | acc])
 
       table?(line, rest) ->
-        [separator | rest] = rest
+        [_separator | rest] = rest
         {rows, rest} = Enum.split_while(rest, &table_row?/1)
-        source = Enum.join([line, separator | rows], "\n")
-        blocks(rest, [{:table, source, cells(line), Enum.map(rows, &cells/1)} | acc])
+        blocks(rest, [{:table, cells(line), Enum.map(rows, &cells/1)} | acc])
 
       true ->
         {markdown, rest} = take_markdown(rest, [line])
@@ -153,53 +152,22 @@ defmodule Alto.TUI.Markdown do
     ]
   end
 
-  defp render_block({:table, source, headers, records}, width) do
-    original_columns = length(headers)
+  defp render_block({:table, headers, records}, width) do
     columns = Enum.reduce(records, length(headers), &max(length(&1), &2))
     headers = headers ++ Enum.map((length(headers) + 1)..columns//1, &"Column #{&1}")
+    rows = if records == [], do: [[]], else: records
 
-    required =
-      1 +
-        Enum.reduce(0..(columns - 1), 0, fn index, total ->
-          widest =
-            Enum.reduce([headers | records], 1, fn row, size ->
-              max(size, display_width(Enum.at(row, index, "")))
-            end)
-
-          total + widest + 3
-        end)
-
-    # The native GFM parser treats pipes in code spans as separators. It also
-    # discards cells beyond the header width, so use the semantic fallback for
-    # either case rather than losing evidence.
-    native_safe? =
-      Enum.all?([headers | records], fn row ->
-        length(row) <= original_columns and Enum.all?(row, &(not String.contains?(&1, "|")))
+    rows
+    |> Enum.map(fn row ->
+      headers
+      |> Enum.with_index()
+      |> Enum.map_join("\n\n", fn {header, index} ->
+        "**#{header}:** #{Enum.at(row, index, "")}"
       end)
-
-    if required <= width and native_safe? do
-      materialize({:markdown, source}, width)
-    else
-      rows = if records == [], do: [[]], else: records
-
-      rows
-      |> Enum.map(fn row ->
-        headers
-        |> Enum.with_index()
-        |> Enum.map_join("\n\n", fn {header, index} ->
-          "**#{header}:** #{Enum.at(row, index, "")}"
-        end)
-      end)
-      |> Enum.map(&materialize({:markdown, &1}, width))
-      |> Enum.intersperse([Line.new([])])
-      |> List.flatten()
-    end
-  end
-
-  defp display_width(text) do
-    glyphs = String.graphemes(text)
-    widths = Alto.TUI.Selection.glyph_widths(glyphs)
-    Enum.reduce(glyphs, 0, &(Map.get(widths, &1, 1) + &2))
+    end)
+    |> Enum.map(&materialize({:markdown, &1}, width))
+    |> Enum.intersperse([Line.new([])])
+    |> List.flatten()
   end
 
   defp materialize({_kind, ""}, _width), do: [Line.new([])]

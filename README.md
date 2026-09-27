@@ -149,8 +149,8 @@ folder; creating a workspace preserves the current draft.
 
 Assistant responses render as Markdown while streaming and when reopening a task:
 headings and emphasis are styled, fenced code retains indentation with syntax
-color, and tables use aligned columns when they fit or labeled records for long
-reports. Selection copies the visible formatted text; saved messages retain the
+color, and tables use labeled records that retain all cells at every pane width.
+Selection copies the visible formatted text; saved messages retain the
 original Markdown. Layout caches and viewport-only painting keep report formatting
 out of the pointer-motion path. The shared renderer is also used by Zekkyou.
 

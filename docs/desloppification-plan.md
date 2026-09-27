@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,366 lines**, a **22.8% reduction**, with **2,908 lines remaining**.
+Current: **31,305 lines**, a **23.0% reduction**, with **2,847 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,15 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Child admission now uses one schema for types, defaults and bounds, replacing a
+second constraints pass. Native tasks retain arbitrary terms except nil/empty;
+string fields require UTF-8, and rejected input never dispatches a provider.
+Markdown tables use labeled records at every width, deleting grid estimation and
+fallback selection while retaining every cell, extra column and escaped pipe.
+This pass removes **61 production lines**: **44 code/typespec**, **13 blank**, and
+**4 source documentation/comment** lines. All **1,075 core tests** and **145 TUI
+tests** pass. No dependency, migration or compatibility wrapper was added.
 
 Consumer handlers now return canonical ledger actions or a runner result directly.
 One path commits the ledger command and settles the queue claim; redundant outcome
