@@ -1,5 +1,16 @@
 defmodule Alto.Runner.Result do
-  @moduledoc "The inspectable result of one Alto run."
+  @moduledoc """
+  The inspectable result of one Alto run.
+
+  `status` and `reason` describe execution success or failure. `model_requests`
+  counts native provider attempts, including rejected requests. `verdict` describes
+  tool-effect evidence, not whether an HTTP request was sent: `completed` means
+  known completed effects (or successful effect-free work), `rejected_before_dispatch`
+  means no tool effect was dispatched, `failed_known` records a known failed effect,
+  and `unknown` means effects or completion remain uncertain. `empty` is an internal
+  aggregation state. An HTTP 402 can therefore have one model request and a
+  `rejected_before_dispatch` tool verdict. Use `reason` for the provider error.
+  """
 
   defstruct status: :error,
             reason: nil,

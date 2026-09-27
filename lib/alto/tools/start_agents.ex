@@ -7,7 +7,7 @@ defmodule Alto.Tools.StartAgents do
     Alto.Tools.SpawnAgents.schema(opts)
     |> Map.put(
       :description,
-      "Start agents and return agent_id addresses immediately. Use send_message to communicate and wait_agents to join. Children remain owned by this run and are cancelled when it ends. Live agents cannot be checkpointed."
+      "Start agents and return pending agent_id addresses immediately; acceptance is not successful startup. Inspect wait_agents results for startup/provider failures. Use send_message to communicate and wait_agents to join. Children remain owned by this run and are cancelled when it ends. Pending messages and native agents are retained across supported checkpoints."
     )
   end
 

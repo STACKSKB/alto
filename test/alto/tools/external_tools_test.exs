@@ -26,6 +26,28 @@ defmodule Alto.Tools.ExternalToolsTest do
     %{root: root, context: context}
   end
 
+  test "unborn repositories can unstage without deleting files and reject misleading branch creation",
+       %{root: root, context: context} do
+    {head, 0} = System.cmd("git", ["symbolic-ref", "HEAD"], cd: root)
+
+    assert {:error, :git_create_branch_requires_initial_commit} =
+             Alto.Tool.prepare(
+               GitMutate,
+               %{"action" => "create_branch", "branch" => "probe"},
+               context
+             )
+
+    assert {^head, 0} = System.cmd("git", ["symbolic-ref", "HEAD"], cd: root)
+    System.cmd("git", ["add", "sample.txt"], cd: root)
+
+    {:ok, prepared, _} =
+      Alto.Tool.prepare(GitMutate, %{"action" => "unstage", "paths" => ["sample.txt"]}, context)
+
+    assert {:ok, _} = GitMutate.run(prepared, context)
+    assert {"", 0} = System.cmd("git", ["ls-files"], cd: root)
+    assert File.read!(Path.join(root, "sample.txt")) == "hello\n"
+  end
+
   test "Git inspection delegates to the installed CLI with bounded output", %{context: context} do
     assert {:ok, %{output: output, exit_status: 0}} =
              Alto.Tool.run(GitInspect, %{"action" => "status"}, context)

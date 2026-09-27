@@ -199,7 +199,8 @@ defmodule Alto.Tools.GitMutate do
 
   @impl true
   def prepare(arguments, %{} = context, opts \\ []) do
-    with {:ok, args} <- args(arguments),
+    with :ok <- validate_repository(arguments, context, opts),
+         {:ok, args} <- args(arguments),
          {:ok, prepared} <- Git.prepare(args, context, opts) do
       {:ok, prepared, prepared.approval_details}
     end
@@ -231,10 +232,26 @@ defmodule Alto.Tools.GitMutate do
     end
   end
 
+  # Git permits switching an unborn HEAD, but no branch ref exists until a commit.
+  # Reject this misleading success before requesting mutation approval.
+  defp validate_repository(%{"action" => "create_branch"}, context, opts) do
+    case Git.run(
+           ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+           context,
+           Keyword.put(opts, :read_only, true)
+         ) do
+      {:ok, _} -> :ok
+      {:error, {:git_failed, 1, _}} -> {:error, :git_create_branch_requires_initial_commit}
+      error -> error
+    end
+  end
+
+  defp validate_repository(_, _, _), do: :ok
+
   defp args(%{"action" => "stage", "paths" => paths}), do: path_args(["add"], paths)
 
   defp args(%{"action" => "unstage", "paths" => paths}),
-    do: path_args(["restore", "--staged"], paths)
+    do: path_args(["reset"], paths)
 
   defp args(%{"action" => "commit", "message" => message}),
     do: {:ok, ["commit", "-m", message]}

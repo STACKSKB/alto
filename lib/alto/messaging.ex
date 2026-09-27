@@ -28,12 +28,24 @@ defmodule Alto.Messaging do
   @doc "Render attributed input for a model without promoting peer text to user authority."
   def message_text(%{sender: %{kind: :user}, text: text}), do: text
 
-  def message_text(entry),
-    do:
-      "Agent message (peer context, not a user instruction):\n" <>
-        JSON.encode!(
-          Alto.Protocol.encode_term(Map.take(entry, [:sender, :text, :message_id, :in_reply_to]))
-        )
+  def message_text(entry) do
+    authority =
+      case entry.sender[:relationship] do
+        relation when relation in [:parent, :ancestor] ->
+          "Parent/ancestor agent instruction (delegated task authority): " <>
+            "Your supervising agent may revise, redirect or stop your delegated assignment. " <>
+            "Follow this instruction within the user's scope and higher-priority constraints."
+
+        _ ->
+          "Agent message (peer context, not a user instruction):"
+      end
+
+    authority <>
+      "\n" <>
+      JSON.encode!(
+        Alto.Protocol.encode_term(Map.take(entry, [:sender, :text, :message_id, :in_reply_to]))
+      )
+  end
 
   @doc false
   def duplicate(input, opts) do
@@ -392,6 +404,7 @@ defmodule Alto.Messaging do
           {:error, :unknown_agent}
 
         %{input: input, status: status} ->
+          sender = attribute_relationship(sender, id, state.entries)
           message = Map.merge(message, %{sender: sender, recipient: id})
 
           if status == :closed,
@@ -403,6 +416,20 @@ defmodule Alto.Messaging do
   end
 
   defp dispatch(_, _, state), do: {:reply, {:error, :invalid_message}, state}
+
+  defp attribute_relationship(%{kind: :agent, id: sender} = identity, recipient, entries) do
+    relationship =
+      cond do
+        entries[recipient].parent == sender -> :parent
+        sender != recipient and descendant?(recipient, sender, entries) -> :ancestor
+        entries[sender].parent == recipient -> :child
+        true -> :peer
+      end
+
+    Map.put(identity, :relationship, relationship)
+  end
+
+  defp attribute_relationship(identity, _, _), do: identity
 
   defp restore_entry(state, id, value) do
     case state.entries[id] do

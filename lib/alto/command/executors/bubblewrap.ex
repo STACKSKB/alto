@@ -3,7 +3,10 @@ defmodule Alto.Command.Executors.Bubblewrap do
   Linux namespace executor with an isolated filesystem and optional network.
 
   Bubblewrap provides namespace and filesystem isolation here; it does not
-  provide seccomp syscall filtering.
+  provide seccomp syscall filtering. `/usr` and `/etc` are host read-only mounts
+  for executables, libraries and configuration; this is not a workspace-only read
+  sandbox. The workspace and explicit writable mounts are persistent. Other
+  writes land in an ephemeral namespace, and network access defaults to disabled.
   """
 
   @behaviour Alto.Command.Executor

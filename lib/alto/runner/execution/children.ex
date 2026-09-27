@@ -59,6 +59,7 @@ defmodule Alto.Runner.Execution.Children do
   @doc "Prepare resources and journal without granting any child dispatch."
   def prepare_children(specs, run) do
     with {:ok, specs} <- prepare_resources(specs, run),
+         {:ok, specs} <- register_agents(specs, run),
          {:ok, journal, run} <- open_continuation(specs, run),
          do: {:ok, specs, journal, run}
   end
@@ -343,7 +344,7 @@ defmodule Alto.Runner.Execution.Children do
           child_profile: checkpoint_profile(spec),
           tools: subagent_tools(spec.tools, run),
           loop: spec.loop || Alto.default_loop(),
-          prompt: spec.system_prompt || run.prompt_config[:prompt],
+          prompt: if(provider, do: spec.system_prompt || run.prompt_config[:prompt]),
           project_instructions: run.prompt_config[:project_instructions],
           cwd: run.cwd,
           workspace_assignment: Map.get(spec, :workspace_assignment),
@@ -361,7 +362,7 @@ defmodule Alto.Runner.Execution.Children do
           messaging_tools: Alto.Messaging.allowed_tools(run),
           parent_max_agent_depth: run.max_agent_depth,
           max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
-          event_sink: subagent_sink(run, spec.id),
+          event_sink: subagent_sink(run, spec),
           parent_run_id: run.session_id,
           agent_identity: child_agent_identity(run.agent_identity, spec.id),
           parent_model_tools: run.model_tools,
@@ -450,13 +451,20 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   defp run_batch(specs, concurrency, start, run) do
-    Alto.Runner.Agents.batch(specs, concurrency, start, fn ->
-      case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-        {{:cancelled, _} = cancelled, _} -> cancelled
-        {_, {:error, _} = error} -> error
-        _ -> :continue
-      end
-    end)
+    Alto.Runner.Agents.batch(
+      specs,
+      concurrency,
+      start,
+      fn ->
+        case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
+          {{:cancelled, _} = cancelled, _} -> cancelled
+          {_, {:error, _} = error} -> error
+          _ -> :continue
+        end
+      end,
+      event_sink: run.event_sink,
+      parent: run.messaging.id
+    )
   end
 
   defp resume_child(entry, journal, run) do
@@ -516,16 +524,19 @@ defmodule Alto.Runner.Execution.Children do
   defp subagent_tools(:inherit, run), do: run.tool_specs
   defp subagent_tools(tools, _run), do: tools
 
-  defp subagent_sink(run, id) do
+  defp subagent_sink(run, spec) do
     fn event ->
-      if event.domain == :live do
-        Alto.Events.notify(
-          run.event_sink,
-          Event.live(:subagent_progress, %{id: id, event: event})
-        )
-      end
-
-      :ok
+      Alto.Events.notify(
+        run.event_sink,
+        Event.live(:subagent_progress, %{
+          id: spec.id,
+          agent_id: spec.messaging.id,
+          parent: run.messaging.id,
+          model: spec.model,
+          backend: spec.profile_key,
+          event: event
+        })
+      )
     end
   end
 

@@ -6,7 +6,7 @@ defmodule Alto.Runner.Agents do
 
   def batch(specs, concurrency, start, check, opts \\ []) do
     runner = Keyword.get(opts, :runner, Runner)
-    {:ok, pid} = GenServer.start(__MODULE__, {self(), specs, concurrency, start, runner})
+    {:ok, pid} = GenServer.start(__MODULE__, {self(), specs, concurrency, start, runner, opts})
 
     try do
       await_batch(pid, check)
@@ -72,13 +72,13 @@ defmodule Alto.Runner.Agents do
   def resume({pid, id}), do: GenServer.call(pid, {:resume, id}, :infinity)
 
   @impl true
-  def init({owner, specs, concurrency, start, runner}) do
+  def init({owner, specs, concurrency, start, runner, opts}) do
     {:ok, state} = init(owner)
 
     {:ok,
      %{
        state
-       | entries: Enum.map(specs, &new_entry(&1, nil)),
+       | entries: Enum.map(specs, &new_entry(&1, nil, opts)),
          limit: concurrency,
          frozen: true,
          start: start,
@@ -104,6 +104,7 @@ defmodule Alto.Runner.Agents do
       {:reply, {:error, :agent_capacity}, state}
     else
       entries = Enum.map(specs, &new_entry(&1, run))
+      Enum.each(entries, &notify_status/1)
       send(self(), :dispatch)
       next = %{state | entries: state.entries ++ entries, limit: run.child_limits.max_concurrency}
       {:reply, {:ok, Enum.map(entries, &public/1)}, next}
@@ -294,28 +295,51 @@ defmodule Alto.Runner.Agents do
     if entry.spec[:messaging], do: Alto.Messaging.close(entry.spec.messaging)
     entry = %{entry | starter: nil, handle: nil, ref: nil, run: nil}
 
-    case {entry.batch?, outcome} do
-      {true, _} ->
-        %{entry | status: :completed, outcome: outcome}
+    next =
+      case {entry.batch?, outcome} do
+        {true, _} ->
+          %{entry | status: :completed, outcome: outcome}
 
-      {false,
-       %Alto.Runner.Result{status: :suspended, reason: :execution_suspended, checkpoint: packet}}
-      when retain_checkpoint? ->
-        %{
-          entry
-          | status: :suspended,
-            summary: nil,
-            spec: Map.put(entry.spec, :async_checkpoint, packet)
-        }
+        {false,
+         %Alto.Runner.Result{status: :suspended, reason: :execution_suspended, checkpoint: packet}}
+        when retain_checkpoint? ->
+          %{
+            entry
+            | status: :suspended,
+              summary: nil,
+              spec: Map.put(entry.spec, :async_checkpoint, packet)
+          }
 
-      _ ->
-        %{entry | status: :completed, summary: Children.child_summary(entry.spec.id, outcome)}
-    end
+        _ ->
+          %{entry | status: :completed, summary: Children.child_summary(entry.spec.id, outcome)}
+      end
+
+    notify_status(next)
+    next
   end
 
-  defp new_entry(spec, run) do
+  defp notify_status(entry) do
+    summary =
+      entry.summary || if(entry.outcome, do: Children.child_summary(entry.spec.id, entry.outcome))
+
+    data = %{
+      agent_id: if(entry.spec[:messaging], do: entry.spec.messaging.id, else: entry.id),
+      id: entry.spec.id,
+      parent: entry.parent,
+      status: entry.status,
+      model: entry.spec[:model],
+      backend: entry.spec[:profile_key],
+      result: summary && Map.take(summary, [:status, :reason, :output, :session_id, :usage])
+    }
+
+    Alto.Events.notify(entry.event_sink, Alto.Event.live(:subagent_status, data))
+  end
+
+  defp new_entry(spec, run, opts \\ []) do
     %{
       id: if(run, do: spec.messaging.id, else: spec.id),
+      event_sink: if(run, do: run.event_sink, else: opts[:event_sink]),
+      parent: if(run, do: run.messaging.id, else: opts[:parent]),
       spec: spec,
       run:
         if(run,
@@ -357,7 +381,16 @@ defmodule Alto.Runner.Agents do
       state
       | entries:
           Enum.map(state.entries, fn entry ->
-            if predicate.(entry), do: change.(entry), else: entry
+            if predicate.(entry) do
+              next = change.(entry)
+
+              if next.status != entry.status and next.status not in [:completed, :suspended],
+                do: notify_status(next)
+
+              next
+            else
+              entry
+            end
           end)
     }
 

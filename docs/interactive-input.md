@@ -169,3 +169,24 @@ An external Codex turn is one Alto effect: checkpointing waits for that effect t
 settle. It does not serialize a running App Server process or interrupt and replay
 an external turn. The official protocol contracts are documented in
 [Codex App Server](https://learn.chatgpt.com/docs/app-server).
+
+### Agent hierarchy and outcomes
+
+The router stamps agent messages with the sender's relationship to the recipient:
+parent, ancestor, child, or peer. A parent/ancestor may revise or stop a delegated
+assignment within the user's goal and constraints; peers and children supply
+context. Authority is computed from registered identities, never model-supplied
+message text. Consumption receipts establish delivery, not guaranteed compliance.
+
+`start_agents` accepts work asynchronously. `pending` is not successful startup;
+inspect `wait_agents` results for provider or configuration failures. Wait reasons
+are completion, timeout, or message arrival; a wait timeout does not terminate the
+child, but the child's own execution deadline does. Agent labels are display names;
+use the unique `agent_id` for messaging and joins.
+
+Result `status`/`reason` describe run success and failure. The `verdict` describes
+tool-effect evidence (`completed`, `rejected_before_dispatch`, `failed_known`, or
+`unknown`), while `model_requests` counts native provider attempts including rejected
+HTTP requests. A provider credit rejection can have a request count of one without
+any tool having been dispatched. A transport timeout may leave effect certainty
+unknown; it is not interchangeable with `wait_agents` timing out.

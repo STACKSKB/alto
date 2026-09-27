@@ -44,6 +44,8 @@ defmodule Alto.TUI.State do
     projects: [],
     tasks: %{},
     entries: %{},
+    subagents: %{},
+    selected_agent_id: nil,
     profiles: [],
     preferences: %{},
     models: %{},
@@ -343,6 +345,7 @@ defmodule Alto.TUI.State do
         state
         |> Alto.TUI.Search.close()
         |> Map.put(:selected_task_id, id)
+        |> Map.put(:selected_agent_id, nil)
         |> Map.put(:search, nil)
         |> Map.put(:transcript_follow?, true)
         |> sync_backend(task)
@@ -357,6 +360,7 @@ defmodule Alto.TUI.State do
     %{
       state
       | selected_task_id: nil,
+        selected_agent_id: nil,
         search: nil,
         overlay: nil,
         leader?: false,
@@ -682,10 +686,19 @@ defmodule Alto.TUI.State do
   defp evict_inactive_caches(%__MODULE__{} = state) do
     active = Enum.map(state.runs, fn {_id, run} -> run.task_id end)
     keep = MapSet.new([state.selected_task_id || :scratch | active])
-    cached = Enum.uniq(Map.keys(state.entries) ++ Map.keys(state.usage))
+
+    cached =
+      Enum.uniq(Map.keys(state.entries) ++ Map.keys(state.usage) ++ Map.keys(state.subagents))
+
     inactive = Enum.reject(cached, &MapSet.member?(keep, &1))
     drop = Enum.take(Enum.sort(inactive), max(length(cached) - @max_cached_tasks, 0))
-    %{state | entries: Map.drop(state.entries, drop), usage: Map.drop(state.usage, drop)}
+
+    %{
+      state
+      | entries: Map.drop(state.entries, drop),
+        usage: Map.drop(state.usage, drop),
+        subagents: Map.drop(state.subagents, drop)
+    }
   end
 
   def sync_backend(state, task) when is_map(task), do: sync_backend(state, task_backend(task))

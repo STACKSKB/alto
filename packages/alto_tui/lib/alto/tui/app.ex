@@ -178,6 +178,13 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{code: "esc"}, %{search: search} = state) when not is_nil(search),
     do: {:noreply, Search.close(state)}
 
+  defp route_event(
+         %Key{code: "esc"},
+         %{selected_agent_id: id, focus: :details, pending_approvals: []} = state
+       )
+       when not is_nil(id),
+       do: {:noreply, State.close_details_drawer(%{state | selected_agent_id: nil})}
+
   defp route_event(%Key{code: "esc"}, %{details_return_focus: focus} = state)
        when not is_nil(focus),
        do: {:noreply, State.close_details_drawer(state)}
@@ -198,6 +205,7 @@ defmodule Alto.TUI.App do
       "x" -> {:noreply, State.close_workspace(state, state.selected_project_id)}
       "t" -> {:noreply, open_overlay(state, :task)}
       "n" -> {:noreply, state |> State.new_task() |> Map.put(:leader?, false)}
+      "u" -> {:noreply, open_overlay(%{state | selected_agent_id: nil}, :agents)}
       "s" -> {:noreply, steer_queued(%{state | leader?: false})}
       "d" -> {:noreply, toggle_details(state)}
       "esc" -> {:noreply, %{state | leader?: false, notice: nil}}
@@ -888,6 +896,24 @@ defmodule Alto.TUI.App do
       else: state
   end
 
+  defp do_ingest_event(state, task_id, %Event{type: type} = event)
+       when type in [:subagent_status, :subagent_progress] do
+    state = Alto.TUI.Subagents.ingest(state, task_id, event)
+
+    if task_id == state.selected_task_id and match?(%{kind: :agents}, state.overlay) do
+      selected = Menu.selected(state.overlay)
+      {:ok, _, items, _} = overlay_items(state, :agents)
+      menu = %{state.overlay | items: items}
+
+      index =
+        Enum.find_index(Menu.items(menu), &(&1[:value] == (selected && selected[:value]))) || 0
+
+      %{state | overlay: %{menu | index: index}}
+    else
+      state
+    end
+  end
+
   defp do_ingest_event(state, _task_id, %Event{
          type: :approval_resolved,
          data: %{request: request}
@@ -973,6 +999,20 @@ defmodule Alto.TUI.App do
       {:error, reason} ->
         %{state | notice: reason}
     end
+  end
+
+  defp overlay_items(state, :agents) do
+    items =
+      Enum.map(Alto.TUI.Subagents.list(state), fn agent ->
+        %{
+          label: Alto.TUI.Subagents.label(agent) <> " · " <> agent.agent_id,
+          value: {:agent, agent.agent_id}
+        }
+      end)
+
+    if items == [],
+      do: {:error, "No subagent activity for this task yet"},
+      else: {:ok, "subagents · select to view live activity", items, nil}
   end
 
   defp overlay_items(state, :effort) do
@@ -1123,6 +1163,19 @@ defmodule Alto.TUI.App do
 
       %{value: :close_workspace} ->
         State.close_workspace(state, state.selected_project_id)
+
+      %{value: {:agent, id}} ->
+        next = %{
+          state
+          | selected_agent_id: id,
+            overlay: nil,
+            details_visible?: true,
+            details_scroll: 0
+        }
+
+        if State.details_pane_visible?(next),
+          do: %{next | focus: :details},
+          else: State.open_details_drawer(next)
 
       %{value: :new_task} ->
         State.new_task(state)

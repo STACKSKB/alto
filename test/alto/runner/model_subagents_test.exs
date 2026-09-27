@@ -86,6 +86,52 @@ defmodule Alto.Runner.ModelSubagentsTest do
     )
   end
 
+  test "child lifecycle and model activity have stable separate identities" do
+    owner = self()
+    calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
+
+    result =
+      Alto.run(
+        "delegate",
+        options(calls, event_sink: fn event -> send(owner, {:child_event, event}) end)
+      )
+
+    assert result.status == :ok
+
+    assert_receive {:child_event,
+                    %{type: :subagent_status, data: %{agent_id: id, status: :starting}}}
+
+    assert_receive {:child_event,
+                    %{
+                      type: :subagent_progress,
+                      data: %{agent_id: ^id, event: %{type: :model_started}}
+                    }}
+
+    assert_receive {:child_event,
+                    %{
+                      type: :subagent_status,
+                      data: %{agent_id: ^id, status: :completed, result: %{status: :ok}}
+                    }}
+  end
+
+  test "Codex rule children do not inherit a provider-only prompt" do
+    calls = [call("spawn", "spawn_agents", %{"agents" => [task("child", "codex")]})]
+
+    opts =
+      options(calls,
+        prompt: &Alto.Prompts.Coding.build/1,
+        tools:
+          Alto.Tools.agents() ++
+            [{Alto.Tools.CodexAgent, command: "/nonexistent/alto-test-codex"}]
+      )
+
+    result = Alto.run("delegate", opts)
+    reply = Enum.find(result.messages, &(&1["tool_call_id"] == "spawn"))
+    assert reply
+    refute reply["content"] =~ "prompt_options_require_provider"
+    assert reply["content"] =~ "error"
+  end
+
   test "mixed discovery and delegation settle correlated tool calls and merge child usage" do
     calls = [
       call("list", "list_agent_models", %{}),

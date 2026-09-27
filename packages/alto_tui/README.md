@@ -255,3 +255,13 @@ Adapters are trusted host code with access to UI state. They must preserve their
 protocol's approval and runtime controls. Native durable-input support is a
 capability supplied by the adapter, not a special case for the `:alto` identifier.
 Configure the Codex connection with options on its `tui_backends` entry.
+
+## Subagent activity
+
+**Ctrl+G, U** opens the current task's subagent list. Select a child to view its
+model, parent ID, current stage, streamed activity, tool summaries and final result
+in the context pane (a drawer on narrow terminals). **Esc** returns to context;
+it does not stop the parent while inspecting a child. Repeated labels remain
+separate because the list uses stable agent IDs. Approvals keep priority.
+Activity is bounded and retained in memory during this TUI session; child session
+logs remain the durable source after restarting the TUI.

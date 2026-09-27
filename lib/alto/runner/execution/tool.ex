@@ -14,6 +14,7 @@ defmodule Alto.Runner.Execution.Tool do
   @doc "Prepare one invocation and return the opaque value and display-safe details."
   def prepare(%{module: module, opts: opts} = tool, arguments, caps) do
     transforms = Map.get(tool, :transforms, [])
+    Code.ensure_loaded!(module)
 
     if transforms != [] or function_exported?(module, :prepare, 3) or
          function_exported?(module, :arguments, 1) do

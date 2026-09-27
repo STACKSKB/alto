@@ -208,6 +208,73 @@ defmodule Alto.TUI.AppTest do
     }
   end
 
+  test "subagent picker isolates live activity and retains failures with duplicate labels",
+       context do
+    state = state!(context)
+    state = %{state | selected_task_id: "task", runs: %{"run" => %{task_id: "task"}}}
+
+    emit = fn state, event ->
+      {:noreply, state} = App.handle_info({:alto_tui_event, "run", event}, state)
+      state
+    end
+
+    base = %{id: "worker", parent: "root", model: "test/model", backend: "test", status: :running}
+
+    state =
+      Enum.reduce(["child-1", "child-2"], state, fn id, state ->
+        emit.(state, Alto.Event.live(:subagent_status, Map.put(base, :agent_id, id)))
+      end)
+
+    state =
+      emit.(
+        state,
+        Alto.Event.live(
+          :subagent_progress,
+          Map.merge(base, %{
+            agent_id: "child-1",
+            event: Alto.Event.live(:model_delta, %{text: "child only output"})
+          })
+        )
+      )
+
+    assert State.current_entries(state) == []
+    assert length(Alto.TUI.Subagents.list(state)) == 2
+    {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
+    {:noreply, state} = App.handle_event(%Key{code: "u"}, state)
+    assert state.overlay.kind == :agents
+    {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
+    assert state.selected_agent_id == "child-1"
+    {_, text} = Alto.TUI.Subagents.details(state)
+    assert text =~ "child only output"
+    assert text =~ "Parent: root"
+
+    state =
+      emit.(
+        state,
+        Alto.Event.live(
+          :subagent_status,
+          Map.merge(
+            base,
+            %{
+              agent_id: "child-1",
+              status: :completed,
+              result: %{status: :error, reason: :provider_timeout}
+            }
+          )
+        )
+      )
+
+    {_, text} = Alto.TUI.Subagents.details(state)
+    assert text =~ "Provider timeout"
+    assert text =~ "error"
+    terminal = ExRatatui.init_test_terminal(150, 42)
+    ExRatatui.draw(terminal, View.widgets(state, %{width: 150, height: 42}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "child only output"
+    {:noreply, state} = App.handle_event(%Key{code: "esc"}, state)
+    assert state.selected_agent_id == nil
+    assert map_size(state.runs) == 1
+  end
+
   test "worktree menu creates and opens a linked checkout while preserving draft and original task",
        context do
     source = Path.join(context.root, "source")
