@@ -628,26 +628,12 @@ defmodule Alto.TUI.View do
       |> State.visible_entries()
       |> Enum.filter(&(&1.kind in [:tool, :system, :error]))
       |> Enum.take(-12)
-      |> Enum.map(&context_entry/1)
+      |> Enum.map(&Alto.TUI.Transcript.text/1)
       |> Enum.join("\n\n")
 
     project = State.selected_project(state)
     root = if project, do: project["root"], else: ""
     {" context ", root <> "\n\n" <> recent}
-  end
-
-  defp context_entry(entry) do
-    line =
-      case entry do
-        %{kind: :tool, text: text} -> "tool · " <> Alto.Display.result(text)
-        %{kind: :error, text: text} -> "error ! " <> Alto.Display.error(text)
-        %{text: text} -> "· " <> Alto.Display.text(text)
-      end
-
-    case Map.get(entry, :detail) do
-      detail when detail not in [nil, "", %{}, []] -> line <> "\n" <> Alto.Display.result(detail)
-      _ -> line
-    end
   end
 
   defp segment_span(segment),

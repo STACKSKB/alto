@@ -126,8 +126,11 @@ defmodule Alto.Runner.Execution do
 
                 {nil, nil} ->
                   case call_policy(fn -> run.spec.driver.init(task, run.spec) end, run) do
-                    {:ok, transition} -> drive(transition, run, [])
-                    {:error, reason} -> abort(run, reason)
+                    {:ok, {terminal, state, effects}} ->
+                      execute(effects, %{run | loop_state: state}, terminal)
+
+                    {:error, reason} ->
+                      abort(run, reason)
                   end
 
                 {nil, {packet, decision}} ->
@@ -160,15 +163,6 @@ defmodule Alto.Runner.Execution do
 
   defp schedule_outcome({:done, outcome}, _opts), do: outcome
   defp schedule_outcome(outcome, _opts), do: outcome
-
-  defp drive({terminal, state, requested}, run, remaining_effects) do
-    run = %{run | loop_state: state}
-
-    effects =
-      requested ++ if(terminal == :continue, do: remaining_effects, else: [])
-
-    execute(effects, run, terminal)
-  end
 
   defp execute(effects, run, terminal),
     do: {:continue, {effects, terminal}, run}

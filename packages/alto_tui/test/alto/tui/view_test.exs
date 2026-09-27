@@ -4,6 +4,26 @@ defmodule Alto.TUI.ViewTest do
   alias Alto.TUI.{Menu, State, View}
   alias ExRatatui.Widgets.{Paragraph, TextInput}
 
+  test "tool output and metadata remain visible in the transcript and context" do
+    state =
+      %{base_state(%{}) | overlay: nil}
+      |> State.append_entry(nil, %{
+        kind: :tool,
+        text: "build completed",
+        detail: %{output: "artifact ready", exit_status: 7}
+      })
+
+    for focus <- [:composer, :details] do
+      terminal = ExRatatui.init_test_terminal(120, 36)
+      assert :ok = ExRatatui.draw(terminal, View.widgets(%{state | focus: focus}, frame()))
+      screen = ExRatatui.get_buffer_content(terminal)
+      assert screen =~ "build completed"
+      assert screen =~ "artifact ready"
+      assert screen =~ "Exit status"
+      assert screen =~ "7"
+    end
+  end
+
   test "uses a native input with the saved-key placeholder" do
     input = ExRatatui.text_input_new()
 

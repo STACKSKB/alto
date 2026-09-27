@@ -2,19 +2,6 @@ defmodule Alto.Listeners.WebAuthTest do
   use ExUnit.Case, async: true
   alias Alto.Listeners.WebAuth
 
-  defmodule HeaderAuth do
-    @behaviour WebAuth
-    def authorize(conn, opts) do
-      if Plug.Conn.get_req_header(conn, "x-host-auth") == [opts[:value]],
-        do: :ok,
-        else: {:error, :denied}
-    end
-  end
-
-  defmodule BrokenAuth do
-    def authorize(_, _), do: raise("verifier unavailable")
-  end
-
   test "generated tokens are unique and support bearer and browser credentials" do
     {:ok, {auth, token}} = WebAuth.normalize(:token)
     {:ok, {_, other}} = WebAuth.normalize(:token)
@@ -37,19 +24,42 @@ defmodule Alto.Listeners.WebAuthTest do
            )
 
     refute WebAuth.allowed?(Plug.Conn.put_req_header(conn, "authorization", "Bearer wrong"), auth)
+
+    refute WebAuth.allowed?(
+             conn
+             |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+             |> Plug.Conn.put_req_header("sec-websocket-protocol", "alto-auth." <> token),
+             auth
+           )
+
     assert {:error, _} = WebAuth.normalize({:token, "short"})
   end
 
   test "hosts can replace authentication or explicitly select a trusted transport" do
     conn = Plug.Test.conn(:get, "/ws")
-    {:ok, {auth, nil}} = WebAuth.normalize({HeaderAuth, value: "host-value"})
+    value = "host-value"
+
+    authenticate = fn conn ->
+      if Plug.Conn.get_req_header(conn, "x-host-auth") == [value],
+        do: :ok,
+        else: {:error, :denied}
+    end
+
+    {:ok, {auth, nil}} = WebAuth.normalize(authenticate)
     refute WebAuth.allowed?(conn, auth)
     assert WebAuth.allowed?(Plug.Conn.put_req_header(conn, "x-host-auth", "host-value"), auth)
-    {:ok, {broken, nil}} = WebAuth.normalize({BrokenAuth, []})
-    refute WebAuth.allowed?(conn, broken)
+
+    for authenticate <- [
+          fn _ -> raise "verifier unavailable" end,
+          fn _ -> throw(:unavailable) end,
+          fn _ -> exit(:unavailable) end,
+          fn _ -> true end
+        ] do
+      {:ok, {broken, nil}} = WebAuth.normalize(authenticate)
+      refute WebAuth.allowed?(conn, broken)
+    end
+
     assert {:ok, {:none, nil}} = WebAuth.normalize(:none)
     assert WebAuth.allowed?(conn, :none)
-    {:ok, {missing, nil}} = WebAuth.normalize({MissingAuth, []})
-    refute WebAuth.allowed?(conn, missing)
   end
 end

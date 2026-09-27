@@ -43,33 +43,39 @@ defmodule Alto.TUI.Transcript do
         | Alto.TUI.Markdown.render(entry.text, width).lines
       ]
     else
-      label =
-        case kind do
-          "user" -> "you › "
-          "reasoning" -> "thinking › "
-          "tool" -> "tool · "
-          "error" -> "error ! "
-          _ -> "· "
-        end
-
-      value = entry[:text]
-
-      text =
-        case kind do
-          role when role in ["tool", "activity"] -> Alto.Display.result(entry[:text])
-          "error" -> Alto.Display.error(entry[:text])
-          role when role in ["user", "reasoning"] and is_binary(value) -> entry.text
-          _ -> Alto.Display.text(entry[:text])
-        end
-
-      detail =
-        if entry[:detail] in [nil, ""],
-          do: "",
-          else: "\n" <> Alto.ToolDisplay.detail(entry.detail)
-
-      Alto.TUI.Viewport.rows(label <> text <> detail, width)
+      Alto.TUI.Viewport.rows(text(entry), width)
       |> Tuple.to_list()
       |> Enum.map(&Line.new([Span.new(&1)]))
     end
+  end
+
+  def text(entry) do
+    kind = to_string(entry[:kind] || "message")
+
+    label =
+      case kind do
+        "user" -> "you › "
+        "reasoning" -> "thinking › "
+        "tool" -> "tool · "
+        "error" -> "error ! "
+        _ -> "· "
+      end
+
+    value = entry[:text]
+
+    text =
+      case kind do
+        role when role in ["tool", "activity"] -> Alto.Display.result(entry[:text])
+        "error" -> Alto.Display.error(entry[:text])
+        role when role in ["user", "reasoning"] and is_binary(value) -> entry.text
+        _ -> Alto.Display.text(entry[:text])
+      end
+
+    detail =
+      if entry[:detail] in [nil, "", %{}, []],
+        do: "",
+        else: "\n" <> Alto.Display.result(entry.detail, limit: 20_000)
+
+    label <> text <> detail
   end
 end

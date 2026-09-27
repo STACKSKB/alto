@@ -3,18 +3,16 @@ defmodule Alto.Listeners.WebAuth do
   Replaceable authentication boundary for WebSocket upgrades.
 
   WebServer accepts `auth: :token` (a generated capability), `{:token, token}`,
-  `{module, options}` implementing this callback, or explicit `:none` for a
+  a unary function returning `:ok`, or explicit `:none` for a
   trusted transport. Authentication supplements the browser origin check.
   """
-
-  @callback authorize(Plug.Conn.t(), keyword()) :: :ok | {:error, term()}
 
   def normalize(:token),
     do: normalize({:token, Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)})
 
   def normalize({:token, token}) when is_binary(token) and byte_size(token) >= 32 do
     if Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, token),
-      do: {:ok, {{__MODULE__, token: token}, token}},
+      do: {:ok, {&authorize(&1, token), token}},
       else: {:error, :invalid_web_auth_token}
   end
 
@@ -22,22 +20,19 @@ defmodule Alto.Listeners.WebAuth do
 
   def normalize({:token, _}), do: {:error, :invalid_web_auth_token}
 
-  def normalize({module, opts}) when is_atom(module) and is_list(opts),
-    do: {:ok, {{module, opts}, nil}}
+  def normalize(auth) when is_function(auth, 1), do: {:ok, {auth, nil}}
 
   def normalize(_), do: {:error, :invalid_web_auth}
 
   def allowed?(_conn, :none), do: true
 
-  def allowed?(conn, {module, opts}) do
-    module.authorize(conn, opts) == :ok
+  def allowed?(conn, auth) do
+    auth.(conn) == :ok
   catch
     _, _ -> false
   end
 
-  def authorize(conn, opts) do
-    expected = Keyword.fetch!(opts, :token)
-
+  defp authorize(conn, expected) do
     bearer_tokens =
       for "Bearer " <> token <- Plug.Conn.get_req_header(conn, "authorization"), do: token
 
