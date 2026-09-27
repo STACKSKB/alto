@@ -6,9 +6,6 @@ defmodule Alto.Tools.ReadImageTest do
   alias Alto.Tools.ReadImage
 
   defmodule Processor do
-    @behaviour Alto.Image.Processor
-
-    @impl true
     def resize(_data, media_type, width, height, opts) do
       send(Keyword.fetch!(opts, :owner), {:resize, media_type, width, height})
       {:ok, Keyword.fetch!(opts, :output)}
@@ -107,7 +104,9 @@ defmodule Alto.Tools.ReadImageTest do
                ReadImage,
                %{"path" => "image.png", "max_width" => 100},
                context,
-               processor: {Processor, owner: self(), output: output}
+               processor: fn data, media, width, height ->
+                 Processor.resize(data, media, width, height, owner: self(), output: output)
+               end
              )
 
     assert_receive {:resize, "image/png", 100, 50}
@@ -117,7 +116,7 @@ defmodule Alto.Tools.ReadImageTest do
                ReadImage,
                %{"path" => "image.png", "max_width" => 100},
                context,
-               processor: {Processor, owner: self(), output: png(101, 50)}
+               processor: {Processor, :resize, [[owner: self(), output: png(101, 50)]]}
              )
   end
 

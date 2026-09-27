@@ -9,9 +9,6 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   alias Alto.Tools.WriteFile
 
   defmodule SearchBackend do
-    @behaviour Alto.Search.Backend
-
-    @impl true
     def search(request, context, opts) do
       {:ok,
        %{
@@ -287,7 +284,9 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                SearchFiles,
                %{"query" => "needle"},
                context,
-               backend: {SearchBackend, label: "ripgrep"}
+               backend: fn request, context ->
+                 SearchBackend.search(request, context, label: "ripgrep")
+               end
              )
 
     assert result.matches == [
@@ -300,7 +299,7 @@ defmodule Alto.Tools.WorkspaceToolsTest do
 
     assert result.scanned_files == 7
 
-    options = [backend: {SearchBackend, label: "index"}, max_query_bytes: 6]
+    options = [backend: {SearchBackend, :search, [[label: "index"]]}, max_query_bytes: 6]
 
     assert {:ok, %{"search_files" => %{definition: definition}}} =
              Alto.Tool.Registry.build([{SearchFiles, options}])

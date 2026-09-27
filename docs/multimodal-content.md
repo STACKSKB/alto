@@ -37,7 +37,9 @@ tools: [
 
 The tool accepts optional `max_width` and `max_height` arguments. A requested
 downsize fails with `:image_resize_unavailable` unless the tool is configured
-with an `Alto.Image.Processor` implementation. Processor output is sniffed and
+with a `processor:` function taking `(bytes, media_type, width, height)` or an MFA
+`{module, function, extra_arguments}` that returns `{:ok, encoded_bytes}`.
+Processor output is sniffed and
 checked against the byte, dimension, pixel, and requested-size limits before it
 is returned.
 

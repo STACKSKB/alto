@@ -115,23 +115,14 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule NonEncodableTool do
-    @behaviour Alto.Tool
+    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
 
     defmodule Payload do
       defstruct [:value]
     end
 
     @impl true
-    def name(_opts), do: :echo
-
-    @impl true
     def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def execution_mode(_opts), do: :parallel
-
-    @impl true
-    def approval(_opts), do: :never
 
     @impl true
     def run(_arguments, _context, _opts), do: {:ok, %Payload{value: "x"}}

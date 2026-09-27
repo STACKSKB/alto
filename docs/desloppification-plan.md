@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,119 lines**, a **23.5% reduction**, with **2,661 lines remaining**.
+Current: **31,069 lines**, a **23.6% reduction**, with **2,611 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,15 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Search backends and image processors now use functions or portable MFA callbacks.
+Their two behavior modules and module/options adapters are deleted; native search
+bounds and image output validation remain. A narrowed search callback now runs in
+the durable child-resume regression alongside the command policy. This pass removes
+**50 production lines**: **28 code/typespec**, **7 blank**, and **15 source
+documentation/comment** lines. A test fixture also reuses the existing tool macro.
+All **1,075 core tests** and **145 TUI tests** pass. No dependency, migration or
+compatibility wrapper was added.
 
 Approval presentation now shares the protocol term encoder and display labels.
 The duplicate normalizer and recursive nested-value formatter are removed;

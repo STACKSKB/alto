@@ -213,15 +213,27 @@ defmodule Alto.Runner.ChildContinuationTest do
       else: {:error, :program_not_allowed}
   end
 
-  test "a narrowed command policy survives a durable child approval", context do
+  test "narrowed command and search callbacks survive a durable child approval", context do
     command = {Alto.Tools.RunCommand, policy: {__MODULE__, :command_policy, [["printf"]]}}
-    options = Keyword.update!(opts(context, Alto.Runner.Serial), :tools, &[command | &1])
+
+    search =
+      {Alto.Tools.SearchFiles,
+       backend: {Alto.Tools.SearchFiles, :search, [Alto.Tools.SearchFiles.options()]}}
+
+    options = Keyword.update!(opts(context, Alto.Runner.Serial), :tools, &[command, search | &1])
+    File.write!(Path.join(context.dir, "search-source"), "callback-marker")
 
     child = %{
       id: "command",
       task: %{"program" => "printf", "args" => ["%s", "frozen"]},
-      tools: [command],
-      loop: Alto.rule_loop(steps: ["run_command"])
+      tools: [command, search],
+      loop:
+        Alto.rule_loop(
+          steps: [
+            "run_command",
+            %{tool: "search_files", arguments: %{"query" => "callback-marker"}}
+          ]
+        )
     }
 
     assert %Alto.Runner.Result{status: :suspended} =
@@ -232,9 +244,13 @@ defmodule Alto.Runner.ChildContinuationTest do
 
     assert %Alto.Runner.Result{
              status: :ok,
-             output: [%{status: :ok, output: [%{output: "frozen", exit_status: 0}]}]
+             output: [
+               %{status: :ok, output: [%{output: "frozen", exit_status: 0}, %{matches: matches}]}
+             ]
            } =
              Alto.run(:ignored, Keyword.put(options, :continuation, identity))
+
+    assert Enum.any?(matches, &(&1.path == "search-source" and &1.text == "callback-marker"))
   end
 
   for sessions <- [:separate, :shared] do

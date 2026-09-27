@@ -3,7 +3,6 @@ defmodule Alto.Tools.SearchFiles do
 
   use Alto.Tool, name: :search_files, execution_mode: :parallel, approval: :never, arguments: true
   alias Alto.Tool.Arguments
-  @behaviour Alto.Search.Backend
 
   alias Alto.Tool.Context
   alias Alto.Tools.Path, as: SafePath
@@ -11,7 +10,7 @@ defmodule Alto.Tools.SearchFiles do
   @impl true
   def options,
     do: %{
-      backend: {__MODULE__, []},
+      backend: nil,
       max_query_bytes: 1_024,
       max_files: 2_000,
       max_entries: 10_000,
@@ -37,25 +36,18 @@ defmodule Alto.Tools.SearchFiles do
     path = arguments["path"]
     case_sensitive? = arguments["case_sensitive"]
 
-    with {backend, backend_opts} <- opts.backend,
-         result <-
-           backend.search(
-             %{query: query, path: path, case_sensitive: case_sensitive?},
-             context,
-             if(backend == __MODULE__ and backend_opts == [], do: opts, else: backend_opts)
-           ),
-         {:ok, output} <- normalize_backend_result(result, backend) do
+    with {:ok, output} <-
+           search(%{query: query, path: path, case_sensitive: case_sensitive?}, context, opts) do
       {:ok, output |> Map.put(:path, path) |> Map.put(:query, query)}
     end
   rescue
     error -> {:error, {:search_backend_exception, error}}
   end
 
-  @impl Alto.Search.Backend
   def search(
         %{query: query, path: path, case_sensitive: case_sensitive?},
         %Context{} = context,
-        opts
+        %{backend: nil} = opts
       ) do
     with {:ok, resolved} <- SafePath.resolve(path, context.cwd),
          {:ok, stat} <- File.lstat(resolved),
@@ -70,13 +62,12 @@ defmodule Alto.Tools.SearchFiles do
     end
   end
 
-  defp normalize_backend_result({:ok, result}, _backend) when is_map(result),
-    do: {:ok, result}
-
-  defp normalize_backend_result({:error, reason}, _backend), do: {:error, reason}
-
-  defp normalize_backend_result(other, backend),
-    do: {:error, {:invalid_search_backend_return, backend, other}}
+  def search(request, context, %{backend: callback}) do
+    case callback do
+      fun when is_function(fun, 2) -> fun.(request, context)
+      {module, function, extra} -> apply(module, function, [request, context] ++ extra)
+    end
+  end
 
   defp search(path, type, query, case_sensitive?, cwd, limits)
        when type in [:regular, :directory] do

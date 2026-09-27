@@ -108,20 +108,17 @@ defmodule Alto.Tools.ReadImage do
     do: {:error, :image_resize_unavailable}
 
   defp resize(data, media_type, target_width, target_height, config) do
-    {module, opts} = config.processor
+    result =
+      case config.processor do
+        fun when is_function(fun, 4) ->
+          fun.(data, media_type, target_width, target_height)
 
-    case module.resize(data, media_type, target_width, target_height, opts) do
-      {:ok, resized} when is_binary(resized) ->
-        validate_resized(resized, target_width, target_height, config)
+        {module, function, extra} ->
+          apply(module, function, [data, media_type, target_width, target_height] ++ extra)
+      end
 
-      {:error, reason} ->
-        {:error, {:image_processor_failed, reason}}
-
-      other ->
-        {:error, {:invalid_image_processor_return, other}}
-    end
-  rescue
-    error -> {:error, {:image_processor_exception, Exception.message(error)}}
+    with {:ok, resized} <- result,
+         do: validate_resized(resized, target_width, target_height, config)
   end
 
   defp validate_resized(data, target_width, target_height, config) do

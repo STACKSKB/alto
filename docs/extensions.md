@@ -261,7 +261,15 @@ host's ceilings. Prepared writes and edits retain these limits with the
 approved operation. Larger tool limits may also require a larger runner result
 budget. Search additionally accepts `max_entries`, `max_file_bytes`,
 `max_query_bytes`, and `excluded_directories`; directory exclusions are a `MapSet`.
-Search backends and image processors use `{module, keyword_options}` tuples.
+Search accepts `backend: fn(request, context) -> {:ok, result_map} end`; `nil`
+uses the bounded native traversal. The request contains atom-keyed `:query`,
+`:path`, and `:case_sensitive` fields. Custom backends own their traversal bounds
+and workspace confinement. Image resizing accepts
+`processor: fn(bytes, media_type, width, height) -> {:ok, encoded_bytes} end`;
+returned bytes are revalidated before model delivery. Both callbacks can instead
+be `{module, function, extra_arguments}`; invocation appends the extra arguments
+to the callback inputs. Use portable MFA arguments in explicit durable child
+tool profiles; inherited callbacks may use functions.
 
 Custom tools can implement `options/0` to supply a default map. Their callbacks
 receive the merged map; tools without it receive their configured keywords.
