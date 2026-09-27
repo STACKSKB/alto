@@ -90,21 +90,13 @@ defmodule Alto.OperationLog do
   `:retain` atomically creates a checkpoint if absent and leaves an existing
   record unchanged. `:retire_checkpoint` retires one at its exact revision.
   `{:entries, filter}` returns bounded canonical views, oldest first, with
-  `:all`, `:open`, or `:parked`; invalid filters fail before contacting the ledger.
+  `:all`, `:open`, or `:parked`; unsupported requests return `{:error, :invalid_request}`.
   `{:recovery, key}` reads one view, and `:identity` reads the store identity.
   Calls use a 5,000 ms timeout unless explicitly overridden.
   """
   @spec request(GenServer.server(), request(), timeout()) ::
           :ok | status() | non_neg_integer() | [map()] | {:ok, map()} | {:error, term()}
-  def request(server, message, timeout \\ 5_000)
-
-  def request(server, {:entries, filter} = message, timeout)
-      when filter in [:all, :open, :parked],
-      do: GenServer.call(server, message, timeout)
-
-  def request(server, message, timeout)
-      when not is_tuple(message) or tuple_size(message) != 2 or elem(message, 0) != :entries,
-      do: GenServer.call(server, message, timeout)
+  def request(server, message, timeout \\ 5_000), do: GenServer.call(server, message, timeout)
 
   @spec scrub(map()) :: map()
   def scrub(evidence) when is_map(evidence) do
@@ -189,7 +181,7 @@ defmodule Alto.OperationLog do
   defp read({:attempts, op}, state),
     do: {:reply, length(Map.get(state.ops, op, %{attempts: []}).attempts), state}
 
-  defp read({:entries, filter}, state) do
+  defp read({:entries, filter}, state) when filter in [:all, :open, :parked] do
     entries =
       state.order
       |> Enum.map(&recovery_view(&1, Map.fetch!(state.ops, &1)))
@@ -214,6 +206,8 @@ defmodule Alto.OperationLog do
        {:ok,
         %{"kind" => "alto_operation_log", "id" => state.id, "dir" => Path.expand(state.dir)}},
        state}
+
+  defp read(_, state), do: {:reply, {:error, :invalid_request}, state}
 
   ## Internals
 

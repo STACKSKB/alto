@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,669 lines**, a **24.6% reduction**, with **2,211 lines remaining**.
+Current: **30,636 lines**, a **24.6% reduction**, with **2,178 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,15 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Agent model catalogs use `Enum.flat_map_reduce` and a filtered comprehension
-instead of repeatedly appending the accumulated model list. Errors accumulate
-in reverse and are reversed once at publication; backend/model sorting and
-pagination remain unchanged. An integration test covers successful discovery
-between two unavailable backends, preserving both models and ordered errors.
-JPEG frame markers use a range with three exclusions; all 13 marker values were
-checked against the original declaration.
-This pass removes **17 production lines**: **14 marker-declaration lines**,
-**2 other code lines**, **1 blank**, and **no documentation lines**.
+Queue and operation-log requests now validate at the server boundary, with one
+public forwarding clause per store. Queue claim and page caps apply to direct
+GenServer calls too; unsupported requests and invalid ledger filters return
+tagged errors without terminating the store. Existing schedule and recovery
+validators handle malformed options. Lifecycle regressions reject bad requests
+against populated stores, preserve the queue log and live claim, and continue
+valid reads and settlement. The pagination test exercises the server-side cap.
+This pass removes **33 production lines**: **25 code lines**, **8 blanks**, and
+**no documentation lines**. No dependencies or compatibility layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work

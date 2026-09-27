@@ -55,14 +55,29 @@ defmodule Alto.QueueTest do
   end
 
   describe "put / claim / ack lifecycle" do
-    test "invalid settlement is rejected without consuming a live claim", %{dir: dir, id: id} do
+    test "invalid requests preserve a live claim and its durable log", %{dir: dir, id: id} do
       %{pid: pid, name: name} = start_queue!(id: id, dir: dir)
       assert {:ok, _} = Queue.request(name, {:put, "job", %{}, []})
       assert {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
 
-      assert_raise FunctionClauseError, fn ->
-        Queue.request(name, {:settle, claimed.claim_id, :bogus, []})
+      path = Path.join(dir, id <> ".jsonl")
+      log = File.read!(path)
+
+      for request <- [
+            {:settle, claimed.claim_id, :bogus, []},
+            {:claim, 0, nil, :infinity, :all},
+            {:claim, 1, nil, -1, :all},
+            {:snapshot_page, -1, 100},
+            {:snapshot_page, 0, 0},
+            :unsupported
+          ] do
+        assert {:error, :invalid_request} = Queue.request(name, request)
       end
+
+      assert {:error, :invalid_selector} =
+               GenServer.call(name, {:claim, 1, nil, :infinity, %{}})
+
+      assert File.read!(path) == log
 
       assert Process.alive?(pid)
       assert %{pending: 0, claimed: 1} = Queue.request(name, :count)
@@ -134,7 +149,7 @@ defmodule Alto.QueueTest do
       end
 
       assert {:ok, %{records: first, next_cursor: 100}} =
-               Queue.request(name, {:snapshot_page, 0, 100})
+               GenServer.call(name, {:snapshot_page, 0, 1_000})
 
       assert length(first) == 100
       assert hd(first).key == "job-1"

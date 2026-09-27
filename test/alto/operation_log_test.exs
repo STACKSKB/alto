@@ -199,6 +199,10 @@ defmodule Alto.OperationLogTest do
       assert 0 = OperationLog.request(name, {:attempts, "op-1"})
 
       assert :ok = OperationLog.request(name, {:intent, "op-1", "print", "inbox:del-1", nil})
+      assert {:error, :invalid_request} = OperationLog.request(name, {:entries, :invalid})
+      assert {:error, :invalid_request} = OperationLog.request(name, {:intent, "op-1"})
+      assert {:error, :invalid_request} = OperationLog.request(name, :unsupported)
+      assert ["op-1"] = entry_keys(OperationLog.request(name, {:entries, :all}))
       assert {:intended} = OperationLog.request(name, {:status, "op-1"})
 
       assert :ok = OperationLog.request(name, {:attempt, "op-1", "clm-a"})

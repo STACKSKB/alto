@@ -120,44 +120,7 @@ defmodule Alto.Queue do
   other calls default to 5,000 ms.
   """
   @spec request(GenServer.server(), request(), timeout()) :: term()
-  def request(server, message, timeout \\ 5_000)
-
-  def request(server, {:claim, count, by, max_bytes, selector}, timeout)
-      when is_integer(count) and count >= 1 and
-             (max_bytes == :infinity or (is_integer(max_bytes) and max_bytes >= 0)) do
-    with :ok <- validate_selector(selector) do
-      GenServer.call(
-        server,
-        {:claim, min(count, @max_claim_count), by, max_bytes, selector},
-        timeout
-      )
-    end
-  end
-
-  def request(server, {:snapshot_page, cursor, limit}, timeout)
-      when is_integer(cursor) and cursor >= 0 and is_integer(limit) and limit >= 1,
-      do: GenServer.call(server, {:snapshot_page, cursor, min(limit, @max_list_records)}, timeout)
-
-  def request(server, {:lookup, key} = message, timeout) when is_binary(key),
-    do: GenServer.call(server, message, timeout)
-
-  def request(server, {tag, _key, _value, opts} = message, timeout)
-      when tag in [:put, :admit] and is_list(opts),
-      do: GenServer.call(server, message, timeout)
-
-  def request(server, {:settle, _claim, action, opts} = message, timeout)
-      when action in [:ack, :release] and is_list(opts),
-      do: GenServer.call(server, message, timeout)
-
-  def request(server, {:restore, _key, _generation, _payload, opts} = message, timeout)
-      when is_list(opts),
-      do: GenServer.call(server, message, timeout)
-
-  def request(server, {tag, _key} = message, timeout) when tag in [:cancel, :cancel_pending],
-    do: GenServer.call(server, message, timeout)
-
-  def request(server, message, timeout) when message in [:count, :compact],
-    do: GenServer.call(server, message, timeout)
+  def request(server, message, timeout \\ 5_000), do: GenServer.call(server, message, timeout)
 
   ## Server implementation
 
@@ -287,10 +250,17 @@ defmodule Alto.Queue do
     end
   end
 
-  def handle_call({:claim, count, by, max_bytes, selector}, _from, state),
-    do: do_claim(state, count, by, max_bytes, selector)
+  def handle_call({:claim, count, by, max_bytes, selector}, _from, state)
+      when is_integer(count) and count >= 1 and
+             (max_bytes == :infinity or (is_integer(max_bytes) and max_bytes >= 0)) do
+    case validate_selector(selector) do
+      :ok -> do_claim(state, min(count, @max_claim_count), by, max_bytes, selector)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
 
-  def handle_call({:settle, claim_id, operation, opts}, _from, state) do
+  def handle_call({:settle, claim_id, operation, opts}, _from, state)
+      when operation in [:ack, :release] do
     with {:ok, record} <- find_by_claim(state, claim_id),
          true <- record.lease_until_ms > now(state) or {:error, :lease_expired},
          {:ok, due} <- schedule_at(state, opts) do
@@ -334,10 +304,11 @@ defmodule Alto.Queue do
      state}
   end
 
-  def handle_call({:snapshot_page, cursor, limit}, _from, state) do
+  def handle_call({:snapshot_page, cursor, limit}, _from, state)
+      when is_integer(cursor) and cursor >= 0 and is_integer(limit) and limit >= 1 do
     records =
       ordered_records(state)
-      |> Enum.slice(cursor, limit)
+      |> Enum.slice(cursor, min(limit, @max_list_records))
 
     next_cursor =
       if cursor + length(records) < :gb_trees.size(state.records),
@@ -347,7 +318,7 @@ defmodule Alto.Queue do
     {:reply, {:ok, %{records: records, next_cursor: next_cursor}}, state}
   end
 
-  def handle_call({:lookup, key}, _from, state) do
+  def handle_call({:lookup, key}, _from, state) when is_binary(key) do
     reply =
       case find_by_key(state, key) do
         nil -> {:error, :not_found}
@@ -356,6 +327,8 @@ defmodule Alto.Queue do
 
     {:reply, reply, state}
   end
+
+  def handle_call(_request, _from, state), do: {:reply, {:error, :invalid_request}, state}
 
   defp cancel_records(state, []) do
     {:reply, {:error, :not_found}, state}
