@@ -1,21 +1,7 @@
 defmodule Alto.Image.Metadata do
   @moduledoc false
 
-  @sof_markers [
-    0xC0,
-    0xC1,
-    0xC2,
-    0xC3,
-    0xC5,
-    0xC6,
-    0xC7,
-    0xC9,
-    0xCA,
-    0xCB,
-    0xCD,
-    0xCE,
-    0xCF
-  ]
+  @sof_markers Enum.to_list(0xC0..0xCF) -- [0xC4, 0xC8, 0xCC]
 
   @spec inspect(binary(), map()) ::
           {:ok, binary(), pos_integer(), pos_integer()} | {:error, term()}

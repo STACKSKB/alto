@@ -99,22 +99,19 @@ defmodule Alto.Subagents.Models do
         |> Enum.sort_by(&elem(&1, 0))
 
       {models, errors} =
-        Enum.reduce(selected, {[], []}, fn {id, backend}, {models, errors} ->
+        Enum.flat_map_reduce(selected, [], fn {id, backend}, errors ->
           case discover(backend, id, policy, run) do
             {:ok, entries} ->
               entries =
-                Enum.flat_map(entries, fn entry ->
-                  model = entry[:id]
+                for entry <- entries,
+                    model = entry[:id],
+                    is_binary(model) and allowed?(policy, id, model),
+                    do: %{backend: id, model: model, name: entry[:name] || model}
 
-                  if is_binary(model) and allowed?(policy, id, model),
-                    do: [%{backend: id, model: model, name: entry[:name] || model}],
-                    else: []
-                end)
-
-              {models ++ entries, errors}
+              {entries, errors}
 
             {:error, _} ->
-              {models, errors ++ [%{backend: id, error: "model discovery failed"}]}
+              {[], [%{backend: id, error: "model discovery failed"} | errors]}
           end
         end)
 
@@ -132,7 +129,7 @@ defmodule Alto.Subagents.Models do
        %{
          models: Enum.slice(models, offset, limit),
          backends: Enum.map(selected, &elem(&1, 0)),
-         errors: errors,
+         errors: Enum.reverse(errors),
          next_offset: if(offset + limit < length(models), do: offset + limit, else: nil)
        }}
     end

@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,686 lines**, a **24.5% reduction**, with **2,228 lines remaining**.
+Current: **30,669 lines**, a **24.6% reduction**, with **2,211 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,14 +53,16 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Image resizing is one workflow: compute the fitted target, skip unnecessary
-processing, dispatch the configured function or MFA, and validate the result.
-Single-use fitting, dispatch and validation wrappers are deleted. Workspace
-confinement and descriptor-based regular-file reads remain unchanged. Existing
-resize tests now check that no-op requests skip the processor and that oversized
-encoded output is rejected alongside dimension, pixel and target violations.
-This pass removes **19 production lines**: **14 code/type/declaration lines**,
-**5 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+Agent model catalogs use `Enum.flat_map_reduce` and a filtered comprehension
+instead of repeatedly appending the accumulated model list. Errors accumulate
+in reverse and are reversed once at publication; backend/model sorting and
+pagination remain unchanged. An integration test covers successful discovery
+between two unavailable backends, preserving both models and ordered errors.
+JPEG frame markers use a range with three exclusions; all 13 marker values were
+checked against the original declaration.
+This pass removes **17 production lines**: **14 marker-declaration lines**,
+**2 other code lines**, **1 blank**, and **no documentation lines**.
+Historical pass notes remain in Git.
 
 ## Remaining work
 
@@ -94,7 +96,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current core check passes **1,076 tests** with application modules preloaded.
+The current core check passes **1,077 tests** with application modules preloaded.
 The TUI suite passes **146 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

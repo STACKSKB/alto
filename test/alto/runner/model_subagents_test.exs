@@ -111,6 +111,34 @@ defmodule Alto.Runner.ModelSubagentsTest do
     assert Enum.any?(request.messages, &(&1["content"] == "Investigate this"))
   end
 
+  test "catalog failures retain successful models and backend order" do
+    profiles =
+      for {id, provider} <- [
+            {"z-unavailable", Provider},
+            {"worker", Child},
+            {"a-unavailable", Provider}
+          ],
+          do: %Alto.Harness.ProviderProfile{id: id, provider: {provider, []}}
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
+             Alto.run(
+               "discover",
+               options([call("list", "list_agent_models", %{})], provider_profiles: profiles)
+             )
+
+    reply =
+      Enum.find(result.messages, &(&1["tool_call_id"] == "list"))["content"] |> JSON.decode!()
+
+    assert Enum.map(reply["models"], & &1["model"]) == ["model-a", "model-b"]
+    assert reply["backends"] == ["a-unavailable", "worker", "z-unavailable"]
+
+    assert reply["errors"] == [
+             %{"backend" => "a-unavailable", "error" => "model discovery failed"},
+             %{"backend" => "z-unavailable", "error" => "model discovery failed"}
+           ]
+  end
+
   test "agents select arbitrary models at spawn time without configured agent definitions" do
     requests =
       Enum.map(["unlisted-new-model", "model-b"], fn model ->
