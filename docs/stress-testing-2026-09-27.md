@@ -135,3 +135,11 @@ A live worker requested an unregistered `bash` tool. Unknown-tool errors now ret
 Before this final diagnostic change, the full Alto core suite passed **1,107 tests**. Document session `sess-wyihfmigwuqjuea` completed with successful persistence. Independent fresh fault-injection verification passed **2,906 checks** with address, undefined-behavior and float-cast-overflow sanitizers. The agent's report of partial/empty line reads was not supported by its completed v8 trace: all eight reads returned their requested line counts without partial lines or byte-limit truncation.
 
 Actual SDL renderer capture found UI defects beyond state tests: mismatched numeric formatting, text painted under control faces, staircase rows, and reused label buffers. Space Bunny is fixing those. A separate lifecycle review found a selftest canvas reinitialization leak, also pending correction. UI completion and physical pen feel are not claimed.
+
+## Verified document/UI milestone
+
+UI session `sess-iktunyudh6qxsjq` completed with successful persistence after resumed runs on fixed Alto. Independent host validation passed `make all test smoke document-fault-test`: core256, regressions, ink3989, document913, actual SDL event/UI tests, application selftest/BMP/project round-trips, and injected document2906 checks. A fresh independent SDL UI binary also passed address, undefined-behavior and float-cast-overflow sanitizers with leak detection enabled.
+
+Fresh SDL renderer readback confirms distinct correct brush values (size6, opacity100%, stabilization55%), knot labels1–5, visible layer names and compact aligned controls. This is a headless software-renderer check, not physical tablet feel acceptance. The next realistic workload is true blended tip composition plus retained-brush persistence, followed by UI wiring; existing parallel tracks are not counted as that feature.
+
+Recurring model mistakes remain observable despite improved guidance: repeated executable arguments, shell wrappers that mask status, and stale messaging IDs after process resume. Recovery diagnostics improve correction but do not establish that initial error frequency is acceptable. The file-read allegation from the finished document run was unsubstantiated by its eight complete recorded line reads.
