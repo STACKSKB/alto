@@ -5,14 +5,27 @@ defmodule Alto.Tool.Arguments do
   # schemas remain opaque. Validation never creates atoms from supplied keys.
   def validate(arguments, fields) when is_map(arguments) do
     names = Map.new(fields, fn {key, _} -> {Atom.to_string(key), key} end)
+    unknown = Enum.reject(Map.keys(arguments), &Map.has_key?(names, &1))
 
-    if Enum.all?(Map.keys(arguments), &Map.has_key?(names, &1)) do
+    if unknown == [] do
       values = Enum.map(arguments, fn {name, value} -> {names[name], value} end)
 
       with {:ok, values} <- NimbleOptions.validate(values, fields),
            do: {:ok, Map.new(values, fn {key, value} -> {Atom.to_string(key), value} end)}
     else
-      {:error, :unknown_tool_argument}
+      allowed = names |> Map.keys() |> Enum.sort()
+      shown_allowed = Enum.take(allowed, 64)
+
+      {:error,
+       {:unknown_tool_argument,
+        %{
+          unknown_fields: unknown |> Enum.take(8) |> Enum.map(&safe_field_name/1) |> Enum.sort(),
+          unknown_field_count: length(unknown),
+          unknown_fields_truncated: length(unknown) > 8,
+          allowed_fields: shown_allowed,
+          allowed_fields_truncated: length(allowed) > length(shown_allowed),
+          hint: "Remove unsupported fields and use only the listed allowed fields."
+        }}}
     end
   end
 
@@ -93,4 +106,21 @@ defmodule Alto.Tool.Arguments do
 
   defp type({:or, [item, {:in, [nil]}]}),
     do: %{anyOf: [type(item), %{type: "null"}]}
+
+  defp safe_field_name(key) when is_binary(key) do
+    cond do
+      not String.valid?(key) -> "[non-UTF-8 string key]"
+      byte_size(key) > 80 -> utf8_prefix(key, 80) <> "…"
+      true -> key
+    end
+  end
+
+  defp safe_field_name(_), do: "[non-string key]"
+
+  defp utf8_prefix(_key, size) when size <= 0, do: ""
+
+  defp utf8_prefix(key, size) do
+    prefix = binary_part(key, 0, size)
+    if String.valid?(prefix), do: prefix, else: utf8_prefix(key, size - 1)
+  end
 end

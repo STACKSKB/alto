@@ -95,6 +95,55 @@ defmodule Alto.ToolArgumentsTest do
     assert_received {:prepared, %{"records" => [%{"label" => "😀"}]}}
   end
 
+  test "unknown argument diagnostics are bounded and never echo values or non-string keys" do
+    long_name = String.duplicate("e\u0301", 100)
+
+    arguments = %{
+      "value" => 1,
+      long_name => "private value",
+      "second" => "also private",
+      {"tuple", "secret"} => "tuple value"
+    }
+
+    assert {:error,
+            {:unknown_tool_argument,
+             %{
+               unknown_field_count: 3,
+               unknown_fields: names,
+               unknown_fields_truncated: false,
+               allowed_fields: ["enabled", "records", "value"],
+               allowed_fields_truncated: false,
+               hint: hint
+             } = details}} =
+             Alto.Tool.Arguments.validate(arguments, elem(ContractTool.arguments([]), 1))
+
+    first = String.slice(long_name, 0, 26) <> "e…"
+    assert MapSet.new(names) == MapSet.new([first, "second", "[non-string key]"])
+    assert byte_size(first) <= 83
+    assert String.valid?(first)
+    assert String.ends_with?(first, "…")
+    assert hint =~ "allowed fields"
+    refute inspect(details) =~ "private value"
+    refute inspect(details) =~ "tuple value"
+    refute inspect(details) =~ "tuple secret"
+  end
+
+  test "unknown argument names and field lists are truncated" do
+    fields = [value: [type: :pos_integer, required: true]]
+    arguments = Enum.into(1..10, %{"value" => 1}, &{"unknown_#{&1}", "private"})
+
+    assert {:error,
+            {:unknown_tool_argument,
+             %{
+               unknown_fields: names,
+               unknown_field_count: 10,
+               unknown_fields_truncated: true
+             }}} = Alto.Tool.Arguments.validate(arguments, fields)
+
+    assert length(names) == 8
+    assert Enum.all?(names, &(byte_size(&1) <= 83))
+  end
+
   test "both delegation entry points validate the shared nested contract", %{caps: caps} do
     for module <- [Alto.Tools.SpawnAgents, Alto.Tools.StartAgents] do
       assert {:error, %NimbleOptions.ValidationError{}} =

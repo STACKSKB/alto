@@ -164,12 +164,18 @@ defmodule Alto.Tools.WorkspaceToolsTest do
   end
 
   test "runtime rejects the legacy single-edit shape", %{context: context} do
-    assert {:error, :unknown_tool_argument} =
+    assert {:error,
+            {:unknown_tool_argument,
+             %{unknown_fields: unknown, allowed_fields: allowed, hint: hint}}} =
              Alto.Tool.run(
                EditFile,
                %{"path" => "edit.txt", "old_text" => "a", "new_text" => "b"},
                context
              )
+
+    assert MapSet.new(unknown) == MapSet.new(["old_text", "new_text"])
+    assert "edits" in allowed
+    assert hint =~ "Remove unsupported fields"
   end
 
   test "host-configured search limits skip large files and bound line output", %{

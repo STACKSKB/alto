@@ -179,13 +179,16 @@ defmodule Alto.Workspaces.GitWorktreeTest do
 
     refute File.exists?(c.manager.root)
 
-    assert {:error, :unknown_tool_argument} =
+    assert {:error,
+            {:unknown_tool_argument, %{unknown_fields: ["path"], allowed_fields: allowed}}} =
              Alto.Tool.prepare(
                CreateWorktree,
                %{"name" => "x", "path" => "/tmp/arbitrary"},
                c.context,
                manager: c.manager
              )
+
+    assert "name" in allowed
   end
 
   defp owner(name), do: %{root_run_id: "test", path: [name]}
