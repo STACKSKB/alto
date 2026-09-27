@@ -50,8 +50,6 @@ defmodule Alto.Ops do
       next_cursor = if cursor + limit < length(items), do: cursor + limit, else: nil
       {:ok, %{items: page, next_cursor: next_cursor}}
     end
-  catch
-    :exit, reason -> {:error, {:ops_unavailable, reason}}
   end
 
   @doc "Single-operation detail (same bounds as `list/3`)."
@@ -64,17 +62,15 @@ defmodule Alto.Ops do
         item -> {:ok, item}
       end
     end
-  catch
-    :exit, reason -> {:error, {:ops_unavailable, reason}}
   end
 
   ## Collection (read-only; never writes, never reclaims eagerly)
 
   defp collect(queue, ledger) do
-    with {:ok, live} <- snapshot_pages(queue, 0, []),
-         live_by_operation = Map.new(live, &{&1.operation_key, &1}),
-         {:ok, entries} <-
-           ledger_call(fn -> Alto.OperationLog.request(ledger, {:entries, :all}) end) do
+    with {:ok, live} <- snapshot_pages(queue, 0, []) do
+      live_by_operation = Map.new(live, &{&1.operation_key, &1})
+      entries = Alto.OperationLog.request(ledger, {:entries, :all})
+
       ledger_items =
         entries
         |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
@@ -102,23 +98,21 @@ defmodule Alto.Ops do
 
       {:ok, merged_live ++ remaining}
     end
+  catch
+    :exit, reason -> {:error, {:ops_unavailable, reason}}
   end
 
   defp snapshot_pages(queue, cursor, acc) do
-    try do
-      case Alto.Queue.request(queue, {:snapshot_page, cursor, 100}) do
-        {:ok, %{records: records, next_cursor: next_cursor}} ->
-          acc = Enum.reverse(records, acc)
+    case Alto.Queue.request(queue, {:snapshot_page, cursor, 100}) do
+      {:ok, %{records: records, next_cursor: next_cursor}} ->
+        acc = Enum.reverse(records, acc)
 
-          if is_nil(next_cursor),
-            do: {:ok, Enum.reverse(acc)},
-            else: snapshot_pages(queue, next_cursor, acc)
+        if is_nil(next_cursor),
+          do: {:ok, Enum.reverse(acc)},
+          else: snapshot_pages(queue, next_cursor, acc)
 
-        {:error, reason} ->
-          {:error, {:queue_unavailable, reason}}
-      end
-    catch
-      :exit, reason -> {:error, {:queue_unavailable, reason}}
+      {:error, reason} ->
+        {:error, {:queue_unavailable, reason}}
     end
   end
 
@@ -129,14 +123,6 @@ defmodule Alto.Ops do
        do: 1
 
   defp inspection_rank(_entry), do: 2
-
-  defp ledger_call(fun) do
-    try do
-      {:ok, fun.()}
-    catch
-      :exit, reason -> {:error, {:ledger_unavailable, reason}}
-    end
-  end
 
   defp disposition(%{status: {:intended}}, live) when not is_nil(live), do: nil
 

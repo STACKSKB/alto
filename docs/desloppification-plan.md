@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,789 lines**, a **24.3% reduction**, with **2,331 lines remaining**.
+Current: **30,755 lines**, a **24.4% reduction**, with **2,297 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,14 +53,15 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Model discovery and streamed completions now share one HTTP response envelope.
-The envelope counts all wire bytes, retains bounded HTTP error prefixes and
-stops failed consumers; catalog and SSE callbacks only process successful data.
-Catalog errors now obey the total response limit, and all consumers use the
-same `provider_response_too_large` error. Split-chunk tests exercise the total
-bound and exact 64 KB error prefix; raw JSON fallback remains covered.
-This pass removes **21 production lines**: **17 code/type/declaration lines**,
-**4 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+Child startup reuses the canonical prompt configuration and inherited timeouts.
+Model, tool, approval and workspace calls clamp against the shared budget when
+executed; startup no longer pre-clamps the same limits. Saved budget caps,
+account bindings and parent deadlines still fence resumed children.
+Operator inspection catches store exits once in the collection flow shared by
+listing and lookup. The outage test now exercises ledger failure before queue
+failure, rather than stopping both and only reaching the queue.
+This pass removes **34 production lines**: **32 code/type/declaration lines**,
+**2 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 

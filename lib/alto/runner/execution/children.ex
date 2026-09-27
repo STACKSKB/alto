@@ -32,10 +32,7 @@ defmodule Alto.Runner.Execution.Children do
                        (Alto.Config.authority_fields() --
                           [
                             :max_steps,
-                            :max_agent_depth,
-                            :provider_timeout,
-                            :tool_timeout,
-                            :approval_timeout
+                            :max_agent_depth
                           ])
 
   defp validate_spawn(data) when is_map(data) and not is_struct(data) do
@@ -326,19 +323,6 @@ defmodule Alto.Runner.Execution.Children do
     end
   end
 
-  defp child_prompt(spec, prompt_config) do
-    prompt_opts =
-      prompt_config
-      |> Keyword.take([:prompt, :project_instructions])
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-
-    if spec.system_prompt do
-      Keyword.put(prompt_opts, :prompt, spec.system_prompt)
-    else
-      prompt_opts
-    end
-  end
-
   defp child_options(spec, run, provider) do
     # A delegated task defaults to a fresh default loop: the parent's
     # driver expects the parent's task shape, which the child task rarely
@@ -358,10 +342,9 @@ defmodule Alto.Runner.Execution.Children do
           provider: provider,
           child_profile: checkpoint_profile(spec),
           tools: subagent_tools(spec.tools, run),
-          loop: spec.loop || Alto.default_loop()
-        ] ++
-        child_prompt(spec, run.prompt_config) ++
-        [
+          loop: spec.loop || Alto.default_loop(),
+          prompt: spec.system_prompt || run.prompt_config[:prompt],
+          project_instructions: run.prompt_config[:project_instructions],
           cwd: run.cwd,
           workspace_assignment: Map.get(spec, :workspace_assignment),
           parent_workspaces: run.workspaces,
@@ -378,9 +361,6 @@ defmodule Alto.Runner.Execution.Children do
           messaging_tools: Alto.Messaging.allowed_tools(run),
           parent_max_agent_depth: run.max_agent_depth,
           max_steps: min(spec.max_steps || run.max_steps, run.max_steps),
-          provider_timeout: Budget.timeout(run.budget, run.provider_timeout),
-          tool_timeout: Budget.timeout(run.budget, run.tool_timeout),
-          approval_timeout: Budget.timeout(run.budget, run.approval_timeout),
           event_sink: subagent_sink(run, spec.id),
           parent_run_id: run.session_id,
           agent_identity: child_agent_identity(run.agent_identity, spec.id),

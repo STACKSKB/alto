@@ -341,9 +341,10 @@ defmodule Alto.OpsTest do
   end
 
   test "store outages are reported instead of looking empty", %{queue: q, ledger: l} do
-    GenServer.stop(Process.whereis(q))
-    GenServer.stop(Process.whereis(l))
-    assert {:error, _} = Ops.list(q, l)
-    assert {:error, _} = Ops.get(q, l, "missing")
+    for store <- [l, q] do
+      GenServer.stop(Process.whereis(store))
+      assert {:error, {:ops_unavailable, {:noproc, _}}} = Ops.list(q, l)
+      assert {:error, {:ops_unavailable, {:noproc, _}}} = Ops.get(q, l, "missing")
+    end
   end
 end
