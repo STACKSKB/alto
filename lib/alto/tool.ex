@@ -129,7 +129,6 @@ defmodule Alto.Tool do
 
   @doc "Prepare a tool input and validate its return contract without executing it."
   def prepare(module, arguments, context, opts \\ [], transforms \\ nil) do
-    Code.ensure_loaded!(module)
     transforms = transforms || opts[:alto_transform] || []
     opts = configure(module, opts)
 

@@ -17,18 +17,17 @@ defmodule Alto.Runner.Execution.Tool do
 
     if transforms != [] or function_exported?(module, :prepare, 3) or
          function_exported?(module, :arguments, 1) do
-      outcome =
-        Call.run(
-          fn ->
-            Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts, transforms)
-          end,
-          Budget.timeout(caps.budget, caps.tool_timeout),
-          caps.cancel_ref
-        )
-
-      case outcome do
+      case Call.run(
+             fn ->
+               Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts, transforms)
+             end,
+             Budget.timeout(caps.budget, caps.tool_timeout),
+             caps.cancel_ref
+           ) do
         {:ok, prepared, details} ->
-          bound_details(prepared, details, caps.max_approval_details_bytes)
+          if :erlang.external_size(details) <= caps.max_approval_details_bytes,
+            do: {:ok, prepared, details},
+            else: {:error, {:approval_details_limit, caps.max_approval_details_bytes}}
 
         {:error, _} = error ->
           error
@@ -119,12 +118,6 @@ defmodule Alto.Runner.Execution.Tool do
 
   def invoke_tool(%{module: module, opts: opts}, arguments, caps),
     do: module.run(arguments, Alto.Tool.context(caps), opts)
-
-  defp bound_details(prepared, details, limit) do
-    if :erlang.external_size(details) <= limit,
-      do: {:ok, prepared, details},
-      else: {:error, {:approval_details_limit, limit}}
-  end
 
   defp decision_name({:suspend, _}), do: :suspended
   defp decision_name(:ok), do: :approved

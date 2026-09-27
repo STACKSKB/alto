@@ -55,12 +55,11 @@ defmodule Alto.TUI.Menu do
   def field(menu, key), do: Enum.find(menu.items, &(&1[:key] == key))
   def value(menu, key), do: ExRatatui.text_input_get_value(field(menu, key).input)
 
-  def values(menu),
-    do:
-      Map.new(
-        Enum.filter(menu.items, & &1[:input]),
-        &{&1.key, ExRatatui.text_input_get_value(&1.input)}
-      )
+  def values(menu) do
+    for %{key: key, input: input} <- menu.items,
+        into: %{},
+        do: {key, ExRatatui.text_input_get_value(input)}
+  end
 
   def selected(menu), do: Enum.at(items(menu), menu.index)
 

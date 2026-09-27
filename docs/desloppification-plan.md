@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,601 lines**, a **24.7% reduction**, with **2,143 lines remaining**.
+Current: **30,592 lines**, a **24.8% reduction**, with **2,134 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,16 +53,16 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Selection history and Codex subscriber registration use `Map.put_new_lazy` to
-retain existing rows and monitors without repeating presence-check branches.
-The subscriber cap still rejects new subscribers while allowing repeat registration;
-its integration test exercises both at a one-subscriber limit. Transcript display
-uses `Enum.flat_map_reduce` to project entries and retain call summaries in one
-pass instead of building nested entries and then flattening them. Existing
-selection tests cover reverse scrolling, Unicode, pane bounds and copy behavior.
-This pass removes **7 production lines**: **8 code lines removed** and **1 net
-blank line added**, with **no documentation lines removed**. Transcript projection
-is line-neutral. No dependencies or compatibility layers were added.
+Tool preparation relies on configuration's existing module-load boundary rather
+than loading the module twice. The supervised preparation result is matched
+directly, and its approval-detail size check sits in the success branch instead
+of a single-use forwarding helper. The callback deadline, cancellation and
+approval-data limits remain unchanged. TUI form values use a pattern-filtered
+comprehension to build the field map without first constructing a filtered list.
+Existing regressions cover transform ordering, frozen preparation, oversized
+details, callback failures and form submission.
+This pass removes **9 production lines**: **7 code lines** and **2 blanks**, with
+**no documentation lines removed**. No dependencies or compatibility layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work
