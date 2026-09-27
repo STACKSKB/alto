@@ -143,3 +143,18 @@ UI session `sess-iktunyudh6qxsjq` completed with successful persistence after re
 Fresh SDL renderer readback confirms distinct correct brush values (size6, opacity100%, stabilization55%), knot labels1–5, visible layer names and compact aligned controls. This is a headless software-renderer check, not physical tablet feel acceptance. The next realistic workload is true blended tip composition plus retained-brush persistence, followed by UI wiring; existing parallel tracks are not counted as that feature.
 
 Recurring model mistakes remain observable despite improved guidance: repeated executable arguments, shell wrappers that mask status, and stale messaging IDs after process resume. Recovery diagnostics improve correction but do not establish that initial error frequency is acceptable. The file-read allegation from the finished document run was unsubstantiated by its eight complete recorded line reads.
+
+
+## Mixed-tip workload milestone
+
+Space Bunny completed bounded engine/document and UI workloads in saved sessions `sess-gix3nayrc63hwjq` and `sess-6bcvre5jilwbhnq`. HotLimit now supports up to four weighted round/ellipse brush components, editable component settings, explicit application to a selected vector stroke with undo, and versioned project persistence that retains compatibility with older projects. This is analytic tip blending; bitmap textures and physical tablet feel have not been validated.
+
+Independent `make all test smoke document-fault-test` passed: 256 core checks, the regression suite, 4,168 ink checks, 1,025 document checks, 3,018 allocation-fault checks, the SDL dummy-driver UI suite, and the application self-test. Fresh ink and UI builds also passed address, undefined-behavior, float-cast-overflow, and leak checks. Rendered brush samples and the mixed-tip control panel were inspected. Review caught and corrected ellipse coverage/bounds, tiny round-dab coverage, and maximum component-radius clipping before this verification. Allocation injection covers malloc, not independently calloc/realloc.
+
+Repeated argv mistakes, an unregistered Bash tool request, and failure-masking shell wrappers remained harness usability findings despite earlier prompt improvements. All application workloads were terminal before beginning a general explicit-shell tool improvement.
+
+## Explicit shell execution and honest command status
+
+Added opt-in `run_shell`, registered in the shipped agentic profile, for a single bounded shell script. It prepares Bash `-e -o pipefail -c` through the same command executor, sandbox, approval, timeout, and output boundaries as argv execution. `run_command` remains compatible. Conditional prompt guidance and schema examples distinguish the contracts and explain Bash failure-propagation exceptions. Shell previews are bounded. The shared TUI/history display now marks nonzero command exits and timeouts as errors instead of showing a success check mark.
+
+The complete core suite passed **1,116 tests** and the TUI suite passed **175 tests**. Live Space Bunny session `sess-2pj7jak2t5wdgzy` used the new shell tool inside Bubblewrap: `false | cat` returned exit 1 and the following unexpected-success marker did not execute. It then used direct argv execution for HotLimit `make test`, which passed, and accurately reported both outcomes. The run completed in three model requests with persistence confirmed. This validates the tool contract and one live recovery path; it does not establish that all model command mistakes are eliminated.

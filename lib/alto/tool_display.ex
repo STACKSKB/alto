@@ -11,6 +11,9 @@ defmodule Alto.ToolDisplay do
         git when git in ["git_inspect", "git_mutate"] ->
           ["git", get(args, :action), get(args, :ref), target, get(args, :branch)]
 
+        "run_shell" ->
+          ["shell:", get(args, :command)]
+
         "run_command" ->
           program = first(args, ~w(program command)a) || name
           argv = [program | List.wrap(get(args, :args))]
@@ -41,6 +44,28 @@ defmodule Alto.ToolDisplay do
 
       _ ->
         completed(name, title, output)
+    end
+  end
+
+  defp completed(name, title, value)
+       when name in [:run_command, "run_command", :run_shell, "run_shell"] do
+    result = decode(value)
+    status = get(result, :exit_status)
+    timed_out? = get(result, :timed_out) == true
+
+    cond do
+      timed_out? ->
+        %{kind: :error, text: title <> " timed out", detail: result_detail(name, value)}
+
+      is_integer(status) and status != 0 ->
+        %{
+          kind: :error,
+          text: title <> " failed (exit #{status})",
+          detail: result_detail(name, value)
+        }
+
+      true ->
+        %{kind: :tool, text: title <> " ✓", detail: result_detail(name, value)}
     end
   end
 

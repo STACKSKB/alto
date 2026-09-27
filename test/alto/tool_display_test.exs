@@ -32,6 +32,49 @@ defmodule Alto.ToolDisplayTest do
     refute ToolDisplay.summary("custom", %{"api_key" => "secret"}) =~ "secret"
   end
 
+  test "command failures and timeouts are visible in live and restored results" do
+    for name <- ["run_command", "run_shell"] do
+      failed = %{exit_status: 7, output: "failed assertion", timed_out: false}
+
+      for value <- [failed, JSON.encode!(failed)] do
+        entry = ToolDisplay.entry(:tool_completed, %{name: name, value: value})
+        assert entry.kind == :error
+        assert entry.text =~ "failed (exit 7)"
+        assert entry.detail == "failed assertion"
+        refute entry.text =~ "✓"
+      end
+
+      entry =
+        ToolDisplay.entry(:tool_completed, %{
+          name: name,
+          value: %{exit_status: 0, timed_out: true}
+        })
+
+      assert entry.kind == :error
+      assert entry.text =~ "timed out"
+
+      [restored] =
+        ToolDisplay.transcript([
+          %{"role" => "tool", "name" => name, "content" => JSON.encode!(failed)}
+        ])
+
+      assert restored.kind == :error
+      assert restored.text =~ "failed (exit 7)"
+
+      assert ToolDisplay.entry(:tool_completed, %{name: name, value: %{exit_status: 0}}).kind ==
+               :tool
+    end
+  end
+
+  test "shell summaries identify and bound the script" do
+    assert ToolDisplay.summary("run_shell", %{"command" => "make test | tail -20"}) ==
+             "shell: make test | tail -20"
+
+    assert String.length(
+             ToolDisplay.summary("run_shell", %{"command" => String.duplicate("x", 2000)})
+           ) <= 500
+  end
+
   test "edit and write results contain actual unified diffs and render real newlines" do
     root = Path.join(System.tmp_dir!(), "alto-diff-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)

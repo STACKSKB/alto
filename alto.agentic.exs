@@ -95,7 +95,8 @@ tools =
      executor:
        {Alto.Command.Executors.Bubblewrap,
         Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
-    {Alto.Tools.RunCommand, executor: command_executor}
+    {Alto.Tools.RunCommand, executor: command_executor},
+    {Alto.Tools.RunShell, executor: command_executor}
   ] ++
     if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++
     fff_tools ++

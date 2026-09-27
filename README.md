@@ -104,6 +104,8 @@ writes and commands in a trusted config file, for example `coding.exs`:
     Alto.Tools.SearchFiles,
     Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
     Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
+    {Alto.Tools.RunShell,
+     executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}},
     {Alto.Tools.RunCommand,
      executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}}
   ]
@@ -116,6 +118,12 @@ temporary directory, and no network by default. The configuration above also
 protects `.git` from commands and native file edits. The full
 [`alto.agentic.exs`](./alto.agentic.exs) profile adds approved Git mutations and
 other coding tools.
+
+`run_command` accepts an executable and an argv list. `run_shell` accepts one
+`command` string for scripts and pipelines, running Bash with `-e -o pipefail`
+through the same executor and approval boundary. Bash failure propagation still
+has its usual exceptions in conditions and `&&`/`||` lists; scripts may explicitly
+override the defaults. Inspect the returned exit status and output.
 
 Execution settings live in the configuration keyword list: use `tools: []` to disable tools,
 `prompt: nil` to omit the system prompt, `project_instructions: nil` to skip

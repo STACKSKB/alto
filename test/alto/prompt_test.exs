@@ -60,6 +60,18 @@ defmodule Alto.PromptTest do
     refute command_only =~ "program=bash with args=[-lc"
   end
 
+  test "shell guidance follows the actual capability registry" do
+    for tools <- [[Alto.Tools.RunShell], [RunCommand, Alto.Tools.RunShell]] do
+      prompt = Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: tools})
+      assert prompt =~ "Use run_shell"
+      assert prompt =~ "errexit has exceptions"
+      refute prompt =~ "Command execution is disabled"
+      refute prompt =~ "read-only"
+    end
+
+    refute Alto.Prompts.Coding.build(%{cwd: "/workspace", tools: [RunCommand]}) =~ "Use run_shell"
+  end
+
   test "chat and coding builders share the same runtime prompt boundary" do
     assert %Alto.Runner.Result{status: :ok} =
              result =
