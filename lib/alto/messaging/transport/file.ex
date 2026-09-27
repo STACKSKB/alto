@@ -59,19 +59,13 @@ defmodule Alto.Messaging.Transport.File do
   end
 
   def request(handle, {:take, _} = operation, timeout) do
-    case Alto.Storage.acquire(handle.path <> ".reader", timeout: min(timeout, 100)) do
-      {:ok, lock} ->
-        try do
-          transact(handle, operation, timeout, true)
-        after
-          Alto.Storage.release(lock)
-        end
+    reader_path = Path.expand(handle.path <> ".reader")
 
-      {:error, :timeout} ->
-        {:error, :input_in_use}
-
-      error ->
-        error
+    case Alto.Storage.with_lock(reader_path, [timeout: min(timeout, 100)], fn ->
+           transact(handle, operation, timeout, true)
+         end) do
+      {:error, {:storage_lock_timeout, ^reader_path, _}} -> {:error, :input_in_use}
+      result -> result
     end
   end
 

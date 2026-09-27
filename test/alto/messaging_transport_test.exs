@@ -149,6 +149,8 @@ defmodule Alto.MessagingTransportTest do
     assert {:ok, reader} = Alto.Input.request(channel, :claim)
     task = Task.async(fn -> Alto.Input.request(writer, :claim) end)
     assert {:error, _} = Task.await(task)
+    task = Task.async(fn -> Alto.Input.request(writer, {:take, :any}) end)
+    assert {:error, :input_in_use} = Task.await(task)
 
     {:ok, first} =
       Task.async(fn -> Messaging.send(writer, text: "one", idempotency_key: "one") end)
@@ -170,6 +172,28 @@ defmodule Alto.MessagingTransportTest do
     assert {:ok, _reader} = Alto.Input.request(reopened, :claim)
     assert :ok = Alto.Input.request(reopened, :release)
     assert {:ok, %{message_id: ^id}} = Alto.Input.request(writer, {:take, :any})
+    assert {:ok, _reader} = Alto.Input.request(writer, :claim)
+    assert :ok = Alto.Input.request(writer, :release)
+  end
+
+  test "file take preserves mailbox lock timeouts and releases its reader lock", %{
+    directory: directory
+  } do
+    {:ok, channel} =
+      Input.open(transport: {Alto.Messaging.Transport.File, directory: directory}, id: "take")
+
+    lock_path = channel.handle.path <> ".lock"
+    {:ok, lock} = Alto.Storage.acquire(lock_path)
+
+    try do
+      assert {:error, {:storage_lock_timeout, ^lock_path, 10}} =
+               Input.request(channel, {:take, :any}, 10)
+    after
+      Alto.Storage.release(lock)
+    end
+
+    assert {:ok, _reader} = Input.request(channel, :claim)
+    assert :ok = Input.request(channel, :release)
   end
 
   test "file reader lock recovers after a reader dies", %{directory: directory} do

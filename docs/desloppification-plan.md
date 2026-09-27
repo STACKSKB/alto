@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,619 lines**, a **24.7% reduction**, with **2,161 lines remaining**.
+Current: **30,608 lines**, a **24.7% reduction**, with **2,150 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,16 +53,16 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-File reads build their shared path, offset and truncation metadata once, after
-selecting text or base64 encoding. Search normalizes its query once and passes a
-matching function through traversal, rather than repeatedly passing and processing
-the query and case mode. Lazy line splitting and indexing avoid materializing
-omitted lines once the match limit is reached. Existing bounds, ordering,
-confinement and custom backends remain; cap-edge regressions distinguish an exact
-final match from a match followed by a nonmatching or empty line.
-This pass removes **17 production lines**: **18 code lines removed**, **1 net
-blank line added**, and **no documentation lines removed**. No dependencies or
-compatibility layers were added.
+File-mailbox takes use the existing scoped storage lock helper instead of
+repeating acquisition and try/after cleanup. Reader contention retains its
+input-in-use error; an inner transaction-lock timeout retains its own path.
+Regression coverage checks contention and reader-lock release after both success
+and transaction failure. PNG metadata uses one binary header pattern instead of
+a nested match; dimensions, format fields and CRC checks remain, with malformed
+header, zero-dimension and bad-CRC coverage through the image tool.
+This pass removes **11 production lines**: **10 code lines** and **2 blanks**
+removed, with **1 explanatory comment added**. No dependencies or compatibility
+layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work
@@ -97,7 +97,7 @@ limit; tests cover limits 1, 4 and 12, plus acceptance/rejection of five childre
 Codex follow-ups retain model/effort selection. Restored mailboxes reject duplicate
 IDs, malformed messages and missing queued receipts.
 
-The current core check passes **1,077 tests** with application modules preloaded.
+The current core check passes **1,078 tests** with application modules preloaded.
 The TUI suite passes **146 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,

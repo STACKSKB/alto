@@ -21,20 +21,15 @@ defmodule Alto.Image.Metadata do
   end
 
   defp parse(
-         <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13::32, "IHDR", ihdr::binary-size(13), crc::32,
-           _rest::binary>>
-       ) do
-    case ihdr do
-      <<width::32, height::32, bit_depth, color_type, 0, 0, interlace>>
-      when width > 0 and height > 0 and bit_depth > 0 and color_type in [0, 2, 3, 4, 6] and
-             interlace in [0, 1] ->
-        if :erlang.crc32(["IHDR", ihdr]) == crc,
-          do: {:ok, "image/png", width, height},
-          else: {:error, :malformed_png}
-
-      _ ->
-        {:error, :malformed_png}
-    end
+         <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13::32, "IHDR", width::32, height::32, bit_depth,
+           color_type, 0, 0, interlace, crc::32, _rest::binary>> = data
+       )
+       when width > 0 and height > 0 and bit_depth > 0 and color_type in [0, 2, 3, 4, 6] and
+              interlace in [0, 1] do
+    # The CRC covers the chunk type and its 13-byte IHDR payload.
+    if :erlang.crc32(binary_part(data, 12, 17)) == crc,
+      do: {:ok, "image/png", width, height},
+      else: {:error, :malformed_png}
   end
 
   defp parse(<<0x89, "PNG", _rest::binary>>), do: {:error, :malformed_png}

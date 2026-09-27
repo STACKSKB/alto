@@ -60,8 +60,12 @@ defmodule Alto.Tools.ReadImageTest do
     root: root,
     context: context
   } do
-    File.write!(Path.join(root, "bad.png"), <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>)
-    assert {:error, :malformed_png} = Alto.Tool.run(ReadImage, %{"path" => "bad.png"}, context)
+    <<header::binary-size(29), _crc::32>> = png(1, 1)
+
+    for malformed <- [<<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>, header <> <<0::32>>, png(0, 1)] do
+      File.write!(Path.join(root, "bad.png"), malformed)
+      assert {:error, :malformed_png} = Alto.Tool.run(ReadImage, %{"path" => "bad.png"}, context)
+    end
 
     File.write!(Path.join(root, "bad.jpg"), <<0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8>>)
     assert {:error, :malformed_jpeg} = Alto.Tool.run(ReadImage, %{"path" => "bad.jpg"}, context)
