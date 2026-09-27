@@ -96,6 +96,11 @@ defmodule Alto.Tools.ReadImageTest do
     assert {:error, :image_resize_unavailable} =
              Alto.Tool.run(ReadImage, %{"path" => "image.png", "max_width" => 100}, context)
 
+    assert {:ok, %Content{blocks: [%{"width" => 400, "height" => 200}]}} =
+             Alto.Tool.run(ReadImage, %{"path" => "image.png", "max_width" => 800}, context,
+               processor: fn _, _, _, _ -> raise "must not resize" end
+             )
+
     output = png(100, 50)
 
     assert {:ok, %Content{blocks: [%{"type" => "image", "width" => 100, "height" => 50}]}} =
@@ -112,10 +117,12 @@ defmodule Alto.Tools.ReadImageTest do
 
     for {output, reason} <- [
           {png(9_000, 2), {:image_dimensions_too_large, 8_192}},
-          {png(5_000, 5_000), {:image_pixel_count_too_large, 20_000_000}}
+          {png(5_000, 5_000), {:image_pixel_count_too_large, 20_000_000}},
+          {png(100, 50) <> :binary.copy(<<0>>, 100), {:image_encoded_too_large, 100}}
         ] do
       assert {:error, ^reason} =
                Alto.Tool.run(ReadImage, %{"path" => "image.png", "max_width" => 100}, context,
+                 max_encoded_bytes: 100,
                  processor: {Processor, :resize, [[owner: self(), output: output]]}
                )
     end

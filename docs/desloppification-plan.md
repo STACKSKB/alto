@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,705 lines**, a **24.5% reduction**, with **2,247 lines remaining**.
+Current: **30,686 lines**, a **24.5% reduction**, with **2,228 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,14 +53,14 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Parsed image metadata owns dimension and pixel limits for file reads, processor
-output and typed transcript content. Content compares declared media and
-integer dimensions strictly with the validated bytes instead of separately
-validating the same declarations. Empty/nonbinary and oversized base64 data
-still fail before decoding. Existing boundary tests now exercise forged
-metadata, actual oversized headers and oversized processor output.
-This pass removes **23 production lines**: **16 code/type/declaration lines**,
-**7 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+Image resizing is one workflow: compute the fitted target, skip unnecessary
+processing, dispatch the configured function or MFA, and validate the result.
+Single-use fitting, dispatch and validation wrappers are deleted. Workspace
+confinement and descriptor-based regular-file reads remain unchanged. Existing
+resize tests now check that no-op requests skip the processor and that oversized
+encoded output is rejected alongside dimension, pixel and target violations.
+This pass removes **19 production lines**: **14 code/type/declaration lines**,
+**5 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 
