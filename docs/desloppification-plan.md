@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,810 lines**, a **24.2% reduction**, with **2,352 lines remaining**.
+Current: **30,789 lines**, a **24.3% reduction**, with **2,331 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,14 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-MCP and Codex share process opening and transport defaults in the JSON-RPC
-lifecycle owner. Both protocol-specific opening callbacks are deleted; protocol
-handshakes, catalogs, notifications and cancellation remain in their adapters.
-The common flow prepares the configured executor and opens retained stdio while
-preserving transport limits and process cleanup. Trusted server argv bypasses
-model-input command limits. Tests exercise large Codex argv, actual MCP executor
-invocations, reuse partitioning and rejection of executors lacking stdio support.
-This pass removes **23 production lines**: **22 code/type/declaration lines**,
-**1 blank**, and **no documentation lines**. Historical pass notes remain in Git.
+Model discovery and streamed completions now share one HTTP response envelope.
+The envelope counts all wire bytes, retains bounded HTTP error prefixes and
+stops failed consumers; catalog and SSE callbacks only process successful data.
+Catalog errors now obey the total response limit, and all consumers use the
+same `provider_response_too_large` error. Split-chunk tests exercise the total
+bound and exact 64 KB error prefix; raw JSON fallback remains covered.
+This pass removes **21 production lines**: **17 code/type/declaration lines**,
+**4 blank**, and **no documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 

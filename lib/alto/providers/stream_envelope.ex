@@ -6,45 +6,75 @@ defmodule Alto.Providers.StreamEnvelope do
   @state_key :alto_stream_envelope
 
   def post(config, body, headers, decoder, sink) do
-    initial = %{
-      sse: SSE.new(config.max_event_bytes),
-      completion: decoder.new(),
-      response_bytes: 0,
-      error: nil,
-      error_body: [],
-      error_bytes: 0
-    }
+    initial = %{sse: SSE.new(config.max_event_bytes), completion: decoder.new()}
 
-    with {:ok, status, state} <-
+    with {:ok, state} <-
            request(
              config,
              headers,
              [method: :post, body: JSON.encode!(body)],
              initial,
-             &consume(&1, &2, &3, config, decoder, sink)
-           ) do
-      result(state, status, decoder, sink)
-    end
+             &consume(&1, &2, decoder, sink)
+           ),
+         {:ok, completion} <- finish(state, decoder, sink),
+         do: decoder.result(completion)
   end
 
   def request(config, headers, options, initial, consume) do
+    initial = %{value: initial, bytes: 0, error: nil, error_body: []}
+
     into = fn {:data, data}, {request, response} ->
       current = Req.Response.get_private(response, @state_key, initial)
-      next = consume.(current, response.status, data)
+      size = current.bytes + byte_size(data)
+
+      next =
+        cond do
+          size > config.max_response_bytes ->
+            %{
+              current
+              | error: {:error, {:provider_response_too_large, config.max_response_bytes}}
+            }
+
+          response.status in 200..299 ->
+            case consume.(current.value, data) do
+              {:ok, value} -> %{current | value: value, bytes: size}
+              {:error, _} = error -> %{current | error: error}
+            end
+
+          current.bytes < 64_000 ->
+            prefix = binary_part(data, 0, min(byte_size(data), 64_000 - current.bytes))
+            %{current | bytes: size, error_body: [prefix | current.error_body]}
+
+          true ->
+            %{current | bytes: size}
+        end
+
       response = Req.Response.put_private(response, @state_key, next)
       if next.error, do: {:halt, {request, response}}, else: {:cont, {request, response}}
     end
 
     case Req.request(HTTPOptions.request_options(config, headers, [into: into] ++ options)) do
       {:ok, response} ->
-        {:ok, response.status, Req.Response.get_private(response, @state_key, initial)}
+        state = Req.Response.get_private(response, @state_key, initial)
+
+        cond do
+          state.error ->
+            state.error
+
+          response.status in 200..299 ->
+            {:ok, state.value}
+
+          true ->
+            body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
+            {:error, {:http_error, response.status, decode_error_body(body)}}
+        end
 
       {:error, reason} ->
         {:error, {:transport_error, reason}}
     end
   end
 
-  def decode_error_body(body) do
+  defp decode_error_body(body) do
     case JSON.decode(body) do
       {:ok, %{"error" => error}} -> error
       {:ok, decoded} -> decoded
@@ -52,34 +82,13 @@ defmodule Alto.Providers.StreamEnvelope do
     end
   end
 
-  defp consume(%{error: error} = state, _, _, _, _, _) when not is_nil(error), do: state
+  defp consume(state, data, decoder, sink) do
+    with {:ok, sse, payloads} <- SSE.feed(state.sse, data) do
+      completion = consume_payloads(payloads, state.completion, decoder, sink)
 
-  defp consume(state, status, data, config, decoder, sink) do
-    state = %{state | response_bytes: state.response_bytes + byte_size(data)}
-
-    cond do
-      state.response_bytes > config.max_response_bytes ->
-        %{state | error: {:model_response_too_large, config.max_response_bytes}}
-
-      status in 200..299 ->
-        case SSE.feed(state.sse, data) do
-          {:ok, sse, payloads} ->
-            completion = consume_payloads(payloads, state.completion, decoder, sink)
-            %{state | sse: sse, completion: completion, error: completion.error}
-
-          {:error, reason} ->
-            %{state | error: reason}
-        end
-
-      true ->
-        remaining = max(min(config.max_response_bytes, 64_000) - state.error_bytes, 0)
-        prefix = binary_part(data, 0, min(byte_size(data), remaining))
-
-        %{
-          state
-          | error_body: [prefix | state.error_body],
-            error_bytes: state.error_bytes + byte_size(prefix)
-        }
+      if completion.error,
+        do: {:error, completion.error},
+        else: {:ok, %{state | sse: sse, completion: completion}}
     end
   end
 
@@ -88,18 +97,6 @@ defmodule Alto.Providers.StreamEnvelope do
       next = decoder.consume(state, payload, sink)
       if next.error, do: {:halt, next}, else: {:cont, next}
     end)
-  end
-
-  defp result(%{error: error}, _, _, _) when not is_nil(error), do: {:error, error}
-
-  defp result(state, status, decoder, sink) when status in 200..299 do
-    with {:ok, completion} <- finish(state, decoder, sink), do: decoder.result(completion)
-  end
-
-  defp result(state, status, _, _) do
-    body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
-
-    {:error, {:http_error, status, decode_error_body(body)}}
   end
 
   defp finish(state, decoder, sink) do

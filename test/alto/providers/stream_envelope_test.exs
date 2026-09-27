@@ -14,24 +14,45 @@ defmodule Alto.Providers.StreamEnvelopeTest do
       Keyword.merge([model: "test", api_key: "secret", req_options: [adapter: adapter]], extra)
 
     request = %{messages: [%{"role" => "user", "content" => "hello"}], tools: [], options: %{}}
-    provider.stream(request, fn event -> send(self(), {:event, event}) end, options)
+
+    if provider == :catalog do
+      OpenAICompatible.list_models(
+        Keyword.put(
+          options,
+          :max_models_response_bytes,
+          options[:max_response_bytes] || 8_000_000
+        )
+      )
+    else
+      provider.stream(request, fn event -> send(self(), {:event, event}) end, options)
+    end
   end
 
-  test "both providers bound all wire bytes, including comments and empty events" do
-    for provider <- [Anthropic, OpenAICompatible],
+  test "provider streams and catalogs bound all wire bytes" do
+    for provider <- [Anthropic, OpenAICompatible, :catalog],
         chunks <- [[":ping\n\n", ":ping\n\n"], ["\n\n\n\n\n\n", "\n\n\n\n\n\n"]] do
-      assert {:error, {:model_response_too_large, 10}} =
+      assert {:error, {:provider_response_too_large, 10}} =
                run(provider, chunks, max_response_bytes: 10)
     end
   end
 
   test "HTTP error bodies obey the same response bound" do
-    for provider <- [Anthropic, OpenAICompatible] do
-      assert {:error, {:model_response_too_large, 10}} =
+    for provider <- [Anthropic, OpenAICompatible, :catalog] do
+      assert {:error, {:provider_response_too_large, 10}} =
                run(provider, ["123456", "789012"], [max_response_bytes: 10], 503)
 
       assert {:error, {:http_error, 503, "oops"}} =
                run(provider, ["oops"], [max_response_bytes: 10], 503)
+
+      assert {:error, {:http_error, 503, retained}} =
+               run(
+                 provider,
+                 [String.duplicate("x", 32_000), String.duplicate("x", 40_000)],
+                 [max_response_bytes: 80_000],
+                 503
+               )
+
+      assert retained == String.duplicate("x", 64_000)
     end
   end
 

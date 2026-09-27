@@ -34,15 +34,15 @@ defmodule Alto.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, status, state} <-
+         {:ok, chunks} <-
            StreamEnvelope.request(
              config,
              config.headers,
              [method: :get, params: config.query],
-             %{chunks: [], bytes: 0, error: nil, limit: config.max_response_bytes},
-             &consume_models_chunk/3
+             [],
+             fn chunks, data -> {:ok, [data | chunks]} end
            ) do
-      models_result(status, state)
+      models_result(chunks)
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
@@ -177,9 +177,8 @@ defmodule Alto.Providers.OpenAICompatible do
     }
   end
 
-  defp models_result(status, state) when status in 200..299 do
-    with nil <- state.error,
-         body <- state.chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+  defp models_result(chunks) do
+    with body <- chunks |> Enum.reverse() |> IO.iodata_to_binary(),
          {:ok, decoded} <- JSON.decode(body),
          %{"data" => data} when is_list(data) <- decoded,
          models when models != [] <- normalize_models(data) do
@@ -189,23 +188,6 @@ defmodule Alto.Providers.OpenAICompatible do
       [] -> {:error, :empty_model_catalog}
       %{} -> {:error, :invalid_models_response_shape}
       reason -> {:error, reason}
-    end
-  end
-
-  defp models_result(status, state) do
-    body = state.chunks |> Enum.reverse() |> IO.iodata_to_binary()
-
-    {:error, {:http_error, status, StreamEnvelope.decode_error_body(body)}}
-  end
-
-  defp consume_models_chunk(state, status, data) do
-    limit = if status in 200..299, do: state.limit, else: min(state.limit, 64_000)
-    size = state.bytes + byte_size(data)
-
-    cond do
-      size <= limit -> %{state | chunks: [data | state.chunks], bytes: size}
-      status in 200..299 -> %{state | error: {:models_response_too_large, limit}}
-      true -> state
     end
   end
 

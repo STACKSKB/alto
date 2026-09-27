@@ -9,8 +9,10 @@ non-SSE JSON fallback, or flush incomplete events at EOF.
 Original chunks go directly to the library, which owns parsing and split-CRLF
 handling. Alto's separate counters enforce the per-event wire-byte limit without
 rewriting chunks or buffering lines. `StreamEnvelope` bounds total response bytes,
-including keepalives and comments, identically for both providers. EOF explicitly
-flushes a final data frame; raw JSON fallback is byte-for-byte.
+including keepalives and comments, for both providers and model catalogs. The
+same envelope handles HTTP errors, retaining at most a 64 KB prefix while
+enforcing the total wire limit. Successful consumers receive only body chunks.
+EOF explicitly flushes a final data frame; raw JSON fallback is byte-for-byte.
 
 Compatibility tests exercise every two-chunk split of multibyte/CRLF input,
 comments, multiline data, unfinished frames, raw bodies and per-frame limits.
