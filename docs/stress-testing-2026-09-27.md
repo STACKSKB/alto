@@ -107,3 +107,11 @@ UI integration attempted a legal 58,399-byte `write_file`, but preparation faile
 The ink worker `sess-bunappmmxj6yhky` completed in 11 requests and independently passed 3,969 checks with sanitizers. Subsequent review and direct reproduction found two remaining app edge cases outside that suite: stationary pressure increase from zero can disappear, and default stabilization can pull ink across a zero-pressure lift. These are being delegated for correction; passing that suite alone is not app acceptance.
 
 The complete core suite after the preparation fix passed **1,103 tests** with ordinary parallelism. Application workers were then relaunched against this tested code.
+
+## Actionable ambiguous edits
+
+Repeated ambiguous `edit_file` failures exposed insufficient recovery information. Errors now report the one-based batch edit index, total matches, and at most eight matching source line numbers with a truncation flag. Guidance asks for unique surrounding context and reserves `replace_all` for intentional changes to every occurrence. Exact matching and atomic application remain intact. All 31 workspace tool tests passed, including batch atomicity and bounded diagnostics.
+
+Live Space Bunny probe `sess-2ogqblwbfbdh4ea` deliberately submitted an ambiguous edit, received lines 2 and 4, retried with unique context, and verified only the second value changed. It completed successfully in five model requests.
+
+Independent ink verification now passes **3,989 checks** under address, undefined-behavior and float-cast-overflow sanitizers. Direct stationary-contact and stabilized pen-lift reproductions also pass. Document compilation and UI integration remain unfinished; these results do not establish application acceptance.

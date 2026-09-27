@@ -328,25 +328,38 @@ defmodule Alto.Tools.WorkspaceToolsTest do
     assert [%{matches: [%{path: "index"}]}] = run.output
   end
 
-  test "edits one unique match atomically and preserves file mode", %{
+  test "ambiguous edit reports bounded source locations and a targeted uniqueness hint", %{
     root: root,
     context: context
   } do
     path = Path.join(root, "sample.txt")
-    File.write!(path, "one two one\n")
+    original = "header\nalpha needle first\nmiddle\nbeta needle second\ntail\n"
+    File.write!(path, original)
     File.chmod!(path, 0o640)
 
-    assert {:error, {:ambiguous_match, 2}} =
+    assert {:error,
+            {:ambiguous_match, 2,
+             %{
+               edit_index: 2,
+               match_lines: [2, 4],
+               locations_truncated: false,
+               hint: hint
+             }}} =
              Alto.Tool.run(
                EditFile,
                %{
                  "path" => "sample.txt",
-                 "edits" => [%{"old_text" => "one", "new_text" => "three"}]
+                 "edits" => [
+                   %{"old_text" => "header", "new_text" => "changed"},
+                   %{"old_text" => "needle", "new_text" => "mark"}
+                 ]
                },
                context
              )
 
-    assert File.read!(path) == "one two one\n"
+    assert hint =~ "Include more surrounding text"
+    assert hint =~ "replace_all=true only if every occurrence is intended"
+    assert File.read!(path) == original
 
     assert {:ok, %{replacements: 2}} =
              Alto.Tool.run(
@@ -354,15 +367,42 @@ defmodule Alto.Tools.WorkspaceToolsTest do
                %{
                  "path" => "sample.txt",
                  "edits" => [
-                   %{"old_text" => "one", "new_text" => "three", "replace_all" => true}
+                   %{"old_text" => "header", "new_text" => "changed"},
+                   %{"old_text" => "beta needle second", "new_text" => "beta mark second"}
                  ]
                },
                context
              )
 
-    assert File.read!(path) == "three two three\n"
+    assert File.read!(path) ==
+             "changed\nalpha needle first\nmiddle\nbeta mark second\ntail\n"
+
     assert {:ok, %{mode: mode}} = File.stat(path)
     assert Bitwise.band(mode, 0o777) == 0o640
+  end
+
+  test "ambiguity reports at most eight matching line numbers", %{root: root, context: context} do
+    path = Path.join(root, "many.txt")
+    original = Enum.map_join(1..12, "\n", &"repeat #{&1}") <> "\n"
+    File.write!(path, original)
+
+    assert {:error,
+            {:ambiguous_match, 12,
+             %{
+               edit_index: 1,
+               match_lines: [1, 2, 3, 4, 5, 6, 7, 8],
+               locations_truncated: true
+             }}} =
+             Alto.Tool.run(
+               EditFile,
+               %{
+                 "path" => "many.txt",
+                 "edits" => [%{"old_text" => "repeat", "new_text" => "single"}]
+               },
+               context
+             )
+
+    assert File.read!(path) == original
   end
 
   test "prepared edits show the frozen result and refuse stale files", %{

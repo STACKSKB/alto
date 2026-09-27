@@ -29,7 +29,7 @@ defmodule Alto.Tools.EditFile do
 
   @impl true
   def arguments(opts) do
-    {"Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot; a match must be unique unless replace_all is true.",
+    {"Apply exact, non-overlapping text replacements to an existing UTF-8 workspace file. Every edit is matched against the same original snapshot. Ambiguous matches report the 1-based edit index and up to eight matching source lines; add longer unique context, or use replace_all only when every occurrence is intended.",
      [
        path: [type: :string, required: true],
        edits: [
@@ -38,7 +38,11 @@ defmodule Alto.Tools.EditFile do
              Arguments.object(
                old_text: [type: Arguments.text(1, :infinity), required: true],
                new_text: [type: Arguments.text(0, opts.max_replacement_bytes), required: true],
-               replace_all: [type: :boolean, default: false]
+               replace_all: [
+                 type: :boolean,
+                 default: false,
+                 doc: "Set true only when every occurrence of old_text should be replaced."
+               ]
              ),
              1,
              opts.max_edits
@@ -95,10 +99,18 @@ defmodule Alto.Tools.EditFile do
 
   defp collect_replacements(content, edits) do
     with {:ok, groups} <-
-           Alto.Result.traverse(edits, fn edit ->
+           edits
+           |> Enum.with_index(1)
+           |> Alto.Result.traverse(fn {edit, edit_index} ->
              matches = :binary.matches(content, edit["old_text"])
 
-             with {:ok, selected} <- select_matches(matches, Map.get(edit, "replace_all", false)),
+             with {:ok, selected} <-
+                    select_matches(
+                      content,
+                      matches,
+                      Map.get(edit, "replace_all", false),
+                      edit_index
+                    ),
                   do:
                     {:ok,
                      Enum.map(selected, fn {start, size} -> {start, size, edit["new_text"]} end)}
@@ -107,13 +119,35 @@ defmodule Alto.Tools.EditFile do
     end
   end
 
-  defp select_matches([], _replace_all?), do: {:error, :text_not_found}
+  defp select_matches(_content, [], _replace_all?, _edit_index),
+    do: {:error, :text_not_found}
 
-  defp select_matches(matches, false) when length(matches) > 1,
-    do: {:error, {:ambiguous_match, length(matches)}}
+  defp select_matches(content, matches, false, edit_index) when length(matches) > 1 do
+    locations = Enum.take(matches, 9)
+    visible = Enum.take(locations, 8)
+    truncated? = length(locations) > 8
 
-  defp select_matches([match | _], false), do: {:ok, [match]}
-  defp select_matches(matches, true), do: {:ok, matches}
+    info = %{
+      edit_index: edit_index,
+      match_lines: Enum.map(visible, fn {offset, _size} -> line_at(content, offset) end),
+      locations_truncated: truncated?,
+      hint:
+        "Include more surrounding text to identify one occurrence, or set replace_all=true only if every occurrence is intended."
+    }
+
+    {:error, {:ambiguous_match, length(matches), info}}
+  end
+
+  defp select_matches(_content, [match | _], false, _edit_index), do: {:ok, [match]}
+  defp select_matches(_content, matches, true, _edit_index), do: {:ok, matches}
+
+  defp line_at(content, offset) do
+    content
+    |> binary_part(0, offset)
+    |> then(&:binary.matches(&1, "\n"))
+    |> length()
+    |> Kernel.+(1)
+  end
 
   defp replace_ranges(content, replacements) do
     with {:ok, {chunks, offset}} <-
