@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,608 lines**, a **24.7% reduction**, with **2,150 lines remaining**.
+Current: **30,601 lines**, a **24.7% reduction**, with **2,143 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,16 +53,16 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-File-mailbox takes use the existing scoped storage lock helper instead of
-repeating acquisition and try/after cleanup. Reader contention retains its
-input-in-use error; an inner transaction-lock timeout retains its own path.
-Regression coverage checks contention and reader-lock release after both success
-and transaction failure. PNG metadata uses one binary header pattern instead of
-a nested match; dimensions, format fields and CRC checks remain, with malformed
-header, zero-dimension and bad-CRC coverage through the image tool.
-This pass removes **11 production lines**: **10 code lines** and **2 blanks**
-removed, with **1 explanatory comment added**. No dependencies or compatibility
-layers were added.
+Selection history and Codex subscriber registration use `Map.put_new_lazy` to
+retain existing rows and monitors without repeating presence-check branches.
+The subscriber cap still rejects new subscribers while allowing repeat registration;
+its integration test exercises both at a one-subscriber limit. Transcript display
+uses `Enum.flat_map_reduce` to project entries and retain call summaries in one
+pass instead of building nested entries and then flattening them. Existing
+selection tests cover reverse scrolling, Unicode, pane bounds and copy behavior.
+This pass removes **7 production lines**: **8 code lines removed** and **1 net
+blank line added**, with **no documentation lines removed**. Transcript projection
+is line-neutral. No dependencies or compatibility layers were added.
 Historical pass notes remain in Git.
 
 ## Remaining work

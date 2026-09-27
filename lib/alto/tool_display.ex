@@ -80,8 +80,8 @@ defmodule Alto.ToolDisplay do
   end
 
   def transcript(messages) do
-    {entries, _calls} = Enum.map_reduce(messages, %{}, &transcript_entry/2)
-    List.flatten(entries)
+    {entries, _calls} = Enum.flat_map_reduce(messages, %{}, &transcript_entry/2)
+    entries
   end
 
   defp transcript_entry(%{"role" => "assistant"} = message, calls) do

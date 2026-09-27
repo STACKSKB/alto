@@ -350,14 +350,10 @@ defmodule Alto.TUI.Selection do
 
   defp remember_rows(history, snapshot, rect, offset) do
     Enum.reduce(rect.y..(rect.y + rect.height - 1), history, fn y, rows ->
-      key = y + offset - rect.y
-
-      if Map.has_key?(rows, key) do
-        rows
-      else
+      Map.put_new_lazy(rows, y + offset - rect.y, fn ->
         row = elem(snapshot.rows, y)
-        Map.put(rows, key, %{row | raw: :binary.copy(row.raw)})
-      end
+        %{row | raw: :binary.copy(row.raw)}
+      end)
     end)
   end
 

@@ -89,6 +89,7 @@ defmodule Alto.Codex.AppServer.ClientTest do
       cwd: root,
       startup_timeout: 5_000,
       request_timeout: 5_000,
+      max_subscribers: 1,
       env: %{"API_KEY" => secret}
     ]
 
@@ -100,6 +101,9 @@ defmodule Alto.Codex.AppServer.ClientTest do
     refute isolated == client
     GenServer.stop(isolated)
     assert :ok = Client.subscribe(client)
+    assert :ok = Client.subscribe(client)
+    other = Task.async(fn -> Client.subscribe(client) end)
+    assert {:error, {:codex_app_server_subscriber_limit, 1}} = Task.await(other)
 
     assert {:ok, %{"account" => %{"type" => "chatgpt", "planType" => "pro"}}} =
              Client.account(client)

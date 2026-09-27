@@ -103,18 +103,15 @@ defmodule Alto.Codex.AppServer.Client do
   end
 
   def handle_call({:subscribe, subscriber}, _from, state) do
-    if Map.has_key?(state.subscribers, subscriber) do
-      {:reply, :ok, state}
+    limit = Keyword.fetch!(state.opts, :max_subscribers)
+
+    if not Map.has_key?(state.subscribers, subscriber) and map_size(state.subscribers) >= limit do
+      {:reply, {:error, {:codex_app_server_subscriber_limit, limit}}, state}
     else
-      if map_size(state.subscribers) >= Keyword.fetch!(state.opts, :max_subscribers) do
-        {:reply,
-         {:error,
-          {:codex_app_server_subscriber_limit, Keyword.fetch!(state.opts, :max_subscribers)}},
-         state}
-      else
-        monitor = Process.monitor(subscriber)
-        {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, subscriber, monitor)}}
-      end
+      subscribers =
+        Map.put_new_lazy(state.subscribers, subscriber, fn -> Process.monitor(subscriber) end)
+
+      {:reply, :ok, %{state | subscribers: subscribers}}
     end
   end
 
