@@ -447,6 +447,39 @@ defmodule Alto.Runner.SerialCompactionTest do
     refute_receive {:stream_call, _}
   end
 
+  test "context-limit result explains uncompactable retained history", %{dir: dir} do
+    result =
+      Alto.run("exceeds the tiny test budget",
+        provider: {ScriptedProvider, test_pid: self()},
+        loop: Alto.default_loop(context: Alto.Context.Window.new(max_tokens: 1)),
+        session: :new,
+        session_dir: dir,
+        compaction: [keep_recent_messages: 12]
+      )
+
+    assert result.status == :error
+    assert {:context_limit, %{compaction_reason: :transcript_uncompactable}} = result.reason
+    refute_receive {:stream_call, _}
+  end
+
+  test "fully retained history records why compaction cannot run", %{dir: dir} do
+    state = reduction_state(dir, {CrashingReducer, []})
+    state = %{state | compaction: Keyword.put(state.compaction, :keep_recent_messages, 100)}
+
+    assert {:error, :transcript_uncompactable, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    assert failed.model_requests == state.model_requests
+
+    assert Enum.any?(
+             failed.events_rev,
+             &(&1.type == :context_compact_failed and &1.data.error == :transcript_uncompactable)
+           )
+
+    assert Alto.Display.error(:transcript_uncompactable) =~ "all messages are retained"
+  end
+
   test "a reducer crash is reported and leaves transcript and accounting intact", %{dir: dir} do
     state = reduction_state(dir, {CrashingReducer, []})
 

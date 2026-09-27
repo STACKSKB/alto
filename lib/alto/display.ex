@@ -10,6 +10,8 @@ defmodule Alto.Display do
   @items 30
   @depth 8
   @messages %{
+    "transcript_uncompactable" =>
+      "No history is available to compact: all messages are retained. Reduce recent-message retention or increase the context budget.",
     "api_key_missing" => "API key is missing. Configure this provider's credentials.",
     "model_discovery_not_supported" => "This provider does not support model discovery.",
     "timeout" => "The request timed out",

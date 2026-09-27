@@ -620,9 +620,20 @@ defmodule Alto.Runner.Execution do
 
   defp compact_model_context(effect_request, run, {status, fallback}) do
     case RunTranscript.reduce(run, reason: :model_context_pressure) do
-      {:ok, next} -> prepare_model_context(effect_request, next)
-      {:error, {:cancelled, _} = reason, next} -> {:error, reason, next}
-      {:error, _, next} -> {status, fallback, next}
+      {:ok, next} ->
+        prepare_model_context(effect_request, next)
+
+      {:error, {:cancelled, _} = reason, next} ->
+        {:error, reason, next}
+
+      {:error, reason, next} ->
+        case fallback do
+          {:context_limit, details} when is_map(details) ->
+            {:error, {:context_limit, Map.put(details, :compaction_reason, reason)}, next}
+
+          _ ->
+            {status, fallback, next}
+        end
     end
   end
 

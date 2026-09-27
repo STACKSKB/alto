@@ -85,7 +85,7 @@ defmodule Alto.Runner.Execution.Transcript do
         record_compact_failed(run, {:compaction_input_limit, byte_size(text), limit})
 
       middle == [] ->
-        {:error, :transcript_uncompactable, run}
+        record_compact_failed(run, :transcript_uncompactable)
 
       true ->
         input = reduction_input(run, pinned, middle, recent, text, reason)
