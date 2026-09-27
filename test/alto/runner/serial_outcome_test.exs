@@ -185,8 +185,15 @@ defmodule Alto.Runner.SerialOutcomeTest do
                  tools: [OkTool]
                )
 
-      assert {:failed, %{outcome: :rejected_before_dispatch, error: {:unknown_tool, "missing"}}} =
-               missing.output
+      assert {:failed,
+              %{
+                outcome: :rejected_before_dispatch,
+                error:
+                  {:unknown_tool, "missing",
+                   %{available_tools: ["ok_tool"], available_tools_truncated: false, hint: hint}}
+              }} = missing.output
+
+      assert hint =~ "supplied tool schemas"
 
       # Undecodable native arguments never dispatch.
       defmodule BadArgsLoop do

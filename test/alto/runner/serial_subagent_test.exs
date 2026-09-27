@@ -249,7 +249,14 @@ defmodule Alto.Runner.SerialSubagentTest do
           record["run_id"] == child_id
       end)
 
-    assert {:ok, %{error: {:unknown_tool, "echo"}}} = Session.decode_term(failed["data"])
+    assert {:ok,
+            %{
+              error:
+                {:unknown_tool, "echo",
+                 %{available_tools: [], available_tools_count: 0, hint: hint}}
+            }} = Session.decode_term(failed["data"])
+
+    assert hint =~ "No tools are registered"
   end
 
   test "invalid delegation requests fail the run", %{dir: dir} do

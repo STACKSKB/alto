@@ -130,7 +130,9 @@ defmodule Alto.Loops.RuleTest do
     test "an unknown tool fails the run through the normal tool pipeline" do
       assert %Alto.Runner.Result{
                status: :error,
-               reason: {:rule_step_failed, 1, "missing", {:unknown_tool, "missing"}}
+               reason:
+                 {:rule_step_failed, 1, "missing",
+                  {:unknown_tool, "missing", %{available_tools: ["echo"]}}}
              } =
                _result =
                Alto.run(%{}, loop: Alto.rule_loop(steps: ["missing"]), tools: [EchoTool])

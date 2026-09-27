@@ -1263,8 +1263,26 @@ defmodule Alto.Runner.Execution do
 
   defp fetch_tool(tools, name) when is_binary(name) do
     case Map.fetch(tools, name) do
-      {:ok, tool} -> {:ok, tool}
-      :error -> {:error, {:unknown_tool, name}}
+      {:ok, tool} ->
+        {:ok, tool}
+
+      :error ->
+        available = tools |> Map.keys() |> Enum.sort()
+        shown = Enum.take(available, 32)
+
+        hint =
+          if shown == [],
+            do: "No tools are registered for this run.",
+            else: "Use one registered tool name from the supplied tool schemas."
+
+        {:error,
+         {:unknown_tool, name,
+          %{
+            available_tools: shown,
+            available_tools_count: length(available),
+            available_tools_truncated: length(available) > length(shown),
+            hint: hint
+          }}}
     end
   end
 
