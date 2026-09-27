@@ -178,7 +178,7 @@ defmodule Alto.Runner.ChildContinuationTest do
             )
         ),
       tools: [First, Guarded, Integrate],
-      approval: Alto.Approvals.Checkpoint,
+      approval: :suspend,
       checkpoint_version: "child-v1",
       continuation_store: context.ledger,
       budget_account: context.account,

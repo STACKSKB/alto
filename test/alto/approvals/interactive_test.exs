@@ -1,8 +1,8 @@
-defmodule Alto.Approvals.InteractiveTest do
+defmodule Alto.Approval.InteractiveTest do
   use ExUnit.Case, async: true
 
   alias Alto.Approval.Request
-  alias Alto.Approvals.Interactive
+  alias Alto.Approval, as: Approval
   alias Alto.Tool.Context
 
   @context %Context{session_id: "test-session", cwd: "/home/three/work"}
@@ -45,7 +45,7 @@ defmodule Alto.Approvals.InteractiveTest do
   defp attempt(input_text, request) do
     {:ok, input} = StringIO.open(input_text)
     {:ok, output} = StringIO.open("")
-    decision = Interactive.decide(request, @context, input: input, output: output)
+    decision = Approval.interactive(request, @context, input: input, output: output)
     {_status, body} = StringIO.contents(output)
     {decision, body}
   end

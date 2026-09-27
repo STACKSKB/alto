@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **31,776 lines**, a **21.8% reduction**, with **3,318 lines remaining**.
+Current: **31,646 lines**, a **22.2% reduction**, with **3,188 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -52,6 +52,19 @@ changes and historical test counts. Contracts belong in the component guides.
 - TUI state uses canonical catalog, task and run data. Rendering shares per-frame
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
+
+Approval policies are now decision literals or two-argument functions. Six
+policy modules are deleted; the interactive, resident and delegated front ends
+share ordinary functions and exact-ID decision waiting. Frozen requests,
+supervision, cancellation, inherited routes and durable suspension remain.
+Usage accounting has one canonical map across provider ingestion, execution,
+events, child results, checkpoints and TUI state. Field projection and cumulative
+arithmetic are shared, and provider usage is normalized once per completion.
+The [extension guide](extensions.md) documents both contracts.
+This pass removes **130 production lines**: **90 code/typespec**, **22 blank**,
+and **18 source documentation/comment** lines. A differential check matched
+**15,000 provider, accounting and Codex projections**. The full core suite passes
+**1,074 tests**. No dependencies, migrations or compatibility adapters were added.
 
 Webhook configuration now uses path-keyed endpoint maps and captured verifier,
 identity and admission functions. The Inbox behavior and Queue adapter modules
@@ -270,7 +283,7 @@ Codex follow-ups retain model/effort selection. Restored mailboxes reject duplic
 IDs, malformed messages and missing queued receipts.
 
 The current core check passes **1,074 tests** with application modules preloaded.
-The last TUI check passed **145 tests** before the webhook-only changes. The direct-call consolidation retains retry, cancellation,
+The TUI suite passes **145 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,
 resume, crash recovery, frozen dispatches, bounds and provider normalization.

@@ -3,15 +3,7 @@ defmodule Alto.Runner.SerialWorkspaceTest do
 
   alias Alto.{Event, OperationLog, Workspaces}
 
-  defmodule ApproveAll do
-    @behaviour Alto.Approval
-    @impl true
-    def decide(_request, _context, _opts), do: :approve
-  end
-
   defmodule BlockingApproval do
-    @behaviour Alto.Approval
-    @impl true
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), :workspace_approval_started)
 
@@ -22,8 +14,6 @@ defmodule Alto.Runner.SerialWorkspaceTest do
   end
 
   defmodule BarrierApproval do
-    @behaviour Alto.Approval
-    @impl true
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:workspace_barrier_entered, self()})
 
@@ -114,7 +104,7 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     )
   end
 
-  defp run_opts(manager, dir, approval \\ ApproveAll) do
+  defp run_opts(manager, dir, approval \\ :approve) do
     [
       loop: loop(manager),
       cwd: Path.join(dir, "source"),
@@ -167,7 +157,9 @@ defmodule Alto.Runner.SerialWorkspaceTest do
       Task.async(fn ->
         Alto.run(
           %{agents: agents},
-          run_opts(manager, dir, {BarrierApproval, test_pid: test_pid})
+          run_opts(manager, dir, fn request, context ->
+            BarrierApproval.decide(request, context, test_pid: test_pid)
+          end)
         )
       end)
 
@@ -240,10 +232,16 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     dir: dir,
     manager: manager
   } do
+    test_pid = self()
     agents = [%{id: "blocked", task: %{content: "never-written\n"}, loop: Alto.loop(WriteLoop)}]
 
     {:ok, handle} =
-      Alto.start(%{agents: agents}, run_opts(manager, dir, {BlockingApproval, test_pid: self()}))
+      Alto.start(
+        %{agents: agents},
+        run_opts(manager, dir, fn request, context ->
+          BlockingApproval.decide(request, context, test_pid: test_pid)
+        end)
+      )
 
     assert_receive :workspace_approval_started, 15_000
     assert :ok = Alto.cancel(handle, :operator_stop)

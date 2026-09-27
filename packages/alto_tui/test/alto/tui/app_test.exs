@@ -1290,7 +1290,7 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider: nil,
-        approval: Alto.Approvals.DenyAll,
+        approval: {:deny, :policy_denied},
         tui_backends: [custom: {CustomBackend, owner: self()}],
         session_dir: Path.join(context.root, "sessions")
       )
@@ -1314,7 +1314,7 @@ defmodule Alto.TUI.AppTest do
     assert state.selected_backend == :custom
     ExRatatui.textarea_set_value(state.textarea, "execute")
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
-    assert_receive {:custom_start, Alto.Approvals.DenyAll}, 2_000
+    assert_receive {:custom_start, {:deny, :policy_denied}}, 2_000
     eventually(fn -> user_state(app).notice == "run completed" end)
   end
 

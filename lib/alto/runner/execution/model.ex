@@ -26,9 +26,12 @@ defmodule Alto.Runner.Execution.Model do
     run = %{run | model_requests: step}
 
     case outcome do
-      {:ok, completion} ->
-        usage = Usage.normalize(if(is_map(completion), do: completion[:usage]))
-        {outcome, %{run | usage: Usage.merge(run.usage, usage)}}
+      {:ok, completion} when is_map(completion) ->
+        usage = Usage.normalize(completion[:usage])
+        {{:ok, Map.put(completion, :usage, usage)}, %{run | usage: Usage.merge(run.usage, usage)}}
+
+      {:ok, other} ->
+        {{:error, {:invalid_completion, other}}, run}
 
       {:error, _} ->
         {outcome, run}

@@ -20,8 +20,7 @@ defmodule Alto.Runner.Execution.Setup do
     tools = Keyword.get(opts, :tools, [])
     cwd = opts |> Keyword.get(:cwd, File.cwd!()) |> Path.expand()
 
-    approval =
-      Alto.Capabilities.normalize(Keyword.get(opts, :approval, Alto.Approvals.DenyAll))
+    approval = Keyword.get(opts, :approval, {:deny, :policy_denied})
 
     with {:ok, limits} <- limits(opts),
          {:ok, budget} <- resolve_budget(opts[:budget], opts),

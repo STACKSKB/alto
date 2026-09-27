@@ -131,7 +131,7 @@ defmodule Alto.Runner.AgentIdentityTest do
       loop: Alto.rule_loop(steps: ["capture_checkpoint"]),
       tools: [CheckpointCaptureTool],
       tool_context_metadata: %{owner: self()},
-      approval: Alto.Approvals.Checkpoint,
+      approval: :suspend,
       checkpoint_version: "identity-test"
     ]
 

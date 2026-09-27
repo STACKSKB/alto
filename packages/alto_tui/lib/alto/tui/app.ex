@@ -3,7 +3,6 @@ defmodule Alto.TUI.App do
 
   use ExRatatui.App
 
-  alias Alto.Approvals.{AllowAll, Delegated, DenyAll}
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
   alias Alto.TUI.{Menu, Backend, Selection, State, View}
@@ -715,21 +714,20 @@ defmodule Alto.TUI.App do
   end
 
   defp configured_or_ui_approval(state) do
-    case Keyword.fetch(state.run_options, :approval) do
-      {:ok, Alto.Approvals.Interactive} ->
-        {Delegated, sink: self()}
+    interactive = &Alto.Approval.interactive/2
 
-      {:ok, {Alto.Approvals.Interactive, []}} ->
-        {Delegated, sink: self()}
+    case Keyword.fetch(state.run_options, :approval) do
+      {:ok, ^interactive} ->
+        &Alto.Approval.delegated/2
 
       {:ok, configured} ->
         configured
 
       :error ->
         case state.approval_level do
-          :ask -> {Delegated, sink: self()}
-          :read_only -> {DenyAll, reason: :read_only_mode}
-          :full_access -> AllowAll
+          :ask -> &Alto.Approval.delegated/2
+          :read_only -> {:deny, :read_only_mode}
+          :full_access -> :approve
         end
     end
   end

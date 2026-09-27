@@ -161,7 +161,7 @@ defmodule RepositoryMaintenance.Workflow do
               Alto.Tools.EditFile,
               Alto.Tools.WriteFile
             ],
-            approval: Alto.Approvals.AllowAll,
+            approval: :approve,
             max_steps: Keyword.get(opts, :max_steps, 8)
           )
         end

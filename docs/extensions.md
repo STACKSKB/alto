@@ -90,6 +90,35 @@ unchanged to execution; they are not interpreted as argument maps again.
 `Alto.Tool.run/4` combines preparation and execution for direct hosts. It runs
 callbacks in the caller; runner execution supplies approval and supervision.
 
+## Approval decisions
+
+The `approval` run option accepts a decision literal (`:approve`, `:suspend`, or
+`{:deny, reason}`) or a two-argument function receiving the display-safe
+`%Alto.Approval.Request{}` and `%Alto.Tool.Context{}`. Use closures to bind
+options. Built-in prompts are `&Alto.Approval.interactive/2` and
+`&Alto.Approval.socket/2`. `Alto.Approval.delegated/3` can be wrapped in a
+closure when it needs options.
+
+```elixir
+approval = fn request, context -> MyPolicy.decide(request, context, policy_opts) end
+Alto.run(task, approval: approval)
+```
+
+`:approve` authorizes the prepared operation, `:suspend` captures it for a
+checkpoint-capable host, and `{:deny, reason}` returns the reason as the tool
+failure. The default policy is `{:deny, :policy_denied}`.
+
+## Usage accounting
+
+Execution normalizes provider usage once with `Alto.Usage.normalize/1` and carries
+one atom-keyed accounting map through results, events, checkpoints and front ends.
+The map includes cumulative counts, latest-request counts, a context window and
+`requests`. A present `requests` field identifies serialized accounting; otherwise
+normalization treats the value as one provider response. `Alto.Usage.merge/2` adds
+cumulative fields and replaces latest-request fields only when the right-hand map
+reports a request. Codex cumulative snapshots use `Alto.Usage.from_codex/1` and
+retain `requests: 0` because the server does not provide a request count.
+
 ## Context estimates
 
 `Alto.Context.Window` accepts a unary estimator. `Alto.Context.Estimator` adapts

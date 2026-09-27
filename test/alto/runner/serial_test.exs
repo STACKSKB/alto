@@ -160,9 +160,6 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule BlockingApproval do
-    @behaviour Alto.Approval
-
-    @impl true
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:approval_started, self()})
       receive do: (:never -> :approve)
@@ -170,9 +167,6 @@ defmodule Alto.Runner.SerialTest do
   end
 
   defmodule RecordingApproval do
-    @behaviour Alto.Approval
-
-    @impl true
     def decide(request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:approval_decision, request})
       :approve
@@ -274,7 +268,7 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("do the thing",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
-               approval: Alto.Approvals.AllowAll,
+               approval: :approve,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
@@ -335,7 +329,7 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("do not run it",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
-               approval: {Alto.Approvals.DenyAll, reason: :not_allowed},
+               approval: {:deny, :not_allowed},
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
@@ -366,7 +360,7 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("safe read",
                provider: {ToolThenAnswerProvider, test_pid: self()},
                tools: [SafeEchoTool],
-               approval: Alto.Approvals.DenyAll
+               approval: {:deny, :policy_denied}
              )
 
     assert result.output == "finished"
@@ -394,7 +388,9 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("prepare it",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [{PreparedEchoTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent}
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent)
+               end
              )
 
     assert_receive {:tool_prepared, prepared}
@@ -475,11 +471,15 @@ defmodule Alto.Runner.SerialTest do
   end
 
   test "cancellation interrupts approval before the tool starts" do
+    parent = self()
+
     assert {:ok, handle} =
              Alto.start("ask first",
-               provider: {ToolThenAnswerProvider, test_pid: self()},
+               provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
-               approval: {BlockingApproval, test_pid: self()}
+               approval: fn request, context ->
+                 BlockingApproval.decide(request, context, test_pid: parent)
+               end
              )
 
     assert_receive {:approval_started, approval_pid}
@@ -525,7 +525,9 @@ defmodule Alto.Runner.SerialTest do
     defaults = [
       provider: {ToolThenAnswerProvider, test_pid: parent},
       tools: [{ConfiguredPrepareTool, test_pid: parent, prepare_result: prepare_result}],
-      approval: {RecordingApproval, test_pid: parent},
+      approval: fn request, context ->
+        RecordingApproval.decide(request, context, test_pid: parent)
+      end,
       event_sink: fn event -> send(parent, {:event, event}) end
     ]
 
@@ -571,7 +573,9 @@ defmodule Alto.Runner.SerialTest do
              Alto.start("cancel in prepare",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [{BlockingPrepareTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent)
+               end,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
@@ -598,7 +602,9 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("time out prepare",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [{BlockingPrepareTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent},
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent)
+               end,
                tool_timeout: 200,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
@@ -635,7 +641,9 @@ defmodule Alto.Runner.SerialTest do
              Alto.run("unprepared tool",
                provider: {ToolThenAnswerProvider, test_pid: parent},
                tools: [EchoTool],
-               approval: {RecordingApproval, test_pid: parent},
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent)
+               end,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 

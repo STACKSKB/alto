@@ -596,7 +596,7 @@ defmodule Alto.Runner.Execution.Children do
 
   def merge_child_summary(run, %{usage: usage, verdict: verdict} = summary) do
     run = Events.merge_verdict(run, verdict)
-    run = %{run | usage: Usage.merge(run.usage, struct(Usage, usage))}
+    run = %{run | usage: Usage.merge(run.usage, usage)}
 
     Enum.reduce(
       Result.persistence_errors(summary),

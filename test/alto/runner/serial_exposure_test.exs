@@ -192,7 +192,7 @@ defmodule Alto.Runner.SerialExposureTest do
                provider: {HiddenCallProvider, []},
                tools: [EchoTool, {GuardedHiddenTool, test_pid: test_pid}],
                model_tools: ["echo"],
-               approval: Alto.Approvals.AllowAll
+               approval: :approve
              )
 
     assert result.output == "done"
@@ -319,7 +319,7 @@ defmodule Alto.Runner.SerialExposureTest do
                provider: {EchoCallProvider, []},
                tools: [{GuardedEcho, test_pid: test_pid}],
                model_tools: ["echo"],
-               approval: Alto.Approvals.DenyAll,
+               approval: {:deny, :policy_denied},
                session: :new,
                session_dir: dir
              )

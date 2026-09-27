@@ -93,9 +93,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   defmodule RecordingApproval do
-    @behaviour Alto.Approval
-
-    @impl true
     def decide(request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:approval_decision, request})
       Keyword.fetch!(opts, :decision)
@@ -319,7 +316,9 @@ defmodule Alto.Runner.SerialRuleLoopTest do
              Alto.run(["hello"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [{GuardedEchoTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent, decision: :approve},
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent, decision: :approve)
+               end,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
@@ -350,7 +349,12 @@ defmodule Alto.Runner.SerialRuleLoopTest do
              Alto.run(["hello"],
                loop: Alto.loop(CountingRuleLoop),
                tools: [{GuardedEchoTool, test_pid: parent}],
-               approval: {RecordingApproval, test_pid: parent, decision: {:deny, :not_allowed}},
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context,
+                   test_pid: parent,
+                   decision: {:deny, :not_allowed}
+                 )
+               end,
                event_sink: fn event -> send(parent, {:event, event}) end
              )
 
@@ -371,12 +375,16 @@ defmodule Alto.Runner.SerialRuleLoopTest do
   end
 
   test "prepared tools resolve before approval and execute the frozen value" do
+    parent = self()
+
     assert %Alto.Runner.Result{status: :ok} =
              result =
              Alto.run("frozen",
                loop: Alto.loop(StampRuleLoop),
                tools: [RuleStampTool],
-               approval: {RecordingApproval, test_pid: self(), decision: :approve}
+               approval: fn request, context ->
+                 RecordingApproval.decide(request, context, test_pid: parent, decision: :approve)
+               end
              )
 
     # Approval receives the display-safe details from prepare, not the opaque value.

@@ -80,7 +80,7 @@ defmodule Alto.FrontEnd.RegistryTest do
          [
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [EchoTool],
-           approval: Alto.Approvals.DenyAll
+           approval: {:deny, :policy_denied}
          ]}
 
       "guarded-loop" ->
@@ -88,7 +88,7 @@ defmodule Alto.FrontEnd.RegistryTest do
          [
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [GuardedEchoTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: approval_timeout
          ]}
 
@@ -611,7 +611,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     context = %{session_id: "run-missing", cwd: root}
 
     assert {:deny, {:approval_unavailable, _reason}} =
-             Alto.Approvals.Socket.decide(request, context, [])
+             Alto.Approval.socket(request, context)
   end
 
   test "the socket approval policy denies unaddressable requests", %{root: root} do
@@ -623,7 +623,7 @@ defmodule Alto.FrontEnd.RegistryTest do
     }
 
     assert {:deny, :approval_request_unaddressable} =
-             Alto.Approvals.Socket.decide(request, %{session_id: "run-1", cwd: root}, [])
+             Alto.Approval.socket(request, %{session_id: "run-1", cwd: root})
   end
 
   test "a stalled subscriber has bounded data and coalesced overflow", %{

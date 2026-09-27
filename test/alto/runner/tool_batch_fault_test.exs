@@ -73,7 +73,7 @@ defmodule Alto.Runner.ToolBatchFaultTest do
   defp capabilities(budget, cancel_ref) do
     %{
       tools: %{},
-      approval: {Alto.Approvals.DenyAll, []},
+      approval: {:deny, :policy_denied},
       session_id: "batch-fault",
       cwd: "/tmp",
       budget: budget,

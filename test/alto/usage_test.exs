@@ -15,7 +15,6 @@ defmodule Alto.UsageTest do
     usage = Alto.Usage.merge(cold, warm)
     assert Alto.Usage.last_cache_hit_rate(usage) == 95.0
     assert Alto.Usage.cache_hit_rate(usage) < 64
-    assert Alto.Usage.last_cache_hit_rate(Alto.Usage.to_map(usage)) == 95.0
   end
 
   test "normalizes common token and cache fields" do
@@ -48,23 +47,25 @@ defmodule Alto.UsageTest do
     assert Usage.normalize(%{"input_tokens" => 12, "output_tokens" => 3, "total_tokens" => 0}).total_tokens ==
              0
 
-    assert Usage.from_map(%{
+    assert Usage.normalize(%{
+             requests: 0,
              input_tokens: 12,
              total_tokens: 0,
              last_input_tokens: 0,
              cached_input_tokens: 99,
              last_cached_input_tokens: 99
-           }) == %Usage{
+           }) == %{
              input_tokens: 12,
              output_tokens: 0,
              total_tokens: 0,
              cached_input_tokens: 12,
              last_input_tokens: 0,
              last_cached_input_tokens: 0,
-             requests: 0
+             requests: 0,
+             context_window: nil
            }
 
-    assert Usage.from_map(%{"input_tokens" => 12}).last_input_tokens == 12
+    assert Usage.normalize(%{"input_tokens" => 12}).last_input_tokens == 12
   end
 
   test "codex snapshots preserve zeros and do not claim a request count" do
@@ -95,8 +96,8 @@ defmodule Alto.UsageTest do
       })
 
     assert usage.context_window == 200_000
-    assert Usage.from_map(Usage.to_map(usage)).context_window == 200_000
-    native = %Usage{requests: 1, last_input_tokens: 50, context_window: 100_000}
+    assert Usage.normalize(usage).context_window == 200_000
+    native = %{Usage.new() | requests: 1, last_input_tokens: 50, context_window: 100_000}
     merged = Usage.merge(native, usage)
     assert merged.last_input_tokens == 50
     assert merged.context_window == 100_000

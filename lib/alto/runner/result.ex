@@ -20,7 +20,7 @@ defmodule Alto.Runner.Result do
             transcript_persisted: false,
             workspace: nil,
             checkpoint: nil,
-            usage: Alto.Usage.to_map(Alto.Usage.new()),
+            usage: Alto.Usage.new(),
             persistence: :not_requested
 
   @type status :: :ok | :error | :cancelled | :suspended

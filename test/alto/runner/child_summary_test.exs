@@ -12,7 +12,7 @@ defmodule Alto.Runner.ChildSummaryTest do
         verdict: :completed,
         model_requests: 2,
         usage: %{
-          Usage.to_map(Usage.new())
+          Usage.new()
           | input_tokens: 7,
             requests: 1,
             context_window: 100_000
@@ -39,7 +39,7 @@ defmodule Alto.Runner.ChildSummaryTest do
 
     result = %{
       Result.empty()
-      | usage: %{Usage.to_map(Usage.new()) | output_tokens: 3, requests: 1},
+      | usage: %{Usage.new() | output_tokens: 3, requests: 1},
         verdict: :failed_known,
         persistence: {:degraded, [:write_failed]}
     }

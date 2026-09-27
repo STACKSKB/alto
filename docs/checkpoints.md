@@ -1,6 +1,8 @@
 # Approval continuations
 
-`Alto.Approvals.Checkpoint` returns `:suspend` at a required tool approval.
+Configure `approval: :suspend` to pause at the first approval-required tool. The
+suspended operation preserves the exact approval request and can be resumed with
+an explicit decision.
 With an explicit `checkpoint_version` and a loop implementing the optional
 checkpoint callbacks, the shared execution hosts return:
 

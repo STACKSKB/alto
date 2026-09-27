@@ -275,7 +275,7 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
              Alto.run("go",
                loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
                tools: [{GuardedBigTool, test_pid: test_pid}],
-               approval: Alto.Approvals.AllowAll,
+               approval: :approve,
                max_tool_result_bytes: 100
              )
 

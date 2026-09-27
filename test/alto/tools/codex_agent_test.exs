@@ -76,7 +76,7 @@ defmodule Alto.Tools.CodexAgentTest do
         cwd: context.root,
         tools: [context.tool],
         loop: Alto.rule_loop(steps: ["codex_agent"]),
-        approval: Alto.Approvals.AllowAll
+        approval: :approve
       ],
       extra
     )

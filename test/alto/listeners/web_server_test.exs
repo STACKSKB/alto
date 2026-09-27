@@ -47,7 +47,7 @@ defmodule Alto.Listeners.WebServerTest do
          [
            provider: ToolThenAnswerProvider,
            tools: [GuardedEchoTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: @approval_timeout_ms
          ]}
 

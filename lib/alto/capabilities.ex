@@ -30,7 +30,7 @@ defmodule Alto.Capabilities do
       subagents: subagents(loop.subagents),
       middleware: Enum.map(loop.middleware, &module_name/1),
       provider: module_name(Keyword.get(opts, :provider)),
-      approval: module_name(Keyword.get(opts, :approval, Alto.Approvals.DenyAll)),
+      approval: inspect(Keyword.get(opts, :approval, {:deny, :policy_denied})),
       tools: Enum.map(tools, &Map.put(&1, :model_visible, &1.name in exposure)),
       context: context(loop.context),
       compaction: compaction(Keyword.get(opts, :compaction, false)),

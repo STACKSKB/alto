@@ -126,7 +126,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
          [
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [EchoTool],
-           approval: Alto.Approvals.DenyAll
+           approval: {:deny, :policy_denied}
          ]}
 
       other ->
@@ -141,7 +141,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
          [
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [{EchoTool, test_pid: parent}],
-           approval: Alto.Approvals.AllowAll
+           approval: :approve
          ]}
 
       other ->
@@ -327,7 +327,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
              loop: parent_loop,
              provider: {ToolThenAnswerProvider, test_pid: parent},
              tools: [],
-             approval: Alto.Approvals.DenyAll
+             approval: {:deny, :policy_denied}
            ]}
 
         other ->
@@ -426,7 +426,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
            [
              provider: {SecretProvider, api_key: "sk-test-SECRET-xyz", model: "m"},
              tools: [],
-             approval: Alto.Approvals.DenyAll
+             approval: {:deny, :policy_denied}
            ]}
 
         other ->

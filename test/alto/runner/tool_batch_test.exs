@@ -56,7 +56,7 @@ defmodule Alto.Runner.ToolBatchTest do
         loop: Alto.default_loop(tool_execution: {:parallel, 2}),
         tools: [{Read, test_pid: self()}, {Write, test_pid: self()}],
         provider: {Provider, calls: calls, test_pid: self()},
-        approval: Alto.Approvals.DenyAll
+        approval: {:deny, :policy_denied}
       ],
       extra
     )
@@ -235,7 +235,7 @@ defmodule Alto.Runner.ToolBatchTest do
           call("w", %{value: "write"}, "write"),
           call("b", %{value: "after"})
         ],
-        approval: Alto.Approvals.Checkpoint,
+        approval: :suspend,
         checkpoint_version: "batch-v1"
       )
 

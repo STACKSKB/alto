@@ -100,7 +100,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
          [
            provider: {ToolThenAnswerProvider, test_pid: parent},
            tools: [GuardedEchoTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: 5_000
          ]}
 
@@ -109,7 +109,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
          [
            provider: {DuplicateGuardedProvider, []},
            tools: [GuardedEchoTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: 5_000
          ]}
 
@@ -118,7 +118,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
          [
            loop: Alto.rule_loop(steps: ["echo"]),
            tools: [GuardedEchoTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: 5_000
          ]}
 
@@ -127,7 +127,7 @@ defmodule Alto.FrontEnd.RegistryApprovalIdentityTest do
          [
            loop: Alto.rule_loop(steps: ["stamp"]),
            tools: [GuardedStampTool],
-           approval: Alto.Approvals.Socket,
+           approval: &Alto.Approval.socket/2,
            approval_timeout: 5_000
          ]}
 

@@ -418,7 +418,7 @@ defmodule Alto.Runner.Checkpoint do
       is_integer(saved.transcript_revision) and saved.transcript_revision >= 0 and
       is_integer(saved.model_requests) and saved.model_requests >= 0 and
       is_integer(saved.op_seq) and saved.op_seq >= 0 and
-      is_struct(saved.usage, Alto.Usage) and Alto.Usage.valid?(saved.usage) and
+      Alto.Usage.valid?(saved.usage) and
       is_list(saved.persistence_errors) and
       valid_compaction_state?(saved) and valid_history_state?(saved) and
       valid_pending_calls?(saved.pending_provider_calls) and

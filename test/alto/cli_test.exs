@@ -271,7 +271,7 @@ defmodule Alto.CLITest do
     assert message =~ "OpenRouter API key required"
   end
 
-  for approval <- [nil, Alto.Approvals.AllowAll] do
+  for approval <- [nil, :approve] do
     @approval approval
     test "providerless served writes use #{approval || "socket approval by default"}", %{
       root: root
@@ -348,7 +348,7 @@ defmodule Alto.CLITest do
       session: nil,
       loop: Alto.rule_loop(steps: ["write_file"]),
       tools: [Alto.Tools.WriteFile],
-      approval: Alto.Approvals.AllowAll
+      approval: :approve
     )
     """)
 

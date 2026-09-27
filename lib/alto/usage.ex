@@ -1,23 +1,22 @@
 defmodule Alto.Usage do
   @moduledoc """
-  Provider-neutral token accounting for run results and front ends.
+  Provider-neutral token accounting as an atom-keyed map.
 
-  Providers may return their native usage map. Alto recognizes the common
-  OpenAI, Anthropic, and Google field names, keeps unknown shapes harmless,
-  and reports cache reads separately so a front end can calculate a real
-  cache-hit rate instead of estimating one from transcript bytes.
+  Provider aliases normalize once at ingestion. Accounting maps flow unchanged
+  through execution, events, results and front ends; cache reads remain separate
+  from total input and the most recent request remains separate from totals.
   """
 
-  defstruct input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
-            cached_input_tokens: 0,
-            last_input_tokens: 0,
-            last_cached_input_tokens: 0,
-            context_window: nil,
-            requests: 0
+  @cumulative ~w(input_tokens output_tokens total_tokens cached_input_tokens requests)a
+  @empty Map.new(@cumulative ++ [:last_input_tokens, :last_cached_input_tokens], &{&1, 0})
+         |> Map.put(:context_window, nil)
+  @input ~w(prompt_tokens input_tokens prompt_token_count inputTokenCount inputTokens)
+  @output ~w(completion_tokens output_tokens candidates_token_count outputTokenCount outputTokens)
+  @cached ~w(cache_read_input_tokens cached_input_tokens cachedContentTokenCount cachedInputTokens)
+  @total ~w(total_tokens total_token_count totalTokenCount totalTokens)
+  @codex_fields ~w(inputTokens outputTokens totalTokens cachedInputTokens)
 
-  @type t :: %__MODULE__{
+  @type t :: %{
           input_tokens: non_neg_integer(),
           output_tokens: non_neg_integer(),
           total_tokens: non_neg_integer(),
@@ -30,12 +29,10 @@ defmodule Alto.Usage do
 
   @doc "Return zeroed accounting."
   @spec new() :: t()
-  def new, do: %__MODULE__{}
-
-  def valid?(%__MODULE__{} = usage), do: valid?(to_map(usage))
+  def new, do: @empty
 
   def valid?(usage) when is_map(usage) do
-    Enum.sort(Map.keys(usage)) == Enum.sort(Map.keys(to_map(new()))) and
+    Enum.sort(Map.keys(usage)) == Enum.sort(Map.keys(@empty)) and
       Enum.all?(usage, fn
         {:context_window, nil} -> true
         {_, value} -> is_integer(value) and value >= 0
@@ -44,170 +41,101 @@ defmodule Alto.Usage do
 
   def valid?(_), do: false
 
-  @doc "Normalize one provider response usage object."
-  @spec normalize(map() | nil | term()) :: t()
+  @doc "Normalize provider usage or a serialized accounting map; string keys take precedence."
+  @spec normalize(term()) :: t()
   def normalize(usage) when is_map(usage) do
     usage = normalize_keys(usage)
-
-    base_input =
-      integer(usage, ~w(prompt_tokens input_tokens prompt_token_count inputTokenCount))
-
-    output =
-      integer(usage, ~w(completion_tokens output_tokens candidates_token_count outputTokenCount))
-
-    cache_read = integer(usage, ~w(cache_read_input_tokens))
-    cache_creation = integer(usage, ~w(cache_creation_input_tokens))
+    accounting? = Map.has_key?(usage, "requests")
 
     input =
-      if present?(usage, ~w(cache_read_input_tokens cache_creation_input_tokens)) do
-        base_input + cache_read + cache_creation
-      else
-        base_input
-      end
+      integer(usage, @input) + integer(usage, ~w(cache_read_input_tokens)) +
+        integer(usage, ~w(cache_creation_input_tokens))
 
-    cached =
-      max(
-        integer(usage, ~w(cache_read_input_tokens cached_input_tokens cachedContentTokenCount)),
-        nested_integer(usage, ~w(prompt_tokens_details input_tokens_details), ~w(cached_tokens))
-      )
+    output = integer(usage, @output)
+    cached = min(max(integer(usage, @cached), nested_cached(usage)), input)
+    last_input = integer(usage, ~w(last_input_tokens), input)
 
-    total =
-      integer(usage, ~w(total_tokens total_token_count totalTokenCount), input + output)
-
-    %__MODULE__{
+    %{
       input_tokens: input,
       output_tokens: output,
-      total_tokens: total,
-      cached_input_tokens: min(cached, input),
-      last_input_tokens: input,
-      last_cached_input_tokens: min(cached, input),
-      requests: 1
-    }
-  end
-
-  def normalize(_usage), do: new()
-
-  @doc "Add token accounting across requests."
-  @spec merge(t(), t()) :: t()
-  def merge(%__MODULE__{} = left, %__MODULE__{} = right) do
-    latest = if right.requests > 0, do: right, else: left
-
-    %__MODULE__{
-      input_tokens: left.input_tokens + right.input_tokens,
-      output_tokens: left.output_tokens + right.output_tokens,
-      total_tokens: left.total_tokens + right.total_tokens,
-      cached_input_tokens: left.cached_input_tokens + right.cached_input_tokens,
-      last_input_tokens: latest.last_input_tokens,
-      last_cached_input_tokens: latest.last_cached_input_tokens,
-      context_window: latest.context_window,
-      requests: left.requests + right.requests
-    }
-  end
-
-  @doc "Convert accounting to a JSON- and protocol-friendly map."
-  @spec to_map(t()) :: map()
-  def to_map(%__MODULE__{} = usage), do: Map.from_struct(usage)
-
-  @doc "Percentage of input tokens served from provider cache."
-  @spec cache_hit_rate(t() | map()) :: float()
-  def cache_hit_rate(%__MODULE__{input_tokens: 0}), do: 0.0
-
-  def cache_hit_rate(%__MODULE__{} = usage) do
-    usage.cached_input_tokens / usage.input_tokens * 100.0
-  end
-
-  def cache_hit_rate(usage) when is_map(usage) do
-    usage
-    |> from_map()
-    |> cache_hit_rate()
-  end
-
-  @doc "Cache-hit percentage of the most recent model request."
-  def last_cache_hit_rate(%__MODULE__{last_input_tokens: 0}), do: 0.0
-
-  def last_cache_hit_rate(%__MODULE__{} = usage),
-    do: min(usage.last_cached_input_tokens / usage.last_input_tokens * 100.0, 100.0)
-
-  def last_cache_hit_rate(usage) when is_map(usage),
-    do: usage |> from_map() |> last_cache_hit_rate()
-
-  @doc "Rehydrate normalized accounting received through an event or session."
-  @spec from_map(map()) :: t()
-  def from_map(map) when is_map(map) do
-    map = normalize_keys(map)
-    input_tokens = integer(map, ~w(input_tokens))
-    last_input_tokens = integer(map, ~w(last_input_tokens), input_tokens)
-    cached_input_tokens = min(integer(map, ~w(cached_input_tokens)), input_tokens)
-    last_cached_input_tokens = min(integer(map, ~w(last_cached_input_tokens)), last_input_tokens)
-
-    %__MODULE__{
-      input_tokens: input_tokens,
-      output_tokens: integer(map, ~w(output_tokens)),
-      total_tokens: integer(map, ~w(total_tokens)),
-      cached_input_tokens: cached_input_tokens,
-      last_input_tokens: last_input_tokens,
-      last_cached_input_tokens: last_cached_input_tokens,
-      context_window: integer(map, ~w(context_window), nil),
-      requests: integer(map, ~w(requests))
-    }
-  end
-
-  @doc "Project an authoritative Codex App Server thread/tokenUsage snapshot."
-  @spec from_codex(map()) :: t()
-  def from_codex(%{total: total, last: last} = usage) when is_map(total) and is_map(last),
-    do: usage |> normalize_keys() |> from_codex()
-
-  def from_codex(%{"total" => total, "last" => last} = usage)
-      when is_map(total) and is_map(last) do
-    total = normalize_keys(total)
-    last = normalize_keys(last)
-    input = integer(total, ~w(inputTokens))
-    output = integer(total, ~w(outputTokens))
-    last_input = integer(last, ~w(inputTokens))
-    cached = min(integer(total, ~w(cachedInputTokens)), input)
-    last_cached = min(integer(last, ~w(cachedInputTokens)), last_input)
-
-    %__MODULE__{
-      input_tokens: input,
-      output_tokens: output,
-      total_tokens: integer(total, ~w(totalTokens), input + output),
+      total_tokens: integer(usage, @total, if(accounting?, do: 0, else: input + output)),
       cached_input_tokens: cached,
       last_input_tokens: last_input,
-      last_cached_input_tokens: last_cached,
-      context_window: integer(usage, ~w(modelContextWindow), nil),
-      # tokenUsage is a cumulative snapshot; it does not identify a request count.
-      requests: 0
+      last_cached_input_tokens:
+        min(
+          integer(usage, ~w(last_cached_input_tokens), if(accounting?, do: 0, else: cached)),
+          last_input
+        ),
+      context_window: integer(usage, ~w(context_window), nil),
+      requests: if(accounting?, do: integer(usage, ~w(requests)), else: 1)
     }
   end
 
-  def from_codex(_usage), do: new()
+  def normalize(_), do: new()
 
-  defp nested_integer(map, parents, children) do
-    Enum.find_value(parents, 0, fn parent ->
-      case Map.get(map, parent) do
-        nested when is_map(nested) -> nested |> normalize_keys() |> integer(children)
-        _other -> nil
+  @doc "Sum cumulative fields; a new request replaces the latest-request fields."
+  @spec merge(t(), t()) :: t()
+  def merge(left, right) do
+    latest = if right.requests > 0, do: right, else: left
+    Map.merge(latest, Map.new(@cumulative, &{&1, Map.fetch!(left, &1) + Map.fetch!(right, &1)}))
+  end
+
+  @doc "Percentage of input tokens served from provider cache."
+  def cache_hit_rate(usage), do: rate(usage.cached_input_tokens, usage.input_tokens)
+
+  @doc "Cache-hit percentage of the most recent model request."
+  def last_cache_hit_rate(usage),
+    do: min(rate(usage.last_cached_input_tokens, usage.last_input_tokens), 100.0)
+
+  defp rate(_, 0), do: 0.0
+  defp rate(cached, input), do: cached / input * 100.0
+
+  @doc "Project a cumulative Codex thread/tokenUsage snapshot; its request count is unknown."
+  @spec from_codex(term()) :: t()
+  def from_codex(usage) when is_map(usage) do
+    usage = normalize_keys(usage)
+
+    case usage do
+      %{"total" => total, "last" => last} when is_map(total) and is_map(last) ->
+        total = total |> normalize_keys() |> Map.take(@codex_fields) |> normalize()
+        last = last |> normalize_keys() |> Map.take(@codex_fields) |> normalize()
+
+        %{
+          total
+          | last_input_tokens: last.input_tokens,
+            last_cached_input_tokens: last.cached_input_tokens,
+            context_window: integer(usage, ~w(modelContextWindow), nil),
+            requests: 0
+        }
+
+      _ ->
+        new()
+    end
+  end
+
+  def from_codex(_), do: new()
+
+  defp nested_cached(map) do
+    Enum.find_value(~w(prompt_tokens_details input_tokens_details), 0, fn parent ->
+      case map[parent] do
+        nested when is_map(nested) -> integer(normalize_keys(nested), ~w(cached_tokens))
+        _ -> nil
       end
     end)
   end
 
   defp integer(map, keys, default \\ 0) do
     Enum.find_value(keys, default, fn key ->
-      case Map.get(map, key) do
+      case map[key] do
         n when is_integer(n) and n >= 0 -> n
-        _other -> nil
+        _ -> nil
       end
     end)
   end
 
-  defp present?(map, keys), do: Enum.any?(keys, &(not is_nil(Map.get(map, &1))))
-
   defp normalize_keys(map) do
-    string_keys = for {key, value} when is_binary(key) <- map, into: %{}, do: {key, value}
-
-    atom_keys =
-      for {key, value} when is_atom(key) <- map, into: %{}, do: {Atom.to_string(key), value}
-
-    Map.merge(atom_keys, string_keys)
+    strings = for {key, value} when is_binary(key) <- map, into: %{}, do: {key, value}
+    atoms = for {key, value} when is_atom(key) <- map, into: %{}, do: {Atom.to_string(key), value}
+    Map.merge(atoms, strings)
   end
 end

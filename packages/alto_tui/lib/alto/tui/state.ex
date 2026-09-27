@@ -449,14 +449,14 @@ defmodule Alto.TUI.State do
   end
 
   def update_usage(%__MODULE__{} = state, task_id, usage) when is_map(usage) do
-    next = Usage.from_map(usage)
+    next = Usage.normalize(usage)
 
     %{state | usage: Map.update(state.usage, task_id, next, &Usage.merge(&1, next))}
     |> evict_inactive_caches()
   end
 
   @doc "Replace token accounting with an authoritative backend snapshot."
-  def put_usage(%__MODULE__{} = state, task_id, %Usage{} = usage),
+  def put_usage(%__MODULE__{} = state, task_id, usage) when is_map(usage),
     do: %{state | usage: Map.put(state.usage, task_id, usage)} |> evict_inactive_caches()
 
   def current_usage(%__MODULE__{} = state),
@@ -616,7 +616,7 @@ defmodule Alto.TUI.State do
        ) do
     case Session.decode_term(encoded) do
       {:ok, %{usage: event_usage}} when is_map(event_usage) ->
-        Usage.merge(usage, Usage.from_map(event_usage))
+        Usage.merge(usage, Usage.normalize(event_usage))
 
       _other ->
         usage

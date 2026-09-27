@@ -163,7 +163,7 @@ defmodule Alto.Runner.SerialSubagentTest do
                loop: parent_loop(1),
                provider: {EchoCallProvider, []},
                tools: [EchoTool],
-               approval: Alto.Approvals.DenyAll,
+               approval: {:deny, :policy_denied},
                session: :new,
                session_dir: dir
              )
@@ -199,7 +199,7 @@ defmodule Alto.Runner.SerialSubagentTest do
                loop: parent_loop(1),
                provider: {GuardedEchoCallProvider, test_pid: test_pid},
                tools: [{GuardedEchoTool, test_pid: test_pid}],
-               approval: Alto.Approvals.DenyAll,
+               approval: {:deny, :policy_denied},
                session: :new,
                session_dir: dir
              )

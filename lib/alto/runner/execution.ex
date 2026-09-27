@@ -27,14 +27,13 @@ defmodule Alto.Runner.Execution do
   alias Alto.Runner.Execution.History
   alias Alto.Runtime
   alias Alto.Session
-  alias Alto.Usage
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
 
   require Logger
 
   @type provider_spec :: module() | {module(), keyword()}
-  @type approval_spec :: module() | {module(), keyword()}
+  @type approval_spec :: Alto.Approval.policy()
   @type run_result :: Result.t()
 
   @spec run(term(), keyword(), (Alto.Loop.frame(), context() -> run_result())) :: run_result()
@@ -639,8 +638,7 @@ defmodule Alto.Runner.Execution do
 
     case Model.request(request, run, sink) do
       {{:ok, completion}, run} ->
-        usage = Usage.normalize(if(is_map(completion), do: completion[:usage]))
-        observation = Alto.Context.Observation.new(request, usage.input_tokens)
+        observation = Alto.Context.Observation.new(request, completion.usage.input_tokens)
         complete_model(Map.put(run, :context_observation, observation), completion)
 
       {{:error, reason}, run} ->
@@ -744,7 +742,6 @@ defmodule Alto.Runner.Execution do
 
         case RunTranscript.append(run, assistant) do
           {:ok, run} ->
-            request_usage = Usage.normalize(Map.get(completion, :usage))
             run = add_pending_provider_calls(run, calls)
 
             event =
@@ -752,7 +749,7 @@ defmodule Alto.Runner.Execution do
                 message: message,
                 reasoning: Map.get(completion, :reasoning),
                 tool_calls: calls,
-                usage: Usage.to_map(request_usage)
+                usage: completion.usage
               })
 
             {:event, event, run}
@@ -1390,7 +1387,7 @@ defmodule Alto.Runner.Execution do
         Map.get(run, :history_digest) ==
           :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic])) and
           Map.get(run, :resolved_operations, []) == [],
-      usage: Usage.to_map(run.usage),
+      usage: run.usage,
       persistence: Result.persistence_status(Enum.reverse(run.persistence_errors))
     }
 

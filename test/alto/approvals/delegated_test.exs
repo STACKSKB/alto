@@ -1,8 +1,8 @@
-defmodule Alto.Approvals.DelegatedTest do
+defmodule Alto.Approval.DelegatedTest do
   use ExUnit.Case, async: true
 
   alias Alto.Approval.Request
-  alias Alto.Approvals.Delegated
+  alias Alto.Approval
   alias Alto.Tool.Context
 
   test "the prepared approval is correlated without giving the front end executable state" do
@@ -20,7 +20,7 @@ defmodule Alto.Approvals.DelegatedTest do
 
     task =
       Task.async(fn ->
-        Delegated.decide(request, %Context{session_id: "run-1", cwd: "/tmp"}, sink: parent)
+        Approval.delegated(request, %Context{session_id: "run-1", cwd: "/tmp"}, sink: parent)
       end)
 
     assert_receive {:alto_approval_request, "run-1", ^request, waiter}
@@ -38,7 +38,7 @@ defmodule Alto.Approvals.DelegatedTest do
       details: %{}
     }
 
-    assert Delegated.decide(request, %Context{session_id: "run", cwd: "/tmp"}, []) ==
+    assert Approval.delegated(request, %Context{session_id: "run", cwd: "/tmp"}, []) ==
              {:deny, :approval_front_end_unavailable}
   end
 end

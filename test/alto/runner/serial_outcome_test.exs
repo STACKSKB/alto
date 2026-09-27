@@ -92,8 +92,6 @@ defmodule Alto.Runner.SerialOutcomeTest do
   end
 
   defmodule BlockingApproval do
-    @behaviour Alto.Approval
-    @impl true
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), :approval_entered)
       receive(do: (:never -> :approve))
@@ -218,7 +216,7 @@ defmodule Alto.Runner.SerialOutcomeTest do
                Alto.run({"ok_tool", %{}},
                  loop: Alto.loop(OnceLoop),
                  tools: [GuardedOkTool],
-                 approval: Alto.Approvals.DenyAll
+                 approval: {:deny, :policy_denied}
                )
 
       assert {:failed, %{outcome: :rejected_before_dispatch, error: {:approval_denied, _}}} =
@@ -255,11 +253,15 @@ defmodule Alto.Runner.SerialOutcomeTest do
     end
 
     test "cancel before dispatch carries no in-flight operation" do
+      parent = self()
+
       {:ok, handle} =
         Alto.start({"ok_tool", %{}},
           loop: Alto.loop(OnceLoop),
           tools: [GuardedOkTool],
-          approval: {BlockingApproval, test_pid: self()}
+          approval: fn request, context ->
+            BlockingApproval.decide(request, context, test_pid: parent)
+          end
         )
 
       assert_receive :approval_entered, 2_000

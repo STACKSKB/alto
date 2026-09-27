@@ -295,7 +295,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe"]),
         tools: [ApprovalProbe],
-        approval: Alto.Approvals.Interactive
+        approval: &Alto.Approval.interactive/2
       )
 
     submit(app, "{}")
@@ -329,7 +329,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe"]),
         tools: [ApprovalProbe],
-        approval: Alto.Approvals.Interactive,
+        approval: &Alto.Approval.interactive/2,
         approval_timeout: 500
       )
 

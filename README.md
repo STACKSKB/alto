@@ -118,7 +118,7 @@ Execution settings live in `Alto.Config`: use `tools: []` to disable tools,
 workspace instructions, and `max_steps:` to bound model calls. An executor's
 `network: :inherit` enables network access; `Alto.Command.Executors.Unsandboxed`
 selects host execution. The CLI defaults to interactive approval for mutations;
-set `approval: Alto.Approvals.AllowAll` for an explicitly trusted unattended run.
+set `approval: :approve` for an explicitly trusted unattended run.
 Served runs default to socket approvals and honor an explicit configured policy.
 See [extension boundaries](docs/extensions.md) for composition examples.
 

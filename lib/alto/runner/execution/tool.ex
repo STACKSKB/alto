@@ -39,7 +39,6 @@ defmodule Alto.Runner.Execution.Tool do
     do: :ok
 
   def authorize(job, details, caps) do
-    {policy, policy_opts} = caps.approval
     context = Alto.Tool.Context.from_run(caps)
 
     request = %Request{
@@ -56,7 +55,12 @@ defmodule Alto.Runner.Execution.Tool do
 
     outcome =
       Call.run(
-        fn -> policy.decide(request, context, policy_opts) end,
+        fn ->
+          case caps.approval do
+            policy when is_function(policy, 2) -> policy.(request, context)
+            decision -> decision
+          end
+        end,
         Budget.timeout(caps.budget, caps.approval_timeout),
         caps.cancel_ref
       )

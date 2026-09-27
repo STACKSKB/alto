@@ -143,7 +143,11 @@ defmodule Alto.TUI.ViewTest do
 
     state =
       Enum.reduce([{"first", 100_000}, {"second", 200_000}], state, fn {task, limit}, state ->
-        State.put_usage(state, task, %Alto.Usage{last_input_tokens: 1_000, context_window: limit})
+        State.put_usage(state, task, %{
+          Alto.Usage.new()
+          | last_input_tokens: 1_000,
+            context_window: limit
+        })
       end)
 
     for {task, expected} <- [{"first", "1.0%"}, {"second", "0.5%"}, {"restored", "—"}] do

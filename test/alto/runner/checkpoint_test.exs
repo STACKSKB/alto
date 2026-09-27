@@ -91,7 +91,7 @@ defmodule Alto.Runner.CheckpointTest do
       provider: nil,
       loop: Alto.rule_loop(steps: ["first", "guarded"]),
       tools: [First, Guarded],
-      approval: Alto.Approvals.Checkpoint,
+      approval: :suspend,
       checkpoint_version: "test-1"
     ]
 

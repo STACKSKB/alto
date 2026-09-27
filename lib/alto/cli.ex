@@ -1,8 +1,6 @@
 defmodule Alto.CLI do
   @moduledoc "Plain-stdio command-line entry point for the execution host."
 
-  alias Alto.Approvals.Interactive
-  alias Alto.Approvals.Socket, as: SocketApproval
   alias Alto.CLI.Arguments
   alias Alto.CLI.Onboarding
   alias Alto.Config
@@ -135,7 +133,7 @@ defmodule Alto.CLI do
   ## webhook endpoints such as `"job"`). The WebSocket client's config field
   ## defaults to `"default"`, and `start_run` with any other name fails with
   ## `unknown_config`. Runs started this way have no terminal to prompt on,
-  ## so approval defaults to `Alto.Approvals.Socket`; compiled policies are honored.
+  ## so approval defaults to `Alto.Approval.socket/2`; configured decisions are honored.
 
   @default_serve_port 4_747
   @default_webhook_port 4_748
@@ -223,7 +221,7 @@ defmodule Alto.CLI do
     with {:ok, run_options} <- common_run_options(config) do
       {:ok,
        run_options
-       |> Keyword.put_new(:approval, SocketApproval)
+       |> Keyword.put_new(:approval, &Alto.Approval.socket/2)
        |> Keyword.drop([
          :listeners,
          :queue,
@@ -373,7 +371,7 @@ defmodule Alto.CLI do
 
       run_options =
         run_options
-        |> Keyword.put_new(:approval, Interactive)
+        |> Keyword.put_new(:approval, &Alto.Approval.interactive/2)
         |> configure_session(options)
         |> Keyword.put_new(:cwd, File.cwd!())
         |> Alto.Events.attach(&send(renderer, {:event, &1}))

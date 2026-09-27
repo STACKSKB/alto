@@ -61,11 +61,6 @@ defmodule Alto.Runner.ModelSubagentsTest do
     end
   end
 
-  defmodule Suspend do
-    @behaviour Alto.Approval
-    def decide(_, _, _), do: :suspend
-  end
-
   defp call(id, name, arguments),
     do: %{id: id, name: name, arguments_json: JSON.encode!(arguments)}
 
@@ -80,7 +75,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
         provider_profiles: [
           %Alto.Harness.ProviderProfile{id: "worker", provider: {Child, owner: self()}}
         ],
-        approval: Alto.Approvals.AllowAll,
+        approval: :approve,
         loop:
           Alto.default_loop(
             tool_execution: {:parallel, 4},
@@ -334,7 +329,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
   test "hidden delegation and denied approval cannot start a child" do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
 
-    for overrides <- [[model_tools: [:list_agent_models]], [approval: Alto.Approvals.DenyAll]] do
+    for overrides <- [[model_tools: [:list_agent_models]], [approval: {:deny, :policy_denied}]] do
       assert %Alto.Runner.Result{status: :ok} =
                result = Alto.run("delegate", options(calls, overrides))
 
@@ -424,7 +419,7 @@ defmodule Alto.Runner.ModelSubagentsTest do
 
   test "approval checkpoint restores the delegation dispatch and tool correlation" do
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
-    opts = options(calls, approval: Suspend, checkpoint_version: "delegation-1")
+    opts = options(calls, approval: :suspend, checkpoint_version: "delegation-1")
 
     assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
              suspended = Alto.run("delegate", opts)

@@ -28,8 +28,6 @@ defmodule Alto.Tools.TransformTest do
   end
 
   defmodule CaptureApproval do
-    @behaviour Alto.Approval
-
     def decide(request, _context, opts) do
       send(Keyword.fetch!(opts, :owner), {:approval, request})
       :approve
@@ -43,7 +41,7 @@ defmodule Alto.Tools.TransformTest do
 
     %{
       tools: %{},
-      approval: Keyword.get(opts, :approval, {Alto.Approvals.DenyAll, []}),
+      approval: Keyword.get(opts, :approval, {:deny, :policy_denied}),
       session_id: "transform-run",
       cwd: "/tmp",
       metadata: %{},
@@ -71,7 +69,7 @@ defmodule Alto.Tools.TransformTest do
     assert tool.execution_mode == :exclusive
     assert tool.approval == :required
 
-    approval = {CaptureApproval, [owner: parent]}
+    approval = fn request, context -> CaptureApproval.decide(request, context, owner: parent) end
     caps = caps(approval: approval)
     original = %{"path" => "file.txt"}
 

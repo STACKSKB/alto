@@ -255,7 +255,7 @@ defmodule DocumentIntake do
         run_opts = [
           loop: Alto.chat_loop(),
           provider: provider,
-          approval: Alto.Approvals.DenyAll,
+          approval: {:deny, :policy_denied},
           tools: [],
           max_steps: 1,
           max_effects: 2,

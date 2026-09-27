@@ -106,7 +106,7 @@ defmodule Alto.Runner.DurableBudgetTest do
           session_dir: Path.join(c.dir, "sessions"),
           loop: Alto.rule_loop(steps: ["guarded_budget"]),
           tools: [Guarded],
-          approval: Alto.Approvals.Checkpoint,
+          approval: :suspend,
           checkpoint_version: "durable-budget-test"
         ]
 

@@ -140,7 +140,7 @@ Alto.Config.new(
        model: System.get_env("ALTO_CODEX_MODEL")}
   ],
   tool_presenter: &Alto.ToolDisplay.summary/2,
-  approval: Alto.Approvals.Interactive,
+  approval: &Alto.Approval.interactive/2,
   prompt: &Alto.Prompts.Coding.build/1,
   tui: [
     type_to_compose: true,

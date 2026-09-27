@@ -64,7 +64,7 @@ defmodule Alto.Runner.AgentMessagingTest do
       [
         provider: {Provider, owner: self()},
         tools: Alto.Tools.agents(),
-        approval: Alto.Approvals.AllowAll,
+        approval: :approve,
         loop:
           Alto.default_loop(
             subagents:
@@ -325,7 +325,6 @@ defmodule Alto.Runner.AgentMessagingTest do
   end
 
   defmodule SelectiveApproval do
-    @behaviour Alto.Approval
     def decide(%{tool: "guarded"}, _, _), do: :suspend
     def decide(_, _, _), do: :approve
   end
@@ -357,7 +356,7 @@ defmodule Alto.Runner.AgentMessagingTest do
       opts =
         options(
           checkpoint_version: "v1",
-          approval: SelectiveApproval,
+          approval: &SelectiveApproval.decide(&1, &2, []),
           tools: Alto.Tools.agents() ++ [Guarded],
           messaging: router
         )

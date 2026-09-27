@@ -54,7 +54,7 @@ defmodule Alto.Runner.SettledHistoryTest do
       session_history: :settled,
       provider: {Provider, owner: self()},
       tools: [{Change, owner: self()}],
-      approval: Alto.Approvals.AllowAll
+      approval: :approve
     ]
 
     %{dir: dir, id: id, opts: opts}
@@ -165,7 +165,7 @@ defmodule Alto.Runner.SettledHistoryTest do
     dir: dir
   } do
     opts =
-      Keyword.merge(opts, approval: Alto.Approvals.Checkpoint, checkpoint_version: "history-v1")
+      Keyword.merge(opts, approval: :suspend, checkpoint_version: "history-v1")
 
     assert %Alto.Runner.Result{status: :suspended, reason: :approval_suspended} =
              paused = Alto.run("change", opts)

@@ -84,7 +84,7 @@ defmodule Alto.Bench.OfflineToolBatches do
           loop: Alto.Loop.Spec.new(Alto.Bench.OfflineBatchLoop, mode: mode, count: @calls),
           tools: [{Alto.Bench.OfflineReadTool, counter: counter, delay_ms: @delay_ms}],
           provider: nil,
-          approval: Alto.Approvals.DenyAll,
+          approval: {:deny, :policy_denied},
           max_steps: 32
         )
 
