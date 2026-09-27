@@ -109,7 +109,7 @@ defmodule Alto.Harness.CatalogTest do
     assert {:error, {:unknown_project, "missing"}} = Catalog.create_task("missing", "x", opts)
     assert {:error, {:unknown_task, "missing"}} = Catalog.update_task("missing", %{}, opts)
 
-    assert {:error, {:invalid_task_fields, ["surprise"]}} =
+    assert {:error, {:invalid_task_field, "surprise", true}} =
              Catalog.update_task("missing", %{"surprise" => true}, opts)
   end
 
@@ -134,11 +134,27 @@ defmodule Alto.Harness.CatalogTest do
 
     assert updated["conversation_id"] == "thr-123"
 
-    assert {:error, {:invalid_task_backend, "../other"}} =
+    assert {:error, {:invalid_task_field, "backend", "../other"}} =
              Catalog.update_task(task["id"], %{"backend" => "../other"}, opts)
 
-    assert {:error, :invalid_task_field_value} =
+    assert {:error, {:invalid_task_field, "title", nil}} =
              Catalog.update_task(task["id"], %{"title" => nil}, opts)
+
+    snapshot = File.read!(opts[:path])
+
+    for value <- [123, <<255>>, String.duplicate("x", 32_001)] do
+      assert {:error, {:invalid_task_field, "conversation_id", ^value}} =
+               Catalog.create_task(
+                 project["id"],
+                 "Rejected",
+                 Keyword.put(opts, :conversation_id, value)
+               )
+
+      assert File.read!(opts[:path]) == snapshot
+    end
+
+    assert {:ok, %{"tasks" => [^updated]}} = Catalog.read(opts)
+    assert {:ok, _task} = Catalog.update_task(task["id"], %{"status" => "waiting"}, opts)
   end
 
   test "rejects malformed records until explicitly replaced", %{root: root, opts: opts} do

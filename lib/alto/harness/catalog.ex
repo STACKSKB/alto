@@ -115,33 +115,31 @@ defmodule Alto.Harness.Catalog do
   @spec create_task(String.t(), String.t(), keyword()) :: {:ok, task()} | {:error, term()}
   def create_task(project_id, title, opts \\ [])
       when is_binary(project_id) and is_binary(title) and title != "" do
-    backend = Keyword.get(opts, :backend, "alto")
+    fields = %{
+      "title" =>
+        if(valid_text?(title), do: Alto.Text.prefix(title, @max_title_bytes), else: title),
+      "status" => "active",
+      "backend" => Keyword.get(opts, :backend, "alto"),
+      "conversation_id" => Keyword.get(opts, :conversation_id)
+    }
 
-    if String.valid?(title) and valid_backend?(backend) do
+    with {:ok, fields} <- validate_changes(fields) do
       transact(opts, fn catalog ->
         if Enum.any?(catalog["projects"], &(&1["id"] == project_id)) do
           append(catalog, "tasks", @max_tasks, :task_capacity, fn ->
             now = now_ms()
 
-            %{
+            Map.merge(fields, %{
               "id" => id("task"),
               "project_id" => project_id,
-              "title" => Alto.Text.prefix(title, @max_title_bytes),
-              "status" => "active",
-              "backend" => backend,
-              "conversation_id" => Keyword.get(opts, :conversation_id),
               "created_at_ms" => now,
               "updated_at_ms" => now
-            }
+            })
           end)
         else
           {:error, {:unknown_project, project_id}}
         end
       end)
-    else
-      if String.valid?(title),
-        do: {:error, :invalid_task_backend},
-        else: {:error, :invalid_task_title}
     end
   end
 
@@ -226,10 +224,10 @@ defmodule Alto.Harness.Catalog do
   defp valid_project?(_), do: false
 
   defp valid_task?(task) when is_map(task) do
-    valid_fields?(task, ~w(id project_id title), ~w(created_at_ms updated_at_ms)) and
-      task["status"] in @statuses and valid_backend?(task["backend"]) and
-      Map.has_key?(task, "conversation_id") and
-      valid_state_field?("conversation_id", task["conversation_id"])
+    valid_fields?(task, ~w(id project_id), ~w(created_at_ms updated_at_ms)) and
+      Enum.all?(@task_changes, fn key ->
+        Map.has_key?(task, key) and valid_state_field?(key, task[key])
+      end)
   end
 
   defp valid_task?(_), do: false
@@ -242,25 +240,9 @@ defmodule Alto.Harness.Catalog do
   defp nonnegative_integer?(value), do: is_integer(value) and value >= 0
 
   defp validate_changes(changes) when is_map(changes) do
-    unknown = changes |> Map.keys() |> Enum.reject(&(&1 in @task_changes))
-
-    cond do
-      unknown != [] ->
-        {:error, {:invalid_task_fields, unknown}}
-
-      Map.has_key?(changes, "status") and changes["status"] not in @statuses ->
-        {:error, {:invalid_task_status, changes["status"]}}
-
-      Map.has_key?(changes, "backend") and not valid_backend?(changes["backend"]) ->
-        {:error, {:invalid_task_backend, changes["backend"]}}
-
-      Enum.any?(["conversation_id", "title"], fn key ->
-        Map.has_key?(changes, key) and not valid_state_field?(key, changes[key])
-      end) ->
-        {:error, :invalid_task_field_value}
-
-      true ->
-        {:ok, changes}
+    case Enum.find(changes, fn {key, value} -> not valid_state_field?(key, value) end) do
+      nil -> {:ok, changes}
+      {key, value} -> {:error, {:invalid_task_field, key, value}}
     end
   end
 
@@ -269,16 +251,20 @@ defmodule Alto.Harness.Catalog do
   defp empty, do: %{"version" => @version, "projects" => [], "tasks" => []}
   defp now_ms, do: System.system_time(:millisecond)
 
-  defp valid_backend?(value) when is_binary(value),
-    do: Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, value)
-
-  defp valid_backend?(_), do: false
-
   defp valid_state_field?("title", value),
     do: valid_text?(value) and byte_size(value) <= @max_title_bytes
 
-  defp valid_state_field?(_key, nil), do: true
-  defp valid_state_field?(_key, value), do: bounded_binary?(value, @max_state_field_bytes)
+  defp valid_state_field?("status", value), do: value in @statuses
+
+  defp valid_state_field?("backend", value) when is_binary(value),
+    do: Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, value)
+
+  defp valid_state_field?("conversation_id", nil), do: true
+
+  defp valid_state_field?("conversation_id", value),
+    do: bounded_binary?(value, @max_state_field_bytes)
+
+  defp valid_state_field?(_key, _value), do: false
 
   defp bounded_binary?(value, max),
     do: is_binary(value) and byte_size(value) <= max and String.valid?(value)
