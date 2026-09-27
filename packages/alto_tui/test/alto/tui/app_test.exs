@@ -329,6 +329,113 @@ defmodule Alto.TUI.AppTest do
     assert Enum.any?(restarted.projects, &(&1["root"] == folder))
   end
 
+  test "folder form renders live suggestions below the input and accepts keyboard and mouse",
+       context do
+    for folder <- ["alpha", "another folder/nested"],
+        do: File.mkdir_p!(Path.join(context.root, folder))
+
+    File.write!(Path.join(context.root, "a-file"), "not a directory")
+    state = state!(context)
+    form = folder_form(state)
+    assert (context.root <> "/") in form.overlay.suggestions
+    {:noreply, typed} = App.handle_event(%ExRatatui.Event.Paste{content: "a"}, form)
+
+    assert typed.overlay.suggestions ==
+             [context.root <> "/alpha/", context.root <> "/another folder/"]
+
+    widgets = View.widgets(typed, %{width: 120, height: 36})
+
+    {%ExRatatui.Widgets.TextInput{}, input} =
+      Enum.find(widgets, fn {widget, _} -> match?(%ExRatatui.Widgets.TextInput{}, widget) end)
+
+    {%ExRatatui.Widgets.List{}, suggestions} =
+      Enum.find(widgets, fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget) and widget.items == typed.overlay.suggestions
+      end)
+
+    assert suggestions.y > input.y
+    terminal = ExRatatui.init_test_terminal(120, 36)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "alpha/"
+    assert screen =~ "another folder/"
+    refute screen =~ "a-file"
+
+    {:noreply, selected} = App.handle_event(%Key{code: "down"}, typed)
+    assert selected.overlay.suggestion_index == 0
+    {:noreply, completed} = App.handle_event(%Key{code: "tab"}, selected)
+    assert Alto.TUI.Menu.value(completed.overlay, :path) == context.root <> "/alpha/"
+    assert completed.overlay.suggestion_index == nil
+
+    {:noreply, clicked} =
+      App.handle_event(
+        %Mouse{kind: "down", button: "left", x: suggestions.x + 1, y: suggestions.y + 1},
+        typed
+      )
+
+    {:noreply, clicked} =
+      App.handle_event(
+        %Mouse{kind: "up", button: "left", x: suggestions.x + 1, y: suggestions.y + 1},
+        clicked
+      )
+
+    assert Alto.TUI.Menu.value(clicked.overlay, :path) == context.root <> "/another folder/"
+    assert clicked.overlay.suggestions == [context.root <> "/another folder/nested/"]
+    {:noreply, selected} = App.handle_event(%Key{code: "down"}, clicked)
+    {:noreply, opened} = App.handle_event(%Key{code: "enter"}, selected)
+    assert State.selected_project(opened)["root"] == context.root <> "/another folder/nested"
+    assert opened.overlay == nil
+  end
+
+  test "inline suggestion mouse selection follows the keyboard-scrolled list", context do
+    for index <- 1..30,
+        do:
+          File.mkdir_p!(
+            Path.join(context.root, "inline-#{String.pad_leading(to_string(index), 2, "0")}")
+          )
+
+    form = folder_form(%{state!(context) | dimensions: {80, 20}})
+    {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "inline-"}, form)
+
+    selected =
+      Enum.reduce(1..20, form, fn _, state ->
+        {:noreply, next} = App.handle_event(%Key{code: "down"}, state)
+        next
+      end)
+
+    expected = Enum.at(selected.overlay.suggestions, selected.overlay.suggestion_index)
+    widgets = View.widgets(selected, %{width: 80, height: 20})
+
+    {%ExRatatui.Widgets.List{}, list} =
+      Enum.find(widgets, fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{}, widget) and expected in widget.items
+      end)
+
+    x = list.x + 1
+    y = list.y + list.height - 1
+
+    assert View.hit_target(selected, 80, 20, x, y) ==
+             {:folder_suggestion, selected.overlay.suggestion_index}
+
+    {:noreply, clicked} =
+      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, selected)
+
+    {:noreply, clicked} =
+      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+
+    assert Alto.TUI.Menu.value(clicked.overlay, :path) == expected
+  end
+
+  test "inline folder errors clear after correcting the path", context do
+    form = folder_form(state!(context))
+    {:noreply, invalid} = App.handle_event(%ExRatatui.Event.Paste{content: "missing/"}, form)
+    assert invalid.overlay.error =~ "Could not list folders"
+    assert invalid.overlay.suggestions == []
+    {:noreply, corrected} = App.handle_event(%Key{code: "u", modifiers: ["ctrl"]}, invalid)
+    assert corrected.overlay.error == nil
+    assert (context.root <> "/") in corrected.overlay.suggestions
+  end
+
   test "folder chooser returns to the typed form and accepts keyboard and mouse choices",
        context do
     for folder <- ["alpha", "another folder/nested", ".hidden"],
@@ -454,12 +561,12 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.get_buffer_content(terminal) =~ "Choose folder"
 
     {%ExRatatui.Widgets.List{}, list} =
-      Enum.find(Enum.reverse(widgets), fn {widget, _} ->
-        match?(%ExRatatui.Widgets.List{}, widget)
+      Enum.find(widgets, fn {widget, _} ->
+        match?(%ExRatatui.Widgets.List{items: ["[ Open folder ]" | _]}, widget)
       end)
 
     x = list.x + 1
-    y = list.y + list.height - 1
+    y = list.y + 2
     assert View.hit_target(form, 50, 16, x - 2, y) == :overlay
     {:noreply, chooser} = App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, form)
 
@@ -470,6 +577,7 @@ defmodule Alto.TUI.AppTest do
     {:noreply, returned} = App.handle_event(%Key{code: "esc"}, chooser)
     assert returned.overlay == form.overlay
     {:noreply, returned} = App.handle_event(%Key{code: "down"}, returned)
+    y = list.y + 3
     ExRatatui.draw(terminal, View.widgets(returned, frame))
     assert ExRatatui.get_buffer_content(terminal) =~ "Create folder"
 
@@ -703,6 +811,7 @@ defmodule Alto.TUI.AppTest do
     for rect <- [
           layout.rail,
           layout.transcript,
+          layout.details,
           layout.settings,
           layout.composer,
           layout.status
@@ -1387,6 +1496,30 @@ defmodule Alto.TUI.AppTest do
            end)
   end
 
+  test "context stays beside the transcript and composer while focused", context do
+    state = state!(context)
+    state = %{state | focus: :details, dimensions: {150, 36}}
+    ExRatatui.textarea_insert_str(state.textarea, "visible draft")
+    state = State.append_entry(state, nil, %{kind: :assistant, text: "visible response"})
+    layout = View.layout(state, 150, 36)
+    assert layout.transcript.x + layout.transcript.width == layout.details.x
+    assert layout.composer.x + layout.composer.width == layout.details.x
+    assert layout.details.width == state.details_width
+
+    assert View.hit_target(state, 150, 36, layout.composer.x + 2, layout.composer.y + 1) ==
+             :composer
+
+    assert View.hit_target(state, 150, 36, layout.transcript.x + 2, 1) == :transcript
+    assert View.hit_target(state, 150, 36, layout.right_seam, 1) == :right_seam
+    assert length(View.selection_content(state, 150, 36)) == 3
+    terminal = ExRatatui.init_test_terminal(150, 36)
+    assert :ok = ExRatatui.draw(terminal, View.widgets(state, %{width: 150, height: 36}))
+    screen = ExRatatui.get_buffer_content(terminal)
+    assert screen =~ "visible response"
+    assert screen =~ "visible draft"
+    assert screen =~ "context"
+  end
+
   test "renders the agreed pane model and telemetry bar headlessly", context do
     state = state!(context)
     state = %{state | dimensions: {150, 42}}
@@ -1565,37 +1698,46 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.textarea_get_value(clicked.textarea) == "draft with a long line"
   end
 
-  test "focus traversal keeps context available and skips a collapsed rail", context do
-    state = %{state!(context) | dimensions: {60, 24}, focus: :transcript}
-    assert State.visible_focuses(state) == [:transcript, :details, :composer]
-    assert State.focus_next(state).focus == :details
-    assert State.focus_next(%{state | focus: :details}).focus == :composer
-    assert State.ensure_visible_focus(%{state | focus: :rail}).focus == :transcript
+  test "focus traversal skips panes collapsed by the responsive layout", context do
+    state = state!(context)
+    state = %{state | dimensions: {80, 24}, focus: :transcript, details_visible?: true}
+
+    assert State.visible_focuses(state) == [:rail, :transcript, :composer]
+    assert State.focus_next(state).focus == :composer
+
+    hidden = %{state | focus: :details}
+    assert State.focus_next(hidden).focus == :composer
+    assert State.focus_next(hidden, :previous).focus == :transcript
+    assert State.ensure_visible_focus(hidden).focus == :transcript
   end
 
-  test "focused context stays full-screen on resize and closes through keyboard", context do
-    state = %{state!(context) | dimensions: {150, 42}, focus: :details}
+  test "focused context becomes a drawer on resize and hiding a pane restores focus", context do
+    state = state!(context)
+    state = %{state | dimensions: {150, 42}, focus: :details}
 
     assert {:noreply, resized} =
              App.handle_event(%ExRatatui.Event.Resize{width: 80, height: 24}, state)
 
     assert resized.focus == :details
-    assert View.layout(resized, 80, 24).details.width == 80
-
-    for key <- ["esc", "tab", "back_tab"] do
-      assert {:noreply, closed} = App.handle_event(%Key{code: key}, resized)
-      assert closed.focus == :composer
-    end
+    assert resized.details_return_focus
+    assert State.visible_focuses(resized) == [:details]
 
     assert {:noreply, leader} =
              App.handle_event(%Key{code: "g", kind: "press", modifiers: ["ctrl"]}, state)
 
     assert {:noreply, hidden} = App.handle_event(%Key{code: "d", kind: "press"}, leader)
-    assert hidden.focus == :composer
+    refute hidden.details_visible?
+    assert hidden.focus == :transcript
   end
 
-  test "context opens from its setting and its header closes it at every width", context do
-    state = %{state!(context) | dimensions: {80, 24}, focus: :composer}
+  test "narrow context is a mouse-aware drawer and becomes full-screen when tiny", context do
+    state = state!(context)
+    state = %{state | dimensions: {80, 24}, focus: :composer}
+
+    terminal = ExRatatui.init_test_terminal(80, 24)
+    assert :ok = ExRatatui.draw(terminal, View.widgets(state, %{width: 80, height: 24}))
+    assert ExRatatui.get_buffer_content(terminal) =~ "D:CTX"
+
     segments = View.settings_segments(state)
     context_index = Enum.find_index(segments, &(&1.target == {:setting, :details}))
     layout = View.layout(state, 80, 24)
@@ -1604,39 +1746,58 @@ defmodule Alto.TUI.AppTest do
       layout.settings.x +
         Enum.sum(Enum.map(Enum.take(segments, context_index), &String.length(&1.text)))
 
-    assert {:noreply, opened} =
+    assert {:noreply, drawer} =
              App.handle_event(
-               %Mouse{kind: "down", button: "left", x: context_x, y: layout.settings.y},
+               %Mouse{
+                 kind: "down",
+                 button: "left",
+                 x: context_x,
+                 y: layout.settings.y
+               },
                state
              )
 
-    {:noreply, opened} =
+    {:noreply, drawer} =
       App.handle_event(
         %Mouse{kind: "up", button: "left", x: context_x, y: layout.settings.y},
-        opened
+        drawer
       )
 
-    assert opened.focus == :details
+    assert drawer.details_return_focus == :composer
+    assert drawer.focus == :details
 
-    for width <- [60, 80, 150] do
-      opened = %{opened | dimensions: {width, 24}}
+    assert %ExRatatui.Layout.Rect{x: 20, y: 0, width: 60, height: 23} =
+             View.context_overlay_rect(drawer, 80, 24)
 
-      assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: ^width, height: 23} =
-               View.layout(opened, width, 24).details
+    assert State.focus_next(drawer).focus == :details
 
-      terminal = ExRatatui.init_test_terminal(width, 24)
-      assert :ok = ExRatatui.draw(terminal, View.widgets(opened, %{width: width, height: 24}))
-      assert ExRatatui.get_buffer_content(terminal) =~ "click header / Esc / Tab close"
-      assert View.activity_widgets(opened, %{width: width, height: 24}) == []
+    terminal = ExRatatui.init_test_terminal(80, 24)
+    assert :ok = ExRatatui.draw(terminal, View.widgets(drawer, %{width: 80, height: 24}))
+    buffer = ExRatatui.get_buffer_content(terminal)
+    assert buffer =~ "click header / Esc close"
 
-      assert {:noreply, closed} =
-               App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 0}, opened)
+    assert {:noreply, closed} =
+             App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 10}, drawer)
 
-      {:noreply, closed} =
-        App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 0}, closed)
+    {:noreply, closed} = App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 10}, closed)
 
-      assert closed.focus == :composer
-    end
+    refute closed.details_return_focus
+    assert closed.focus == :composer
+
+    fullscreen = %{drawer | dimensions: {60, 24}}
+
+    assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 60, height: 23} =
+             View.context_overlay_rect(fullscreen, 60, 24)
+
+    forced_drawer = %{fullscreen | narrow_context: :drawer}
+
+    assert %ExRatatui.Layout.Rect{x: 15, y: 0, width: 45, height: 23} =
+             View.context_overlay_rect(forced_drawer, 60, 24)
+
+    forced_fullscreen = %{drawer | narrow_context: :fullscreen}
+
+    assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 23} =
+             View.context_overlay_rect(forced_fullscreen, 80, 24)
 
     tiny = %{state | dimensions: {40, 20}}
     tiny_settings = View.settings_segments(tiny)

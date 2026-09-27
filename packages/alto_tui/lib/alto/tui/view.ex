@@ -25,12 +25,12 @@ defmodule Alto.TUI.View do
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
     |> add(status_widget(state, width), layout.status)
-    |> add_details(state, details_layout(state, layout.details))
+    |> add_details(state, details_layout(state, width, height, layout.details))
     |> add_overlay(state.overlay, layout.root)
   end
 
-  def activity_widgets(%State{focus: :details}, _frame), do: []
   def activity_widgets(%State{overlay: overlay}, _frame) when not is_nil(overlay), do: []
+  def activity_widgets(%State{details_return_focus: focus}, _frame) when not is_nil(focus), do: []
 
   def activity_widgets(state, %{width: width, height: height}) do
     case State.activity(state) do
@@ -51,8 +51,9 @@ defmodule Alto.TUI.View do
   def layout(%State{} = state, width, height) do
     PaneLayout.calculate(width, height,
       rail_visible: state.rail_visible?,
-      details: state.focus == :details,
-      rail_width: state.rail_width
+      details_visible: state.details_visible?,
+      rail_width: state.rail_width,
+      details_width: state.details_width
     )
   end
 
@@ -71,10 +72,12 @@ defmodule Alto.TUI.View do
 
   def selection_content(state, width, height) do
     layout = layout(state, width, height)
-    details = details_layout(state, layout.details)
+    details = details_layout(state, width, height, layout.details)
 
-    if details do
-      [details.content]
+    details_content = if details, do: [details.content], else: []
+
+    if details && details.presentation == :drawer do
+      details_content
     else
       transcript =
         if State.visible_entries(state) == [], do: [], else: [content_rect(layout.transcript)]
@@ -84,7 +87,7 @@ defmodule Alto.TUI.View do
           do: [],
           else: [content_rect(layout.composer)]
 
-      transcript ++ composer
+      transcript ++ composer ++ details_content
     end
   end
 
@@ -102,8 +105,14 @@ defmodule Alto.TUI.View do
     inner = content_rect(popup)
     list = menu_list_rect(overlay, inner)
     {_items, offset} = Menu.window(overlay, list.height)
+    suggestions = folder_list_rect(overlay, inner)
+    suggestion_offset = folder_offset(overlay, suggestions)
 
     cond do
+      not is_nil(suggestions) and PaneLayout.contains?(suggestions, x, y) and
+          y - suggestions.y + suggestion_offset < length(overlay.suggestions) ->
+        {:folder_suggestion, y - suggestions.y + suggestion_offset}
+
       PaneLayout.contains?(list, x, y) and y - list.y + offset < length(Menu.items(overlay)) ->
         {:overlay_row, y - list.y + offset}
 
@@ -117,17 +126,20 @@ defmodule Alto.TUI.View do
 
   def hit_target(%State{} = state, width, height, x, y) do
     layout = layout(state, width, height)
-    details = details_layout(state, layout.details)
+    details = details_layout(state, width, height, layout.details)
 
     cond do
-      details && PaneLayout.contains?(details.rect, x, y) ->
+      details && details.presentation == :drawer && PaneLayout.contains?(details.rect, x, y) ->
         details_target(details, x, y)
 
-      details ->
-        :details_close
+      details && details.presentation == :drawer ->
+        :details_drawer_outside
 
       layout.left_seam && x == layout.left_seam ->
         :left_seam
+
+      layout.right_seam && x == layout.right_seam ->
+        :right_seam
 
       PaneLayout.contains?(layout.rail, x, y) and y == layout.rail.y + 1 ->
         :new_workspace
@@ -157,6 +169,9 @@ defmodule Alto.TUI.View do
       PaneLayout.contains?(layout.composer, x, y) ->
         :composer
 
+      PaneLayout.contains?(layout.details, x, y) ->
+        details_target(details, x, y)
+
       PaneLayout.contains?(layout.transcript, x, y) ->
         :transcript
 
@@ -165,7 +180,33 @@ defmodule Alto.TUI.View do
     end
   end
 
-  defp details_layout(state, rect) do
+  @doc "Rectangle used by narrow context, or nil when the persistent pane is active."
+  def context_overlay_rect(%State{details_return_focus: nil}, _width, _height), do: nil
+
+  def context_overlay_rect(%State{}, width, height) when width <= 0 or height <= 1, do: nil
+
+  def context_overlay_rect(%State{} = state, width, height) do
+    layout = layout(state, width, height)
+
+    if layout.details do
+      nil
+    else
+      main_height = layout.status.y
+      fullscreen? = context_fullscreen?(state, width)
+      drawer_width = min(max(div(width * state.narrow_context_width, 100), 1), width)
+
+      if fullscreen? do
+        %Rect{x: 0, y: 0, width: width, height: main_height}
+      else
+        %Rect{x: width - drawer_width, y: 0, width: drawer_width, height: main_height}
+      end
+    end
+  end
+
+  defp details_layout(state, width, height, pane) do
+    drawer = context_overlay_rect(state, width, height)
+    rect = drawer || pane
+
     if rect do
       controls = if state.pending_approvals == [], do: [], else: approval_controls(rect)
       content = content_rect(rect)
@@ -173,7 +214,8 @@ defmodule Alto.TUI.View do
       %{
         rect: rect,
         content: %{content | height: max(content.height - length(controls), 0)},
-        controls: controls
+        controls: controls,
+        presentation: if(drawer, do: :drawer, else: :pane)
       }
     end
   end
@@ -328,10 +370,10 @@ defmodule Alto.TUI.View do
   @doc "Largest useful context offset, including the approval button rows."
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
-    details = details_layout(state, layout(state, width, height).details)
+    details = details_layout(state, width, height, layout(state, width, height).details)
 
     if details do
-      {_, text} = details_content(state)
+      {_, text} = details_content(state, details.presentation)
       Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
     else
       0
@@ -339,10 +381,13 @@ defmodule Alto.TUI.View do
   end
 
   defp details_widget(state, details) do
-    {title, text} = details_content(state)
+    {title, text} = details_content(state, details.presentation)
     bottom = Alto.TUI.Viewport.bottom(text, details.content.width, details.content.height)
 
-    title = title <> "│ click header / Esc / Tab close "
+    title =
+      if details.presentation == :drawer,
+        do: title <> "│ click header / Esc close ",
+        else: title
 
     %Paragraph{
       text: text,
@@ -357,7 +402,7 @@ defmodule Alto.TUI.View do
 
   defp add_details(widgets, state, layout) do
     details = details_widget(state, layout)
-    clear = [{%Clear{}, layout.rect}]
+    clear = if layout.presentation == :drawer, do: [{%Clear{}, layout.rect}], else: []
 
     body =
       if layout.controls == [] do
@@ -474,12 +519,45 @@ defmodule Alto.TUI.View do
          }, rect},
         {%List{
            items: Enum.map(items, & &1.label),
-           selected: menu.index - offset,
+           selected: if(menu.index >= offset, do: menu.index - offset),
            highlight_symbol: "› ",
            highlight_style: style(fg: :black, bg: @accent),
            style: bg
          }, list_rect}
-      ] ++ menu_editor(menu, inner, bg)
+      ] ++ menu_editor(menu, inner, bg) ++ folder_list(menu, inner, bg)
+  end
+
+  defp folder_list_rect(%{kind: :workspace_form}, inner),
+    do: %{inner | y: inner.y + 4, height: max(inner.height - 8, 0)}
+
+  defp folder_list_rect(_menu, _inner), do: nil
+
+  defp folder_offset(menu, %{height: height}),
+    do: max((menu[:suggestion_index] || 0) - max(height, 1) + 1, 0)
+
+  defp folder_offset(_menu, nil), do: 0
+
+  defp folder_list(%{kind: :workspace_form, suggestions: suggestions} = menu, inner, bg) do
+    rect = folder_list_rect(menu, inner)
+    offset = folder_offset(menu, rect)
+    index = menu.suggestion_index
+
+    [
+      {%List{
+         items: Enum.slice(suggestions, offset, rect.height),
+         selected: if(index != nil, do: index - offset),
+         highlight_symbol: "› ",
+         highlight_style: style(fg: :black, bg: @accent),
+         style: bg
+       }, rect}
+    ]
+  end
+
+  defp folder_list(_menu, _inner, _bg), do: []
+
+  defp menu_list_rect(%{kind: :workspace_form}, inner) do
+    height = min(inner.height, 4)
+    %{inner | y: inner.y + inner.height - height, height: height}
   end
 
   defp menu_list_rect(menu, inner) do
@@ -527,6 +605,9 @@ defmodule Alto.TUI.View do
   end
 
   defp menu_editor(_menu, _inner, _bg), do: []
+
+  defp editor_rect(%{kind: :workspace_form}, inner),
+    do: %{inner | y: inner.y + 2, height: min(inner.height, 1)}
 
   defp editor_rect(menu, inner) do
     list = menu_list_rect(menu, inner)
@@ -594,7 +675,7 @@ defmodule Alto.TUI.View do
     end
   end
 
-  defp details_target(%{rect: rect}, _x, y) when y == rect.y,
+  defp details_target(%{presentation: :drawer, rect: rect}, _x, y) when y == rect.y,
     do: :details_close
 
   defp details_target(details, x, y) do
@@ -603,11 +684,11 @@ defmodule Alto.TUI.View do
     end)
   end
 
-  defp details_content(%{pending_approvals: [%{request: request} | _]}) do
+  defp details_content(%{pending_approvals: [%{request: request} | _]}, _presentation) do
     {" approval required ", Alto.TUI.ApprovalView.text(request)}
   end
 
-  defp details_content(state) do
+  defp details_content(state, _presentation) do
     recent =
       state
       |> State.visible_entries()
@@ -658,6 +739,12 @@ defmodule Alto.TUI.View do
 
   defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
 
+  defp overlay_rect(%{kind: :workspace_form}, width, height) do
+    w = min(max(width - 4, 1), 88)
+    h = min(max(height, 1), 18)
+    %Rect{x: max(div(width - w, 2), 0), y: max(div(height - h, 2), 0), width: w, height: h}
+  end
+
   defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
 
   defp popup_rect(width, height, width_percent, height_percent) do
@@ -699,9 +786,16 @@ defmodule Alto.TUI.View do
     with :pass <- Alto.TUI.Backend.ui(state, :quota_label), do: ""
   end
 
+  defp context_fullscreen?(%{narrow_context: :fullscreen}, _width), do: true
+  defp context_fullscreen?(%{narrow_context: :drawer}, _width), do: false
+
+  defp context_fullscreen?(state, width),
+    do: width < state.narrow_context_fullscreen_below
+
   defp context_labels(%{pending_approvals: [_ | _]}), do: {"REQ", "!"}
-  defp context_labels(%{focus: :details}), do: {"OPEN", "O"}
-  defp context_labels(_state), do: {"CTX", "C"}
+  defp context_labels(%{details_return_focus: focus}) when not is_nil(focus), do: {"OPEN", "O"}
+  defp context_labels(%{details_visible?: true}), do: {"CTX", "C"}
+  defp context_labels(_state), do: {"OFF", "X"}
 
   defp short(nil, _max), do: "—"
 

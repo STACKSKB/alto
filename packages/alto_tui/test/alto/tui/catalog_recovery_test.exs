@@ -11,7 +11,7 @@ defmodule Alto.TUI.CatalogRecoveryTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
     path = Path.join(root, "harness.json")
-    config = Alto.Test.TUI.config(tui: [approval_auto_open: :invalid])
+    config = Alto.Test.TUI.config(tui: [narrow_context_width: 101])
 
     assert_raise NimbleOptions.ValidationError, fn ->
       State.new(config, project: root, path: path)

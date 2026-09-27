@@ -144,6 +144,9 @@ tools =
   prompt: &Alto.Prompts.Coding.build/1,
   tui: [
     type_to_compose: true,
+    narrow_context: :adaptive,
+    narrow_context_width: 75,
+    narrow_context_fullscreen_below: 72,
     approval_auto_open: true
   ],
   project_instructions: :auto,

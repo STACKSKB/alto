@@ -66,9 +66,9 @@ defmodule Alto.TUI.App do
     seam? =
       not state.selection.active? and
         match?(%Mouse{kind: "down", button: "left", modifiers: []}, event) and
-        View.hit_target(state, width, height, event.x, event.y) == :left_seam
+        View.hit_target(state, width, height, event.x, event.y) in [:left_seam, :right_seam]
 
-    if seam? or state.dragging == :left_seam do
+    if seam? or state.dragging in [:left_seam, :right_seam] do
       route_event(event, %{state | selection: Selection.new()})
     else
       case Selection.event(state.selection, event, state.dimensions, widgets,
@@ -90,7 +90,7 @@ defmodule Alto.TUI.App do
         {:click, mouse, selection} ->
           state = %{state | selection: selection}
 
-          if View.hit_target(state, width, height, mouse.x, mouse.y) == :left_seam,
+          if View.hit_target(state, width, height, mouse.x, mouse.y) in [:left_seam, :right_seam],
             do: {:noreply, state},
             else: route_event(mouse, state)
 
@@ -139,7 +139,7 @@ defmodule Alto.TUI.App do
       {:noreply,
        state
        |> Map.put(:dimensions, {width, height})
-       |> State.ensure_visible_focus()}
+       |> State.reconcile_responsive_focus()}
 
   defp route_event(%Paste{content: content}, %{overlay: nil, focus: :composer} = state) do
     ExRatatui.textarea_insert_str(state.textarea, content)
@@ -150,7 +150,7 @@ defmodule Alto.TUI.App do
        when not is_nil(overlay),
        do: {:noreply, %{state | overlay: Menu.paste(overlay, content)}}
 
-  defp route_event(%Paste{}, %{focus: :details} = state),
+  defp route_event(%Paste{}, %{details_return_focus: focus} = state) when not is_nil(focus),
     do: {:noreply, state, render?: false}
 
   defp route_event(%Paste{content: content}, %{type_to_compose?: true} = state) do
@@ -167,9 +167,9 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{} = key, %{overlay: overlay} = state) when not is_nil(overlay),
     do: {:noreply, overlay_key(state, key)}
 
-  defp route_event(%Key{code: code}, %{focus: :details} = state)
-       when code in ["esc", "tab", "back_tab"],
-       do: {:noreply, %{state | focus: :composer, selection: Selection.new()}}
+  defp route_event(%Key{code: "esc"}, %{details_return_focus: focus} = state)
+       when not is_nil(focus),
+       do: {:noreply, State.close_details_drawer(state)}
 
   defp route_event(%Key{code: "g", modifiers: ["ctrl"]}, state) do
     {:noreply, %{state | leader?: not state.leader?, notice: nil}}
@@ -232,9 +232,8 @@ defmodule Alto.TUI.App do
 
   defp route_event(
          %Key{} = key,
-         %{type_to_compose?: true, focus: focus} = state
-       )
-       when focus != :details do
+         %{type_to_compose?: true, details_return_focus: nil} = state
+       ) do
     if printable_key?(key) do
       forward_textarea(%{state | focus: :composer}, key)
     else
@@ -830,11 +829,10 @@ defmodule Alto.TUI.App do
 
   defp clear_approvals(state, predicate) do
     pending = Enum.reject(state.pending_approvals, predicate)
-    closed? = pending == [] and state.pending_approvals != []
     state = reset_approval_view(state, pending)
 
-    if closed? and state.focus == :details,
-      do: %{state | focus: :composer, selection: Selection.new()},
+    if pending == [] and state.details_drawer_auto_opened?,
+      do: State.close_details_drawer(state),
       else: state
   end
 
@@ -1033,21 +1031,6 @@ defmodule Alto.TUI.App do
        }),
        do: form_result(state, :choose)
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form} = form} = state, %Key{code: "tab"}) do
-    case if(Menu.value(form, :path) == "",
-           do: :empty,
-           else: Alto.Harness.Folders.suggest(Menu.value(form, :path), form.base)
-         ) do
-      {:ok, %{completion: completion}} when is_binary(completion) and completion != "" ->
-        ExRatatui.text_input_set_value(Menu.field(form, :path).input, completion)
-        ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
-        %{state | overlay: %{form | error: nil}}
-
-      _ ->
-        state
-    end
-  end
-
   defp overlay_key(state, key) do
     case Menu.key(state.overlay, key) do
       :cancel -> close_overlay(state)
@@ -1078,7 +1061,7 @@ defmodule Alto.TUI.App do
         form = state.overlay.return_form
         ExRatatui.text_input_set_value(Menu.field(form, :path).input, path)
         ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
-        %{state | overlay: %{form | error: nil}}
+        %{state | overlay: Menu.refresh_folder(%{form | index: 0, error: nil})}
 
       %{value: :new_workspace} ->
         open_workspace_form(state)
@@ -1161,8 +1144,11 @@ defmodule Alto.TUI.App do
   end
 
   defp handle_mouse(state, %Mouse{kind: "drag", x: x}) do
+    {width, _height} = state.dimensions
+
     case state.dragging do
       :left_seam -> %{state | rail_width: (x + 1) |> max(20) |> min(48)}
+      :right_seam -> %{state | details_width: (width - x) |> max(28) |> min(60)}
       _other -> state
     end
   end
@@ -1183,8 +1169,8 @@ defmodule Alto.TUI.App do
 
   defp handle_mouse(state, _mouse), do: state
 
-  defp activate_target(state, :left_seam, _x),
-    do: %{state | dragging: :left_seam}
+  defp activate_target(state, seam, _x) when seam in [:left_seam, :right_seam],
+    do: %{state | dragging: seam}
 
   defp activate_target(state, :new_workspace, _x), do: open_workspace_form(state)
   defp activate_target(state, {:close_workspace, id}, _x), do: State.close_workspace(state, id)
@@ -1205,11 +1191,15 @@ defmodule Alto.TUI.App do
   defp activate_target(state, pane, _x) when pane in [:composer, :transcript, :details],
     do: %{state | focus: pane}
 
-  defp activate_target(state, :details_close, _x),
-    do: %{state | focus: :composer, selection: Selection.new()}
+  defp activate_target(state, target, _x)
+       when target in [:details_close, :details_drawer_outside],
+       do: State.close_details_drawer(state)
 
   defp activate_target(state, {:approval, decision}, _x),
     do: decide_approval(state, approval_decision(decision))
+
+  defp activate_target(%{overlay: form} = state, {:folder_suggestion, index}, _x),
+    do: %{state | overlay: Menu.complete_folder(form, Enum.at(form.suggestions, index))}
 
   defp activate_target(state, {:overlay_row, row}, _x), do: handle_overlay_click(state, row)
   defp activate_target(state, :overlay_outside, _x), do: close_overlay(state)
@@ -1250,13 +1240,28 @@ defmodule Alto.TUI.App do
 
   defp printable_key?(_key), do: false
 
-  defp toggle_details(state),
-    do: %{
-      state
-      | leader?: false,
-        selection: Selection.new(),
-        focus: if(state.focus == :details, do: :composer, else: :details)
-    }
+  defp toggle_details(state) do
+    state = %{state | leader?: false}
+
+    cond do
+      state.details_return_focus ->
+        State.close_details_drawer(state)
+
+      State.details_pane_visible?(state) ->
+        state
+        |> Map.put(:details_visible?, false)
+        |> State.ensure_visible_focus()
+
+      true ->
+        requested = %{state | details_visible?: true}
+
+        if State.details_pane_visible?(requested) do
+          %{requested | focus: :details}
+        else
+          State.open_details_drawer(requested)
+        end
+    end
+  end
 
   defp move_rail(state, delta) do
     rows = State.rail_rows(state)
@@ -1294,19 +1299,30 @@ defmodule Alto.TUI.App do
 
     next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
-    %{next | focus: if(rest == [], do: :composer, else: :details)}
+    if rest == [] and next.details_drawer_auto_opened? do
+      State.close_details_drawer(next)
+    else
+      %{next | focus: if(next.details_return_focus, do: :details, else: :composer)}
+    end
   end
 
   def show_pending_approval(state, pending, notice) do
-    next = %{reset_approval_view(state, state.pending_approvals ++ [pending]) | notice: notice}
+    next = %{
+      reset_approval_view(state, state.pending_approvals ++ [pending])
+      | details_visible?: true,
+        notice: notice
+    }
 
-    if next.approval_auto_open?,
-      do: %{
-        next
-        | focus: :details,
-          selection: if(next.focus == :details, do: next.selection, else: Selection.new())
-      },
-      else: next
+    cond do
+      not next.approval_auto_open? ->
+        State.ensure_visible_focus(next)
+
+      State.details_pane_visible?(next) or next.details_return_focus ->
+        %{next | focus: :details}
+
+      true ->
+        State.open_details_drawer(next, auto: true)
+    end
   end
 
   defp reset_approval_view(state, pending) do
@@ -1441,9 +1457,10 @@ defmodule Alto.TUI.App do
             "Open folder",
             [{:path, "Folder", "", [placeholder: "/path/to/project"]}],
             base: base,
+            folders: Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/")),
             on_action: &form_result/2,
             intro: "Relative paths start from: #{base}",
-            hint: "Tab complete · Ctrl+O choose · Ctrl+N create · Esc cancel",
+            hint: "↑↓ choose · Tab complete · Ctrl+O choose · Ctrl+N create · Esc cancel",
             buttons: ["[ Open folder ]", "[ Cancel ]", "[ Choose folder ]", "[ Create folder ]"],
             actions: [:submit, :cancel, :choose, :create]
           ),

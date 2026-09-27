@@ -11,6 +11,9 @@ defmodule Alto.TUI.State do
   @max_cached_tasks 12
   @tui_options NimbleOptions.new!(
                  type_to_compose: [type: :boolean],
+                 narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
+                 narrow_context_width: [type: {:in, 40..100}],
+                 narrow_context_fullscreen_below: [type: {:in, 0..300}],
                  approval_auto_open: [type: :boolean]
                )
 
@@ -46,11 +49,18 @@ defmodule Alto.TUI.State do
     approval_level: :ask,
     composer_mode: :prose,
     type_to_compose?: true,
+    narrow_context: :adaptive,
+    narrow_context_width: 75,
+    narrow_context_fullscreen_below: 72,
     approval_auto_open?: true,
     focus: :composer,
     leader?: false,
+    details_visible?: true,
+    details_drawer_auto_opened?: false,
+    details_return_focus: nil,
     rail_visible?: true,
     rail_width: 26,
+    details_width: 36,
     transcript_scroll: 0,
     transcript_follow?: true,
     details_scroll: 0,
@@ -110,6 +120,10 @@ defmodule Alto.TUI.State do
         profiles: profiles,
         selected_provider_id: profile && profile.id,
         type_to_compose?: Keyword.get(tui_options, :type_to_compose, true),
+        narrow_context: Keyword.get(tui_options, :narrow_context, :adaptive),
+        narrow_context_width: Keyword.get(tui_options, :narrow_context_width, 75),
+        narrow_context_fullscreen_below:
+          Keyword.get(tui_options, :narrow_context_fullscreen_below, 72),
         approval_auto_open?: Keyword.get(tui_options, :approval_auto_open, true),
         selected_model: profile && profile.default_model,
         selected_backend: selected_backend,
@@ -345,7 +359,7 @@ defmodule Alto.TUI.State do
            {:ok, projects, tasks} <- Catalog.navigation(state.catalog_opts) do
         {:ok,
          %{state | projects: projects, tasks: tasks, selected_project_id: project["id"]}
-         |> Map.put(:focus, :composer)
+         |> close_details_drawer()
          |> new_task()
          |> Map.put(:notice, "Workspace: " <> root)}
       end
@@ -464,15 +478,7 @@ defmodule Alto.TUI.State do
       |> Enum.map(&Enum.at(@focuses, &1))
       |> Enum.find(&(&1 in visible))
 
-    %{
-      state
-      | focus: next || :composer,
-        selection:
-          if(state.focus == :details or next == :details,
-            do: Alto.TUI.Selection.new(),
-            else: state.selection
-          )
-    }
+    %{state | focus: next || :composer}
   end
 
   @doc "Move focus away from a pane omitted by the responsive layout."
@@ -485,9 +491,68 @@ defmodule Alto.TUI.State do
     end
   end
 
-  @doc "Focus targets available at the state's current terminal dimensions."
+  @doc "Open narrow-terminal context as a modal drawer and remember where to return."
+  def open_details_drawer(%__MODULE__{} = state, opts \\ []) do
+    return_focus = if state.focus == :details, do: state.details_return_focus, else: state.focus
+    auto_opened? = state.details_drawer_auto_opened? or Keyword.get(opts, :auto, false)
+
+    %{
+      state
+      | details_visible?: true,
+        details_drawer_auto_opened?: auto_opened?,
+        details_return_focus: return_focus || :composer,
+        focus: :details
+    }
+  end
+
+  @doc "Close the context drawer and restore its prior visible focus."
+  def close_details_drawer(%__MODULE__{} = state) do
+    state = %{
+      state
+      | details_drawer_auto_opened?: false,
+        focus: state.details_return_focus || :composer,
+        details_return_focus: nil
+    }
+
+    ensure_visible_focus(state)
+  end
+
+  @doc "Keep actively focused context visible while crossing responsive breakpoints."
+  def reconcile_responsive_focus(%__MODULE__{} = state) do
+    cond do
+      details_pane_visible?(state) and state.details_return_focus ->
+        %{
+          state
+          | details_drawer_auto_opened?: false,
+            details_return_focus: nil
+        }
+
+      not details_pane_visible?(state) and state.focus == :details and
+          is_nil(state.details_return_focus) ->
+        open_details_drawer(state)
+
+      true ->
+        ensure_visible_focus(state)
+    end
+  end
+
+  @doc "Whether the responsive layout currently allocates the persistent context pane."
+  def details_pane_visible?(%__MODULE__{} = state),
+    do: not is_nil(responsive_layout(state).details)
+
+  @doc "Focus targets rendered at the state's current terminal dimensions."
   def visible_focuses(%__MODULE__{} = state) do
-    if responsive_layout(state).rail, do: @focuses, else: List.delete(@focuses, :rail)
+    if state.details_return_focus do
+      [:details]
+    else
+      layout = responsive_layout(state)
+
+      Enum.filter(@focuses, fn
+        :rail -> not is_nil(layout.rail)
+        :details -> not is_nil(layout.details)
+        _other -> true
+      end)
+    end
   end
 
   defp responsive_layout(state) do
@@ -495,7 +560,9 @@ defmodule Alto.TUI.State do
 
     Alto.TUI.Layout.calculate(width, height,
       rail_visible: state.rail_visible?,
-      rail_width: state.rail_width
+      details_visible: state.details_visible?,
+      rail_width: state.rail_width,
+      details_width: state.details_width
     )
   end
 

@@ -12,6 +12,14 @@ mix deps.get
 mix alto.tui --config ../../alto.agentic.exs
 ```
 
+The existing `rustler_precompiled` dependency is pinned and patched at build time
+to replace native libraries atomically. Its unpatched extraction can crash a
+running TUI with `SIGBUS` when another build overwrites the mapped library.
+For a checkout built before this fix, rebuild that dependency once in each used
+environment: `mix deps.compile rustler_precompiled` and
+`MIX_ENV=test mix deps.compile rustler_precompiled`. Fresh builds apply the patch
+automatically; no new dependency or native toolchain is required.
+
 While the TUI is open, standard console Logger handlers are muted and logs go to
 `$ALTO_STATE_HOME/alto/logs/tui.log` (or `$XDG_STATE_HOME/alto/logs/tui.log`, defaulting
 to `~/.local/state/alto/logs/tui.log`). Use `--log PATH` to choose another file, or
@@ -40,10 +48,9 @@ When delivered, their queue notice disappears and each message becomes a separat
 The status bar shows whether Alto is waiting for the model, executing a tool, or
 waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,
 to answer a pending request. Esc stops the selected task's run and preserves your
-draft. If a popup or full-screen context is open, the first Esc closes it.
-Open context with **Ctrl+G, D** or its settings indicator; Esc or Tab returns to
-the composer. Context always occupies the full screen above the status bar.
-Cancellation, failure, or a session-save failure pauses the queued follow-up; press Enter with an empty composer to send it.
+draft. If a popup or the compact details
+drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
+failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
 Host configuration uses `%Alto.Harness.ProviderProfile{}` entries in
 `provider_profiles`, with a `{module, options}` provider and either `:discover`
@@ -128,7 +135,11 @@ Click **+ New workspace** or use **Ctrl+G, W → Open another folder** to open a
 existing folder path and press Enter (or click Open folder).
 Relative paths start from the current workspace; `~` addresses your home folder.
 Alto remembers the folder, selects it, and prepares a new task while preserving
-your draft. Tab extends the typed path to the longest common prefix of matching
+your draft. Matching subfolders appear below the input as you type. Up/Down
+highlights a suggestion; Tab copies it into the input, and Enter opens it. Continue
+with Down to reach the action buttons, or use Tab when no further completion is
+available. Click a
+suggestion to copy its path and browse its subfolders. Tab extends the typed path to the longest common prefix of matching
 folders. For example, `/hom` becomes `/home/`, regardless of the current workspace.
 Use **Ctrl+O** or click **Choose folder** to open the folder chooser. Saved workspaces
 appear when the field is empty; otherwise it lists filesystem matches. Type to
@@ -136,7 +147,10 @@ filter, use Up/Down or click a folder to copy it into the form, then press Enter
 open it. Esc returns from the chooser without changing the typed path.
 **Ctrl+N** or **Create folder** creates and opens the typed path, including missing
 parent directories. **Ctrl+U** clears the field.
-The details pane shows the full working folder. Existing runs continue
+The details pane stays beside the transcript and composer on wide terminals, and
+its seam can be dragged to change its width. On narrow terminals it opens as a
+drawer, with a full-screen fallback on very small terminals. Esc closes the drawer
+and restores the previous focus. The details pane shows the full working folder. Existing runs continue
 in their original folders. Use Ctrl+G, W to switch between saved workspaces.
 
 Use **Ctrl+G, W → Create worktree…** to create a local linked Git worktree from

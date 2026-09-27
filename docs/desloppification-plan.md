@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,575 lines**, a **24.8% reduction**, with **2,117 lines remaining**.
+Current: **30,842 lines**, a **24.1% reduction**, with **2,384 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,17 +53,20 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-TUI rendering passes its calculated rectangles into transcript and details
-helpers instead of recalculating the pane layout. Workspace close buttons use
-one sliced, pattern-filtered projection, retaining their original row indices.
-Viewport caching captures the ASCII-width predicate once per uncached chunk and
-checks the head of each homogeneous group instead of checking every line again.
-`Enum.flat_map_reduce` accumulates visible rows without a later flatten pass.
-Native-rendering comparisons cover chunk boundaries, Unicode, blanks, scrolling
-and borders; interaction tests retain workspace close and selection behavior.
-This pass removes **17 production lines**: **16 code lines** and **1 blank**, with
-**no documentation lines removed**. Only TUI production code changed; no
-dependencies or compatibility layers were added.
+The context sidebar and narrow-terminal drawer are restored, including pane
+resizing, approval focus and selection. Folder forms again show live directories
+below the path input, with keyboard completion and mouse navigation. These UX
+restorations take priority over the line-count target; removing visible behavior
+does not count as simplification.
+
+A private native-rendering reproduction confirmed SIGBUS when the existing
+`rustler_precompiled` loader extracted over a running VM's mapped NIF. A tracked
+build patch stages and atomically renames native libraries. The same reproduction
+survives repeated rebuilds with the patch, and a regression verifies that open
+file descriptors retain their original bytes. The loader has been rebuilt for
+this checkout's dev and test environments; other existing checkouts need the
+one-time dependency rebuild documented in the TUI README. The original screenshot
+has no matching crash dump, so the exact incident cannot be proven from it alone.
 Historical pass notes remain in Git.
 
 ## Remaining work
@@ -99,7 +102,7 @@ Codex follow-ups retain model/effort selection. Restored mailboxes reject duplic
 IDs, malformed messages and missing queued receipts.
 
 The current core check passes **1,078 tests** with application modules preloaded.
-The TUI suite passes **146 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
+The TUI suite passes **153 tests**, including delegated approvals and durable usage telemetry. The direct-call consolidation retains retry, cancellation,
 uncertain-outcome and successful-sibling coverage, adding reducer crash and
 cancellation regressions. The canonical-record change preserves coverage for forks,
 resume, crash recovery, frozen dispatches, bounds and provider normalization.

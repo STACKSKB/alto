@@ -93,9 +93,10 @@ defmodule Alto.TUI.ApprovalControlsTest do
     refute_receive {:alto_approval_decision, "approval-1", _decision}, 100
   end
 
-  test "keeps full-screen controls pinned while details scrolls and accepts a narrow click",
-       context do
+  test "keeps drawer controls pinned while details scrolls and accepts a narrow click", context do
     state = pending_state(context, {80, 24})
+    assert state.details_return_focus
+    assert state.details_drawer_auto_opened?
     assert state.focus == :details
     scrolled = %{state | details_scroll: 100}
     {buffer, _terminal} = render(scrolled, 80, 24)
@@ -107,6 +108,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), scrolled)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
+    refute decided.details_return_focus
     assert decided.focus == :composer
   end
 
@@ -196,7 +198,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
       assert state.details_scroll == cap
 
       rect =
-        View.layout(state, width, height).details
+        View.context_overlay_rect(state, width, height) ||
+          View.layout(state, width, height).details
 
       wheel = %Mouse{kind: "scroll_down", x: rect.x + 2, y: rect.y + 2}
       {:noreply, state} = App.handle_event(wheel, state)
@@ -206,7 +209,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     end
   end
 
-  test "approval selection autoscrolls wide and narrow context without activating controls",
+  test "approval selection autoscrolls wide panes and compact drawers without activating controls",
        context do
     for {width, height} = dimensions <- [{140, 40}, {80, 24}] do
       state = pending_state(context, dimensions)
@@ -224,7 +227,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
       }
 
       rect =
-        View.layout(state, width, height).details
+        View.context_overlay_rect(state, width, height) ||
+          View.layout(state, width, height).details
 
       down = %Mouse{kind: "down", button: "left", x: rect.x + 1, y: rect.y + 2}
       {:noreply, state} = App.handle_event(down, state)
@@ -265,6 +269,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
       |> Alto.Test.TUI.config()
 
     state = pending_state(context, {80, 24}, config)
+    refute state.details_return_focus
     assert state.focus == :composer
     {buffer, _terminal} = render(state, 80, 24)
     assert buffer =~ "D:REQ"

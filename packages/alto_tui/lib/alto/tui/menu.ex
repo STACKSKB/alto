@@ -50,6 +50,7 @@ defmodule Alto.TUI.Menu do
       error: nil,
       submit: &on_action.(&1, :submit)
     })
+    |> refresh_folder()
   end
 
   def field(menu, key), do: Enum.find(menu.items, &(&1[:key] == key))
@@ -79,9 +80,95 @@ defmodule Alto.TUI.Menu do
     if count == 0, do: menu, else: %{menu | index: Integer.mod(menu.index + delta, count)}
   end
 
+  def window(%{kind: :workspace_form} = menu, height) do
+    offset = max(menu.index - max(height, 1) + 1, 1)
+    {Enum.slice(items(menu), offset, max(height, 0)), offset}
+  end
+
   def window(menu, height) do
     offset = max(menu.index - max(height, 1) + 1, 0)
     {Enum.slice(items(menu), offset, max(height, 0)), offset}
+  end
+
+  @doc "Refresh the inline folder list after an edit or completion."
+  def refresh_folder(%{kind: :workspace_form, base: base} = menu) do
+    path = value(menu, :path)
+    saved = if path == "", do: Map.get(menu, :folders, []), else: []
+
+    {found, completion, error} =
+      case Alto.Harness.Folders.suggest(path, base) do
+        {:ok, %{folders: folders, completion: completion}} -> {folders, completion, nil}
+        {:error, reason} -> {[], nil, "Could not list folders: " <> Alto.Display.error(reason)}
+      end
+
+    Map.merge(menu, %{
+      suggestions: Enum.take(Enum.uniq(saved ++ found), 50),
+      suggestion_index: nil,
+      completion: completion,
+      error: error
+    })
+  end
+
+  def refresh_folder(menu), do: menu
+
+  def folder_selection(menu),
+    do: if(menu[:suggestion_index] != nil, do: Enum.at(menu.suggestions, menu.suggestion_index))
+
+  def complete_folder(menu, path) do
+    if is_binary(path) and path != "" do
+      input = field(menu, :path).input
+      ExRatatui.text_input_set_value(input, path)
+      ExRatatui.text_input_handle_key(input, "end")
+      refresh_folder(%{menu | index: 0})
+    else
+      menu
+    end
+  end
+
+  def key(%{kind: :workspace_form} = menu, %Key{code: code})
+      when code in ["up", "down", "back_tab"] do
+    suggestions = Map.get(menu, :suggestions, [])
+    count = length(suggestions)
+
+    current =
+      cond do
+        menu.index > 0 -> count + menu.index
+        menu[:suggestion_index] != nil -> menu.suggestion_index + 1
+        true -> 0
+      end
+
+    delta = if code == "down", do: 1, else: -1
+    next = Integer.mod(current + delta, count + length(menu.items))
+
+    {index, suggestion} =
+      cond do
+        next == 0 -> {0, nil}
+        next <= count -> {0, next - 1}
+        true -> {next - count, nil}
+      end
+
+    {:edit, Map.merge(menu, %{index: index, suggestion_index: suggestion})}
+  end
+
+  def key(%{kind: :workspace_form} = menu, %Key{code: "tab"}) do
+    completion = folder_selection(menu) || if(value(menu, :path) != "", do: menu[:completion])
+
+    if menu.index == 0 and is_binary(completion) and completion != "" and
+         completion != value(menu, :path) do
+      {:edit, complete_folder(menu, completion)}
+    else
+      {:edit, Map.put(move(menu, 1), :suggestion_index, nil)}
+    end
+  end
+
+  def key(%{kind: :workspace_form} = menu, %Key{code: "enter"}) do
+    case folder_selection(menu) do
+      nil ->
+        if selected(menu)[:input], do: {:action, menu.submit}, else: :select
+
+      path ->
+        {:action, fn state -> menu.submit.(%{state | overlay: complete_folder(menu, path)}) end}
+    end
   end
 
   def key(_menu, %Key{code: "esc"}), do: :cancel
@@ -149,6 +236,8 @@ defmodule Alto.TUI.Menu do
   defp edit(menu, fun) do
     field = selected(menu)
     unless field[:locked?], do: fun.(field.input)
+
     %{menu | error: nil}
+    |> refresh_folder()
   end
 end
