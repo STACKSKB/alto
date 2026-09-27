@@ -49,7 +49,7 @@ defmodule Alto.Harness.ProviderProfile do
   def models(%__MODULE__{models: :discover, provider: {module, _options}} = profile, opts) do
     if Code.ensure_loaded?(module) and function_exported?(module, :list_models, 1) do
       {^module, options} = Alto.Harness.ProviderStore.resolve(profile, opts)
-      module.list_models(options)
+      module.list_models(Alto.Provider.options(options))
     else
       {:error, {:model_discovery_not_supported, module}}
     end

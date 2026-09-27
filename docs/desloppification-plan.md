@@ -10,7 +10,7 @@ formatting does not count as simplification.
 The fixed baseline is **40,655** physical production `.ex` lines under `lib/`
 and `packages/alto_tui/lib/`. The 30% target is **at most 28,458**.
 
-Current: **30,885 lines**, a **24.0% reduction**, with **2,427 lines remaining**.
+Current: **30,851 lines**, a **24.1% reduction**, with **2,393 lines remaining**.
 Added functionality does not reset the baseline. Source-documentation reductions
 are included in the physical count; tests, Markdown, examples, dependencies and
 generated output are excluded. Report implementation and documentation savings
@@ -53,15 +53,15 @@ changes and historical test counts. Contracts belong in the component guides.
   projections; backend event and approval flows reuse existing handlers. User
   and agent messages share input channels, receipts and validation.
 
-Tool transforms compose in the existing preparation pipeline through
-`Alto.Tool.transform/2`; the wrapper module, metadata forwarders and prepared-value
-tag are deleted. Transforms run outermost first before validation, and approval
-details show the final transformed input. Execution receives the ordinary frozen
-value. Registry records keep transforms separate from domain options; checkpoint
-fingerprints and child-tool narrowing retain transform identity. The stale-value
-unit test was replaced by checkpoint resume and raw-tool execution coverage.
-This pass removes **48 production lines**: **20 code/type/declaration lines**,
-**11 blank**, and **17 documentation lines**. Historical pass notes remain in Git.
+Request observers compose through `Alto.Provider.observe/2` and the existing
+supervised streaming boundary. The Observe wrapper, recursive unwrapping and
+metadata forwarding are deleted. Provider identity remains the actual adapter;
+description and discovery receive clean domain options. Nested order, retries,
+independent observer failures and standalone streaming remain supported. Profile
+coverage now exercises discovery, selection, context checks and an observed run
+instead of only inspecting the constructed options.
+This pass removes **34 production lines**: **20 code/type/declaration lines**,
+**5 blank**, and **9 documentation lines**. Historical pass notes remain in Git.
 
 ## Remaining work
 

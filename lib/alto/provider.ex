@@ -8,6 +8,26 @@ defmodule Alto.Provider do
   if an adapter or model ignores this hint.
   """
 
+  @doc "Observe every attempted request, including retries and reductions. Observers run inside the provider call's timeout and cancellation boundary, fail independently, and do not count as streamed output."
+  def observe(spec, observer) when is_function(observer, 1) do
+    {module, opts} = Alto.Capabilities.normalize(spec)
+
+    {module,
+     Keyword.put(opts, :alto_request_observers, [
+       observer | Keyword.get(opts, :alto_request_observers, [])
+     ])}
+  end
+
+  @doc "Provider callback options without host request observers."
+  def options(opts), do: Keyword.delete(opts, :alto_request_observers)
+
+  @doc "Notify request observers, then stream through the configured provider. Direct hosts supply their own timeout and cancellation supervision."
+  def stream(provider, request, sink, opts) do
+    {observers, opts} = Keyword.pop(opts, :alto_request_observers, [])
+    Enum.each(observers, &Alto.Events.notify(&1, request))
+    provider.stream(request, sink, opts)
+  end
+
   alias Alto.Event
 
   @type sink :: (Event.t() -> any())

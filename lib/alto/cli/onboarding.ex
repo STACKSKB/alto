@@ -112,7 +112,7 @@ defmodule Alto.CLI.Onboarding do
 
       with true <-
              Code.ensure_loaded?(provider) and function_exported?(provider, :list_models, 1),
-           {:ok, models} <- provider.list_models(provider_options),
+           {:ok, models} <- provider.list_models(Alto.Provider.options(provider_options)),
            {:ok, model} <- select_model(models, opts[:input], opts[:output]),
            {:ok, _credentials} <-
              Credentials.put(credentials, @provider_id, %{"model" => model}) do

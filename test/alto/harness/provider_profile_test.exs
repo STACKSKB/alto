@@ -5,27 +5,57 @@ defmodule Alto.Harness.ProviderProfileTest do
 
   defmodule Provider do
     @behaviour Alto.Provider
-    def describe(_opts), do: %{}
-    def list_models(_opts), do: {:ok, [%{id: "large", name: "Large"}]}
-    def stream(_request, _sink, _opts), do: {:ok, %{message: "ok", tool_calls: []}}
+    def describe(opts) do
+      report(:describe, opts)
+      %{}
+    end
+
+    def list_models(opts) do
+      report(:models, opts)
+      {:ok, [%{id: "large", name: "Large"}]}
+    end
+
+    def stream(_request, _sink, opts) do
+      report(:stream, opts)
+      {:ok, %{message: "ok", tool_calls: []}}
+    end
+
+    defp report(kind, opts) do
+      Keyword.validate!(opts, [:owner, :base_url, :model, :timeout])
+      if opts[:owner], do: send(opts[:owner], {kind, opts})
+    end
   end
 
   test "discovery and runtime model selection preserve connection options" do
+    owner = self()
+    connection = [base_url: "http://local", owner: owner]
+
     opts = [
       provider_profiles: [
         %ProviderProfile{
           id: "local",
           label: "Local",
-          provider: {Provider, base_url: "http://local"}
+          provider: Alto.Provider.observe({Provider, connection}, &send(owner, {:observed, &1}))
         }
       ]
     ]
 
     assert {:ok, [profile]} = ProviderProfile.from_run_options(opts)
     assert {:ok, [%{id: "large"}]} = ProviderProfile.models(profile)
-    assert {Provider, provider_opts} = ProviderProfile.runtime_provider(profile, "large")
-    assert provider_opts[:base_url] == "http://local"
-    assert provider_opts[:model] == "large"
+    assert_received {:models, ^connection}
+    provider = ProviderProfile.runtime_provider(profile, "large")
+
+    assert %Alto.Runner.Result{status: :ok, output: "ok"} =
+             Alto.run("hello",
+               provider: provider,
+               loop: Alto.default_loop(context: Alto.Context.Window.new()),
+               tools: []
+             )
+
+    selected = Keyword.put(connection, :model, "large")
+    assert_received {:describe, ^selected}
+    assert_received {:stream, ^selected}
+    assert_received {:observed, %{messages: [_ | _]}}
   end
 
   test "profile structs share defaults without losing options or catalog metadata" do

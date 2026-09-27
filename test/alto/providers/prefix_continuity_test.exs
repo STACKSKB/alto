@@ -60,7 +60,7 @@ defmodule Alto.Providers.PrefixContinuityTest do
     assert %Alto.Runner.Result{status: :ok} =
              Alto.run("PRIVATE-BODY",
                provider:
-                 Alto.Providers.Observe.wrap(Provider, fn request ->
+                 Alto.Provider.observe(Provider, fn request ->
                    send(parent, {:prefix, PrefixContinuity.report(request)})
                  end),
                tools: [],

@@ -1,6 +1,5 @@
 defmodule Alto.Providers.ObserveTest do
   use ExUnit.Case, async: true
-  alias Alto.Providers.Observe
 
   defmodule RetryingProvider do
     def describe(_opts), do: %{}
@@ -18,7 +17,9 @@ defmodule Alto.Providers.ObserveTest do
     owner = self()
 
     provider =
-      Observe.wrap({RetryingProvider, counter: counter}, fn _ -> send(owner, :observed) end)
+      Alto.Provider.observe({RetryingProvider, counter: counter}, fn _ ->
+        send(owner, :observed)
+      end)
 
     assert %Alto.Runner.Result{status: :ok, output: "recovered"} =
              Alto.run("hello", provider: provider, tools: [], provider_retries: 1)
@@ -29,9 +30,6 @@ defmodule Alto.Providers.ObserveTest do
   end
 
   defmodule Provider do
-    def describe(opts), do: %{model: opts[:model]}
-    def list_models(opts), do: {:ok, opts}
-
     def stream(request, sink, opts) do
       send(opts[:owner], {:request, request, opts})
       sink.(Alto.Event.live(:text_delta, %{text: "hello"}))
@@ -39,22 +37,20 @@ defmodule Alto.Providers.ObserveTest do
     end
   end
 
-  test "nested observers preserve requests, options, discovery, description and stream output" do
+  test "nested observers preserve requests, options and stream output" do
     owner = self()
 
     {module, opts} =
       {Provider, owner: owner, model: "first"}
-      |> Observe.wrap(fn request -> send(owner, {:inner, request}) end)
-      |> Observe.wrap(fn request -> send(owner, {:outer, request}) end)
+      |> Alto.Provider.observe(fn request -> send(owner, {:inner, request}) end)
+      |> Alto.Provider.observe(fn request -> send(owner, {:outer, request}) end)
 
     opts = Keyword.put(opts, :model, "selected")
-    assert module.describe(opts) == %{model: "selected"}
-    assert {:ok, underlying} = module.list_models(opts)
-    assert underlying == [model: "selected", owner: owner]
+    underlying = [model: "selected", owner: owner]
     request = %{messages: [], tools: []}
 
     assert {:ok, %{message: "hello"}} =
-             module.stream(request, &send(owner, {:event, &1}), opts)
+             Alto.Provider.stream(module, request, &send(owner, {:event, &1}), opts)
 
     assert_receive {:outer, ^request}
     assert_receive {:inner, ^request}
@@ -68,8 +64,8 @@ defmodule Alto.Providers.ObserveTest do
           fn _ -> throw(:failed) end,
           fn _ -> exit(:failed) end
         ] do
-      {module, opts} = Observe.wrap({Provider, owner: self()}, observer)
-      assert {:ok, _} = module.stream(%{}, fn _ -> :ok end, opts)
+      {module, opts} = Alto.Provider.observe({Provider, owner: self()}, observer)
+      assert {:ok, _} = Alto.Provider.stream(module, %{}, fn _ -> :ok end, opts)
       assert_receive {:request, %{}, _}
     end
   end

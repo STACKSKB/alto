@@ -19,13 +19,13 @@ A resumed conversation retains its stored system message.
 
 The executor emits `model_started` with the step number only. Request diagnostics
 are ordinary provider composition in the selected configuration file, not a
-runner option. For example, `alto.agentic.exs` wraps its OpenRouter provider:
+runner option. For example, `alto.agentic.exs` observes its OpenRouter provider:
 
 ```elixir
 require Logger
 
 provider =
-  Alto.Providers.Observe.wrap({Alto.Providers.OpenAICompatible, provider_options}, fn request ->
+  Alto.Provider.observe({Alto.Providers.OpenAICompatible, provider_options}, fn request ->
     report = Alto.Providers.PrefixContinuity.report(request)
     Logger.debug(fn -> "Alto prefix continuity: #{inspect(report)}" end)
   end)
@@ -34,12 +34,15 @@ provider =
 Use this `{module, options}` provider specification in the run options or a
 provider profile. A bare module means `{module, []}`; provider options belong
 inside the tuple.
-Omit the wrapper to omit diagnostics; nest wrappers to compose observers.
+Omit observation to omit diagnostics; nest calls to compose observers.
 Observers run for each transport attempt (including retries and reduction),
 inside the provider's existing timeout and cancellation boundary. They receive
 the request unchanged and select their own output destination. Their output
 does not count as streamed model output or suppress retries. Observer exceptions
 are isolated; a slow observer still consumes the provider call's time budget.
+Direct hosts stream observed specifications through `Alto.Provider.stream/4`
+and use `Alto.Provider.options/1` before calling description or discovery callbacks.
+The configured module remains the actual provider.
 Only the prefix report is content-free; arbitrary observers receive full requests
 and are trusted configuration code. Description, model discovery, model selection
 and credentials pass through to the wrapped provider.
@@ -391,7 +394,7 @@ fall back to the tool name; presentation cannot change tool input or authorizati
 `Alto.Events.combine/1` composes synchronous sinks in order, isolating sink
 failures. CLI, registry and TUI delivery attach their host sink before the
 application sink, preserving host backpressure. Request diagnostics are composed
-with `Alto.Providers.Observe.wrap/2` in the profile; the core executor has no
+with `Alto.Provider.observe/2` in the profile; the core executor has no
 prefix-continuity dependency.
 
 NimbleOptions now owns context-window, child-limit and compaction option schemas.

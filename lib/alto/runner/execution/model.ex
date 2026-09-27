@@ -45,7 +45,7 @@ defmodule Alto.Runner.Execution.Model do
     checked =
       Call.run(
         fn ->
-          description = provider.describe(provider_opts)
+          description = provider.describe(Alto.Provider.options(provider_opts))
           identity = Alto.Context.Observation.identity(provider, provider_opts, description)
 
           observation =
@@ -111,7 +111,7 @@ defmodule Alto.Runner.Execution.Model do
 
     invoke = fn attempt_sink ->
       with :ok <- Budget.take_model(budget),
-           do: provider.stream(request, attempt_sink, provider_opts)
+           do: Alto.Provider.stream(provider, request, attempt_sink, provider_opts)
     end
 
     attempt_stream(invoke, sink, caps, step, 1)

@@ -35,7 +35,7 @@ openrouter_provider = {Alto.Providers.OpenAICompatible, openrouter_options}
 
 openrouter_provider =
   if System.get_env("ALTO_REQUEST_DIAGNOSTICS") == "1" do
-    Alto.Providers.Observe.wrap(openrouter_provider, fn request ->
+    Alto.Provider.observe(openrouter_provider, fn request ->
       Logger.debug(fn ->
         report = Alto.Providers.PrefixContinuity.report(request)
         "Alto prefix continuity: #{inspect(report)}"
