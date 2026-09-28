@@ -29,6 +29,25 @@ defmodule Alto.Config do
                         max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
                       ]
 
+  @budget_defaults [max_effects: 10_000, max_model_requests: 256, run_timeout: 900_000]
+
+  @doc false
+  def budget_defaults, do: @budget_defaults
+
+  @doc """
+  Return the shipped run configuration as an ordinary keyword list.
+
+  Override fields with `Keyword.merge/2` or pass overrides here. Nested values
+  (such as a provider's HTTP options) are replaced, not implicitly deep-merged.
+  Providers and credentials are deliberately left to the caller.
+  """
+  @spec default(keyword()) :: keyword()
+  def default(overrides \\ []) do
+    limits = Enum.map(@execution_limits, fn {key, schema} -> {key, schema[:default]} end)
+    defaults = [loop: Alto.default_loop(), tools: [], approval: {:deny, :policy_denied}]
+    Keyword.merge(defaults ++ limits ++ @budget_defaults, overrides)
+  end
+
   @doc false
   def execution_limits, do: @execution_limits
   @doc false

@@ -4,9 +4,7 @@ defmodule Alto.Runner.Budget do
   alias Alto.Persistence.Retained
   defstruct [:counter, :account, :max_effects, :max_model_requests, :deadline]
 
-  @default_max_effects 10_000
-  @default_max_model_requests 256
-  @default_run_timeout 900_000
+  @defaults Alto.Config.budget_defaults()
   @max_uint64 18_446_744_073_709_551_615
 
   @type t :: %__MODULE__{
@@ -18,9 +16,9 @@ defmodule Alto.Runner.Budget do
         }
 
   def new(opts) do
-    max_effects = Keyword.get(opts, :max_effects, @default_max_effects)
-    models = Keyword.get(opts, :max_model_requests, @default_max_model_requests)
-    timeout = Keyword.get(opts, :run_timeout, @default_run_timeout)
+    max_effects = Keyword.get(opts, :max_effects, @defaults[:max_effects])
+    models = Keyword.get(opts, :max_model_requests, @defaults[:max_model_requests])
+    timeout = Keyword.get(opts, :run_timeout, @defaults[:run_timeout])
 
     cond do
       not valid_cap?(models) ->

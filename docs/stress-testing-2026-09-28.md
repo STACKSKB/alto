@@ -135,3 +135,26 @@ live steering/compaction evidence. Physical tablet feel and display latency were
 not acceptance gates for this Alto-focused workload and remain unmeasured. All
 workload workers have stopped. HotLimit source is retained in its existing
 checkout; no HotLimit commit or Git identity was invented.
+
+## Follow-up: renderer redesign and project instruction exposure
+
+The user rejected the HotLimit architecture and clarified that the composition graph is an internal developer abstraction, not a user-facing node editor. The migration contract now lives in HotLimit `docs/architecture.md`, with root `AGENTS.md` directing workers to it. Object ownership, explicit changes, incremental geometry and tile compositing are separate concerns; prior historical stroke caching did not solve full live-stroke replay.
+
+Verified fresh Alto session `sess-wb25okyntwuy7ha` contains the HotLimit AGENTS text in its initial **system** message. Existing behavior loads only the first root candidate (`alto.md`, then `AGENTS.md`), bounded to32,000bytes. Nested instructions are not automatically injected and resumed tasks retain their saved prompt. Coding prompt guidance now asks workers with loaded project instructions to check applicable nested instructions and reread changed files on resume. README documents the actual scope rather than implying automatic hierarchical loading. Focused project/prompt checks:16passed.
+
+Independent baseline (`/tmp/alto-live/long-stroke.c`, original sources preserved in `/tmp/alto-live/hotlimit-before`): one live Gpen stroke, alpha200, pressure0.6, circular points `(100+80*cos(i*.01),100+80*sin(i*.01))`; warm composite then21append+composite probes. CPU-only; excludes SDL upload/present.
+
+| Page | Existing samples | p50 ms | p95 ms |
+|---|---:|---:|---:|
+|1024 square|100|15.078|17.513|
+|1024 square|1000|20.724|23.239|
+|1024 square|10000|59.904|73.018|
+|4096 square|100|117.639|193.719|
+|4096 square|1000|101.116|112.320|
+|4096 square|10000|144.468|164.028|
+
+Space Bunny Alpha was safely cancelled after12model cycles, with persistence successful and no source edits, after prolonged design reasoning without implementation. Two supervisor steers were queued; do not claim they were acted upon. Its repeated-program `ls` argv error received Alto's existing actionable hint. Qwen3.8-27b free then failed upstream with429after bounded retries (`sess-vkht4grz4df4yri`), with persistence successful. Public zero-priced model listing is not evidence that an endpoint has live capacity. Subsequent implementation runs use narrowly scoped phase assignments.
+
+Cohere's first implementation run (`sess-4zs7sl6fpdxyhaa`) wrote two unused scratch stubs, then emitted malformed edit arguments. Alto reported the tool error, but Cohere rejected the subsequent request withHTTP400 because the historical assistant call still contained malformed JSON. Fixed OpenAI-compatible wire replay: valid argument strings remain byte-for-byte unchanged; malformed/non-object historical arguments are represented as a JSON object containing `_alto_invalid_arguments`, with original text retained. Call IDs and tool error replies remain paired; stored transcripts are not rewritten and the wrapper is never executed. Focused34tests passed; full core suite1131tests passed.
+
+Live verification resumed the exact failed Cohere session with workspace tools disabled. It returned normally in2cycles and acknowledged the earlier failure and incomplete implementation. During that verification it emitted another malformed call (`compose_message`); recovery still succeeded. The incomplete renderer stubs were moved out of HotLimit into `/tmp/alto-live/rejected-cohere-scaffold`, not accepted as working code. A smaller Space Bunny Alpha phase-one run is implementing actual coverage scratch changes with a frozen independent ink oracle.

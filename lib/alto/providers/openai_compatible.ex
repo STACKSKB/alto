@@ -151,7 +151,7 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp provider_message(message, supports_images) when is_map(message) do
-    message = Map.delete(message, "alto_anthropic_content")
+    message = message |> Map.delete("alto_anthropic_content") |> replayable_tool_arguments()
 
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
@@ -169,6 +169,34 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp provider_message(message, _supports_images),
     do: {:error, {:invalid_provider_message, message}}
+
+  # A failed tool call remains in the audit transcript verbatim. Some endpoints
+  # reject malformed JSON even in historical calls, preventing the model from
+  # seeing the tool error and correcting it. Wrap only the invalid wire value;
+  # keep the call id, paired error result, and valid argument strings unchanged.
+  # This representation is never passed to a tool for execution.
+  defp replayable_tool_arguments(%{"role" => "assistant", "tool_calls" => calls} = message)
+       when is_list(calls) do
+    calls =
+      Enum.map(calls, fn
+        %{"function" => %{"arguments" => raw} = function} = call when is_binary(raw) ->
+          case JSON.decode(raw) do
+            {:ok, object} when is_map(object) ->
+              call
+
+            _ ->
+              wrapped = JSON.encode!(%{"_alto_invalid_arguments" => raw})
+              Map.put(call, "function", Map.put(function, "arguments", wrapped))
+          end
+
+        call ->
+          call
+      end)
+
+    Map.put(message, "tool_calls", calls)
+  end
+
+  defp replayable_tool_arguments(message), do: message
 
   defp openai_image(%{"media_type" => media_type, "data" => data}) do
     %{

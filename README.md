@@ -126,6 +126,35 @@ through the same executor and approval boundary. Bash failure propagation still
 has its usual exceptions in conditions and `&&`/`||` lists; scripts may explicitly
 override the defaults. Inspect the returned exit status and output.
 
+The CLI and TUI enable project instructions by default. On a fresh task, Alto
+loads the first existing root file, `alto.md` then `AGENTS.md`, into the system
+prompt (up to 32,000 bytes). These files are alternatives, not automatically
+combined: use an explicit reference if your Alto-specific file supplements
+`AGENTS.md`. The coding prompt asks agents to read applicable nested instructions
+before editing; nested files are not automatically injected. Resumed tasks keep
+the saved transcript, so changed instruction files must be reread.
+
+Start a trusted `alto.exs` (or any explicitly selected config file) from the
+shipped defaults and override ordinary Elixir values:
+
+```elixir
+Alto.default_config()
+|> Keyword.merge(
+  run_timeout: 2 * 60 * 60 * 1_000,
+  provider_timeout: 30 * 60 * 1_000 + 10_000,
+  tool_timeout: 120_000
+)
+```
+
+`run_timeout` bounds the whole run, including descendants; `provider_timeout`
+bounds each provider call. HTTP providers also expose `timeout` (total request)
+and `idle_timeout` (stream silence) in their provider option list. Set the outer
+provider timeout above the HTTP timeout to let the transport report its own
+failure. `alto.agentic.exs` demonstrates these overrides for long coding tasks.
+Defaults are an ordinary keyword list, not global mutable configuration;
+`Keyword.merge/2` replaces nested values rather than implicitly deep-merging them.
+Changes apply to newly started/resumed runs, not already running deadlines.
+
 Execution settings live in the configuration keyword list: use `tools: []` to disable tools,
 `prompt: nil` to omit the system prompt, `project_instructions: nil` to skip
 workspace instructions, and `max_steps:` to bound model calls. An executor's

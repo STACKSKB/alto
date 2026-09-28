@@ -47,6 +47,31 @@ defmodule Alto.ConfigTest do
              Alto.run(%{"value" => "configured"}, options)
   end
 
+  test "default configuration composes with file overrides and drives a run", %{root: root} do
+    defaults = Alto.default_config()
+    assert defaults[:run_timeout] == Alto.Config.budget_defaults()[:run_timeout]
+    assert Alto.default_config(run_timeout: 7_200_000)[:run_timeout] == 7_200_000
+    assert Alto.default_config() == defaults
+    path = Path.join(root, "defaults.exs")
+
+    File.write!(
+      path,
+      "Alto.default_config() |> Keyword.merge(run_timeout: 7200000, " <>
+        "loop: Alto.rule_loop(steps: [\"configured_echo\"]), " <>
+        "tools: [{Alto.ConfigTest.ConfiguredTool, suffix: \"!\"}])"
+    )
+
+    assert {:ok, options} = Config.load(path)
+    assert options[:run_timeout] == 7_200_000
+    assert options[:provider_timeout] == defaults[:provider_timeout]
+
+    assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
+             Alto.run(%{"value" => "configured"}, options)
+
+    assert {:ok, budget} = Alto.Runner.Budget.new(options)
+    assert Alto.Runner.Budget.remaining(budget) > 7_199_000
+  end
+
   test "reports evaluation failures and invalid return values", %{root: root} do
     broken = Path.join(root, "broken.exs")
     invalid = Path.join(root, "invalid.exs")

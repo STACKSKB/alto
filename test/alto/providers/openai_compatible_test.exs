@@ -67,6 +67,53 @@ defmodule Alto.Providers.OpenAICompatibleTest do
     refute Map.has_key?(body, "session_id")
   end
 
+  test "invalid historical arguments remain inspectable without poisoning the next request" do
+    configure_adapter(self(), 200, "application/json", [
+      JSON.encode!(%{"choices" => [%{"message" => %{"content" => "correcting"}}]})
+    ])
+
+    valid = ~s({ "path": "README.md" })
+
+    for raw <- [~s({"path":), "[]", "null", "42", ""] do
+      call = fn id, args ->
+        %{
+          "id" => id,
+          "type" => "function",
+          "function" => %{"name" => "read_file", "arguments" => args}
+        }
+      end
+
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => nil,
+          "tool_calls" => [call.("bad", raw), call.("good", valid)]
+        },
+        %{
+          "role" => "tool",
+          "tool_call_id" => "bad",
+          "content" => "Malformed JSON; provide one JSON object."
+        },
+        %{"role" => "tool", "tool_call_id" => "good", "content" => "file contents"}
+      ]
+
+      assert {:ok, _} =
+               OpenAICompatible.stream(%{messages: messages, tools: []}, fn _ -> :ok end,
+                 model: "strict-endpoint",
+                 req_options: [adapter: Adapter]
+               )
+
+      assert_receive {:http_request, wire}
+      [assistant | replies] = JSON.decode!(wire.body)["messages"]
+      [bad, good] = assistant["tool_calls"]
+      assert bad["id"] == "bad"
+      assert JSON.decode!(bad["function"]["arguments"]) == %{"_alto_invalid_arguments" => raw}
+      assert good["function"]["arguments"] == valid
+      assert replies == tl(messages)
+      assert hd(messages)["tool_calls"] |> hd() |> get_in(["function", "arguments"]) == raw
+    end
+  end
+
   test "sends typed image tool results as vision content only when explicitly enabled" do
     configure_adapter(self(), 200, "application/json", [
       JSON.encode!(%{"choices" => [%{"message" => %{"content" => "seen"}}]})

@@ -10,6 +10,10 @@ defmodule Alto do
   alias Alto.Loops.Rule
   alias Alto.Runner
 
+  @doc "Return the default run configuration, with optional keyword overrides."
+  @spec default_config(keyword()) :: keyword()
+  defdelegate default_config(overrides \\ []), to: Alto.Config, as: :default
+
   @doc "Build the shipped default loop as an ordinary, composable value."
   @spec default_loop(keyword()) :: Alto.Loop.t()
   def default_loop(opts \\ []) do
