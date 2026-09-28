@@ -26,6 +26,31 @@ defmodule Alto.Approval.DelegatedTest do
     assert Task.await(task) == :approve
   end
 
+  test "configured reviewers execute in the waiting approval process and normalize booleans" do
+    owner = self()
+    request = %{id: "review-id"}
+    context = %{session_id: "run", cwd: "/tmp"}
+
+    for {result, expected} <- [
+          {true, :approve},
+          {false, {:deny, :reviewer_denied}},
+          {{:deny, :classified}, {:deny, :classified}}
+        ] do
+      task = Task.async(fn -> Approval.delegated(request, context, sink: owner) end)
+      assert_receive {:alto_approval_request, "run", ^request, waiter}
+
+      reviewer = fn received, tool_context ->
+        assert received == request
+        assert tool_context == context
+        assert self() == waiter
+        result
+      end
+
+      send(waiter, {:alto_approval_decision, request.id, {:review, reviewer}})
+      assert Task.await(task) == expected
+    end
+  end
+
   test "fails closed without a front end" do
     request = %{
       id: "id",

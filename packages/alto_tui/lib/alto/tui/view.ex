@@ -362,9 +362,9 @@ defmodule Alto.TUI.View do
     {width, _height} = composer_inner_size(state)
 
     if width < 90 do
-      " gear: B A P M R E W X T N D Q S U · Esc cancel "
+      " gear: G goal · B A P M R E W X T N D Q S U · Esc cancel "
     else
-      " gear: B backend · A approval · P provider · M model · R effort · E entry · W workspace · X close workspace · T task · N new · D details · S steer queued · U agents · Q quit "
+      " gear: G goal · B backend · A approval · P provider · M model · R effort · E entry · W workspace · X close workspace · T task · N new · D details · S steer queued · U agents · Q quit "
     end
   end
 
@@ -398,7 +398,7 @@ defmodule Alto.TUI.View do
     case State.visible_entries(state) do
       [] ->
         "Welcome to Alto. Start typing below.\n\n" <>
-          "^G gear · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · U agents · Q quit"
+          "^G gear · G goal · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · U agents · Q quit"
 
       entries ->
         Alto.TUI.Transcript.render(entries, max(rect.width - 2, 1))
@@ -740,7 +740,12 @@ defmodule Alto.TUI.View do
 
     approval =
       Map.fetch!(
-        %{ask: {"ASK", "?"}, read_only: {"READ", "R"}, full_access: {"AUTO", "!"}},
+        %{
+          ask: {"ASK", "?"},
+          read_only: {"READ", "R"},
+          full_access: {"AUTO", "!"},
+          review: {"REVIEW", "✓"}
+        },
         state.approval_level
       )
 
@@ -812,7 +817,11 @@ defmodule Alto.TUI.View do
     root = if project, do: project["root"], else: ""
 
     Alto.TUI.Subagents.details(state) ||
-      {" context ", root <> "\n\n" <> Alto.TUI.Subagents.summary(state) <> recent}
+      {" context ",
+       root <>
+         "\n\n" <>
+         Alto.TUI.Goal.summary(State.selected_task(state)) <>
+         "\n\n" <> Alto.TUI.Subagents.summary(state) <> recent}
   end
 
   defp segment_span(segment),

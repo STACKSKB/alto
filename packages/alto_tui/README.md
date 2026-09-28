@@ -61,6 +61,46 @@ draft. If a popup or the compact details
 drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
 failure pauses the queued follow-up; press Enter with an empty composer to send it.
 
+**F2** opens approval choices: ASK, READ, AUTO, and **REVIEW · approve for me**.
+An explicit choice overrides the configured native approval policy. AUTO also
+resolves waiting approvals immediately. The native TUI consults the current
+choice for subsequent requests, including child runs. Codex sandbox changes take
+effect on its next turn; requests already reaching the TUI use the current choice.
+
+Configure any two-argument approver in your Elixir config (`alto.exs`, or the file
+passed with `--config`), then select REVIEW:
+
+```elixir
+tui: [
+  approval_reviewer: fn request, context ->
+    MyClassifier.approve?(request, context)
+  end
+]
+```
+
+The callback receives the prepared request (`id`, `run_id`, `call_id`, `tool`,
+`arguments`, `execution_mode`, `details`) and execution context. It may call an
+LLM, a local classifier, or ordinary Elixir logic. Return `true` / `:approve`, or
+`false` / `{:deny, reason}`. Exceptions, invalid decisions, and timeouts do not
+approve the request. `approval_timeout` bounds review time; cancellation cleans
+up pending reviews. Native callbacks receive the runner's tool context; Codex
+callbacks receive `cwd`, `session_id`, and `metadata`. REVIEW requires a callback
+and does not silently fall back to AUTO.
+
+**Ctrl+G, G** opens the task goal editor. Enter an objective and press Enter to
+save it on the selected task, creating a task if needed. The editor shows the
+current status and provides **Pause**, **Resume**, **Complete**, and **Clear goal**
+actions. Use Tab or arrow keys to select an action, then Enter; Esc cancels.
+The chat draft stays intact. Goals survive TUI restarts and appear in the context
+pane. Active objectives accompany the next run's initial message on either
+backend. Goal controls do not start, cancel, or automatically continue runs;
+changes during a run apply when the next run starts.
+
+Assistant replies and reasoning render Markdown headings, emphasis, and code.
+Tool output uses a six-line, 1,200-byte preview with an explicit truncation
+marker. Opening search exposes the longer retained tool details; closing search
+restores compact previews. The model and session keep their original tool results.
+
 **Ctrl+F** searches the current loaded conversation, including user messages,
 assistant replies, code, and tool/edit details. Matching is literal and
 case-insensitive; punctuation has no special meaning. Type or paste a query,

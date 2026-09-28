@@ -11,6 +11,36 @@ defmodule Alto.Harness.CatalogTest do
     %{root: root, opts: [path: path]}
   end
 
+  test "optional goals survive reload, validate states, and preserve legacy tasks", %{
+    root: root,
+    opts: opts
+  } do
+    {:ok, project} = Catalog.register_project(root, opts)
+    {:ok, task} = Catalog.create_task(project["id"], "Goal task", opts)
+    assert {:ok, _} = Catalog.read(opts)
+    refute Map.has_key?(task, "goal")
+
+    for status <- ~w(active paused completed) do
+      goal = %{"objective" => "Fix rendering", "status" => status}
+      assert {:ok, _} = Catalog.update_task(task["id"], %{"goal" => goal}, opts)
+      assert {:ok, catalog} = Catalog.read(opts)
+      assert hd(catalog["tasks"])["goal"] == goal
+    end
+
+    for goal <- [
+          %{"objective" => "", "status" => "active"},
+          %{"objective" => "x", "status" => "invalid"},
+          %{"objective" => String.duplicate("x", 32_001), "status" => "active"}
+        ] do
+      assert {:error, {:invalid_task_field, "goal", ^goal}} =
+               Catalog.update_task(task["id"], %{"goal" => goal}, opts)
+    end
+
+    assert {:ok, cleared} = Catalog.update_task(task["id"], %{"goal" => nil}, opts)
+    assert cleared["goal"] == nil
+    assert {:ok, _} = Catalog.read(opts)
+  end
+
   test "snapshot limits include the newline and rejected writes preserve the file", %{opts: opts} do
     path = opts[:path]
     value = %{"version" => 2, "projects" => [], "tasks" => []}

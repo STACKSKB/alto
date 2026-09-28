@@ -9,6 +9,35 @@ defmodule Alto.TUI.MarkdownTest do
   defp plain(%Text{lines: lines}),
     do: Enum.map_join(lines, "\n", fn line -> Enum.map_join(line.spans, & &1.content) end)
 
+  test "assistant and reasoning transcript entries render Markdown syntax" do
+    for kind <- [:assistant, :codex_assistant, :reasoning] do
+      rendered =
+        Transcript.render(
+          [%{kind: kind, text: "### Result\n\n**Done** with `code`.\n\n```elixir\n:ok\n```"}],
+          60
+        )
+        |> plain()
+
+      assert rendered =~ "Result"
+      assert rendered =~ "Done with code."
+      assert rendered =~ ":ok"
+      refute rendered =~ "###"
+      refute rendered =~ "**"
+      refute rendered =~ "```"
+    end
+  end
+
+  test "tool previews bound lines and characters while expanded search keeps details" do
+    detail = Enum.map_join(1..100, "\n", &"output line #{&1}") <> "\nFINAL EVIDENCE"
+    entry = %{kind: :tool, text: "shell completed", detail: detail}
+    preview = Transcript.render([entry], 80) |> plain()
+    assert preview =~ "output line 1"
+    assert preview =~ "output truncated"
+    refute preview =~ "FINAL EVIDENCE"
+    assert Transcript.text(entry, expanded: true) =~ "FINAL EVIDENCE"
+    assert byte_size(Transcript.text(%{kind: :tool, text: String.duplicate("x", 50_000)})) < 1_300
+  end
+
   test "native Markdown styles headings, emphasis and inline code" do
     rich = Markdown.render("## Review\n\nA **confirmed** finding in `src/main.ex`.", 60)
     assert plain(rich) =~ "Review"

@@ -49,6 +49,12 @@ defmodule Alto.TUI.Markdown do
         {code, rest} = take_code(rest, opening, [])
         blocks(rest, [{:code, elem(opening, 1), Enum.join(code, "\n")} | acc])
 
+      heading = heading(line) ->
+        blocks(rest, [{:heading, heading} | acc])
+
+      setext?(rest) ->
+        blocks(tl(rest), [{:heading, line} | acc])
+
       indented?(line) ->
         {code, rest} = Enum.split_while([line | rest], &(indented?(&1) or String.trim(&1) == ""))
 
@@ -74,10 +80,22 @@ defmodule Alto.TUI.Markdown do
   defp take_markdown([], acc), do: {Enum.reverse(acc), []}
 
   defp take_markdown([line | rest] = remaining, acc) do
-    if String.trim(line) == "" or not is_nil(fence(line)) or table?(line, rest),
-      do: {Enum.reverse(acc), remaining},
-      else: take_markdown(rest, [line | acc])
+    if String.trim(line) == "" or not is_nil(fence(line)) or table?(line, rest) or
+         not is_nil(heading(line)) or setext?(rest),
+       do: {Enum.reverse(acc), remaining},
+       else: take_markdown(rest, [line | acc])
   end
+
+  defp heading(line) do
+    case Regex.run(~r/^ {0,3}\#{1,6}(?:[ \t]+(.*)|$)/u, line) do
+      [_, title] -> Regex.replace(~r/[ \t]+\#+[ \t]*$/, title, "")
+      [_] -> ""
+      _ -> nil
+    end
+  end
+
+  defp setext?([line | _]), do: Regex.match?(~r/^ {0,3}(?:=+|-+)[ \t]*$/, line)
+  defp setext?(_), do: false
 
   defp indented?(line), do: String.starts_with?(line, ["    ", "\t"])
 
@@ -139,6 +157,20 @@ defmodule Alto.TUI.Markdown do
         else: result
 
     Enum.map(result, &String.trim/1)
+  end
+
+  defp render_block({:heading, source}, width) do
+    materialize({:markdown, source}, width)
+    |> Enum.map(fn line ->
+      %{
+        line
+        | spans:
+            Enum.map(line.spans, fn span ->
+              style = span.style || %Style{}
+              %{span | style: %{style | modifiers: Enum.uniq([:bold | style.modifiers || []])}}
+            end)
+      }
+    end)
   end
 
   defp render_block({:markdown, source}, width), do: materialize({:markdown, source}, width)

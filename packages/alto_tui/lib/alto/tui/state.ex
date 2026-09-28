@@ -15,7 +15,8 @@ defmodule Alto.TUI.State do
                  narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
                  narrow_context_width: [type: {:in, 40..100}],
                  narrow_context_fullscreen_below: [type: {:in, 0..300}],
-                 approval_auto_open: [type: :boolean]
+                 approval_auto_open: [type: :boolean],
+                 approval_reviewer: [type: {:fun, 2}]
                )
 
   @enforce_keys [:textarea, :run_options, :catalog_opts]
@@ -52,6 +53,7 @@ defmodule Alto.TUI.State do
     efforts: %{},
     model_loading: MapSet.new(),
     approval_level: :ask,
+    approval_override?: false,
     composer_mode: :prose,
     type_to_compose?: true,
     narrow_context: :adaptive,
@@ -70,6 +72,7 @@ defmodule Alto.TUI.State do
     transcript_follow?: true,
     details_scroll: 0,
     pending_approvals: [],
+    approval_reviews: %{},
     backend_state: %{},
     runs: %{},
     input_routes: %{},

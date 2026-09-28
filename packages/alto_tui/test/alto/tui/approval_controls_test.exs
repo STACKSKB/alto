@@ -36,6 +36,90 @@ defmodule Alto.TUI.ApprovalControlsTest do
     %{root: root, catalog: Path.join(root, "catalog.json"), config: config}
   end
 
+  test "protocol reviewers normalize decisions and fail closed without blocking the UI",
+       context do
+    owner = self()
+
+    for {reviewer, expected} <- [
+          {fn _, _ -> true end, :approve},
+          {fn _, _ -> false end, {:deny, :reviewer_denied}},
+          {fn _, _ -> :unexpected end, {:deny, :invalid_reviewer_decision}},
+          {fn _, _ -> raise "classifier failed" end, {:deny, :reviewer_failed}},
+          {fn _, _ -> Process.sleep(:infinity) end, {:deny, :reviewer_timeout}}
+        ] do
+      initial = pending_state(context, {140, 40})
+      request = %{id: "codex-review", tool: "command", arguments: %{}, details: %{}}
+
+      pending = %{
+        local_id: "codex-run",
+        request: request,
+        review_context: %{cwd: context.root, session_id: "thread", metadata: %{}},
+        respond: fn decision -> send(owner, {:review_decision, decision}) end
+      }
+
+      options =
+        initial.run_options
+        |> Keyword.put(:tui, approval_reviewer: reviewer)
+        |> Keyword.put(:approval_timeout, 100)
+
+      initial = %{initial | run_options: options, pending_approvals: [], approval_level: :review}
+      reviewing = App.route_approval(initial, pending)
+      assert reviewing.pending_approvals == []
+      assert map_size(reviewing.approval_reviews) == 1
+      assert_receive {:alto_approval_reviewed, "codex-review", ^expected} = result, 1_000
+      {:noreply, finished} = App.handle_info(result, reviewing)
+      assert_receive {:review_decision, ^expected}
+      assert finished.approval_reviews == %{}
+      {:noreply, ^finished} = App.handle_info(result, finished)
+      refute_receive {:review_decision, _}, 10
+    end
+  end
+
+  test "cancelling a run kills its classifier immediately and discards late decisions", context do
+    owner = self()
+
+    reviewer = fn _, _ ->
+      send(owner, {:review_started, self()})
+      Process.sleep(:infinity)
+    end
+
+    initial = pending_state(context, {140, 40})
+
+    pending = %{
+      local_id: "codex-run",
+      request: %{id: "codex-review"},
+      review_context: %{},
+      respond: fn decision -> send(owner, {:review_decision, decision}) end
+    }
+
+    initial = %{
+      initial
+      | pending_approvals: [],
+        approval_level: :review,
+        run_options: Keyword.put(initial.run_options, :tui, approval_reviewer: reviewer)
+    }
+
+    reviewing = App.route_approval(initial, pending)
+    assert_receive {:review_started, pid}
+    monitor = Process.monitor(pid)
+
+    reviewing = %{
+      reviewing
+      | focus: :composer,
+        details_return_focus: nil,
+        runs: %{"codex-run" => %{local_id: "codex-run", task_id: reviewing.selected_task_id}}
+    }
+
+    {:noreply, stopped} = App.handle_event(%ExRatatui.Event.Key{code: "esc"}, reviewing)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
+    assert stopped.approval_reviews == %{}
+
+    {:noreply, ^stopped} =
+      App.handle_info({:alto_approval_reviewed, "codex-review", :approve}, stopped)
+
+    refute_receive {:review_decision, _}, 10
+  end
+
   test "renders labeled desktop controls and accepts clicks on their labels", context do
     state = pending_state(context, {140, 40})
     {buffer, _terminal} = render(state, 140, 40)

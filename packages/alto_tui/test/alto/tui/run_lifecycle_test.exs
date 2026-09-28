@@ -363,6 +363,152 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert state(app).pending_approvals == []
   end
 
+  test "AUTO overrides configured interactive approval, including a waiting request", %{
+    root: root
+  } do
+    app =
+      start_app(root,
+        provider: nil,
+        loop: Alto.rule_loop(steps: ["approval_probe", "approval_probe"]),
+        tools: [ApprovalProbe],
+        approval: &Alto.Approval.interactive/2
+      )
+
+    submit(app, "{}")
+    eventually(fn -> state(app).pending_approvals != [] end)
+    select_approval(app, "auto")
+    eventually(fn -> state(app).runs == %{} end)
+    assert state(app).pending_approvals == []
+    assert state(app).approval_level == :full_access
+    assert state(app).notice =~ "completed"
+
+    submit(app, "{}")
+    eventually(fn -> state(app).runs == %{} end)
+    assert state(app).pending_approvals == []
+  end
+
+  test "approve for me invokes the configured classifier with request and context", %{root: root} do
+    owner = self()
+
+    reviewer = fn request, context ->
+      send(owner, {:reviewed, request, context.cwd})
+      true
+    end
+
+    app =
+      start_app(root,
+        provider: nil,
+        loop: Alto.rule_loop(steps: ["approval_probe"]),
+        tools: [ApprovalProbe],
+        approval: &Alto.Approval.interactive/2,
+        tui: [approval_reviewer: reviewer]
+      )
+
+    select_approval(app, "review")
+    submit(app, "{}")
+    assert_receive {:reviewed, %{tool: "approval_probe", id: id}, ^root}, 2_000
+    assert is_binary(id)
+    eventually(fn -> state(app).runs == %{} end)
+    assert state(app).pending_approvals == []
+    assert state(app).notice =~ "completed"
+  end
+
+  test "gear goal controls persist without starting runs and active objectives reach the provider",
+       %{
+         root: root
+       } do
+    app = start_app(root)
+    ExRatatui.textarea_set_value(state(app).textarea, "preserved draft")
+    open_goal(app)
+    assert screen(app) =~ "task goal"
+
+    ExRatatui.text_input_set_value(
+      Alto.TUI.Menu.field(state(app).overlay, :objective).input,
+      "Fix the rendering regression"
+    )
+
+    key(app, "enter")
+    assert ExRatatui.textarea_get_value(state(app).textarea) == "preserved draft"
+    assert state(app).runs == %{}
+    task = State.selected_task(state(app))
+    assert task["goal"] == %{"objective" => "Fix the rendering regression", "status" => "active"}
+    assert {:ok, catalog} = Alto.Harness.Catalog.read(state(app).catalog_opts)
+    assert hd(catalog["tasks"])["goal"] == task["goal"]
+
+    goal_action(app, "pause")
+    assert State.selected_task(state(app))["goal"]["status"] == "paused"
+
+    assert Alto.TUI.Goal.with_context(State.selected_task(state(app)), "Next") =~
+             "objective is paused"
+
+    goal_action(app, "resume")
+    submit(app, "Investigate")
+    assert_receive {:model_waiting, worker, messages}, 2_000
+    assert inspect(messages) =~ "Fix the rendering regression"
+    send(worker, {:finish, "done"})
+    eventually(fn -> state(app).runs == %{} end)
+    goal_action(app, "complete")
+    assert State.selected_task(state(app))["goal"]["status"] == "completed"
+
+    assert Alto.TUI.Goal.with_context(State.selected_task(state(app)), "Next") =~
+             "objective is completed"
+
+    goal_action(app, "clear goal")
+    assert State.selected_task(state(app))["goal"] == nil
+
+    assert Alto.TUI.Goal.with_context(State.selected_task(state(app)), "Next") =~
+             "objective has been cleared"
+
+    assert state(app).runs == %{}
+  end
+
+  test "goal editor validates input and cancels without altering the chat draft", %{root: root} do
+    app = start_app(root)
+    ExRatatui.textarea_set_value(state(app).textarea, "draft")
+    open_goal(app)
+    key(app, "enter")
+    assert state(app).overlay.error == "Enter an objective"
+    assert state(app).runs == %{}
+    assert state(app).selected_task_id == nil
+    key(app, "esc")
+    assert state(app).overlay == nil
+    assert ExRatatui.textarea_get_value(state(app).textarea) == "draft"
+
+    submit(app, "/goal is ordinary chat text")
+    assert_receive {:model_waiting, worker, messages}, 2_000
+    assert inspect(messages) =~ "/goal is ordinary chat text"
+    assert State.selected_task(state(app))["goal"] == nil
+    send(worker, {:finish, "done"})
+    eventually(fn -> state(app).runs == %{} end)
+  end
+
+  defp open_goal(app) do
+    key(app, "g", ["ctrl"])
+    key(app, "g")
+    assert state(app).overlay.kind == :goal
+  end
+
+  defp goal_action(app, action) do
+    open_goal(app)
+
+    index =
+      Enum.find_index(
+        state(app).overlay.items,
+        &String.contains?(String.downcase(&1.label), action)
+      )
+
+    assert is_integer(index)
+    Enum.each(1..index, fn _ -> key(app, "tab") end)
+    key(app, "enter")
+    assert state(app).overlay == nil
+  end
+
+  defp select_approval(app, filter) do
+    key(app, "f2")
+    Enum.each(String.graphemes(filter), &key(app, &1))
+    key(app, "enter")
+  end
+
   defp start_app(root, options \\ nil, backend \\ Alto.TUI.Backends.Native) do
     options =
       options ||

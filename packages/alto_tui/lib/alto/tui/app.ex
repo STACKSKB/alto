@@ -14,13 +14,15 @@ defmodule Alto.TUI.App do
     :selected_backend,
     :selected_provider_id,
     :selected_model,
-    :approval_level
+    :approval_level,
+    :approval_override?
   ]
 
   @approval_items [
     %{label: "ASK · prompt for each prepared mutation", value: :ask},
     %{label: "READ · deny prepared mutations", value: :read_only},
-    %{label: "AUTO · approve prepared mutations", value: :full_access}
+    %{label: "AUTO · approve prepared mutations", value: :full_access},
+    %{label: "REVIEW · approve for me using configured agent/classifier", value: :review}
   ]
 
   @impl true
@@ -195,6 +197,7 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{} = key, %{leader?: true} = state) do
     case String.downcase(key.code || "") do
+      "g" -> {:noreply, open_overlay(state, :goal)}
       "a" -> {:noreply, open_overlay(state, :approval)}
       "b" -> {:noreply, open_overlay(state, :backend)}
       "p" -> {:noreply, open_overlay(state, :provider)}
@@ -314,7 +317,19 @@ defmodule Alto.TUI.App do
       respond: &send(waiter, {:alto_approval_decision, request.id, &1})
     }
 
-    {:noreply, show_pending_approval(state, pending, "approval required · F8 approve / F9 deny")}
+    {:noreply, route_approval(state, pending)}
+  end
+
+  def handle_info({:alto_approval_reviewed, id, decision}, state) do
+    case Map.pop(state.approval_reviews, id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {review, remaining} ->
+        stop_review(review)
+        review.pending.respond.(decision)
+        {:noreply, %{state | approval_reviews: remaining, notice: approval_notice(decision)}}
+    end
   end
 
   def handle_info({:alto_models_loaded, profile_id, result}, state) do
@@ -405,6 +420,7 @@ defmodule Alto.TUI.App do
 
   @impl true
   def terminate(_reason, state) do
+    Enum.each(state.approval_reviews, fn {_, review} -> stop_review(review) end)
     Enum.each(state.runs, fn {_id, run} -> cancel_run(run) end)
     :ok
   end
@@ -617,6 +633,7 @@ defmodule Alto.TUI.App do
     cancel_run(run)
 
     state
+    |> clear_approvals(&(Map.get(&1, :local_id) == run.local_id))
     |> update_run(run, phase: "cancelling")
     |> Map.put(:notice, "cancelling run · draft and queued message kept")
   end
@@ -686,7 +703,8 @@ defmodule Alto.TUI.App do
         &Map.merge(&1, %{approval_sink: owner, approval_route: local_id})
       )
 
-    with {:ok, handle} <- do_start_task(task, prompt, run_options) do
+    with {:ok, handle} <-
+           do_start_task(task, Alto.TUI.Goal.with_context(task, prompt), run_options) do
       case Alto.subscribe(handle) do
         {:ok, ref} ->
           {:ok, handle, ref, local_id}
@@ -773,22 +791,81 @@ defmodule Alto.TUI.App do
   end
 
   defp configured_or_ui_approval(state) do
-    interactive = &Alto.Approval.interactive/2
+    configured = Keyword.get(state.run_options, :approval)
 
-    case Keyword.fetch(state.run_options, :approval) do
-      {:ok, ^interactive} ->
-        &Alto.Approval.delegated/2
-
-      {:ok, configured} ->
-        configured
-
-      :error ->
-        case state.approval_level do
-          :ask -> &Alto.Approval.delegated/2
-          :read_only -> {:deny, :read_only_mode}
-          :full_access -> :approve
-        end
+    if state.approval_override? or is_nil(configured) or
+         configured == (&Alto.Approval.interactive/2) do
+      &Alto.Approval.delegated/2
+    else
+      configured
     end
+  end
+
+  def route_approval(state, pending) do
+    reviewer = state.run_options |> Keyword.get(:tui, []) |> Keyword.get(:approval_reviewer)
+
+    decision =
+      case state.approval_level do
+        :full_access -> :approve
+        :read_only -> {:deny, :read_only_mode}
+        :review when is_function(reviewer, 2) -> {:review, reviewer}
+        _ -> :ask
+      end
+
+    cond do
+      decision == :ask ->
+        show_pending_approval(state, pending, "approval required · F8 approve / F9 deny")
+
+      match?({:review, _}, decision) and Map.has_key?(pending, :review_context) ->
+        start_approval_review(state, pending, reviewer)
+
+      true ->
+        pending.respond.(decision)
+        state
+    end
+  end
+
+  defp start_approval_review(state, pending, reviewer) do
+    owner = self()
+    id = pending.request.id
+
+    {:ok, pid} =
+      Task.Supervisor.start_child(Alto.TaskSupervisor, fn ->
+        decision =
+          try do
+            case Alto.Approval.review(reviewer, pending.request, pending.review_context) do
+              :approve -> :approve
+              {:deny, _} = deny -> deny
+              _ -> {:deny, :invalid_reviewer_decision}
+            end
+          rescue
+            _ -> {:deny, :reviewer_failed}
+          catch
+            _, _ -> {:deny, :reviewer_failed}
+          end
+
+        send(owner, {:alto_approval_reviewed, id, decision})
+      end)
+
+    timer =
+      Process.send_after(
+        owner,
+        {:alto_approval_reviewed, id, {:deny, :reviewer_timeout}},
+        Keyword.get(state.run_options, :approval_timeout, 300_000)
+      )
+
+    review = %{pid: pid, timer: timer, pending: pending}
+
+    %{
+      state
+      | approval_reviews: Map.put(state.approval_reviews, id, review),
+        notice: "reviewing approval"
+    }
+  end
+
+  defp stop_review(review) do
+    Process.cancel_timer(review.timer)
+    Process.exit(review.pid, :kill)
   end
 
   defp runtime_provider(state, profile) do
@@ -887,6 +964,11 @@ defmodule Alto.TUI.App do
   end
 
   defp clear_approvals(state, predicate) do
+    {expired, active} =
+      Enum.split_with(state.approval_reviews, fn {_, review} -> predicate.(review.pending) end)
+
+    Enum.each(expired, fn {_, review} -> stop_review(review) end)
+    state = %{state | approval_reviews: Map.new(active)}
     pending = Enum.reject(state.pending_approvals, predicate)
     state = if pending != state.pending_approvals, do: Search.close(state), else: state
     state = reset_approval_view(state, pending)
@@ -1000,6 +1082,8 @@ defmodule Alto.TUI.App do
         %{state | notice: reason}
     end
   end
+
+  defp overlay_items(state, :goal), do: {:state, Alto.TUI.Goal.open(state)}
 
   defp overlay_items(state, :agents) do
     items =
@@ -1215,8 +1299,36 @@ defmodule Alto.TUI.App do
 
   defp apply_selection(state, :backend, value), do: select_backend(state, value)
 
-  defp apply_selection(state, :approval, value),
-    do: %{state | approval_level: value, overlay: nil, notice: "approval level: #{value}"}
+  defp apply_selection(state, :approval, value) do
+    reviewer = state.run_options |> Keyword.get(:tui, []) |> Keyword.get(:approval_reviewer)
+
+    if value == :review and not is_function(reviewer, 2) do
+      %{state | notice: "Configure tui: [approval_reviewer: &YourReviewer.review/2] first"}
+    else
+      next = %{
+        state
+        | approval_level: value,
+          approval_override?: true,
+          overlay: nil,
+          notice: "approval level: #{value}"
+      }
+
+      if value == :ask do
+        next
+      else
+        resolved =
+          Enum.reduce(
+            next.pending_approvals,
+            reset_approval_view(next, []),
+            &route_approval(&2, &1)
+          )
+
+        if resolved.pending_approvals == [] and resolved.details_drawer_auto_opened?,
+          do: State.close_details_drawer(resolved),
+          else: resolved
+      end
+    end
+  end
 
   defp apply_selection(state, :provider, value) do
     profile = Enum.find(state.profiles, &(&1.id == value))

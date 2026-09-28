@@ -227,7 +227,7 @@ defmodule Alto.Harness.Catalog do
     valid_fields?(task, ~w(id project_id), ~w(created_at_ms updated_at_ms)) and
       Enum.all?(@task_changes, fn key ->
         Map.has_key?(task, key) and valid_state_field?(key, task[key])
-      end)
+      end) and valid_state_field?("goal", task["goal"])
   end
 
   defp valid_task?(_), do: false
@@ -263,6 +263,14 @@ defmodule Alto.Harness.Catalog do
 
   defp valid_state_field?("conversation_id", value),
     do: bounded_binary?(value, @max_state_field_bytes)
+
+  defp valid_state_field?("goal", nil), do: true
+
+  defp valid_state_field?("goal", %{"objective" => objective, "status" => status} = goal),
+    do:
+      map_size(goal) == 2 and valid_text?(objective) and
+        bounded_binary?(objective, @max_state_field_bytes) and
+        status in ~w(active paused completed)
 
   defp valid_state_field?(_key, _value), do: false
 

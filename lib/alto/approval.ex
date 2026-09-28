@@ -62,9 +62,22 @@ defmodule Alto.Approval do
     if is_pid(sink) do
       route = get_in(context[:metadata], [:approval_route]) || context.session_id
       send(sink, {:alto_approval_request, route, request, self()})
-      await_decision(request.id)
+
+      case await_decision(request.id) do
+        {:review, reviewer} when is_function(reviewer, 2) -> review(reviewer, request, context)
+        decision -> decision
+      end
     else
       {:deny, :approval_front_end_unavailable}
+    end
+  end
+
+  @doc "Run a configured classifier; booleans are accepted alongside approval decisions."
+  def review(reviewer, request, context) when is_function(reviewer, 2) do
+    case reviewer.(request, context) do
+      true -> :approve
+      false -> {:deny, :reviewer_denied}
+      decision -> decision
     end
   end
 

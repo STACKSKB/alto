@@ -9,7 +9,8 @@ defmodule Alto.TUI.Backends.Codex do
   @codex_approval_items [
     %{label: "ASK · workspace sandbox; prompt for escalations", value: :ask},
     %{label: "READ · read-only sandbox; no escalation", value: :read_only},
-    %{label: "AUTO · full host access; no prompts", value: :full_access}
+    %{label: "AUTO · full host access; no prompts", value: :full_access},
+    %{label: "REVIEW · approve for me using configured agent/classifier", value: :review}
   ]
 
   @approval_methods %{
@@ -291,7 +292,7 @@ defmodule Alto.TUI.Backends.Codex do
       model: state.selected_model,
       effort:
         State.selected_effort(state) || (State.model_metadata(state) || %{})[:default_effort],
-      approval: state.approval_level
+      approval: if(state.approval_level == :review, do: :ask, else: state.approval_level)
     ]
 
     run = %{
@@ -299,6 +300,7 @@ defmodule Alto.TUI.Backends.Codex do
       backend_id: state.selected_backend,
       adapter: {:ok, __MODULE__, []},
       client: client,
+      cwd: project["root"],
       task_id: task["id"],
       thread_id: task["conversation_id"],
       turn_id: nil,
@@ -308,7 +310,12 @@ defmodule Alto.TUI.Backends.Codex do
     }
 
     async_send({:codex_turn_started, local_id}, fn ->
-      CodexBackend.start_turn(client, task["conversation_id"], prompt, opts)
+      CodexBackend.start_turn(
+        client,
+        task["conversation_id"],
+        Alto.TUI.Goal.with_context(task, prompt),
+        opts
+      )
     end)
 
     Host.attach_run(state, local_id, run, prompt, "starting Codex…")
@@ -726,34 +733,28 @@ defmodule Alto.TUI.Backends.Codex do
           )
         end
 
-        case run.approval_level do
-          :ask ->
-            request = %{
-              id: "codex-#{id}",
-              tool: elem(Map.fetch!(@approval_methods, method), 0),
-              arguments:
-                Map.take(params, ~w(command cwd reason fileChanges grantRoot permissions)),
-              details: params
-            }
+        request = %{
+          id: "codex-#{id}",
+          run_id: local_id,
+          call_id: params["itemId"],
+          execution_mode: :exclusive,
+          tool: elem(Map.fetch!(@approval_methods, method), 0),
+          arguments: Map.take(params, ~w(command cwd reason fileChanges grantRoot permissions)),
+          details: params
+        }
 
-            pending = %{
-              respond: respond,
-              local_id: local_id,
-              request: request
-            }
+        pending = %{
+          respond: respond,
+          local_id: local_id,
+          request: request,
+          review_context: %{
+            cwd: params["cwd"] || run.cwd,
+            session_id: run.thread_id,
+            metadata: %{}
+          }
+        }
 
-            Host.show_pending_approval(
-              state,
-              pending,
-              "Codex approval required · F8 approve / F9 deny"
-            )
-
-          level when level in [:read_only, :full_access] ->
-            decision = if level == :full_access, do: :approve, else: {:deny, :read_only}
-
-            respond.(decision)
-            state
-        end
+        Host.route_approval(state, pending)
     end
   end
 
