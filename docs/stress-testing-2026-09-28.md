@@ -88,3 +88,50 @@ strokes. After moving abort before pointer/capacity lookup, the same probe
 passed at 8, 16 and 32 strokes, including undo and leak checking. The worker's
 expanded cache suite passed 9,665 checks; the cache-disabled suite passed 9,338.
 Final commit timing validation remains in progress.
+
+## Final continuation and completion audit
+
+The final Space Bunny continuation completed successfully in 25 logical model
+cycles and persisted the same conversation. It compacted 452,519 bytes into an
+18,314-byte handoff containing `COLD_ORACLE`, `COMMIT_ROLLBACK`, and
+`TRANSACTION_SCOPE`. Another reduction produced no progress (40,282 to 40,284
+bytes); Alto rejected it and continued executing tools. Two additional parent
+steers were consumed during the final continuation. This provides live evidence
+of constraints surviving successive handoffs across resumed runs, alongside the
+scripted repeated-compaction regression.
+
+After correcting benchmark failure handling and reporting total replay counts,
+separate cached and uncached binaries completed at 1024x768 with **60 samples**
+per steady/commit scenario (20 for cold first samples):
+
+| 128 historical strokes | Uncached median / p95 | Cached median / p95 |
+| --- | --- | --- |
+| Append + composite | 19.006 / 22.956 ms | 3.315 / 4.044 ms |
+| Commit + composite | 18.412 / 22.050 ms | 3.513 / 5.184 ms |
+
+The normal warmed commit path is about 5.2 times faster. Truly cold first samples
+still cost roughly 20 ms. Commit counters show one full initial replay and 59
+single-stroke tail replays over 60 probes; this is not a claim that every commit
+avoids the fallback. These measurements exclude SDL upload and display latency.
+
+An independent final cache build passed 9,665 checks. The final worker reran
+cached and cache-disabled suites successfully (9,665 and 9,338 checks). Earlier
+full gates and sanitizer checks cover the unchanged application source; final
+edits concerned benchmark validation/reporting only. The independent stroke
+restart sanitizer probe also passed after the API fix.
+
+The worker's final narrative incorrectly described the eraser's `full 128 / tail
+60` total as full replay on every sample; the recorded totals mean one historical
+rebuild plus 60 tail replays. It also classified exceeding an explicit timeout
+and deleting a log with `make clean` as tool defects. Those incidents were not
+harness failures, though they are useful evidence for future instruction and
+error-message improvements. The malformed-JSON crash and stale-recipient hint
+were actual Alto defects and were fixed during this workload.
+
+This performance/stress-testing goal is complete: real application edits and
+measured gains, independent correctness checks, fixed Alto defects with focused
+and full regression coverage, durable failed/successful session resumption, and
+live steering/compaction evidence. Physical tablet feel and display latency were
+not acceptance gates for this Alto-focused workload and remain unmeasured. All
+workload workers have stopped. HotLimit source is retained in its existing
+checkout; no HotLimit commit or Git identity was invented.
