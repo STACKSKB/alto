@@ -3,12 +3,15 @@ defmodule Alto.Runner.Result do
   The inspectable result of one Alto run.
 
   `status` and `reason` describe execution success or failure. `model_requests`
-  counts native provider attempts, including rejected requests. `verdict` describes
+  counts logical model cycles, including a cycle denied by the shared preflight
+  budget after `:model_started` was emitted. It is not the number of provider
+  transport calls: a transient retry may make several calls in one cycle.
+  `verdict` describes
   tool-effect evidence, not whether an HTTP request was sent: `completed` means
   known completed effects (or successful effect-free work), `rejected_before_dispatch`
   means no tool effect was dispatched, `failed_known` records a known failed effect,
   and `unknown` means effects or completion remain uncertain. `empty` is an internal
-  aggregation state. An HTTP 402 can therefore have one model request and a
+  aggregation state. An HTTP 402 can therefore have one model cycle and a
   `rejected_before_dispatch` tool verdict. Use `reason` for the provider error.
   """
 

@@ -186,7 +186,9 @@ use the unique `agent_id` for messaging and joins.
 
 Result `status`/`reason` describe run success and failure. The `verdict` describes
 tool-effect evidence (`completed`, `rejected_before_dispatch`, `failed_known`, or
-`unknown`), while `model_requests` counts native provider attempts including rejected
-HTTP requests. A provider credit rejection can have a request count of one without
-any tool having been dispatched. A transport timeout may leave effect certainty
+`unknown`), while `model_requests` counts logical model cycles. A cycle can be
+counted after `model_started` even when the shared budget denies it before any
+provider call; transient retries can make multiple provider calls within one
+cycle. A provider credit rejection can have a cycle count of one without any
+tool having been dispatched. A transport timeout may leave effect certainty
 unknown; it is not interchangeable with `wait_agents` timing out.

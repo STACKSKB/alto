@@ -304,6 +304,25 @@ defmodule Alto.Runner.SerialTest do
     assert result.model_requests == 1
   end
 
+  test "shared preflight denial counts a model cycle without another provider call" do
+    parent = self()
+
+    assert %Alto.Runner.Result{status: :error, reason: {:model_request_limit, 1}} =
+             result =
+             Alto.run("loop once",
+               provider: {ToolThenAnswerProvider, test_pid: parent},
+               tools: [EchoTool],
+               max_model_requests: 1,
+               event_sink: fn event -> send(parent, {:event, event}) end
+             )
+
+    assert result.model_requests == 2
+    assert_receive {:provider_request, _}
+    refute_receive {:provider_request, _}, 20
+    assert_receive {:event, %Event{type: :model_started, data: %{step: 1}}}
+    assert_receive {:event, %Event{type: :model_started, data: %{step: 2}}}
+  end
+
   test "rejects an initial transcript over its hard limit" do
     assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 8}} =
              result =
