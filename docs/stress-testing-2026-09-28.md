@@ -74,3 +74,17 @@ calls and malformed JSON-RPC startup input. Live continuation follows.
 The last settled conversation survived at revision 119 with both steering
 constraints intact. The crash result itself reported no session or final
 persistence, so recovery uses the settled snapshot rather than that result.
+
+The malformed-JSON fix subsequently passed the complete core suite: **1,130
+tests, zero failures**. A new live continuation resumed normally from the
+settled snapshot and consumed additional transaction-safety steers. This proves
+resumption; it does not yet prove a second malformed live completion recovered.
+
+The commit-latency workload also exposed a HotLimit heap overflow when starting
+a stroke while another was live. The API promises to abort the older stroke,
+but it checked buffer capacity before that abort replaced the arrays. An
+independent ASan/UBSan probe reproduced the overflow with eight committed
+strokes. After moving abort before pointer/capacity lookup, the same probe
+passed at 8, 16 and 32 strokes, including undo and leak checking. The worker's
+expanded cache suite passed 9,665 checks; the cache-disabled suite passed 9,338.
+Final commit timing validation remains in progress.
