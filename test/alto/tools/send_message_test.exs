@@ -16,7 +16,16 @@ defmodule Alto.Tools.SendMessageTest do
     assert {:ok, _} = Alto.Tools.SendMessage.run(%{args | "to" => "agent-parent"}, context, [])
     assert [%{text: "status"}] = Alto.Input.request(input, :list)
 
-    assert {:error, {:unknown_agent, %{suggested_agent_id: nil}}} =
-             Alto.Tools.SendMessage.run(%{args | "to" => "missing"}, context, [])
+    for missing <- ["missing", "agent-parent-from-previous-run"] do
+      assert {:error, {:unknown_agent, %{suggested_agent_id: nil, hint: hint}}} =
+               Alto.Tools.SendMessage.run(%{args | "to" => missing}, context, [])
+
+      assert hint =~ "not registered in the current agent tree"
+      assert hint =~ "Call list_agents"
+      assert hint =~ "may be stale"
+      assert hint =~ "No message was delivered"
+    end
+
+    assert [%{text: "status"}] = Alto.Input.request(input, :list)
   end
 end

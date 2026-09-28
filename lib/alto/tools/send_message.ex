@@ -16,7 +16,7 @@ defmodule Alto.Tools.SendMessage do
          type: :string,
          required: true,
          doc:
-           "Copy the complete agent_id verbatim from list_agents, preserving any prefix such as agent-. Do not use a label or shortened ID."
+           "Copy the complete agent_id verbatim from list_agents, preserving any prefix such as agent-. Do not use a label or shortened ID. After resuming a conversation, call list_agents again: IDs in older messages may no longer be registered."
        ],
        text: [type: Arguments.text(1, 64_000), required: true],
        delivery: [type: {:in, ["steer", "follow_up"]}, default: "steer"],
@@ -57,7 +57,12 @@ defmodule Alto.Tools.SendMessage do
         requested: to,
         suggested_agent_id: suggestion,
         hint:
-          "Use the complete agent_id from list_agents, including its prefix. No message was delivered."
+          if(suggestion,
+            do:
+              "Use the complete agent_id from list_agents, including its prefix. No message was delivered.",
+            else:
+              "This recipient is not registered in the current agent tree. Call list_agents and choose the current recipient; IDs from an earlier run may be stale. No message was delivered."
+          )
       }}}
   end
 end
