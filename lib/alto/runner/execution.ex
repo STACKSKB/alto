@@ -1264,9 +1264,14 @@ defmodule Alto.Runner.Execution do
 
   defp decode_arguments(arguments) when is_binary(arguments) do
     case JSON.decode(arguments) do
-      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-      {:ok, decoded} -> {:error, {:tool_arguments_not_object, decoded}}
-      {:error, error} -> {:error, {:invalid_tool_arguments, Exception.message(error)}}
+      {:ok, decoded} when is_map(decoded) ->
+        {:ok, decoded}
+
+      {:ok, decoded} ->
+        {:error, {:tool_arguments_not_object, decoded}}
+
+      {:error, _error} ->
+        {:error, {:invalid_tool_arguments, "Malformed JSON; provide one JSON object."}}
     end
   end
 

@@ -297,9 +297,14 @@ defmodule Alto.External.JSONRPC do
 
   defp decode_line(line, state, handle_message) do
     case JSON.decode(line) do
-      {:ok, message} when is_map(message) -> handle_message.(message, state)
-      {:ok, _other} -> {:error, :json_rpc_message_not_object, state}
-      {:error, error} -> {:error, {:json_rpc_invalid_json, Exception.message(error)}, state}
+      {:ok, message} when is_map(message) ->
+        handle_message.(message, state)
+
+      {:ok, _other} ->
+        {:error, :json_rpc_message_not_object, state}
+
+      {:error, _error} ->
+        {:error, {:json_rpc_invalid_json, "Malformed JSON-RPC message."}, state}
     end
   end
 

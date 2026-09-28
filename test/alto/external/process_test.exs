@@ -85,6 +85,26 @@ defmodule Alto.External.ProcessTest do
     refute File.exists?(grandchild)
   end
 
+  test "malformed JSON-RPC startup line reports a bounded error instead of crashing" do
+    root = Path.join(System.tmp_dir!(), "alto-bad-rpc-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    server = Path.join(root, "bad-server")
+    File.write!(server, "#!/bin/sh\nprintf '%s\\n' '{\"jsonrpc\":'\n")
+    File.chmod!(server, 0o755)
+
+    assert {:error, reason} =
+             Alto.External.MCP.Client.ensure_started(
+               command: server,
+               cwd: root,
+               startup_timeout: 1_000
+             )
+
+    assert inspect(reason) =~ "json_rpc_invalid_json"
+    refute inspect(reason) =~ "FunctionClauseError"
+    refute inspect(reason) =~ ~s({"jsonrpc":)
+  end
+
   test "missing and non-executable paths return startup errors" do
     path =
       Path.join(
