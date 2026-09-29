@@ -28,7 +28,7 @@ defmodule Alto.TUI.App do
   @impl true
   def mount(opts) do
     with config when is_list(config) <- Keyword.get(opts, :config),
-         {:ok, state} <- State.new(config, opts) do
+         {:ok, state} <- State.new(config, Keyword.put(opts, :async_history, true)) do
       dimensions =
         case Keyword.get(opts, :test_mode) do
           {width, height} -> {width, height}
@@ -60,9 +60,33 @@ defmodule Alto.TUI.App do
 
   @impl true
   def handle_event(event, state) do
+    pending? = Map.get(state, :stream_events, []) != []
+
+    case do_handle_event(event, flush_stream(state)) do
+      {:noreply, next, opts} when pending? -> {:noreply, next, Keyword.put(opts, :render?, true)}
+      result -> result
+    end
+  end
+
+  defp do_handle_event(event, state) do
     event = Alto.TUI.DragInput.latest(event, state.drag_poll)
     {width, height} = state.dimensions
-    widgets = fn -> View.widgets(state, %{width: width, height: height}) end
+
+    widgets = fn ->
+      # Selection needs absolute history coordinates for dragging/autoscroll;
+      # ordinary redraws only need the followed tail.
+      selected =
+        if state.transcript_follow? and match?(%Mouse{}, event) and
+             View.hit_target(state, width, height, event.x, event.y) == :transcript,
+           do: %{
+             state
+             | transcript_follow?: false,
+               transcript_scroll: View.transcript_bottom_scroll(state)
+           },
+           else: state
+
+      View.widgets(selected, %{width: width, height: height})
+    end
 
     # Pane seams retain their resize gesture; Alt+drag can select their text too.
     seam? =
@@ -75,6 +99,7 @@ defmodule Alto.TUI.App do
     else
       case Selection.event(state.selection, event, state.dimensions, widgets,
              content: fn -> View.selection_content(state, width, height) end,
+             materialize: selection_materializer(state, width, height),
              scroll_limit: fn {x, y} ->
                case View.hit_target(state, width, height, x, y) do
                  :transcript -> View.transcript_bottom_scroll(state)
@@ -120,6 +145,28 @@ defmodule Alto.TUI.App do
 
       nil ->
         state
+    end
+  end
+
+  defp selection_materializer(state, width, height) do
+    rect = View.layout(state, width, height).transcript
+    entries = State.visible_entries(state)
+    # The persistent drag callback must not keep all tasks, child activity,
+    # approvals and earlier selections reachable through the whole UI state.
+    search = %State{
+      textarea: nil,
+      run_options: [],
+      catalog_opts: [],
+      entries: %{scratch: entries},
+      search: state.search
+    }
+
+    fn {x, y}, offset, rows ->
+      if x >= rect.x and x < rect.x + rect.width and y >= rect.y and y < rect.y + rect.height do
+        if search.search,
+          do: Search.highlighted(search, max(rect.width - 2, 1), offset, rows),
+          else: Alto.TUI.Transcript.viewport(entries, max(rect.width - 2, 1), offset, rows)
+      end
     end
   end
 
@@ -185,7 +232,9 @@ defmodule Alto.TUI.App do
          %{selected_agent_id: id, focus: :details, pending_approvals: []} = state
        )
        when not is_nil(id),
-       do: {:noreply, State.close_details_drawer(%{state | selected_agent_id: nil})}
+       do:
+         {:noreply,
+          %{state | selected_agent_id: nil, details_scroll: 0, details_drawer_auto_opened?: false}}
 
   defp route_event(%Key{code: "esc"}, %{details_return_focus: focus} = state)
        when not is_nil(focus),
@@ -258,6 +307,20 @@ defmodule Alto.TUI.App do
     end
   end
 
+  defp route_event(
+         %Key{code: "enter", modifiers: []},
+         %{focus: focus, pending_approvals: []} = state
+       )
+       when focus in [:details, :transcript] do
+    if not task_running?(state, state.selected_task_id) and
+         (String.trim(ExRatatui.textarea_get_value(state.textarea)) != "" or
+            State.input_pending?(state, state.selected_task_id)) do
+      {:noreply, submit(state)}
+    else
+      {:noreply, %{state | notice: "Tab to the message composer to send a follow-up"}}
+    end
+  end
+
   defp route_event(%Key{} = key, %{focus: :composer} = state), do: forward_textarea(state, key)
 
   defp route_event(
@@ -274,9 +337,107 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{} = key, state), do: {:noreply, navigate(state, key)}
 
   @impl true
-  def handle_info({:tui_deferred_input, event}, state), do: handle_event(event, state)
+  def handle_info({:alto_tui_event, id, %Event{type: type} = event, sender, ref}, state)
+      when type in [:model_delta, :model_reasoning_delta] do
+    result = buffer_stream(state, id, event)
+    send(sender, {ref, :ok})
+    result
+  end
 
-  def handle_info(:tui_activity_tick, state) do
+  def handle_info({:alto_tui_event, id, %Event{type: type} = event}, state)
+      when type in [:model_delta, :model_reasoning_delta],
+      do: buffer_stream(state, id, event)
+
+  def handle_info({:tui_stream_frame, token}, %{stream_frame: %{token: token}} = state),
+    do: {:noreply, flush_stream(state)}
+
+  def handle_info({:tui_stream_frame, _}, state), do: {:noreply, state, render?: false}
+
+  def handle_info(message, state) do
+    pending? = Map.get(state, :stream_events, []) != []
+    result = do_handle_info(message, flush_stream(state))
+
+    case result do
+      {:noreply, next, opts} when pending? -> {:noreply, next, Keyword.put(opts, :render?, true)}
+      other -> other
+    end
+  end
+
+  defp buffer_stream(state, id, %Event{data: %{text: text}} = event) when is_binary(text) do
+    if Map.has_key?(state.runs, id) do
+      frame = state.stream_frame || new_stream_frame()
+
+      state = %{
+        state
+        | stream_frame: frame,
+          stream_bytes: state.stream_bytes + byte_size(text),
+          stream_events: [{id, event} | state.stream_events]
+      }
+
+      if state.stream_bytes >= 8192 or length(state.stream_events) >= 256,
+        do: {:noreply, flush_stream(state)},
+        else: {:noreply, state, render?: false}
+    else
+      {:noreply, state, render?: false}
+    end
+  end
+
+  defp buffer_stream(state, id, event),
+    do: {:noreply, ingest_event(flush_stream(state), id, event)}
+
+  defp new_stream_frame do
+    token = make_ref()
+    %{token: token, timer: Process.send_after(self(), {:tui_stream_frame, token}, 32)}
+  end
+
+  defp flush_stream(%{stream_frame: %{}} = state) do
+    Process.cancel_timer(state.stream_frame.timer)
+    events = Enum.reverse(state.stream_events)
+    state = %{state | stream_frame: nil, stream_events: [], stream_bytes: 0}
+
+    events
+    |> Enum.chunk_by(fn {id, event} -> {id, event.type} end)
+    |> Enum.reduce(state, fn [{id, event} | _] = chunk, acc ->
+      text = Enum.map_join(chunk, fn {_, event} -> event.data.text end)
+      ingest_event(acc, id, %{event | data: Map.put(event.data, :text, text)})
+    end)
+  end
+
+  defp flush_stream(state), do: state
+
+  defp do_handle_info({:tui_deferred_input, event}, state), do: handle_event(event, state)
+
+  defp do_handle_info({:tui_history, token, kind, value}, state) do
+    next = Alto.TUI.History.apply(state, token, kind, value)
+
+    next =
+      if (kind == :entries and next.history_load) && next.history_load.token == token do
+        id = next.history_load.id
+        if State.input_pending?(next, id), do: send(self(), {:alto_tui_send_input, id})
+        if next.selected_task_id != id, do: State.hydrate_selected(next), else: next
+      else
+        next
+      end
+
+    {:noreply, next, render?: next != state}
+  end
+
+  defp do_handle_info(
+         {:DOWN, monitor, :process, _pid, reason},
+         %{history_load: %{monitor: monitor}} = state
+       ) do
+    id = state.history_load.id
+    notice = if reason == :normal, do: state.notice, else: "Could not load saved history"
+    next = %{state | history_load: nil, notice: notice}
+
+    if reason != :normal and State.input_pending?(next, id),
+      do: send(self(), {:alto_tui_send_input, id})
+
+    next = if next.selected_task_id != id, do: State.hydrate_selected(next), else: next
+    {:noreply, next}
+  end
+
+  defp do_handle_info(:tui_activity_tick, state) do
     Process.send_after(self(), :tui_activity_tick, 250)
     active? = State.activity(state) != nil
 
@@ -293,24 +454,24 @@ defmodule Alto.TUI.App do
     {:noreply, next, render?: active?}
   end
 
-  def handle_info({:tui_selection_scroll, token}, state) do
+  defp do_handle_info({:tui_selection_scroll, token}, state) do
     case Selection.autoscroll(state.selection, token) do
       {:scrolled, selection} -> {:noreply, apply_selection_scroll(state, selection)}
       {:idle, selection} -> {:noreply, %{state | selection: selection}, render?: false}
     end
   end
 
-  def handle_info({:alto_tui_event, local_id, %Event{} = event, sender, ref}, state) do
+  defp do_handle_info({:alto_tui_event, local_id, %Event{} = event, sender, ref}, state) do
     next = ingest_event(state, local_id, event)
     send(sender, {ref, :ok})
     {:noreply, next}
   end
 
-  def handle_info({:alto_tui_event, local_id, %Event{} = event}, state) do
+  defp do_handle_info({:alto_tui_event, local_id, %Event{} = event}, state) do
     {:noreply, ingest_event(state, local_id, event)}
   end
 
-  def handle_info({:alto_approval_request, local_id, request, waiter}, state) do
+  defp do_handle_info({:alto_approval_request, local_id, request, waiter}, state) do
     pending = %{
       local_id: local_id,
       request: request,
@@ -320,7 +481,7 @@ defmodule Alto.TUI.App do
     {:noreply, route_approval(state, pending)}
   end
 
-  def handle_info({:alto_approval_reviewed, id, decision}, state) do
+  defp do_handle_info({:alto_approval_reviewed, id, decision}, state) do
     case Map.pop(state.approval_reviews, id) do
       {nil, _} ->
         {:noreply, state}
@@ -332,7 +493,7 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_info({:alto_models_loaded, profile_id, result}, state) do
+  defp do_handle_info({:alto_models_loaded, profile_id, result}, state) do
     state = %{state | model_loading: MapSet.delete(state.model_loading, profile_id)}
 
     case result do
@@ -354,22 +515,22 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_info({:alto_tui_send_input, task_id}, state) do
+  defp do_handle_info({:alto_tui_send_input, task_id}, state) do
     {:noreply, send_input(state, task_id)}
   end
 
   # Completion is a runner notification, independent of its implementation.
-  def handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
+  defp do_handle_info({:alto_runner_result, ref, result}, state) when is_reference(ref) do
     case Enum.find(state.runs, fn {_id, run} -> run[:ref] == ref end) do
       nil -> {:noreply, state, render?: false}
       {local_id, _run} -> {:noreply, finish_runner_result(state, local_id, result)}
     end
   end
 
-  def handle_info(
-        {:alto_worktree_created, token, result},
-        %{worktree_creation: %{token: token} = pending} = state
-      ) do
+  defp do_handle_info(
+         {:alto_worktree_created, token, result},
+         %{worktree_creation: %{token: token} = pending} = state
+       ) do
     Process.demonitor(pending.monitor, [:flush])
     visible? = state.overlay && state.overlay.kind == :worktree_creating
     state = %{state | worktree_creation: nil}
@@ -399,19 +560,19 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def handle_info(
-        {:DOWN, monitor, :process, _pid, reason},
-        %{worktree_creation: %{monitor: monitor} = pending} = state
-      ),
-      do:
-        handle_info(
-          {:alto_worktree_created, pending.token, {:error, {:creation_exited, reason}}},
-          state
-        )
+  defp do_handle_info(
+         {:DOWN, monitor, :process, _pid, reason},
+         %{worktree_creation: %{monitor: monitor} = pending} = state
+       ),
+       do:
+         handle_info(
+           {:alto_worktree_created, pending.token, {:error, {:creation_exited, reason}}},
+           state
+         )
 
-  def handle_info(:prepare_backend, state), do: {:noreply, backend_action(state, :prepare)}
+  defp do_handle_info(:prepare_backend, state), do: {:noreply, backend_action(state, :prepare)}
 
-  def handle_info(message, state) do
+  defp do_handle_info(message, state) do
     case Backend.message(state, message) do
       :pass -> {:noreply, state, render?: false}
       result -> result
@@ -420,6 +581,7 @@ defmodule Alto.TUI.App do
 
   @impl true
   def terminate(_reason, state) do
+    Alto.TUI.History.stop(state)
     Enum.each(state.approval_reviews, fn {_, review} -> stop_review(review) end)
     Enum.each(state.runs, fn {_id, run} -> cancel_run(run) end)
     :ok
@@ -441,6 +603,9 @@ defmodule Alto.TUI.App do
 
       prompt == "" ->
         %{state | notice: "write a message first"}
+
+      Alto.TUI.History.loading_entries?(state, state.selected_task_id) ->
+        queue_input(state, state.selected_task_id, prompt, :follow_up)
 
       task_running?(state, state.selected_task_id) ->
         queue_message(state, prompt, mode)
@@ -548,6 +713,10 @@ defmodule Alto.TUI.App do
         end
     end
   end
+
+  defp send_input(%{history_load: %{id: task_id}, entries: entries} = state, task_id)
+       when not is_map_key(entries, task_id),
+       do: state
 
   defp send_input(state, task_id) do
     case {task_running?(state, task_id), Map.get(state.inputs, task_id)} do
@@ -673,7 +842,12 @@ defmodule Alto.TUI.App do
             "run started"
           )
         else
-          {:error, reason} -> %{state | notice: "cannot start: #{human_error(reason)}"}
+          {:error, reason} ->
+            message = "Cannot continue: #{human_error(reason)}"
+
+            state
+            |> State.append_entry(state.selected_task_id, %{kind: :error, text: message})
+            |> Map.put(:notice, message <> " · draft kept")
         end
     end
   end
@@ -897,8 +1071,24 @@ defmodule Alto.TUI.App do
   defp finish_runner_result(state, local_id, result) do
     completed? = result.status == :ok
     status = if completed?, do: "completed", else: "failed"
-    notice = if completed?, do: "run completed", else: "run failed"
-    entry = if completed?, do: nil, else: %{kind: :error, text: human_error(result.reason)}
+
+    {entry, notice} =
+      case result.status do
+        :ok ->
+          {nil, "run completed"}
+
+        :cancelled ->
+          message =
+            if result.reason == :user,
+              do: "Run cancelled by user",
+              else: "Run cancelled: #{human_error(result.reason)}"
+
+          {%{kind: :system, text: message}, "run cancelled · Enter sends a follow-up"}
+
+        _ ->
+          {%{kind: :error, text: human_error(result.reason)}, "run failed"}
+      end
+
     persistence = result.persistence
 
     {entry, notice} = persistence_feedback(entry, notice, persistence)
@@ -913,6 +1103,7 @@ defmodule Alto.TUI.App do
 
   def finish_run(state, local_id, status, opts \\ []) do
     run = Map.fetch!(state.runs, local_id)
+    Alto.Runner.release(run[:handle])
     changes = %{"status" => status} |> maybe_change("conversation_id", opts[:session_id])
 
     state = State.update_task(state, run.task_id, changes)
@@ -1323,9 +1514,7 @@ defmodule Alto.TUI.App do
             &route_approval(&2, &1)
           )
 
-        if resolved.pending_approvals == [] and resolved.details_drawer_auto_opened?,
-          do: State.close_details_drawer(resolved),
-          else: resolved
+        %{resolved | details_drawer_auto_opened?: false}
       end
     end
   end
@@ -1433,7 +1622,7 @@ defmodule Alto.TUI.App do
        do: State.close_details_drawer(state)
 
   defp activate_target(state, {:approval, decision}, _x),
-    do: decide_approval(state, approval_decision(decision))
+    do: decide_approval(%{state | focus: :details}, approval_decision(decision))
 
   defp activate_target(%{overlay: form} = state, {:folder_suggestion, index}, _x),
     do: %{state | overlay: Menu.complete_folder(form, Enum.at(form.suggestions, index))}
@@ -1575,13 +1764,12 @@ defmodule Alto.TUI.App do
     pending.respond.(decision)
 
     state = Search.close(state)
-    next = %{reset_approval_view(state, rest) | notice: approval_notice(decision)}
 
-    if rest == [] and next.details_drawer_auto_opened? do
-      State.close_details_drawer(next)
-    else
-      %{next | focus: if(next.details_return_focus, do: :details, else: :composer)}
-    end
+    %{
+      reset_approval_view(state, rest)
+      | notice: approval_notice(decision),
+        details_drawer_auto_opened?: false
+    }
   end
 
   def show_pending_approval(state, pending, notice) do

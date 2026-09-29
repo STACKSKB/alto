@@ -45,51 +45,27 @@ defmodule Alto.TUI.Viewport do
       )
 
   def rows(text, width) do
-    key = {__MODULE__, :documents}
-    documents = Process.get(key, [])
+    Alto.TUI.Cache.fetch({__MODULE__, :documents}, {text, width}, 4, fn ->
+      text
+      |> String.split("\n", trim: false)
+      |> Enum.chunk_every(128)
+      |> Enum.flat_map(fn lines ->
+        chunk = Enum.join(lines, "\n")
 
-    case Enum.find(documents, fn {old, w, _} -> old == text and w == width end) do
-      {_, _, rows} ->
-        rows
+        Alto.TUI.Cache.fetch({__MODULE__, :chunks}, {width, chunk}, 512, fn ->
+          fits = &(byte_size(&1) <= width and not Regex.match?(~r/[^\x20-\x7E]/, &1))
 
-      nil ->
-        chunks = text |> String.split("\n", trim: false) |> Enum.chunk_every(128)
-        cache = Process.get({__MODULE__, :chunks}, %{})
-
-        {rows, next} =
-          Enum.flat_map_reduce(chunks, %{}, fn lines, next ->
-            chunk = Enum.join(lines, "\n")
-            chunk_key = {width, chunk}
-
-            rows =
-              Map.get_lazy(cache, chunk_key, fn ->
-                ascii_fits_width? =
-                  &(byte_size(&1) <= width and not Regex.match?(~r/[^\x20-\x7E]/, &1))
-
-                lines
-                |> Enum.chunk_by(ascii_fits_width?)
-                |> Enum.flat_map(fn [first | _] = group ->
-                  if ascii_fits_width?.(first),
-                    do: Enum.map(group, &String.trim_leading(&1, " ")),
-                    else: wrap(Enum.join(group, "\n"), width)
-                end)
-              end)
-
-            {rows, Map.put(next, chunk_key, rows)}
+          lines
+          |> Enum.chunk_by(fits)
+          |> Enum.flat_map(fn [first | _] = group ->
+            if fits.(first),
+              do: Enum.map(group, &String.trim_leading(&1, " ")),
+              else: wrap(Enum.join(group, "\n"), width)
           end)
-
-        # Retain only this document's bounded chunk working set and a few views.
-        retained = Map.merge(cache, next)
-
-        Process.put(
-          {__MODULE__, :chunks},
-          if(map_size(retained) <= 512, do: retained, else: next)
-        )
-
-        rows = List.to_tuple(rows)
-        Process.put(key, Enum.take([{text, width, rows} | documents], 4))
-        rows
-    end
+        end)
+      end)
+      |> List.to_tuple()
+    end)
   end
 
   defp slice(rows, offset, height) do

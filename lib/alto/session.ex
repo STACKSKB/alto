@@ -66,18 +66,25 @@ defmodule Alto.Session do
   def append(id, record, opts \\ []) when is_map(record) do
     with :ok <- validate_id(id),
          {:ok, line} <- encode_line(record) do
-      path = log_path(dir(opts), id)
-
-      with_lock(id, opts, fn ->
-        with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
-             :ok <- Alto.Storage.ensure_private_file(path),
-             :ok <- Alto.DurableLog.append(path, line) do
-          :ok
-        else
-          {:error, reason} -> {:error, {:session_write_failed, reason}}
-        end
-      end)
+      case Alto.Session.Writer.append(id, line, opts) do
+        :unavailable -> append_direct(id, line, opts)
+        result -> result
+      end
     end
+  end
+
+  defp append_direct(id, line, opts) do
+    path = log_path(dir(opts), id)
+
+    with_lock(id, opts, fn ->
+      with :ok <- Alto.Storage.ensure_private_dir(Path.dirname(path), owned: true),
+           :ok <- Alto.Storage.ensure_private_file(path),
+           :ok <- Alto.DurableLog.append(path, line) do
+        :ok
+      else
+        {:error, reason} -> {:error, {:session_write_failed, reason}}
+      end
+    end)
   end
 
   @doc false
@@ -141,9 +148,8 @@ defmodule Alto.Session do
     with :ok <- validate_id(id),
          {:ok, cursor} <- event_cursor(Keyword.get(opts, :cursor, 0)),
          {:ok, limit} <- event_limit(Keyword.get(opts, :limit, 100)),
-         {:ok, run_id} <- event_run_id(Keyword.get(opts, :run_id)),
-         {:ok, records} <- read(id, opts) do
-      page_events(records, cursor, limit, run_id)
+         {:ok, run_id} <- event_run_id(Keyword.get(opts, :run_id)) do
+      page_events(id, opts, cursor, limit, run_id)
     end
   end
 
@@ -395,32 +401,77 @@ defmodule Alto.Session do
   defp event_run_id(run_id) when is_binary(run_id) and run_id != "", do: {:ok, run_id}
   defp event_run_id(run_id), do: {:error, {:invalid_event_run_id, run_id}}
 
-  defp page_events(records, cursor, limit, run_id) do
-    records = Enum.filter(records, &(&1["type"] == "event"))
-    total = length(records)
+  defp page_events(id, opts, cursor, limit, run_id) do
+    initial = %{records: 0, total: 0, candidates: 0, events: []}
 
-    candidates =
-      records
-      |> Enum.with_index(1)
-      |> Enum.drop(cursor)
-      |> Enum.filter(fn {record, _ordinal} -> is_nil(run_id) or record["run_id"] == run_id end)
+    reducer = fn line, acc ->
+      number = acc.records + 1
 
-    events =
-      for {record, ordinal} <- Enum.take(candidates, limit),
-          do: Map.put(record, "ordinal", ordinal)
+      with true <-
+             number <= @max_records or {:error, {:session_too_many_records, id, @max_records}},
+           {:ok, record} <- decode_line(line, id, number) do
+        acc = %{acc | records: number}
 
-    last_cursor = Map.get(List.last(events, %{}), "ordinal", cursor)
-    complete = length(candidates) <= limit
+        if record["type"] == "event" do
+          ordinal = acc.total + 1
+          matches = ordinal > cursor and (is_nil(run_id) or record["run_id"] == run_id)
+          keep = matches and acc.candidates < limit
 
-    {:ok,
-     %{
-       events: events,
-       next_cursor: if(complete, do: nil, else: last_cursor),
-       last_cursor: last_cursor,
-       high_watermark: total,
-       complete: complete,
-       gap: cursor > total
-     }}
+          events =
+            if keep,
+              do: [record |> Map.put("ordinal", ordinal) |> Alto.Retained.detach() | acc.events],
+              else: acc.events
+
+          {:ok,
+           %{
+             acc
+             | total: ordinal,
+               candidates: acc.candidates + if(matches, do: 1, else: 0),
+               events: events
+           }}
+        else
+          {:ok, acc}
+        end
+      end
+    end
+
+    case Alto.Session.LogScan.fold(
+           log_path(dir(opts), id),
+           @max_log_bytes,
+           0,
+           "",
+           initial,
+           initial,
+           reducer,
+           complete_only: false
+         ) do
+      {:ok, acc, _, _} ->
+        events = Enum.reverse(acc.events)
+        last = Map.get(List.last(events, %{}), "ordinal", cursor)
+        complete = acc.candidates <= limit
+
+        {:ok,
+         %{
+           events: events,
+           next_cursor: if(complete, do: nil, else: last),
+           last_cursor: last,
+           high_watermark: acc.total,
+           complete: complete,
+           gap: cursor > acc.total
+         }}
+
+      {:error, :enoent} ->
+        {:error, {:session_not_found, id}}
+
+      {:error, {:too_large, size, max}} ->
+        {:error, {:session_too_large, id, size, max}}
+
+      {:error, {kind, _, _}} = error when kind in [:session_corrupt, :session_too_many_records] ->
+        error
+
+      {:error, reason} ->
+        {:error, {:session_read_failed, reason}}
+    end
   end
 
   defp maybe_term(nil), do: nil

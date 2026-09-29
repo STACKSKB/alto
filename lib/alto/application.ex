@@ -5,6 +5,10 @@ defmodule Alto.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      Alto.Session.ChildIndex,
+      {Registry, keys: :unique, name: Alto.Session.WriterRegistry},
+      {DynamicSupervisor,
+       name: Alto.Session.WriterSupervisor, strategy: :one_for_one, max_children: 64},
       {Task.Supervisor, name: Alto.TaskSupervisor},
       {Registry, keys: :unique, name: Alto.External.Registry},
       {DynamicSupervisor,

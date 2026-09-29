@@ -24,7 +24,7 @@ defmodule Alto.FrontEnd.Registry do
     :config_name,
     :started_at_ms,
     :start_order,
-    events_rev: [],
+    event_buffer: %Alto.EventBuffer{},
     head_seq: 0,
     result: :running
   ]
@@ -34,6 +34,9 @@ defmodule Alto.FrontEnd.Registry do
   @options [
     max_buffer_messages: [type: :non_neg_integer, default: 10_000],
     max_buffer_bytes: [type: :non_neg_integer, default: 8_000_000],
+    max_retained_event_bytes: [type: :non_neg_integer, default: 8_000_000],
+    max_finished_bytes: [type: :non_neg_integer, default: 32_000_000],
+    max_subscriber_bytes: [type: :non_neg_integer, default: 32_000_000],
     max_retained_events: [type: :non_neg_integer, default: 1_000],
     max_active_runs: [type: :non_neg_integer, default: 32],
     max_subscribers: [type: :non_neg_integer, default: 128],
@@ -166,6 +169,7 @@ defmodule Alto.FrontEnd.Registry do
           sessions_enabled: sessions_enabled,
           session_dir: session_dir,
           subscribers: %{},
+          subscriber_bytes: 0,
           pending: %{},
           runs: %{},
           finished_order: []
@@ -567,11 +571,15 @@ defmodule Alto.FrontEnd.Registry do
   defp ingest_event(state, run, %Event{domain: :durable} = event) do
     seq = run.head_seq + 1
 
-    run = %{
-      run
-      | head_seq: seq,
-        events_rev: Enum.take([{seq, event} | run.events_rev], state.max_retained_events)
-    }
+    {events, _dropped} =
+      Alto.EventBuffer.push(
+        run.event_buffer,
+        {seq, event},
+        state.max_retained_events,
+        state.max_retained_event_bytes
+      )
+
+    run = %{run | head_seq: seq, event_buffer: events}
 
     state = %{state | runs: Map.put(state.runs, run.id, run)}
 
@@ -613,13 +621,33 @@ defmodule Alto.FrontEnd.Registry do
   end
 
   defp enqueue(state, pid, notification) do
-    update_in(state.subscribers[pid], &Subscriber.enqueue(&1, notification))
+    sub = state.subscribers[pid]
+    available = max(state.max_subscriber_bytes - state.subscriber_bytes, 0)
+
+    next =
+      Subscriber.enqueue(
+        %{sub | max_buffer_bytes: min(sub.max_buffer_bytes, sub.buffered_bytes + available)},
+        notification
+      )
+
+    next = %{next | max_buffer_bytes: sub.max_buffer_bytes}
+
+    %{
+      state
+      | subscribers: Map.put(state.subscribers, pid, next),
+        subscriber_bytes: state.subscriber_bytes + next.buffered_bytes - sub.buffered_bytes
+    }
   end
 
   defp deliver_pull(state, client_pid, subscriber, count) do
-    {subscriber, messages} = Subscriber.pull(subscriber, count, state.disconnect_after_overflow)
+    {next, messages} = Subscriber.pull(subscriber, count, state.disconnect_after_overflow)
     Enum.each(messages, &send(client_pid, &1))
-    put_in(state.subscribers[client_pid], subscriber)
+
+    %{
+      state
+      | subscribers: Map.put(state.subscribers, client_pid, next),
+        subscriber_bytes: state.subscriber_bytes + next.buffered_bytes - subscriber.buffered_bytes
+    }
   end
 
   ## Attach and replay
@@ -630,12 +658,12 @@ defmodule Alto.FrontEnd.Registry do
 
   defp deliver_attach(state, pid, run_id, from_seq) do
     run = Map.fetch!(state.runs, run_id)
-    dropped = run.head_seq - length(run.events_rev)
+    dropped = run.head_seq - run.event_buffer.size
     gap = from_seq <= dropped and dropped > 0
 
     replay =
-      run.events_rev
-      |> Enum.reverse()
+      run.event_buffer
+      |> Alto.EventBuffer.to_list()
       |> Enum.filter(fn {seq, _event} -> seq >= from_seq end)
 
     state = enqueue(state, pid, {:attached, run_id, gap, run.head_seq, replay})
@@ -682,12 +710,13 @@ defmodule Alto.FrontEnd.Registry do
         if entry.run_id == run.id, do: clear_pending(state, id), else: state
       end)
 
+    Runner.release(run.handle)
     run = %{run | result: run_result}
     state = put_in(state.runs[run.id], run)
 
-    state = track_finished(state, run.id)
-
-    publish(state, run.id, result_notification(run), :result)
+    state
+    |> publish(run.id, result_notification(run), :result)
+    |> track_finished(run.id)
   end
 
   defp result_notification(run),
@@ -696,9 +725,9 @@ defmodule Alto.FrontEnd.Registry do
   defp track_finished(state, run_id) do
     order = state.finished_order ++ [run_id]
     limit = state.max_finished_runs
-    overflow = max(length(order) - limit, 0)
-
-    {evict, order} = Enum.split(order, overflow)
+    sizes = Map.new(order, fn id -> {id, :erlang.external_size(state.runs[id])} end)
+    bytes = Enum.sum(Map.values(sizes))
+    {evict, order} = trim_finished(order, sizes, bytes, limit, state.max_finished_bytes, [])
     Enum.each(evict, &close_channels(state.runs[&1]))
 
     subscribers =
@@ -708,6 +737,13 @@ defmodule Alto.FrontEnd.Registry do
 
     %{state | runs: Map.drop(state.runs, evict), finished_order: order, subscribers: subscribers}
   end
+
+  defp trim_finished(order, _sizes, bytes, limit, byte_limit, evict)
+       when length(order) <= limit and bytes <= byte_limit,
+       do: {evict, order}
+
+  defp trim_finished([id | rest], sizes, bytes, limit, byte_limit, evict),
+    do: trim_finished(rest, sizes, bytes - sizes[id], limit, byte_limit, [id | evict])
 
   defp close_channels(run) do
     if Process.alive?(run.messaging), do: GenServer.stop(run.messaging)
@@ -808,7 +844,12 @@ defmodule Alto.FrontEnd.Registry do
     case Map.fetch(state.subscribers, client_pid) do
       {:ok, subscriber} ->
         Process.demonitor(subscriber.monitor, [:flush])
-        %{state | subscribers: Map.delete(state.subscribers, client_pid)}
+
+        %{
+          state
+          | subscribers: Map.delete(state.subscribers, client_pid),
+            subscriber_bytes: state.subscriber_bytes - subscriber.buffered_bytes
+        }
 
       :error ->
         state

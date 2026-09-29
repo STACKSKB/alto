@@ -56,10 +56,21 @@ unfinished tool dispatch prevents safely resuming that run.
 
 The status bar shows whether Alto is waiting for the model, executing a tool, or
 waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,
-to answer a pending request. Esc stops the selected task's run and preserves your
+to answer a pending request. Approval actions keep focus in context; F8/F9 used
+from another pane preserve that pane’s focus. A narrow context drawer stays open
+after a decision until you close it with Esc. Esc stops the selected task's run and preserves your
 draft. If a popup or the compact details
 drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
 failure pauses the queued follow-up; press Enter with an empty composer to send it.
+
+After a failed or cancelled run, Enter sends an existing draft or queued follow-up
+from the transcript/context pane too. If there is no message ready, the TUI points
+you to the composer. A failed restart appears in chat and keeps the draft.
+Cancelled subagent calls retain an unknown outcome, allowing the conversation to
+continue without replaying them. Older cancelled sessions with a stranded dispatch
+marker recover on the next follow-up only when the owning run has a recorded
+cancellation; the model receives explicit uncertainty and reconciliation guidance.
+Active or crashed runs without that evidence keep their dispatch protection.
 
 **F2** opens approval choices: ASK, READ, AUTO, and **REVIEW · approve for me**.
 An explicit choice overrides the configured native approval policy. AUTO also
@@ -300,8 +311,9 @@ Configure the Codex connection with options on its `tui_backends` entry.
 
 **Ctrl+G, U** opens the current task's subagent list. Select a child to view its
 model, parent ID, current stage, streamed activity, tool summaries and final result
-in the context pane (a drawer on narrow terminals). **Esc** returns to context;
-it does not stop the parent while inspecting a child. Repeated labels remain
+in the context pane (a drawer on narrow terminals). **Esc** returns to context
+and keeps focus there; a second Esc closes a narrow drawer. Leaving the child view
+does not stop the parent while inspecting a child. Repeated labels remain
 separate because the list uses stable agent IDs. Approvals keep priority.
 Live activity is bounded. Reopening a native task rebuilds child and grandchild
 activity from durable session logs, including failed/cancelled children and
@@ -311,3 +323,45 @@ running or successful. This read-only inspection also works behind a resume fenc
 Discovery scans at most 4,096 session headers and retains 256 children; a notice
 reports truncation or unreadable discovered sessions. Transient streaming fragments
 that were never committed to history cannot be reconstructed.
+
+### Navigation performance
+
+Saved native conversations load in cancellable background work. The rail responds
+immediately; transcript entries appear before saved child activity is discovered.
+Recently used tasks and rendered transcript tails remain in bounded caches.
+Messages submitted during loading are retained, including when navigating away.
+
+See the [performance audit](../../docs/tui-performance-audit.md) for measured
+click-to-frame results, the reproducible navigation benchmark, and remaining
+scrolling, streaming, and persistence work.
+
+### Memory budgets
+
+The TUI detaches small display strings from oversized saved-file buffers and uses
+one owner-aware budget for derived Markdown, wrapping, transcript and search
+caches. Configure budgets in `alto.exs`:
+
+```elixir
+[
+  max_event_bytes: 8_000_000,
+  tui: [
+    render_cache_bytes: 16_000_000,
+    history_cache_bytes: 12_000_000
+  ]
+]
+```
+
+`render_cache_bytes` is a conservative weighted serialized-size estimate, including
+source keys; it is not an exact RSS ceiling. Zero disables derived caching.
+`history_cache_bytes` covers cached display entries and child activity; inactive
+conversations are evicted first and release their derived caches. The selected
+conversation, active runs and queued input stay protected even above that budget.
+Per-conversation and per-agent bounds still apply.
+
+Search retains at most 1,000 matches and builds excerpts only when displaying
+results. `1000+` means more occurrences exist; refine the query to narrow them.
+Closing search releases its match, projection and highlighting caches. Full session
+logs and saved transcripts are unchanged by these display/cache limits.
+
+See the [RSS audit](../../docs/rss-optimization-audit.md) for measurements and
+remaining runtime/native-allocation limitations.

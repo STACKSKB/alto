@@ -15,18 +15,11 @@ defmodule Alto.Session.Children do
         )
 
       headers =
-        names
-        |> Enum.sort()
-        |> Enum.take(@max_scan)
-        |> Enum.flat_map(fn name ->
-          case header(Path.join(Session.dir(opts), name)) do
-            %{"type" => "started", "subagent" => true} = started ->
-              [%{id: Path.rootname(name), started: started}]
-
-            _ ->
-              []
-          end
-        end)
+        Alto.Session.ChildIndex.headers(
+          Session.dir(opts),
+          names |> Enum.sort() |> Enum.take(@max_scan)
+        )
+        |> Enum.group_by(& &1.started["parent_session_id"])
 
       {children, truncated} = descend([parent], MapSet.new([parent]), headers, [])
 
@@ -42,20 +35,21 @@ defmodule Alto.Session.Children do
     end
   end
 
-  defp header(path) do
+  @doc false
+  def header(path) do
     with {:ok, %{type: :regular}} <- File.lstat(path),
-         {:ok, file} <- File.open(path, [:read, :binary]) do
+         {:ok, file} <- :file.open(String.to_charlist(path), [:read, :binary, :raw]) do
       try do
-        with bytes when is_binary(bytes) <- IO.binread(file, @header_bytes),
+        with {:ok, bytes} <- :file.read(file, @header_bytes),
              [line, _] <- String.split(bytes, "\n", parts: 2),
-             {:ok, %{} = record} <- JSON.decode(line),
+             {:ok, %{} = record} <- JSON.decode(:binary.copy(line)),
              1 <- record["v"] do
           record
         else
           _ -> nil
         end
       after
-        File.close(file)
+        :file.close(file)
       end
     else
       _ -> nil
@@ -67,8 +61,8 @@ defmodule Alto.Session.Children do
   defp descend([parent | rest], seen, headers, acc) do
     children =
       Enum.filter(
-        headers,
-        &(&1.started["parent_session_id"] == parent and not MapSet.member?(seen, &1.id))
+        Map.get(headers, parent, []),
+        &(not MapSet.member?(seen, &1.id))
       )
 
     remaining = @max_children - length(acc)

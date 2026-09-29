@@ -141,3 +141,24 @@ the public lookup/read and generation-fenced retirement APIs rather than
 reconstructing handles from private operation-log envelopes. Discovery does not
 authorize execution, replacement-generation adoption, or automatic retries of
 uncertain effects.
+
+### Retained results and event memory
+
+Core execution keeps at most `max_events` events and `max_event_bytes` serialized
+bytes (default 8,000,000). Retention is a contiguous suffix; discarded events count
+in `events_dropped`. Durable session logging is independent of this in-memory bound.
+
+After consuming a completed result, an owner can call `Alto.Runner.release(handle)`
+to retire a supporting host immediately. The built-in host refuses to release a
+running task and otherwise keeps its existing 60-second completion TTL unless
+explicitly released. The TUI and front-end registry release hosts after receiving
+their outcomes. Other owners can retain the existing repeated-await behavior or
+release explicitly. Custom runners may implement the optional `release/1`
+callback; unsupported runners return `{:error, :unsupported}`.
+
+`Alto.FrontEnd.Registry` also accepts `max_retained_event_bytes` (8,000,000 per run),
+`max_finished_bytes` (32,000,000 across finished run records), and
+`max_subscriber_bytes` (32,000,000 across buffered subscriber notifications).
+Existing count limits still apply. Finished outcomes are published before
+retention eviction, and replay gaps/overflow remain explicit. Byte accounting is
+conservative serialized size, not unique physical backing memory.

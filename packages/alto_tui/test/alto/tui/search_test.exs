@@ -303,18 +303,19 @@ defmodule Alto.TUI.SearchTest do
     assert shown.pending_approvals == [pending]
   end
 
-  test "resolving an approval during search cannot restore its closed automatic drawer", %{
+  test "manual approval preserves context while background cleanup closes an automatic drawer", %{
     state: state
   } do
     pending = %{local_id: "run", request: %{id: "approval"}, respond: fn _ -> :ok end}
     state = %{state | dimensions: {80, 24}, focus: :transcript}
 
-    for resolve <- [
-          fn state ->
-            {:noreply, next} = App.handle_event(%Key{code: "f8"}, state)
-            next
-          end,
-          &App.drop_run(&1, "run")
+    for {manual?, resolve} <- [
+          {true,
+           fn state ->
+             {:noreply, next} = App.handle_event(%Key{code: "f8"}, state)
+             next
+           end},
+          {false, &App.drop_run(&1, "run")}
         ] do
       searching =
         state |> App.show_pending_approval(pending, "approval required") |> Search.open()
@@ -323,10 +324,17 @@ defmodule Alto.TUI.SearchTest do
       closed = searching |> resolve.() |> Search.close()
       assert closed.pending_approvals == []
       assert closed.search == nil
-      assert closed.details_return_focus == nil
       refute closed.details_drawer_auto_opened?
-      assert closed.focus == :transcript
-      assert View.context_overlay_rect(closed, 80, 24) == nil
+
+      if manual? do
+        assert closed.details_return_focus == :transcript
+        assert closed.focus == :details
+        assert View.context_overlay_rect(closed, 80, 24) != nil
+      else
+        assert closed.details_return_focus == nil
+        assert closed.focus == :transcript
+        assert View.context_overlay_rect(closed, 80, 24) == nil
+      end
     end
   end
 
@@ -339,5 +347,24 @@ defmodule Alto.TUI.SearchTest do
     )
 
     ExRatatui.get_buffer_content(terminal)
+  end
+
+  test "dense search is capped before excerpt allocation and clears on close", %{state: state} do
+    state =
+      state
+      |> State.put_entries(nil, [%{kind: :assistant, text: String.duplicate("a ", 10_000)}])
+      |> Search.open()
+      |> Search.paste("a")
+
+    matches = Search.matches(state)
+    assert length(matches) == 1000
+    assert Search.count(state) == "1/1000+"
+    assert hd(matches).start == 0
+    assert List.last(matches).start == 1998
+    refute Map.has_key?(hd(matches), :before)
+    refute Map.has_key?(hd(matches), :source)
+    assert Enum.any?(Alto.TUI.Cache.stats().items, fn {{{mod, _}, _}, _} -> mod == Search end)
+    Search.close(state)
+    refute Enum.any?(Alto.TUI.Cache.stats().items, fn {{{mod, _}, _}, _} -> mod == Search end)
   end
 end

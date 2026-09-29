@@ -25,17 +25,10 @@ defmodule Alto.Runner.Execution.Events do
 
     run = merge_event_verdict(run, event)
 
-    events_rev = [event | run.events_rev]
+    {events, dropped} =
+      Alto.EventBuffer.push(run.event_buffer, event, run.max_events, run.max_event_bytes)
 
-    if length(events_rev) > run.max_events do
-      %{
-        run
-        | events_rev: List.delete_at(events_rev, -1),
-          events_dropped: run.events_dropped + 1
-      }
-    else
-      %{run | events_rev: events_rev}
-    end
+    %{run | event_buffer: events, events_dropped: run.events_dropped + dropped}
   end
 
   defp merge_event_verdict(run, %{type: type, data: data})

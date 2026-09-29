@@ -31,6 +31,35 @@ defmodule Alto.SessionConversationTest do
 
   defp bytes(messages), do: Transcript.bytes(messages)
 
+  test "viewing an atomic head does not wait for the writer lock", %{dir: dir} do
+    opts = [session_dir: dir]
+    {:ok, id} = Session.create("view", %{}, opts)
+    messages = [%{"role" => "user", "content" => "saved"}]
+    {:ok, _} = Session.persist_settled(id, messages, 5, opts)
+    owner = self()
+
+    holder =
+      Task.async(fn ->
+        Session.with_lock(id, opts, fn ->
+          send(owner, :writer_locked)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :writer_locked, 2000
+    reader = Task.async(fn -> Session.conversation(id, :latest, opts) end)
+
+    try do
+      assert {:ok, %{"messages" => ^messages}} = Task.await(reader, 2000)
+    after
+      send(holder.pid, :release)
+      Task.await(holder)
+    end
+  end
+
   test "settled revisions are immutable, parent-linked, and available before completion", %{
     dir: dir
   } do

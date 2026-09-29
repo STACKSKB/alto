@@ -10,29 +10,209 @@ defmodule Alto.TUI.Markdown do
 
   def render(source, width) do
     width = max(width, 1)
-    key = {__MODULE__, :blocks}
-    widths = Process.get(key, [])
 
-    cache =
-      case List.keyfind(widths, width, 0) do
-        {^width, cache} -> cache
-        nil -> %{}
-      end
-
-    {groups, used} =
+    groups =
       source
       |> String.split("\n")
       |> blocks([])
-      |> Enum.map_reduce(%{}, fn block, used ->
-        id = {width, block}
-        rows = Map.get_lazy(cache, id, fn -> render_block(block, width) end)
-        {rows, Map.put(used, id, rows)}
+      |> Enum.map(&cached_block(&1, width))
+
+    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten())
+  end
+
+  @doc "Render the final visible blocks without materializing earlier Markdown."
+  def tail(source, width, height) do
+    width = max(width, 1)
+
+    {groups, _} =
+      source
+      |> String.split("\n")
+      |> blocks([])
+      |> Enum.reverse()
+      |> Enum.reduce_while({[], 0}, fn block, {groups, count} ->
+        rows = cached_block(block, width)
+        count = count + length(rows) + if(groups == [], do: 0, else: 1)
+        result = {[rows | groups], count}
+        if count >= height, do: {:halt, result}, else: {:cont, result}
       end)
 
-    # Streaming replaces the final block repeatedly. Retain only current blocks
-    # at the three most recent pane widths.
-    Process.put(key, Enum.take([{width, used} | List.keydelete(widths, width, 0)], 3))
-    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten())
+    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten() |> Enum.take(-height))
+  end
+
+  defp cached_block(block, width),
+    do:
+      Alto.TUI.Cache.fetch({__MODULE__, :blocks}, {width, block}, 256, fn ->
+        render_block(block, width)
+      end)
+
+  @doc "Count native wrapped rows without exporting a grid of styled cells."
+  def layout(source, width) do
+    Alto.TUI.Cache.fetch({__MODULE__, :layouts}, {source, max(width, 1)}, 256, fn ->
+      {parts, rows} =
+        source
+        |> String.split("\n")
+        |> blocks([])
+        |> expand_tables()
+        |> Enum.map_reduce(0, fn block, offset ->
+          plain = block_plain(block, max(width, 1))
+          count = length(plain)
+          {{block, offset, count, plain}, offset + count + 1}
+        end)
+
+      %{parts: parts, rows: max(rows - 1, 0), width: max(width, 1)}
+    end)
+  end
+
+  @doc "Materialize just a range of an indexed Markdown document."
+  def window(plan, offset, height) do
+    last = min(offset + height, plan.rows)
+
+    if last <= offset do
+      []
+    else
+      rows =
+        Enum.reduce(plan.parts, %{}, fn {block, first, count, _plain}, acc ->
+          start = max(offset, first)
+          stop = min(last, first + count)
+
+          if stop > start do
+            block_window(block, plan.width, start - first, stop - start)
+            |> Enum.with_index(start)
+            |> Enum.reduce(acc, fn {row, n}, acc -> Map.put(acc, n, row) end)
+          else
+            acc
+          end
+        end)
+
+      Enum.map(offset..(last - 1), &Map.get(rows, &1, Line.new([])))
+    end
+  end
+
+  defp expand_tables(parts) do
+    Enum.flat_map(parts, fn
+      {:table, headers, records} ->
+        columns = Enum.reduce(records, length(headers), &max(length(&1), &2))
+        headers = headers ++ Enum.map((length(headers) + 1)..columns//1, &"Column #{&1}")
+
+        if(records == [], do: [[]], else: records)
+        |> Enum.map(fn row ->
+          {:markdown,
+           headers
+           |> Enum.with_index()
+           |> Enum.map_join("\n\n", fn {header, i} -> "**#{header}:** #{Enum.at(row, i, "")}" end)}
+        end)
+
+      part ->
+        [part]
+    end)
+  end
+
+  def plain_rows(plan),
+    do:
+      plan.parts
+      |> Enum.map(fn {_, _, _, plain} -> plain end)
+      |> Enum.intersperse([""])
+      |> List.flatten()
+
+  defp block_plain({:code, language, _} = block, width),
+    do: ["  " <> if(language == "", do: "code", else: language) | native_plain(block, width)]
+
+  defp block_plain({:heading, text}, width), do: native_plain({:markdown, text}, width)
+  defp block_plain(block, width), do: native_plain(block, width)
+
+  defp native_plain({_kind, ""}, _width), do: [""]
+  defp native_plain({:code, _, ""}, _width), do: [""]
+
+  defp native_plain(block, width) do
+    marker = marker(block)
+    source = content_source(block) <> "\n\n" <> marker
+    estimate = length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4
+    height = min(max(div(32_768, width), 1), max(estimate, 1))
+    terminal = Alto.TUI.Viewport.test_terminal(:markdown_metrics, width, height)
+    measure_pages(terminal, block, source, marker, width, height, 0, 0, [])
+  end
+
+  defp measure_pages(terminal, block, source, marker, width, height, offset, last, pages) do
+    :ok = ExRatatui.draw(terminal, [])
+
+    :ok =
+      ExRatatui.draw(terminal, [
+        {native_widget(block, source, offset), %Rect{width: width, height: height}}
+      ])
+
+    lines = ExRatatui.get_buffer_content(terminal) |> String.split("\n")
+    marker_row = Enum.find_index(lines, &String.contains?(&1, marker))
+    body = if marker_row, do: Enum.take(lines, marker_row), else: lines
+
+    last =
+      Enum.with_index(body, offset)
+      |> Enum.reduce(last, fn {line, n}, acc ->
+        if String.trim(line) == "", do: acc, else: n + 1
+      end)
+
+    pages = [body | pages]
+
+    if marker_row != nil or offset >= 65_000 do
+      pages
+      |> Enum.reverse()
+      |> List.flatten()
+      |> Enum.take(last)
+      |> Enum.map(&(Alto.TUI.Selection.buffer_row_text(&1, width) |> String.trim_trailing()))
+    else
+      measure_pages(terminal, block, source, marker, width, height, offset + height, last, pages)
+    end
+  end
+
+  defp block_window({:code, language, _} = block, width, offset, height) do
+    label =
+      Line.new([
+        Span.new("  " <> if(language == "", do: "code", else: language),
+          style: %Style{fg: @muted}
+        )
+      ])
+
+    if offset == 0,
+      do: [label | native_window(block, width, 0, height - 1)],
+      else: native_window(block, width, offset - 1, height)
+  end
+
+  defp block_window({:heading, text}, width, offset, height) do
+    native_window({:markdown, text}, width, offset, height)
+    |> Enum.map(fn line ->
+      %{
+        line
+        | spans:
+            Enum.map(line.spans, fn span ->
+              %{
+                span
+                | style: %{
+                    span.style
+                    | modifiers: Enum.uniq([:bold | span.style.modifiers || []])
+                  }
+              }
+            end)
+      }
+    end)
+  end
+
+  defp block_window(block, width, offset, height), do: native_window(block, width, offset, height)
+
+  defp native_window(_, _, _, height) when height <= 0, do: []
+
+  defp native_window(block, width, offset, height) do
+    session = CellSession.new(width, height)
+
+    try do
+      :ok =
+        CellSession.draw(session, [
+          {native_widget(block, content_source(block), offset),
+           %Rect{width: width, height: height}}
+        ])
+
+      CellSession.take_cells(session).cells |> Enum.chunk_every(width) |> styled_rows()
+    after
+      CellSession.close(session)
+    end
   end
 
   def plain(source, width) do

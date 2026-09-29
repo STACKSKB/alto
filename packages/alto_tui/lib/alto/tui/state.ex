@@ -11,6 +11,8 @@ defmodule Alto.TUI.State do
   @max_entries_per_task 2_000
   @max_cached_tasks 12
   @tui_options NimbleOptions.new!(
+                 render_cache_bytes: [type: :non_neg_integer],
+                 history_cache_bytes: [type: :non_neg_integer],
                  type_to_compose: [type: :boolean],
                  narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
                  narrow_context_width: [type: {:in, 40..100}],
@@ -38,6 +40,14 @@ defmodule Alto.TUI.State do
     :clipboard_write,
     :clipboard_read,
     :drag_poll,
+    :history_load,
+    :stream_frame,
+    stream_events: [],
+    stream_tails: %{},
+    stream_bytes: 0,
+    async_history?: false,
+    render_cache_bytes: 16_000_000,
+    history_cache_bytes: 12_000_000,
     activity_tick: 0,
     activity_started_ms: nil,
     selection: %Alto.TUI.Selection{},
@@ -45,7 +55,10 @@ defmodule Alto.TUI.State do
     projects: [],
     tasks: %{},
     entries: %{},
+    entry_bytes: %{},
+    cache_order: [],
     subagents: %{},
+    subagent_bytes: %{},
     selected_agent_id: nil,
     profiles: [],
     preferences: %{},
@@ -133,6 +146,9 @@ defmodule Alto.TUI.State do
         run_options: run_options,
         credentials_path: credentials_path,
         catalog_opts: catalog_opts,
+        async_history?: Keyword.get(opts, :async_history, false),
+        render_cache_bytes: Keyword.get(tui_options, :render_cache_bytes, 16_000_000),
+        history_cache_bytes: Keyword.get(tui_options, :history_cache_bytes, 12_000_000),
         projects: projects,
         tasks: tasks,
         selected_project_id: selected_project["id"],
@@ -234,6 +250,9 @@ defmodule Alto.TUI.State do
           activity not in [:pass, nil] ->
             {activity, state.activity_started_ms}
 
+          state.history_load != nil and state.history_load.id == state.selected_task_id ->
+            {"loading saved history", state.activity_started_ms}
+
           MapSet.size(state.model_loading) > 0 ->
             {"loading model catalog", state.activity_started_ms}
 
@@ -326,7 +345,7 @@ defmodule Alto.TUI.State do
         state
 
       _project ->
-        state = Alto.TUI.Search.close(state)
+        state = state |> Alto.TUI.Search.close() |> Alto.TUI.History.cancel()
 
         %{
           state
@@ -352,13 +371,14 @@ defmodule Alto.TUI.State do
         |> Map.put(:search, nil)
         |> Map.put(:transcript_follow?, true)
         |> sync_backend(task)
+        |> touch_cache(id)
         |> hydrate_selected()
     end
   end
 
   @doc "Leave the current task selected project intact and compose a new task."
   def new_task(%__MODULE__{} = state) do
-    state = Alto.TUI.Search.close(state)
+    state = state |> Alto.TUI.Search.close() |> Alto.TUI.History.cancel()
 
     %{
       state
@@ -415,10 +435,42 @@ defmodule Alto.TUI.State do
     end)
   end
 
-  def put_entries(%__MODULE__{} = state, task_id, entries),
-    do:
-      %{state | entries: Map.put(state.entries, task_id || :scratch, bounded_entries(entries))}
-      |> evict_inactive_caches()
+  def put_entries(%__MODULE__{} = state, task_id, entries) do
+    key = task_id || :scratch
+    entries = bounded_entries(entries)
+
+    %{
+      state
+      | entries: Map.put(state.entries, key, entries),
+        entry_bytes: Map.put(state.entry_bytes, key, :erlang.external_size(entries)),
+        stream_tails: Map.delete(state.stream_tails, key)
+    }
+    |> touch_cache(key)
+    |> evict_inactive_caches()
+  end
+
+  def put_subagents(state, task, agents) do
+    %{
+      state
+      | subagents: Map.put(state.subagents, task, agents),
+        subagent_bytes: Map.put(state.subagent_bytes, task, :erlang.external_size(agents))
+    }
+    |> evict_inactive_caches()
+  end
+
+  def put_agent(state, task, key, agent) do
+    agents = Map.get(state.subagents, task, %{})
+    bytes = Map.get_lazy(state.subagent_bytes, task, fn -> :erlang.external_size(agents) end)
+    old = if Map.has_key?(agents, key), do: :erlang.external_size({key, agents[key]}), else: 0
+
+    %{
+      state
+      | subagents: Map.put(state.subagents, task, Map.put(agents, key, agent)),
+        subagent_bytes:
+          Map.put(state.subagent_bytes, task, bytes - old + :erlang.external_size({key, agent}))
+    }
+    |> evict_inactive_caches()
+  end
 
   def append_entry(%__MODULE__{} = state, task_id, entry) do
     key = task_id || :scratch
@@ -442,16 +494,60 @@ defmodule Alto.TUI.State do
 
   def append_assistant_delta(%__MODULE__{} = state, task_id, text, kind \\ :assistant) do
     key = task_id || :scratch
-    entries = Map.get(state.entries, key, [])
 
-    entries =
-      case List.pop_at(entries, -1) do
-        {%{kind: ^kind} = last, rest} -> rest ++ [%{last | text: last.text <> text}]
-        {_last, _rest} -> entries ++ [%{kind: kind, text: text}]
+    tail =
+      case Map.get(state.stream_tails, key) do
+        %{kind: ^kind} = tail ->
+          tail
+
+        _ ->
+          entries = Map.get(state.entries, key, [])
+
+          {entry, prefix} =
+            case List.pop_at(entries, -1) do
+              {%{kind: ^kind} = last, prefix} -> {last, prefix}
+              _ -> {%{kind: kind, text: ""}, entries}
+            end
+
+          %{
+            kind: kind,
+            entry: entry,
+            prefix: prefix,
+            count: length(prefix),
+            bytes: Enum.reduce(prefix, 0, &(:erlang.external_size(&1) + &2))
+          }
       end
 
-    put_entries(state, key, entries)
+    entry = %{tail.entry | text: bounded_value(tail.entry.text <> text)}
+    tail = trim_stream_prefix(tail, :erlang.external_size(entry))
+    tail = %{tail | entry: entry}
+
+    %{
+      state
+      | entries: Map.put(state.entries, key, tail.prefix ++ [entry]),
+        entry_bytes: Map.put(state.entry_bytes, key, tail.bytes + :erlang.external_size(entry)),
+        stream_tails: Map.put(state.stream_tails, key, tail)
+    }
+    |> evict_inactive_caches()
   end
+
+  defp trim_stream_prefix(tail, bytes)
+       when tail.count < @max_entries_per_task and tail.bytes + bytes <= 2_000_000,
+       do: tail
+
+  defp trim_stream_prefix(%{prefix: [entry | rest]} = tail, bytes),
+    do:
+      trim_stream_prefix(
+        %{
+          tail
+          | prefix: rest,
+            count: tail.count - 1,
+            bytes: tail.bytes - :erlang.external_size(entry)
+        },
+        bytes
+      )
+
+  defp trim_stream_prefix(tail, _), do: tail
 
   def put_task(%__MODULE__{} = state, task) do
     state = update_task_record(state, task)
@@ -537,6 +633,8 @@ defmodule Alto.TUI.State do
   end
 
   @doc "Close the context drawer and restore its prior visible focus."
+  def close_details_drawer(%__MODULE__{details_return_focus: nil} = state), do: state
+
   def close_details_drawer(%__MODULE__{} = state) do
     state = %{
       state
@@ -597,9 +695,24 @@ defmodule Alto.TUI.State do
     )
   end
 
-  defp hydrate_selected(%__MODULE__{selected_task_id: nil} = state), do: state
+  @doc false
+  def hydrate_selected(%__MODULE__{selected_task_id: nil} = state),
+    do: Alto.TUI.History.cancel(state)
 
-  defp hydrate_selected(%__MODULE__{} = state) do
+  def hydrate_selected(%__MODULE__{async_history?: true} = state) do
+    task = selected_task(state)
+
+    if task && is_binary(task["conversation_id"]) &&
+         Alto.TUI.Backend.runner?(state.run_options, task_backend(task)) do
+      state |> Alto.TUI.History.request(task) |> evict_inactive_caches()
+    else
+      state |> Alto.TUI.History.cancel() |> hydrate_sync()
+    end
+  end
+
+  def hydrate_selected(state), do: hydrate_sync(state)
+
+  defp hydrate_sync(%__MODULE__{} = state) do
     task = selected_task(state)
     session_id = task && task["conversation_id"]
     backend = task && task_backend(task)
@@ -607,7 +720,7 @@ defmodule Alto.TUI.State do
     entries =
       Map.put_new_lazy(state.entries, state.selected_task_id, fn ->
         if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend),
-          do: session_id |> load_session_entries(state.catalog_opts) |> bounded_entries(),
+          do: load_session_entries(session_id, state.catalog_opts),
           else: []
       end)
 
@@ -623,7 +736,12 @@ defmodule Alto.TUI.State do
            else: Usage.new()
       end)
 
-    state = %{state | entries: entries, usage: usage}
+    sizes =
+      Map.new(entries, fn {id, entries} ->
+        {id, Map.get_lazy(state.entry_bytes, id, fn -> :erlang.external_size(entries) end)}
+      end)
+
+    state = %{state | entries: entries, entry_bytes: sizes, usage: usage}
 
     state =
       if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend) and
@@ -633,6 +751,8 @@ defmodule Alto.TUI.State do
         %{
           state
           | subagents: Map.put(state.subagents, state.selected_task_id, agents),
+            subagent_bytes:
+              Map.put(state.subagent_bytes, state.selected_task_id, :erlang.external_size(agents)),
             notice:
               if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
         }
@@ -643,11 +763,12 @@ defmodule Alto.TUI.State do
     evict_inactive_caches(state)
   end
 
-  defp load_session_entries(session_id, opts) do
+  @doc false
+  def load_session_entries(session_id, opts) do
     # Viewing a saved revision must not require permission to resume tool execution.
     case Session.conversation(session_id, :latest, Keyword.take(opts, [:session_dir])) do
       {:ok, %{"messages" => messages}} ->
-        Alto.ToolDisplay.transcript(messages)
+        messages |> Alto.ToolDisplay.transcript() |> bounded_entries()
 
       {:error, reason} ->
         [
@@ -659,27 +780,13 @@ defmodule Alto.TUI.State do
     end
   end
 
-  defp load_session_usage(session_id, opts) do
-    case Session.read(session_id, Keyword.take(opts, [:session_dir])) do
-      {:ok, records} -> Enum.reduce(records, Usage.new(), &merge_record_usage/2)
-      _error -> Usage.new()
+  @doc false
+  def load_session_usage(session_id, opts) do
+    case Alto.TUI.SavedSession.load(session_id, Keyword.take(opts, [:session_dir])) do
+      {:ok, projection} -> projection.usage
+      _ -> Usage.new()
     end
   end
-
-  defp merge_record_usage(
-         %{"type" => "event", "event" => "model_completed", "data" => encoded},
-         usage
-       ) do
-    case Session.decode_term(encoded) do
-      {:ok, %{usage: event_usage}} when is_map(event_usage) ->
-        Usage.merge(usage, Usage.normalize(event_usage))
-
-      _other ->
-        usage
-    end
-  end
-
-  defp merge_record_usage(_record, usage), do: usage
 
   defp bounded_entries(entries) when is_list(entries) do
     entries
@@ -699,25 +806,51 @@ defmodule Alto.TUI.State do
   defp bounded_entries(_), do: []
 
   defp bounded_value(value) when is_binary(value),
-    do: Alto.Text.truncate(value, 64_000, "\n[display shortened; see session log]")
+    do:
+      value
+      |> Alto.Text.truncate(64_000, "\n[display shortened; see session log]")
+      |> Alto.Retained.detach()
 
   defp bounded_value(value), do: value
 
+  defp touch_cache(state, id),
+    do: %{state | cache_order: [id | List.delete(state.cache_order, id)]}
+
   defp evict_inactive_caches(%__MODULE__{} = state) do
     active = Enum.map(state.runs, fn {_id, run} -> run.task_id end)
-    keep = MapSet.new([state.selected_task_id || :scratch | active])
+
+    keep =
+      MapSet.new([state.selected_task_id || :scratch | active ++ Map.keys(state.input_routes)])
 
     cached =
       Enum.uniq(Map.keys(state.entries) ++ Map.keys(state.usage) ++ Map.keys(state.subagents))
 
-    inactive = Enum.reject(cached, &MapSet.member?(keep, &1))
-    drop = Enum.take(Enum.sort(inactive), max(length(cached) - @max_cached_tasks, 0))
+    order = Enum.uniq(state.cache_order ++ cached) |> Enum.filter(&(&1 in cached))
+    inactive = order |> Enum.reverse() |> Enum.reject(&MapSet.member?(keep, &1))
+    budget = state.history_cache_bytes
+    total = Enum.sum(Map.values(state.entry_bytes)) + Enum.sum(Map.values(state.subagent_bytes))
+
+    {drop, _, _} =
+      Enum.reduce_while(inactive, {[], length(cached), total}, fn id, {drop, count, bytes} ->
+        if count <= @max_cached_tasks and bytes <= budget,
+          do: {:halt, {drop, count, bytes}},
+          else:
+            {:cont,
+             {[id | drop], count - 1,
+              bytes - Map.get(state.entry_bytes, id, 0) - Map.get(state.subagent_bytes, id, 0)}}
+      end)
+
+    Enum.each(drop, &Alto.TUI.Cache.drop_owner/1)
 
     %{
       state
-      | entries: Map.drop(state.entries, drop),
+      | cache_order: order -- drop,
+        entries: Map.drop(state.entries, drop),
+        entry_bytes: Map.drop(state.entry_bytes, drop),
+        stream_tails: Map.drop(state.stream_tails, drop),
         usage: Map.drop(state.usage, drop),
-        subagents: Map.drop(state.subagents, drop)
+        subagents: Map.drop(state.subagents, drop),
+        subagent_bytes: Map.drop(state.subagent_bytes, drop)
     }
   end
 

@@ -473,7 +473,7 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert failed.model_requests == state.model_requests
 
     assert Enum.any?(
-             failed.events_rev,
+             Alto.EventBuffer.to_list(failed.event_buffer),
              &(&1.type == :context_compact_failed and &1.data.error == :transcript_uncompactable)
            )
 
@@ -491,7 +491,11 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert failed.compaction_count == state.compaction_count
     assert failed.model_requests == state.model_requests
     assert failed.usage == state.usage
-    assert Enum.any?(failed.events_rev, &(&1.type == :context_compact_failed))
+
+    assert Enum.any?(
+             Alto.EventBuffer.to_list(failed.event_buffer),
+             &(&1.type == :context_compact_failed)
+           )
   end
 
   test "cancelling a running reducer leaves transcript and accounting intact", %{dir: dir} do

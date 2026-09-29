@@ -1104,20 +1104,22 @@ defmodule Alto.TUI.AppTest do
         runs: %{"run" => %{task_id: "task", phase: "waiting for model"}}
     }
 
-    {:noreply, state} =
+    {:noreply, state, render?: false} =
       App.handle_info(
         {:alto_tui_event, "run", Alto.Event.live(:model_reasoning_delta, %{text: "Check files"})},
         state
       )
 
+    {:noreply, state} = App.handle_info({:tui_stream_frame, state.stream_frame.token}, state)
     assert state.runs["run"].phase == "thinking"
 
-    {:noreply, state} =
+    {:noreply, state, render?: false} =
       App.handle_info(
         {:alto_tui_event, "run", Alto.Event.live(:model_delta, %{text: "Answer"})},
         state
       )
 
+    {:noreply, state} = App.handle_info({:tui_stream_frame, state.stream_frame.token}, state)
     assert state.runs["run"].phase == "receiving response"
 
     assert [%{kind: :reasoning, text: "Check files"}, %{kind: :assistant, text: "Answer"}] =
@@ -1622,7 +1624,9 @@ defmodule Alto.TUI.AppTest do
 
     layout = View.layout(state, 80, 24)
     widget = widget_at(View.widgets(state, %{width: 80, height: 24}), layout.transcript)
-    assert widget.scroll == {bottom, 0}
+    assert widget.scroll == {0, 0}
+    full = Alto.TUI.Transcript.render(State.visible_entries(state), layout.transcript.width - 2)
+    assert widget.text.lines == Enum.take(full.lines, -(layout.transcript.height - 2))
 
     paused = %{state | transcript_follow?: false, transcript_scroll: 3}
     widget = widget_at(View.widgets(paused, %{width: 80, height: 24}), layout.transcript)
@@ -2526,5 +2530,66 @@ defmodule Alto.TUI.AppTest do
       App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
 
     form
+  end
+
+  test "stream frames coalesce chunks, acknowledge ingestion and flush before durable events",
+       context do
+    state = %{
+      state!(context)
+      | selected_task_id: "task",
+        runs: %{"run" => %{task_id: "task", phase: "waiting"}}
+    }
+
+    state =
+      Enum.reduce(1..100, state, fn n, state ->
+        ref = make_ref()
+        event = Alto.Event.live(:model_delta, %{text: "#{n} "})
+
+        assert {:noreply, next, render?: false} =
+                 App.handle_info({:alto_tui_event, "run", event, self(), ref}, state)
+
+        assert_receive {^ref, :ok}
+        assert State.current_entries(next) == []
+        next
+      end)
+
+    token = state.stream_frame.token
+
+    {:noreply, state} =
+      App.handle_info(
+        {:alto_tui_event, "run",
+         Alto.Event.durable(:tool_started, %{name: "probe", summary: "probe"})},
+        state
+      )
+
+    assert hd(State.current_entries(state)).text == Enum.map_join(1..100, &"#{&1} ")
+    assert state.stream_frame == nil
+    assert state.stream_events == []
+    assert {:noreply, ^state, render?: false} = App.handle_info({:tui_stream_frame, token}, state)
+  end
+
+  test "stream buffering has a hard event bound and key input flushes pending content", context do
+    state = %{
+      state!(context)
+      | selected_task_id: "task",
+        runs: %{"run" => %{task_id: "task", phase: "waiting"}}
+    }
+
+    event = {:alto_tui_event, "run", Alto.Event.live(:model_delta, %{text: "x"})}
+
+    state =
+      Enum.reduce(1..255, state, fn _, acc ->
+        {:noreply, next, render?: false} = App.handle_info(event, acc)
+        next
+      end)
+
+    {:noreply, state} = App.handle_info(event, state)
+    assert hd(State.current_entries(state)).text == String.duplicate("x", 256)
+    assert state.stream_events == []
+    {:noreply, state, render?: false} = App.handle_info(event, state)
+    result = App.handle_event(%Key{code: "left"}, state)
+    state = elem(result, 1)
+    assert state.stream_frame == nil
+    assert hd(State.current_entries(state)).text == String.duplicate("x", 257)
   end
 end

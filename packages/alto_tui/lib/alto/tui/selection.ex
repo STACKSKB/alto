@@ -239,6 +239,7 @@ defmodule Alto.TUI.Selection do
 
           %{
             index: index,
+            materialize: Keyword.get(opts, :materialize),
             offset: offset,
             limit: limit.(selection.anchor),
             dimensions: dimensions,
@@ -331,6 +332,12 @@ defmodule Alto.TUI.Selection do
       widgets =
         List.update_at(selection.snapshot.source_widgets, scroll.index, fn {widget, rect} ->
           {_, horizontal} = widget.scroll
+
+          text =
+            if scroll[:materialize],
+              do: scroll.materialize.(scroll.origin, offset, selection.region.height)
+
+          widget = if text, do: %{widget | text: text}, else: widget
           {%{widget | scroll: {offset, horizontal}}, rect}
         end)
 
@@ -351,7 +358,8 @@ defmodule Alto.TUI.Selection do
   defp remember_rows(history, snapshot, rect, offset) do
     Enum.reduce(rect.y..(rect.y + rect.height - 1), history, fn y, rows ->
       Map.put_new_lazy(rows, y + offset - rect.y, fn ->
-        row = elem(snapshot.rows, y)
+        row = elem(snapshot.rows, y) |> Map.take([:raw, :ranges])
+        row = %{row | raw: Alto.Retained.detach(row.raw)}
         %{row | raw: :binary.copy(row.raw)}
       end)
     end)

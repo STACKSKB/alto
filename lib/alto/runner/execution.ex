@@ -1035,8 +1035,14 @@ defmodule Alto.Runner.Execution do
 
           commit_tool_outcome(job, outcome, next)
 
-        {:error, {:cancelled, _}, _} = cancelled ->
-          cancelled
+        {:error, {:cancelled, _} = reason, next} ->
+          # Agent operations have crossed the dispatch boundary too. Retain an
+          # unknown outcome before stopping, so cancellation cannot strand the
+          # conversation behind an unresolved operation fence.
+          case commit_tool_outcome(job, {:unknown, reason}, next) do
+            {:event, event, settled} -> {:error, reason, Events.record(settled, event)}
+            {:error, _, _} = error -> error
+          end
 
         {:error, reason, next} ->
           outcome =
@@ -1398,7 +1404,7 @@ defmodule Alto.Runner.Execution do
       output: output,
       loop_state: run.loop_state,
       messages: messages,
-      events: Enum.reverse(run.events_rev),
+      events: Alto.EventBuffer.to_list(run.event_buffer),
       events_dropped: run.events_dropped,
       verdict: final_verdict(run.verdict, disposition),
       model_requests: run.model_requests,

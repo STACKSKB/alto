@@ -16,6 +16,8 @@ defmodule Alto.TUI.View do
 
   @doc "Render one complete frame."
   def widgets(%State{} = state, %{width: width, height: height}) do
+    Alto.TUI.Cache.configure(state.render_cache_bytes)
+    Alto.TUI.Cache.owner(state.selected_task_id || :scratch)
     state = %{state | dimensions: {width, height}}
     layout = layout(state, width, height)
 
@@ -384,14 +386,30 @@ defmodule Alto.TUI.View do
   def transcript_bottom_scroll(state) do
     {width, height} = state.dimensions
     transcript = layout(state, width, height).transcript
-    transcript_bottom(transcript_text(state, transcript), transcript)
+
+    entries = State.visible_entries(state)
+
+    if state.search == nil and entries != [] do
+      index = Alto.TUI.Transcript.index(entries, max(transcript.width - 2, 1))
+      max(index.rows - max(transcript.height - 2, 1), 0)
+    else
+      transcript_bottom(
+        transcript_text(%{state | transcript_follow?: false}, transcript),
+        transcript
+      )
+    end
   end
 
   defp transcript_bottom(text, rect),
     do: Alto.TUI.Viewport.bottom(text, max(rect.width - 2, 1), max(rect.height - 2, 1))
 
   defp transcript_text(%{search: search} = state, rect) when not is_nil(search) do
-    Search.highlighted(state, max(rect.width - 2, 1))
+    Search.highlighted(
+      state,
+      max(rect.width - 2, 1),
+      state.transcript_scroll,
+      max(rect.height - 2, 1)
+    )
   end
 
   defp transcript_text(state, rect) do
@@ -401,7 +419,17 @@ defmodule Alto.TUI.View do
           "^G gear · G goal · B backend · A approval · P provider · M model · R effort · E entry mode · W workspace · X close workspace · T task · N new · D details · U agents · Q quit"
 
       entries ->
-        Alto.TUI.Transcript.render(entries, max(rect.width - 2, 1))
+        width = max(rect.width - 2, 1)
+
+        if state.transcript_follow?,
+          do: Alto.TUI.Transcript.tail(entries, width, max(rect.height - 2, 1)),
+          else:
+            Alto.TUI.Transcript.viewport(
+              entries,
+              width,
+              state.transcript_scroll,
+              max(rect.height - 2, 1)
+            )
     end
   end
 
@@ -436,7 +464,11 @@ defmodule Alto.TUI.View do
       }
     else
       %List{
-        items: Enum.with_index(matches, &Search.result_line(&1, &2, details.content.width)),
+        items:
+          Enum.with_index(
+            matches,
+            &Search.result_line(&1, &2, details.content.width, State.visible_entries(state))
+          ),
         selected: Search.index(state, matches),
         highlight_symbol: "› ",
         highlight_style: style(bg: @panel_alt),

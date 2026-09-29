@@ -38,6 +38,27 @@ defmodule Alto.TUI.MarkdownTest do
     assert byte_size(Transcript.text(%{kind: :tool, text: String.duplicate("x", 50_000)})) < 1_300
   end
 
+  test "followed tail matches the full transcript at varied widths and heights" do
+    entries = [
+      %{kind: :user, text: "Original request\n" <> String.duplicate("history ", 100)},
+      %{kind: :assistant, text: "### Results\n\n**Done**\n\n```elixir\n  :ok\n```"},
+      %{kind: :tool, text: "shell", detail: Enum.map_join(1..30, "\n", &"line #{&1}")},
+      %{kind: :reasoning, text: "## Next\n\nA `small` note."},
+      %{kind: :assistant, text: ""}
+    ]
+
+    for width <- [12, 60], height <- [1, 4, 12, 100] do
+      tail = Transcript.tail(entries, width, height)
+      full = Transcript.render(entries, width)
+      assert tail.lines == Enum.take(full.lines, -height)
+      # Switching documents and then returning must preserve identical styles.
+      Transcript.render([%{kind: :assistant, text: "Another conversation"}], width)
+      assert Transcript.tail(entries, width, height) == tail
+    end
+
+    assert Transcript.tail([], 60, 20).lines == Transcript.render([], 60).lines
+  end
+
   test "native Markdown styles headings, emphasis and inline code" do
     rich = Markdown.render("## Review\n\nA **confirmed** finding in `src/main.ex`.", 60)
     assert plain(rich) =~ "Review"
@@ -265,5 +286,40 @@ defmodule Alto.TUI.MarkdownTest do
     assert selected.scroll.offset > 0
     assert Selection.text(selected) =~ "Heading 1"
     assert Selection.text(selected) =~ "Heading 5"
+  end
+
+  test "indexed windows preserve native wrapping, styles and search coordinates" do
+    sources = [
+      "",
+      "## Heading **strong**",
+      "- first\n- second `code`",
+      "```elixir\n  IO.puts(\"猫\")\n\n  :ok\n```",
+      "| 名 | Value |\n| --- | --- |\n| 猫 | **yes** |\n| two | `three` |",
+      String.duplicate("long **styled** word 猫 ", 40)
+    ]
+
+    entries =
+      Enum.map(sources, &%{kind: :assistant, text: &1}) ++
+        [
+          %{kind: :user, text: "literal **text**"},
+          %{kind: :tool, text: "done", detail: "one\ntwo"}
+        ]
+
+    for width <- [11, 40, 80] do
+      full = Transcript.render(entries, width)
+      index = Transcript.index(entries, width)
+      assert index.rows == length(full.lines)
+
+      plain =
+        Transcript.plain_groups(index)
+        |> Enum.intersperse([ExRatatui.Text.Line.new([])])
+        |> List.flatten()
+
+      assert plain(%Text{lines: plain}) == plain(full)
+
+      for offset <- [0, 1, 5, 14, index.rows - 2], height <- [1, 7, 30] do
+        assert Transcript.window(index, offset, height) == Enum.slice(full.lines, offset, height)
+      end
+    end
   end
 end

@@ -32,6 +32,8 @@ defmodule Alto.Runner.TaskHost do
 
   def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
 
+  def release(handle), do: call(handle, :release)
+
   def await(handle, timeout \\ :infinity), do: call(handle, {:await, timeout})
   def cancel(handle, reason \\ :user), do: call(handle, {:cancel, reason})
   @impl true
@@ -101,6 +103,11 @@ defmodule Alto.Runner.TaskHost do
   end
 
   @impl true
+  def handle_call(:release, _from, %{result: nil} = state),
+    do: {:reply, {:error, :running}, state}
+
+  def handle_call(:release, _from, state), do: {:stop, :normal, :ok, state}
+
   def handle_call({:await, _timeout}, _from, %{result: result} = state) when not is_nil(result),
     do: {:reply, result, state}
 

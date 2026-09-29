@@ -10,20 +10,17 @@ defmodule Alto.TUI.Subagents do
       {:ok, %{sessions: children, truncated: truncated}} ->
         {agents, warnings} =
           Enum.reduce([%{id: session_id} | children], {%{}, []}, fn child, {agents, warnings} ->
-            case Alto.Session.read(child.id, opts) do
-              {:ok, records} ->
-                starts =
-                  Enum.filter(records, &(&1["type"] == "started" and &1["subagent"] == true))
+            case Alto.TUI.SavedSession.load(child.id, opts) do
+              {:ok, projection} ->
+                combined = Map.merge(agents, projection.agents)
+                truncated = projection.truncated or map_size(combined) > 256
+                kept = combined |> Enum.sort_by(&elem(&1, 0)) |> Enum.take(256) |> Map.new()
 
-                Enum.reduce(starts, {agents, warnings}, fn start, {acc, notices} ->
-                  key = start["agent_id"] || child.id <> ":" <> to_string(start["run_id"])
-
-                  if map_size(acc) < 256 or Map.has_key?(acc, key) do
-                    {Map.put(acc, key, saved_agent(child.id, start, records)), notices}
-                  else
-                    {acc, Enum.uniq(["Saved child history was truncated" | notices])}
-                  end
-                end)
+                {kept,
+                 if(truncated,
+                   do: ["Saved child history was truncated" | warnings],
+                   else: warnings
+                 )}
 
               {:error, _} ->
                 {agents, ["Some saved child activity could not be read" | warnings]}
@@ -38,9 +35,8 @@ defmodule Alto.TUI.Subagents do
     end
   end
 
-  defp saved_agent(session, start, records) do
+  def saved_agent(session, start, records) do
     run_id = start["run_id"]
-    records = Enum.filter(records, &(&1["run_id"] == run_id))
     completed = Enum.find(Enum.reverse(records), &(&1["type"] == "completed"))
     identity = if is_map(start["agent_identity"]), do: start["agent_identity"], else: %{}
     path = identity["path"]
@@ -69,16 +65,16 @@ defmodule Alto.TUI.Subagents do
     }
   end
 
-  defp saved_value(nil), do: ""
+  def saved_value(nil), do: ""
 
-  defp saved_value(encoded) do
+  def saved_value(encoded) do
     case Alto.Session.decode_term(encoded) do
       {:ok, value} -> Alto.Display.error(value)
       _ -> "[saved value unavailable]"
     end
   end
 
-  defp saved_activity(%{"type" => "event", "event" => event} = record) do
+  def saved_activity(%{"type" => "event", "event" => event} = record) do
     data = if is_map(record["wire_data"]), do: record["wire_data"], else: %{}
 
     value = if is_map(data["value"]), do: data["value"], else: %{}
@@ -101,7 +97,7 @@ defmodule Alto.TUI.Subagents do
     end
   end
 
-  defp saved_activity(_), do: ""
+  def saved_activity(_), do: ""
   defp text_value(value) when is_binary(value), do: value
   defp text_value(_), do: ""
 
@@ -182,7 +178,7 @@ defmodule Alto.TUI.Subagents do
       }
 
       agent = fun.(Map.get(agents, key, base))
-      %{state | subagents: Map.put(state.subagents, task, Map.put(agents, key, agent))}
+      Alto.TUI.State.put_agent(state, task, key, agent)
     else
       state
     end
@@ -210,8 +206,9 @@ defmodule Alto.TUI.Subagents do
     end
   end
 
-  defp tail(text) do
+  def tail(text) do
     # Bound retained streamed text, preserving valid UTF-8 at the cut.
-    if byte_size(text) > 16_000, do: text |> String.slice(-4_000, 4_000), else: text
+    if(byte_size(text) > 16_000, do: text |> String.slice(-4_000, 4_000), else: text)
+    |> Alto.Retained.detach()
   end
 end

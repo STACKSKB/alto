@@ -107,4 +107,29 @@ defmodule Alto.Runner.TaskHostTest do
     assert_receive {:alto_runner_result, ^ref,
                     %Result{status: :error, reason: {:run_process_failed, :cancel_timeout}}}
   end
+
+  test "explicit release refuses running work and frees a consumed result host" do
+    parent = self()
+
+    {:ok, handle} =
+      TaskHost.start(
+        fn _ ->
+          send(parent, {:worker, self()})
+
+          receive do
+            :finish -> Result.empty()
+          end
+        end,
+        []
+      )
+
+    assert_receive {:worker, worker}
+    assert {:error, :running} = TaskHost.release(handle)
+    assert Process.alive?(worker)
+    send(worker, :finish)
+    assert %Result{} = TaskHost.await(handle, 1000)
+    monitor = Process.monitor(handle.pid)
+    assert :ok = TaskHost.release(handle)
+    assert_receive {:DOWN, ^monitor, :process, _, :normal}
+  end
 end

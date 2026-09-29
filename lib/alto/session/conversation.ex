@@ -76,13 +76,14 @@ defmodule Alto.Session.Conversation do
   @spec fetch(Session.session_id(), :latest | revision(), keyword()) ::
           {:ok, snapshot()} | {:error, term()}
   def fetch(id, revision \\ :latest, opts \\ []) do
-    with {:ok, revision} <- requested_revision(revision) do
-      with_snapshot(id, opts, fn head ->
-        with :ok <-
-               check_expected(id, Keyword.get(opts, :expected_revision, :any), head["revision"]),
-             do: select_revision(id, revision, head, opts)
-      end)
-    end
+    # The head is atomically replaced and revisions are immutable. A viewer can
+    # read either complete head without spawning flock or waiting for a writer.
+    # Execution/resume and all mutations retain their locks and revision checks.
+    with :ok <- Session.validate_id(id),
+         {:ok, revision} <- requested_revision(revision),
+         {:ok, head} <- read_head(id, opts),
+         :ok <- check_expected(id, Keyword.get(opts, :expected_revision, :any), head["revision"]),
+         do: select_revision(id, revision, head, opts)
   end
 
   @doc "Fence a settled revision before any tool in the named batch is dispatched."
@@ -115,7 +116,7 @@ defmodule Alto.Session.Conversation do
   defp persist_locked(draft, constraints, opts) do
     id = draft["session_id"]
 
-    with {:ok, current} <- current_head(id, opts),
+    with {:ok, current, current_encoded} <- current_head(id, opts),
          current_revision <- if(current, do: current["revision"], else: 0),
          retained_bytes <- if(current, do: current["conversation_bytes"], else: 0),
          :ok <- check_expected(id, constraints.expected, current_revision),
@@ -147,27 +148,25 @@ defmodule Alto.Session.Conversation do
              byte_size(encoded)
            ),
          :ok <- Storage.ensure_private_dir(conversation_dir(opts, id), owned: true),
-         :ok <- archive_current(id, current, opts),
+         :ok <- archive_current(id, current, current_encoded, opts),
          snapshot <- Map.put(entry, "conversation_bytes", conversation_bytes),
-         :ok <- write_head(id, entry, opts) do
+         :ok <- write_encoded_head(id, encoded, opts) do
       {:ok, snapshot}
     end
   end
 
   defp current_head(id, opts) do
-    case read_head(id, opts) do
-      {:ok, head} -> {:ok, head}
-      {:error, :enoent} -> {:ok, nil}
+    case read_head(id, opts, true) do
+      {:ok, head, encoded} -> {:ok, head, encoded}
+      {:error, :enoent} -> {:ok, nil, nil}
       {:error, _} = error -> error
     end
   end
 
-  defp archive_current(_id, nil, _opts), do: :ok
+  defp archive_current(_id, nil, _encoded, _opts), do: :ok
 
-  defp archive_current(id, snapshot, opts) do
-    with {:ok, encoded} <- encode_bounded(Map.put(snapshot, "dispatch", nil)),
-         do: put_entry(id, snapshot["revision"], encoded, opts)
-  end
+  defp archive_current(id, snapshot, encoded, opts),
+    do: put_entry(id, snapshot["revision"], encoded, opts)
 
   defp resolve_parent(_id, nil, parent), do: {:ok, parent}
 
@@ -206,10 +205,14 @@ defmodule Alto.Session.Conversation do
   end
 
   defp write_head(id, record, opts) do
+    with {:ok, encoded} <- encode_bounded(record, @max_head_bytes),
+         do: write_encoded_head(id, encoded, opts)
+  end
+
+  defp write_encoded_head(id, encoded, opts) do
     path = transcript_path(opts, id)
 
-    with {:ok, encoded} <- encode_bounded(record, @max_head_bytes),
-         :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
+    with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
          :ok <- Alto.AtomicFile.write(path, encoded <> "\n", mode: 0o600) do
       :ok
     else
@@ -217,9 +220,9 @@ defmodule Alto.Session.Conversation do
     end
   end
 
-  defp read_head(id, opts) do
+  defp read_head(id, opts, encoded? \\ false) do
     case Alto.BoundedFile.read(transcript_path(opts, id), @max_head_bytes) do
-      {:ok, contents} -> decode_head(contents, id)
+      {:ok, contents} -> decode_head(contents, id, encoded?)
       {:error, :enoent} -> missing_head(id, opts)
       {:error, reason} -> {:error, reason}
     end
@@ -231,11 +234,11 @@ defmodule Alto.Session.Conversation do
       else: {:error, :enoent}
   end
 
-  defp decode_head(contents, id) do
+  defp decode_head(contents, id, encoded?) do
     with {:ok, %{"revision" => revision} = record} <- JSON.decode(contents),
          {:ok, ^revision} <- requested_revision(revision),
-         {:ok, snapshot} <- entry_snapshot({:ok, record}, id, revision) do
-      {:ok, snapshot}
+         {:ok, snapshot, encoded} <- entry_snapshot({:ok, record}, id, revision, nil, true) do
+      if encoded?, do: {:ok, snapshot, encoded}, else: {:ok, snapshot}
     else
       _ -> {:error, {:session_corrupt, id, :transcript}}
     end
@@ -246,13 +249,18 @@ defmodule Alto.Session.Conversation do
 
   defp select_revision(id, revision, _head, opts) do
     case Alto.BoundedFile.read(entry_path(opts, id, revision), @max_entry_bytes) do
-      {:ok, contents} -> entry_snapshot(JSON.decode(contents), id, revision, byte_size(contents))
-      {:error, :enoent} -> {:error, {:conversation_revision_not_found, id, revision}}
-      {:error, reason} -> {:error, {:conversation_read_failed, reason}}
+      {:ok, contents} ->
+        entry_snapshot(JSON.decode(contents), id, revision, byte_size(contents), false)
+
+      {:error, :enoent} ->
+        {:error, {:conversation_revision_not_found, id, revision}}
+
+      {:error, reason} ->
+        {:error, {:conversation_read_failed, reason}}
     end
   end
 
-  defp entry_snapshot(decoded, id, revision, entry_bytes \\ nil) do
+  defp entry_snapshot(decoded, id, revision, entry_bytes, encoded?) do
     with {:ok, %{"dispatch" => dispatch} = entry} <- decoded,
          true <- is_nil(entry_bytes) or is_nil(dispatch),
          :ok <- validate_dispatch_fence(dispatch, revision),
@@ -266,7 +274,10 @@ defmodule Alto.Session.Conversation do
          {:ok, _parent} <- optional_parent(entry["parent"]),
          {:ok, _summary} <- optional_summary(entry["summary"]),
          {:ok, encoded} <- encode_bounded(Map.put(entry, "dispatch", nil)) do
-      {:ok, Map.put(entry, "conversation_bytes", retained + (entry_bytes || byte_size(encoded)))}
+      snapshot =
+        Map.put(entry, "conversation_bytes", retained + (entry_bytes || byte_size(encoded)))
+
+      if encoded?, do: {:ok, snapshot, encoded}, else: {:ok, snapshot}
     else
       _ -> {:error, {:conversation_corrupt, id, revision}}
     end

@@ -120,6 +120,55 @@ defmodule Alto.TUI.ApprovalControlsTest do
     refute_receive {:review_decision, _}, 10
   end
 
+  test "approval hotkeys preserve context or the pane the user chose", context do
+    for dimensions <- [{140, 40}, {80, 24}], code <- ["f8", "f9"] do
+      state = pending_state(context, dimensions)
+      {:noreply, decided} = App.handle_event(%ExRatatui.Event.Key{code: code}, state)
+      assert_receive {:alto_approval_decision, "approval-1", _}
+      assert decided.focus == :details
+      assert decided.details_return_focus == state.details_return_focus
+      refute decided.details_drawer_auto_opened?
+      # A subsequent resolved event must not close a drawer the user is using.
+      resolved = App.drop_run(decided, "run-1")
+      assert resolved.focus == :details
+      assert resolved.details_return_focus == state.details_return_focus
+    end
+
+    for focus <- [:composer, :transcript, :rail] do
+      state = %{pending_state(context, {140, 40}) | focus: focus}
+      {:noreply, decided} = App.handle_event(%ExRatatui.Event.Key{code: "f8"}, state)
+      assert_receive {:alto_approval_decision, "approval-1", :approve}
+      assert decided.focus == focus
+    end
+  end
+
+  test "leaving a subagent returns to context and closing a drawer is explicit", context do
+    for dimensions <- [{140, 40}, {80, 24}] do
+      state = %{
+        pending_state(context, dimensions)
+        | pending_approvals: [],
+          selected_agent_id: "child",
+          details_scroll: 50
+      }
+
+      ExRatatui.textarea_set_value(state.textarea, "draft")
+      {:noreply, context_view} = App.handle_event(%ExRatatui.Event.Key{code: "esc"}, state)
+      assert context_view.selected_agent_id == nil
+      assert context_view.details_scroll == 0
+      assert context_view.focus == :details
+      assert context_view.details_return_focus == state.details_return_focus
+      assert ExRatatui.textarea_get_value(context_view.textarea) == "draft"
+
+      if state.details_return_focus do
+        {:noreply, closed} = App.handle_event(%ExRatatui.Event.Key{code: "esc"}, context_view)
+        assert closed.focus == :composer
+        assert closed.details_return_focus == nil
+      else
+        assert State.close_details_drawer(context_view) == context_view
+      end
+    end
+  end
+
   test "renders labeled desktop controls and accepts clicks on their labels", context do
     state = pending_state(context, {140, 40})
     {buffer, _terminal} = render(state, 140, 40)
@@ -135,6 +184,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:noreply, decided} = click(approve_event, state)
     assert_receive {:alto_approval_decision, "approval-1", :approve}
     assert decided.pending_approvals == []
+    assert decided.focus == :details
 
     state = pending_state(context, {140, 40})
     {buffer, _terminal} = render(state, 140, 40)
@@ -192,8 +242,12 @@ defmodule Alto.TUI.ApprovalControlsTest do
     assert {:noreply, decided} = click(click_at(deny, "[ Deny F9 ]"), scrolled)
     assert_receive {:alto_approval_decision, "approval-1", {:deny, :user_denied}}
     assert decided.pending_approvals == []
-    refute decided.details_return_focus
-    assert decided.focus == :composer
+    assert decided.details_return_focus == :composer
+    assert decided.focus == :details
+    refute decided.details_drawer_auto_opened?
+    {:noreply, closed} = App.handle_event(%ExRatatui.Event.Key{code: "esc"}, decided)
+    assert closed.focus == :composer
+    assert closed.details_return_focus == nil
   end
 
   test "dragging approval labels does not select UI text or send a decision", context do

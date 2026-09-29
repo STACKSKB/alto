@@ -3,6 +3,9 @@ defmodule Alto.TUI.Search do
   alias Alto.TUI.{State, Transcript}
   alias ExRatatui.{Style, Text}
   alias ExRatatui.Text.{Line, Span}
+  @max_matches 1000
+
+  def clear_cache, do: Alto.TUI.Cache.drop_namespace(__MODULE__)
 
   def open(%{search: search} = state) when not is_nil(search), do: state
 
@@ -36,6 +39,8 @@ defmodule Alto.TUI.Search do
   def close(%{search: nil} = state), do: state
 
   def close(state) do
+    clear_cache()
+
     state
     |> Map.merge(state.search.return_state)
     |> Map.merge(%{search: nil, selection: Alto.TUI.Selection.new()})
@@ -71,47 +76,50 @@ defmodule Alto.TUI.Search do
 
   def find(_entries, ""), do: []
 
-  def find(entries, query) do
+  def find(entries, query), do: match_data(entries, query).matches
+
+  defp match_data(entries, query) do
     cached(:matches, {entries, query}, fn ->
       regex = Regex.compile!(Regex.escape(query), "iu")
 
-      entries
-      |> Enum.with_index()
-      |> Enum.flat_map(fn {entry, index} ->
-        source = source(entry)
+      {matches, _} =
+        Enum.reduce_while(Enum.with_index(entries), {[], 0}, fn {entry, index}, {acc, count} ->
+          source = source(entry)
+          offsets = scan(regex, source, @max_matches + 1 - count)
 
-        Regex.scan(regex, source, return: :index)
-        |> Enum.with_index()
-        |> Enum.map(fn {[{start, size}], occurrence} ->
-          before =
-            binary_part(source, max(start - 160, 0), min(start, 160))
-            |> valid_suffix()
-            |> String.split("\n")
-            |> List.last()
-            |> String.slice(-40, 40)
+          found =
+            Enum.with_index(offsets, fn [{start, size}], occurrence ->
+              %{
+                entry: index,
+                start: start,
+                size: size,
+                occurrence: occurrence,
+                kind: to_string(entry[:kind] || "message"),
+                hit: Alto.Retained.detach(binary_part(source, start, size))
+              }
+            end)
 
-          hit = binary_part(source, start, size)
-
-          tail =
-            binary_part(source, start + size, byte_size(source) - start - size)
-            |> Alto.Text.prefix(400)
-            |> String.split("\n")
-            |> hd()
-            |> String.slice(0, 100)
-
-          %{
-            entry: index,
-            start: start,
-            size: size,
-            occurrence: occurrence,
-            kind: to_string(entry[:kind] || "message"),
-            before: before,
-            hit: hit,
-            after: tail
-          }
+          next = {acc ++ found, count + length(found)}
+          if elem(next, 1) > @max_matches, do: {:halt, next}, else: {:cont, next}
         end)
-      end)
+
+      %{matches: Enum.take(matches, @max_matches), truncated: length(matches) > @max_matches}
     end)
+  end
+
+  # Regex.run with an offset keeps both the temporary scan and retained result
+  # bounded. Literal queries are nonempty, so every match advances.
+  defp scan(regex, source, limit), do: scan(regex, source, limit, 0, [])
+  defp scan(_, _, 0, _, acc), do: Enum.reverse(acc)
+
+  defp scan(regex, source, limit, offset, acc) do
+    case Regex.run(regex, source, return: :index, offset: offset) do
+      [{start, size}] = hit when size > 0 ->
+        scan(regex, source, limit - 1, start + size, [hit | acc])
+
+      _ ->
+        Enum.reverse(acc)
+    end
   end
 
   # The bounded prefix window may start inside a UTF-8 codepoint.
@@ -134,7 +142,13 @@ defmodule Alto.TUI.Search do
 
   def count(state) do
     matches = matches(state)
-    "#{if matches == [], do: 0, else: index(state, matches) + 1}/#{length(matches)}"
+
+    suffix =
+      if query(state) != "" and match_data(State.visible_entries(state), query(state)).truncated,
+        do: "+",
+        else: ""
+
+    "#{if matches == [], do: 0, else: index(state, matches) + 1}/#{length(matches)}#{suffix}"
   end
 
   def move(state, delta) do
@@ -162,7 +176,8 @@ defmodule Alto.TUI.Search do
     query = query(state)
 
     cached(:projection, {entries, query, width}, fn ->
-      document = Transcript.document(entries, width, "alto", expanded: true)
+      layout = Transcript.index(entries, width, expanded: true)
+      document = %{groups: Transcript.plain_groups(layout)}
       matches = find(entries, query)
       wrapped = wrapped_pattern(query)
 
@@ -172,7 +187,7 @@ defmodule Alto.TUI.Search do
           body = if assistant?, do: Enum.drop(lines, 1), else: lines
           mapping = source_rows(body, source(entry), row + if(assistant?, do: 1, else: 0))
           text = Enum.map_join(body, "\n", &line_text/1)
-          offsets = if wrapped, do: Regex.scan(wrapped, text, return: :index), else: []
+          offsets = if wrapped, do: scan(wrapped, text, @max_matches), else: []
 
           {{row + if(assistant?, do: 1, else: 0), text, offsets, mapping},
            row + length(lines) + 1}
@@ -209,7 +224,7 @@ defmodule Alto.TUI.Search do
           end
         end)
 
-      %{text: document.text, matches: matches}
+      %{layout: layout, matches: matches}
     end)
   end
 
@@ -266,11 +281,16 @@ defmodule Alto.TUI.Search do
     end
   end
 
-  def highlighted(state, width) do
+  def highlighted(state, width, offset \\ 0, height \\ :all) do
     data = projection(state, width)
     selected = index(state, data.matches)
 
-    cached(:highlight, {data, selected}, fn ->
+    height = if height == :all, do: max(data.layout.rows, 1), else: height
+
+    cached(:highlight, {data, selected, offset, height}, fn ->
+      text =
+        Transcript.viewport(State.visible_entries(state), width, offset, height, expanded: true)
+
       ranges =
         data.matches
         |> Enum.with_index()
@@ -280,9 +300,9 @@ defmodule Alto.TUI.Search do
         |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
       %Text{
-        data.text
+        text
         | lines:
-            Enum.with_index(data.text.lines, fn line, row ->
+            Enum.with_index(text.lines, fn line, row ->
               highlight_line(line, Map.get(ranges, row, []))
             end)
       }
@@ -321,13 +341,29 @@ defmodule Alto.TUI.Search do
     %{line | spans: List.flatten(spans)}
   end
 
-  def result_line(match, number, width) do
-    before = String.slice(match.before, -max(div(width - 20, 3), 1), max(div(width - 20, 3), 1))
+  def result_line(match, number, width, entries) do
+    source = source(Enum.at(entries, match.entry))
+
+    before =
+      binary_part(source, max(match.start - 160, 0), min(match.start, 160))
+      |> valid_suffix()
+      |> String.split("\n")
+      |> List.last()
+      |> String.slice(-40, 40)
+
+    tail =
+      binary_part(source, match.start + match.size, byte_size(source) - match.start - match.size)
+      |> Alto.Text.prefix(400)
+      |> String.split("\n")
+      |> hd()
+      |> String.slice(0, 100)
+
+    before = String.slice(before, -max(div(width - 20, 3), 1), max(div(width - 20, 3), 1))
 
     Line.new([
       Span.new("#{number + 1} · #{match.kind} › " <> before),
       Span.new(match.hit, style: match_style(false)),
-      Span.new(match.after)
+      Span.new(tail)
     ])
   end
 
@@ -336,17 +372,6 @@ defmodule Alto.TUI.Search do
 
   defp line_text(line), do: line.spans |> Enum.map_join(& &1.content) |> String.trim_trailing()
 
-  defp cached(key, input, fun) do
-    key = {__MODULE__, key}
-
-    case Process.get(key) do
-      {^input, result} ->
-        result
-
-      _ ->
-        result = fun.()
-        Process.put(key, {input, result})
-        result
-    end
-  end
+  defp cached(key, input, fun),
+    do: Alto.TUI.Cache.fetch({__MODULE__, key}, input, 1, fun)
 end

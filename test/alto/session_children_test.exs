@@ -41,6 +41,26 @@ defmodule Alto.Session.ChildrenTest do
     assert hd(children).started["agent_id"] == "agent-stable"
   end
 
+  test "cached discovery sees appended, repaired, replaced and removed logs", %{dir: dir} do
+    {:ok, parent} = Session.create("parent", %{}, session_dir: dir)
+    assert {:ok, %{sessions: []}} = Session.Children.list(parent, session_dir: dir)
+    first = child(parent, dir)
+    assert {:ok, %{sessions: [%{id: ^first}]}} = Session.Children.list(parent, session_dir: dir)
+    nested = child(first, dir)
+    assert {:ok, %{sessions: children}} = Session.Children.list(parent, session_dir: dir)
+    assert length(children) == 2
+    path = Path.join(dir, nested <> ".jsonl")
+    original = File.read!(path)
+    File.write!(path, "{torn")
+    assert {:ok, %{sessions: [_]}} = Session.Children.list(parent, session_dir: dir)
+    File.write!(path <> ".replacement", original)
+    File.rename!(path <> ".replacement", path)
+    assert {:ok, %{sessions: restored}} = Session.Children.list(parent, session_dir: dir)
+    assert length(restored) == 2
+    File.rm!(Path.join(dir, first <> ".jsonl"))
+    assert {:ok, %{sessions: []}} = Session.Children.list(parent, session_dir: dir)
+  end
+
   test "bounds returned children and reports truncation", %{dir: dir} do
     {:ok, parent} = Session.create("parent", %{}, session_dir: dir)
     for _ <- 1..257, do: child(parent, dir)
@@ -52,5 +72,35 @@ defmodule Alto.Session.ChildrenTest do
 
     assert {:error, {:invalid_session_id, _}} =
              Session.Children.list("../escape", session_dir: dir)
+  end
+
+  test "persisted headers survive an empty process cache and rebuild after cache corruption", %{
+    dir: dir
+  } do
+    id = child("sess-parent", dir)
+    names = [id <> ".jsonl"]
+
+    assert {:reply, [%{id: ^id}] = headers, _} =
+             Session.ChildIndex.handle_call({dir, names}, nil, [])
+
+    cache = Path.join([dir, ".cache", "children.json"])
+    assert File.exists?(cache)
+    assert {:reply, ^headers, _} = Session.ChildIndex.handle_call({dir, names}, nil, [])
+    File.write!(cache, "broken")
+    assert {:reply, ^headers, _} = Session.ChildIndex.handle_call({dir, names}, nil, [])
+    assert {:ok, %{"v" => 1}} = JSON.decode(File.read!(cache))
+  end
+
+  test "cached title does not pin the log read buffer", %{dir: dir} do
+    id = child("sess-parent", dir, %{task: String.duplicate("task ", 24)})
+    path = Path.join(dir, id <> ".jsonl")
+
+    Session.with_lock(id, [session_dir: dir], fn ->
+      File.write!(path, String.duplicate(" ", 40_000), [:append])
+    end)
+
+    header = Session.Children.header(path)
+    assert byte_size(header["task"]) == 120
+    assert :binary.referenced_byte_size(header["task"]) < 2000
   end
 end

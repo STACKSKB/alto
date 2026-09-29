@@ -24,6 +24,9 @@ defmodule Alto.TUI.RunLifecycleTest do
           sink.(Alto.Event.live(:model_delta, %{text: text}))
           {:ok, %{message: received <> text, tool_calls: []}}
 
+        {:tools, calls} ->
+          {:ok, %{message: nil, tool_calls: calls}}
+
         :fail ->
           {:error, :controlled_failure}
       end
@@ -480,6 +483,76 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert State.selected_task(state(app))["goal"] == nil
     send(worker, {:finish, "done"})
     eventually(fn -> state(app).runs == %{} end)
+  end
+
+  test "a follow-up sends from context after denied approval and provider failure", %{root: root} do
+    app =
+      start_app(root,
+        provider_profiles: [
+          %Alto.Harness.ProviderProfile{
+            id: "controlled",
+            label: "Controlled",
+            provider: {ControlledProvider, owner: self(), model: "test"},
+            models: [%{id: "test"}]
+          }
+        ],
+        loop: Alto.default_loop(),
+        tools: [ApprovalProbe],
+        approval: &Alto.Approval.interactive/2,
+        session_history: :settled
+      )
+
+    submit(app, "do work")
+    assert_receive {:model_waiting, first, _}, 2_000
+    send(first, {:tools, [%{id: "denied-call", name: "approval_probe", arguments_json: "{}"}]})
+    eventually(fn -> state(app).pending_approvals != [] end)
+    key(app, "f9")
+    assert_receive {:model_waiting, after_denial, _}, 2_000
+    send(after_denial, :fail)
+    eventually(fn -> state(app).runs == %{} end)
+    assert state(app).focus == :details
+    session = State.selected_task(state(app))["conversation_id"]
+    ExRatatui.textarea_set_value(state(app).textarea, "continue without that permission")
+    key(app, "enter")
+    assert_receive {:model_waiting, resumed, messages}, 2_000
+    assert List.last(messages)["content"] == "continue without that permission"
+    assert Enum.any?(messages, &(&1["tool_call_id"] == "denied-call"))
+    send(resumed, {:finish, "continued"})
+    eventually(fn -> state(app).runs == %{} end)
+    assert State.selected_task(state(app))["conversation_id"] == session
+  end
+
+  test "older cancelled native sessions recover on the next follow-up", %{root: root} do
+    app = start_app(root)
+    submit(app, "original work")
+    assert_receive {:model_waiting, first, _}, 2_000
+    send(first, {:finish, "saved progress"})
+    eventually(fn -> state(app).runs == %{} end)
+    id = State.selected_task(state(app))["conversation_id"]
+    opts = [session_dir: Path.join(root, "sessions")]
+    {:ok, _} = Alto.Session.mark_dispatched(id, ["old:op-1"], Keyword.put(opts, :run_id, "old"))
+
+    submit(app, "continue")
+    assert state(app).runs == %{}
+    assert state(app).notice =~ "Cannot continue:"
+    assert List.last(State.current_entries(state(app))).text =~ "Cannot continue:"
+    assert ExRatatui.textarea_get_value(state(app).textarea) == "continue"
+    refute_receive {:model_waiting, _, _}, 20
+
+    :ok =
+      Alto.Session.append(
+        id,
+        Alto.Session.completed_record(%{run_id: "old", status: :cancelled}),
+        opts
+      )
+
+    submit(app, "continue")
+    assert_receive {:model_waiting, resumed, messages}, 2_000
+    assert inspect(messages) =~ "alto_cancelled_run_recovery"
+    assert inspect(messages) =~ "saved progress"
+    send(resumed, {:finish, "continued"})
+    eventually(fn -> state(app).runs == %{} end)
+    assert State.selected_task(state(app))["conversation_id"] == id
   end
 
   defp open_goal(app) do

@@ -18,6 +18,8 @@ defmodule Alto.Runner do
   @callback await(term(), timeout()) :: outcome() | {:error, :await_timeout}
   @callback cancel(term(), term()) :: :ok | :already_finished
   @callback terminate(term(), term()) :: outcome()
+  @callback release(term()) :: :ok | {:error, term()}
+  @optional_callbacks release: 1
   @callback subscribe(term(), pid()) :: {:ok, reference()} | {:error, term()}
 
   @doc "The default execution host."
@@ -44,6 +46,15 @@ defmodule Alto.Runner do
   @doc "Stop after cooperative cancellation has failed; the outcome may be unknown."
   def terminate(%Handle{runner: runner, state: state}, reason \\ :cancel_timeout),
     do: runner.terminate(state, reason)
+
+  @doc "Release a completed outcome after its owner has consumed it. Running work is untouched."
+  def release(%Handle{runner: runner, state: state}) do
+    if function_exported?(runner, :release, 1),
+      do: runner.release(state),
+      else: {:error, :unsupported}
+  end
+
+  def release(_), do: {:error, :unsupported}
 
   def subscribe(%Handle{runner: runner, state: state}, pid \\ self()),
     do: runner.subscribe(state, pid)

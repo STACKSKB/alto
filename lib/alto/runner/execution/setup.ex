@@ -105,7 +105,7 @@ defmodule Alto.Runner.Execution.Setup do
         Keyword.get(opts, :messaging_tools, Alto.Messaging.allowed_tools(settings)),
       model_requests: 0,
       usage: Usage.new(),
-      events_rev: [],
+      event_buffer: %Alto.EventBuffer{},
       events_dropped: 0,
       verdict: :empty,
       op_seq: 0,

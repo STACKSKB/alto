@@ -681,6 +681,60 @@ defmodule Alto.FrontEnd.RegistryTest do
     assert :ok = Registry.request(registry, {:cancel, id, :cleanup})
   end
 
+  test "zero replay-byte budget reports a gap without dropping terminal delivery", %{
+    registry: registry,
+    root: root
+  } do
+    start_registry(registry, root, max_retained_event_bytes: 0)
+    {:ok, id} = Registry.request(registry, {:start_run, "tool-loop", "finish", []})
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
+    :ok = Registry.request(registry, {:attach, self(), id, 1, [:durable]})
+    Registry.pull(registry, self(), 10)
+    assert_receive {:alto_notification, {:attached, ^id, true, 5, []}}, @receive_timeout
+    assert_receive {:alto_notification, {:result, ^id, _}}, @receive_timeout
+  end
+
+  test "finished-byte eviction still publishes the result and releases its host", %{
+    registry: registry,
+    root: root
+  } do
+    start_registry(registry, root, max_finished_bytes: 0)
+    :ok = Registry.request(registry, {:attach, self(), nil, 1, [:durable]})
+    {:ok, id} = Registry.request(registry, {:start_run, "blocking-loop", "wait", []})
+    run = :sys.get_state(registry).runs[id]
+    host = run.handle.state.pid
+    monitor = Process.monitor(host)
+    assert :ok = Registry.request(registry, {:cancel, id, :cleanup})
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
+    assert :sys.get_state(registry).finished_order == []
+    refute Map.has_key?(:sys.get_state(registry).runs, id)
+    assert_receive {:DOWN, ^monitor, :process, ^host, :normal}, @receive_timeout
+    Registry.pull(registry, self(), 100)
+    assert_receive {:alto_notification, {:result, ^id, _}}, @receive_timeout
+  end
+
+  test "subscriber bytes are bounded across all clients", %{registry: registry, root: root} do
+    start_registry(registry, root, max_subscriber_bytes: 256)
+
+    peer =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn -> send(peer, :stop) end)
+
+    for client <- [self(), peer],
+        do: :ok = Registry.request(registry, {:attach, client, nil, 1, [:durable]})
+
+    {:ok, _} = Registry.request(registry, {:start_run, "tool-loop", "finish", []})
+    wait_until(fn -> Registry.request(registry, :run_ids) == [] end)
+    subs = :sys.get_state(registry).subscribers |> Map.values()
+    assert Enum.sum(Enum.map(subs, & &1.buffered_bytes)) <= 256
+    assert Enum.any?(subs, &(&1.overflow != []))
+  end
+
   # Notifications are pull-based, so a background puller keeps the test
   # process consuming while it asserts. It stops well before the test VM.
   defp attach(registry, run_id \\ nil, domains \\ [:durable, :live])

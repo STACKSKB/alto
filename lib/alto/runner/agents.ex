@@ -345,7 +345,7 @@ defmodule Alto.Runner.Agents do
         if(run,
           do:
             run
-            |> Map.drop([:messages_rev, :events_rev, :loop_state])
+            |> Map.drop([:messages_rev, :event_buffer, :loop_state])
             |> Map.put(:execution_owner, self())
         ),
       starter: nil,

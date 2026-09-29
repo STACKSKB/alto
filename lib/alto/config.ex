@@ -19,6 +19,7 @@ defmodule Alto.Config do
   ]
   @execution_limits @authority_limits ++
                       [
+                        max_event_bytes: [type: :non_neg_integer, default: 8_000_000],
                         provider_retries: [type: :non_neg_integer, default: 0],
                         agent_depth: [type: :non_neg_integer, default: 0],
                         resume_snapshot: [type: :boolean, default: true],

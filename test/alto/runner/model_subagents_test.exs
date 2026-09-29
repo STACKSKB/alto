@@ -86,6 +86,43 @@ defmodule Alto.Runner.ModelSubagentsTest do
     )
   end
 
+  test "cancelling a dispatched spawn records an unknown outcome and remains resumable" do
+    dir = Path.join(System.tmp_dir!(), "alto-cancel-spawn-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]
+
+    opts =
+      options(calls,
+        session: :new,
+        session_dir: dir,
+        session_history: :settled,
+        provider_profiles: [
+          %Alto.Harness.ProviderProfile{id: "worker", provider: {Block, owner: self()}}
+        ]
+      )
+
+    {:ok, handle} = Alto.start("delegate", opts)
+    assert_receive {:blocking, _}, 5_000
+    :ok = Alto.cancel(handle, :user)
+    result = Alto.await(handle, 5_000)
+    assert result.status == :cancelled
+    assert result.persistence == :ok
+    assert Enum.any?(result.events, &(&1.type == :tool_failed and &1.data.outcome == :unknown))
+    assert {:ok, resume} = Alto.Session.resume_options(result.session_id, session_dir: dir)
+
+    continued =
+      Alto.run("continue without repeating the cancelled work", Keyword.merge(opts, resume))
+
+    assert continued.status == :ok
+
+    assert Enum.any?(continued.messages, fn message ->
+             message["role"] == "tool" and message["tool_call_id"] == "spawn" and
+               String.contains?(message["content"], "cancelled")
+           end)
+
+    refute_receive {:blocking, _}, 20
+  end
+
   test "child lifecycle and model activity have stable separate identities" do
     owner = self()
     calls = [call("spawn", "spawn_agents", %{"agents" => [task()]})]

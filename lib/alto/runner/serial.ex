@@ -110,6 +110,8 @@ defmodule Alto.Runner.Serial do
   end
 
   @impl true
+  defdelegate release(handle), to: TaskHost
+  @impl true
   defdelegate await(handle, timeout \\ :infinity), to: TaskHost
   @impl true
   defdelegate cancel(handle, reason \\ :user), to: TaskHost
