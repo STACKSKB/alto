@@ -1398,6 +1398,13 @@ defmodule Alto.Runner.Execution do
   defp result(run, output, disposition, reason \\ nil) do
     run = merge_async(run, if(disposition == :checkpoint, do: :collect, else: :close))
     messages = Enum.reverse(run.messages_rev)
+    history_digest = Map.get(run, :history_digest)
+    resolved_operations = Map.get(run, :resolved_operations, [])
+
+    transcript_persisted =
+      not is_nil(history_digest) and resolved_operations == [] and
+        history_digest ==
+          :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic]))
 
     value = %Result{
       status: :ok,
@@ -1415,11 +1422,8 @@ defmodule Alto.Runner.Execution do
       transcript_revision: run.transcript_revision,
       context_observation:
         Alto.Context.Observation.dump(Map.get(run, :context_observation), messages),
-      resolved_operations: Map.get(run, :resolved_operations, []),
-      transcript_persisted:
-        Map.get(run, :history_digest) ==
-          :crypto.hash(:sha256, :erlang.term_to_binary(run.messages_rev, [:deterministic])) and
-          Map.get(run, :resolved_operations, []) == [],
+      resolved_operations: resolved_operations,
+      transcript_persisted: transcript_persisted,
       usage: run.usage,
       persistence: Result.persistence_status(Enum.reverse(run.persistence_errors))
     }

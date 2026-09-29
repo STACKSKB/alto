@@ -234,7 +234,9 @@ defmodule Alto.Runner.Agents do
   def handle_info({:alto_runner_result, ref, outcome}, state) when is_reference(ref),
     do:
       {:noreply,
-       state |> update_entries(&(&1.ref == ref), &finish(&1, outcome, true)) |> dispatch()}
+       state
+       |> update_entries(&(&1.ref == ref), &finish(&1, outcome, state.runner, true))
+       |> dispatch()}
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner: ref} = state),
     do: {:stop, :normal, stop_children(state)}
@@ -257,11 +259,15 @@ defmodule Alto.Runner.Agents do
         }
 
       {:error, reason} ->
-        finish(entry, runner.terminate(handle, {:subscription_failed, reason}))
+        finish(
+          %{entry | handle: handle},
+          runner.terminate(handle, {:subscription_failed, reason}),
+          runner
+        )
     end
   end
 
-  defp started(entry, {:error, _} = outcome, _runner), do: finish(entry, outcome)
+  defp started(entry, {:error, _} = outcome, runner), do: finish(entry, outcome, runner)
 
   defp dispatch(%{frozen: true} = state), do: state
 
@@ -291,8 +297,9 @@ defmodule Alto.Runner.Agents do
     end
   end
 
-  defp finish(entry, outcome, retain_checkpoint? \\ false) do
+  defp finish(entry, outcome, runner, retain_checkpoint? \\ false) do
     if entry.spec[:messaging], do: Alto.Messaging.close(entry.spec.messaging)
+    handle = entry.handle
     entry = %{entry | starter: nil, handle: nil, ref: nil, run: nil}
 
     next =
@@ -315,6 +322,7 @@ defmodule Alto.Runner.Agents do
       end
 
     notify_status(next)
+    if handle && function_exported?(runner, :release, 1), do: runner.release(handle)
     next
   end
 
@@ -424,12 +432,19 @@ defmodule Alto.Runner.Agents do
       Enum.map(state.entries, fn
         %{starter: %Task{} = starter} = entry ->
           case Task.shutdown(starter, :brutal_kill) do
-            {:ok, outcome} -> started(entry, outcome, state.runner)
-            _ -> finish(entry, {:error, {:run_process_failed, :child_start_interrupted}})
+            {:ok, outcome} ->
+              started(entry, outcome, state.runner)
+
+            _ ->
+              finish(
+                entry,
+                {:error, {:run_process_failed, :child_start_interrupted}},
+                state.runner
+              )
           end
 
         %{status: :pending} = entry ->
-          finish(entry, {:error, {:not_started, reason}})
+          finish(entry, {:error, {:not_started, reason}}, state.runner)
 
         entry ->
           entry
@@ -451,12 +466,12 @@ defmodule Alto.Runner.Agents do
       receive do
         {:alto_runner_result, ref, outcome} when is_map_key(refs, ref) ->
           state
-          |> update_entries(&(&1.ref == ref), &finish(&1, outcome))
+          |> update_entries(&(&1.ref == ref), &finish(&1, outcome, state.runner))
           |> drain(deadline, reason)
       after
         max(deadline - System.monotonic_time(:millisecond), 0) ->
           update_entries(state, &(&1.ref != nil), fn entry ->
-            finish(entry, state.runner.terminate(entry.handle, reason))
+            finish(entry, state.runner.terminate(entry.handle, reason), state.runner)
           end)
       end
     end

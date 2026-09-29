@@ -43,7 +43,7 @@ defmodule Alto.Tools.ReadFile do
          {:ok, content, metadata} <- read(resolved, arguments, opts) do
       encoded =
         if String.valid?(content),
-          do: %{content: content},
+          do: %{content: Alto.Retained.detach(content)},
           else: %{content_base64: Base.encode64(content), encoding: "base64"}
 
       {:ok, encoded |> Map.merge(metadata) |> Map.put(:path, arguments["path"])}

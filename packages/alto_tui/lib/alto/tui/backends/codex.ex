@@ -610,7 +610,19 @@ defmodule Alto.TUI.Backends.Codex do
     parts = Map.get(previous, :reasoning_parts, %{summary: %{}, raw: %{}})
     type = if method == "item/reasoning/summaryTextDelta", do: :summary, else: :raw
     index = params["summaryIndex"] || params["contentIndex"] || 0
-    parts = Map.update!(parts, type, &Map.update(&1, index, delta, fn text -> text <> delta end))
+    # Once a summary exists, raw reasoning can never contribute to the display.
+    parts =
+      cond do
+        type == :summary ->
+          %{parts | raw: %{}, summary: Map.update(parts.summary, index, delta, &(&1 <> delta))}
+
+        map_size(parts.summary) > 0 ->
+          parts
+
+        true ->
+          %{parts | raw: Map.update(parts.raw, index, delta, &(&1 <> delta))}
+      end
+
     chosen = if map_size(parts.summary) > 0, do: parts.summary, else: parts.raw
     text = chosen |> Enum.sort_by(&elem(&1, 0)) |> Enum.map_join("\n\n", &elem(&1, 1))
 

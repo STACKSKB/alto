@@ -7,6 +7,7 @@ defmodule Alto.TUI.Markdown do
   alias ExRatatui.Widgets.{CodeBlock, Markdown}
 
   @muted {:rgb, 150, 160, 175}
+  @windowed_block_bytes 8_192
 
   def render(source, width) do
     width = max(width, 1)
@@ -30,8 +31,8 @@ defmodule Alto.TUI.Markdown do
       |> blocks([])
       |> Enum.reverse()
       |> Enum.reduce_while({[], 0}, fn block, {groups, count} ->
-        rows = cached_block(block, width)
-        count = count + length(rows) + if(groups == [], do: 0, else: 1)
+        {rows, total_rows} = tail_block(block, width, height)
+        count = count + total_rows + if(groups == [], do: 0, else: 1)
         result = {[rows | groups], count}
         if count >= height, do: {:halt, result}, else: {:cont, result}
       end)
@@ -45,22 +46,46 @@ defmodule Alto.TUI.Markdown do
         render_block(block, width)
       end)
 
+  defp tail_block(block, width, height) do
+    if block_bytes(block) >= @windowed_block_bytes do
+      Alto.TUI.Cache.fetch({__MODULE__, :block_tails}, {width, block, height}, 256, fn ->
+        plan = layout_blocks([block], width)
+        {window(plan, max(plan.rows - height, 0), height), plan.rows}
+      end)
+    else
+      rows = cached_block(block, width)
+      {rows, length(rows)}
+    end
+  end
+
+  defp block_bytes({:code, language, source}), do: byte_size(language) + byte_size(source)
+  defp block_bytes({_, source}), do: byte_size(source)
+
+  defp block_bytes({:table, headers, records}) do
+    Enum.reduce(headers, 0, &(byte_size(&1) + &2)) +
+      Enum.reduce(records, 0, fn row, size ->
+        Enum.reduce(row, size, &(byte_size(&1) + &2))
+      end)
+  end
+
   @doc "Count native wrapped rows without exporting a grid of styled cells."
   def layout(source, width) do
     Alto.TUI.Cache.fetch({__MODULE__, :layouts}, {source, max(width, 1)}, 256, fn ->
-      {parts, rows} =
-        source
-        |> String.split("\n")
-        |> blocks([])
-        |> expand_tables()
-        |> Enum.map_reduce(0, fn block, offset ->
-          plain = block_plain(block, max(width, 1))
-          count = length(plain)
-          {{block, offset, count, plain}, offset + count + 1}
-        end)
-
-      %{parts: parts, rows: max(rows - 1, 0), width: max(width, 1)}
+      source |> String.split("\n") |> blocks([]) |> layout_blocks(max(width, 1))
     end)
+  end
+
+  defp layout_blocks(blocks, width) do
+    {parts, rows} =
+      blocks
+      |> expand_tables()
+      |> Enum.map_reduce(0, fn block, offset ->
+        plain = block_plain(block, width)
+        count = length(plain)
+        {{block, offset, count, plain}, offset + count + 1}
+      end)
+
+    %{parts: parts, rows: max(rows - 1, 0), width: width}
   end
 
   @doc "Materialize just a range of an indexed Markdown document."

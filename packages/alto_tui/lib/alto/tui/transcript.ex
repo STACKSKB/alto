@@ -25,10 +25,19 @@ defmodule Alto.TUI.Transcript do
     cached(:indexes, {entries, width, opts}, 4, fn ->
       build = fn entry ->
         plan =
-          if entry[:kind] in [:assistant, :codex_assistant, :reasoning] and
-               is_binary(entry[:text]),
-             do: {:markdown, Alto.TUI.Markdown.layout(entry.text, width)},
-             else: {:literal, cached_rows(entry, width, "alto", opts)}
+          cond do
+            entry[:kind] in [:assistant, :codex_assistant, :reasoning] and
+                is_binary(entry[:text]) ->
+              {:markdown, Alto.TUI.Markdown.layout(entry.text, width)}
+
+            to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
+                is_binary(entry[:text]) ->
+              # Preserve the full-render path for non-atom roles, including styles.
+              {:styled, cached_rows(entry, width, "alto", opts)}
+
+            true ->
+              {:literal, Alto.TUI.Viewport.rows(text(entry, opts), width)}
+          end
 
         {entry, plan}
       end
@@ -52,14 +61,15 @@ defmodule Alto.TUI.Transcript do
           count =
             case plan do
               {:markdown, layout} -> layout.rows + 1
-              {:literal, lines} -> length(lines)
+              {:styled, lines} -> length(lines)
+              {:literal, rows} -> tuple_size(rows)
             end
 
           {{entry, plan, offset, count}, offset + count + 1}
         end)
 
-      # Indexes contain plain row strings, not per-cell styles. Charge entries
-      # rather than visual rows so very long histories remain cached too.
+      # Literal rows stay as strings until a caller requests visible lines.
+      # Charge entries rather than visual rows so long histories remain cached.
       {%{parts: parts, rows: max(rows - 1, 0)}, max(length(entries), 1)}
     end)
   end
@@ -68,6 +78,9 @@ defmodule Alto.TUI.Transcript do
     Enum.map(index.parts, fn {entry, plan, _, _} ->
       case plan do
         {:literal, rows} ->
+          rows |> Tuple.to_list() |> Enum.map(&literal_line/1)
+
+        {:styled, rows} ->
           rows
 
         {:markdown, layout} ->
@@ -96,6 +109,10 @@ defmodule Alto.TUI.Transcript do
             lines =
               case plan do
                 {:literal, rows} ->
+                  for row <- (start - first)..(stop - first - 1),
+                      do: rows |> elem(row) |> literal_line()
+
+                {:styled, rows} ->
                   Enum.slice(rows, start - first, stop - start)
 
                 {:markdown, layout} ->
@@ -179,6 +196,8 @@ defmodule Alto.TUI.Transcript do
 
     Line.new([Span.new(label <> " ›", style: %Style{fg: {:rgb, 150, 160, 175}})])
   end
+
+  defp literal_line(row), do: Line.new([Span.new(row)])
 
   defp cached_rows(entry, width, assistant, opts) do
     cached(:entries, {entry, width, assistant, opts}, 512, fn ->

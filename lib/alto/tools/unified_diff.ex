@@ -2,6 +2,7 @@ defmodule Alto.Tools.UnifiedDiff do
   @moduledoc false
 
   @context_lines 3
+  @disjoint_fast_path_min_lines 64
 
   @doc "Return a bounded patch, or nil when disabled or the original content was not retained."
   @spec render(binary(), binary() | nil, binary(), non_neg_integer()) ::
@@ -28,9 +29,16 @@ defmodule Alto.Tools.UnifiedDiff do
   defp split_lines(content), do: Regex.scan(~r/[^\n]*\n|[^\n]+$/, content) |> List.flatten()
 
   defp records(before, updated) do
+    differences =
+      if length(before) + length(updated) >= @disjoint_fast_path_min_lines and
+           disjoint_lines?(before, updated) do
+        [{:del, before}, {:ins, updated}]
+      else
+        List.myers_difference(before, updated)
+      end
+
     {records, _} =
-      before
-      |> List.myers_difference(updated)
+      differences
       |> Enum.flat_map(fn {tag, lines} -> Enum.map(lines, &{tag, &1}) end)
       |> Enum.map_reduce({1, 1}, fn {tag, line}, {old, new} ->
         {{tag, line, old, new},
@@ -38,6 +46,11 @@ defmodule Alto.Tools.UnifiedDiff do
       end)
 
     records
+  end
+
+  defp disjoint_lines?(before, updated) do
+    before_lines = MapSet.new(before)
+    Enum.all?(updated, &(not MapSet.member?(before_lines, &1)))
   end
 
   defp hunk_ranges(records) do

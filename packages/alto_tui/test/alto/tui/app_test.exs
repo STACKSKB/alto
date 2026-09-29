@@ -1265,7 +1265,25 @@ defmodule Alto.TUI.AppTest do
         state
       )
 
-    assert [%{kind: :reasoning, text: "Summary"}] = State.current_entries(state)
+    assert [%{kind: :reasoning, text: "Summary", reasoning_parts: %{raw: %{}}}] =
+             State.current_entries(state)
+
+    # Hidden raw deltas must not consume the transcript budget or evict the summary.
+    state =
+      Enum.reduce(1..25, state, fn _, state ->
+        {:noreply, state} =
+          App.handle_info(
+            {:codex_notification, self(), "item/reasoning/textDelta",
+             %{params | "delta" => String.duplicate("x", 100_000)}},
+            state
+          )
+
+        state
+      end)
+
+    assert [%{kind: :reasoning, text: "Summary", reasoning_parts: %{raw: %{}}}] =
+             State.current_entries(state)
+
     assert state.runs["run"].phase == "thinking"
 
     params =

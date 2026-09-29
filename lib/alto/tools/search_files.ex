@@ -152,7 +152,7 @@ defmodule Alto.Tools.SearchFiles do
           match = %{
             path: relative_path,
             line: line_number,
-            text: truncate_line(line, limits.max_line_graphemes)
+            text: line |> truncate_line(limits.max_line_graphemes) |> Alto.Retained.detach()
           }
 
           {:cont, %{acc | matches: [match | acc.matches]}}
