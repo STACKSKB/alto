@@ -4,6 +4,23 @@ defmodule Alto.TUI.ViewportTest do
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Widgets.Paragraph
 
+  test "scratch resize releases the old native grid without closing other owners" do
+    original = Viewport.test_terminal(:markdown_metrics, 20, 5)
+    selection = Viewport.test_terminal(:selection, 20, 5)
+    assert Viewport.test_terminal(:markdown_metrics, 20, 5) == original
+
+    replacement = Viewport.test_terminal(:markdown_metrics, 30, 8)
+    assert {:error, "terminal not initialized"} = ExRatatui.get_buffer_content(original)
+    assert ExRatatui.get_buffer_content(selection) == ""
+
+    assert :ok =
+             ExRatatui.draw(replacement, [
+               {%Paragraph{text: "resized 猫"}, %Rect{width: 30, height: 8}}
+             ])
+
+    assert ExRatatui.get_buffer_content(replacement) == "resized 猫"
+  end
+
   test "cached chunks match native wrapping across boundaries, blanks and wide glyphs" do
     text =
       Enum.map_join(1..310, "\n", fn n ->

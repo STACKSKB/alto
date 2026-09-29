@@ -64,6 +64,61 @@ steady-state cycles remain follow-up work, rather than an asserted memory win.
 The hydration probe's global binary counter initially includes other process
 allocations; backing-allocation measurements directly verify display detachment.
 
+## Native lifecycle follow-up: accepted and rejected experiments
+
+The next implementation releases a replaced native scratch terminal immediately
+through `ExRatatui.safe_restore_terminal/1`. The native implementation takes and
+drops the test backend without changing the real terminal mode. Previously a
+small BEAM resource handle could keep a large obsolete native grid alive until
+GC. Scratch grids for Markdown, wrapping and selection have separate owners;
+unchanged dimensions still reuse the existing resource.
+
+Validation used three fresh, precompiled VMs for each baseline/candidate and each
+workload, with three cycles of 12 conversations per VM. Standard conversations
+have 120 distinct entries at width 84; long-block conversations have 40 entries
+at width 41. Each indexed viewport also renders its visible window and tail.
+Reported time is the pooled median of those operations; memory is the median of
+per-VM peaks or final-cycle samples. This is local experimental evidence, not a
+production percentile guarantee.
+
+| Workload / metric | Baseline | Immediate native release |
+| --- | ---: | ---: |
+| Standard: peak RSS | 227.7 MiB | 215.5 MiB |
+| Standard: final-cycle RSS | 194.8 MiB | 204.2 MiB |
+| Standard: index + window + tail | 157.4 ms | 115.1 ms |
+| Long blocks: peak RSS | 236.9 MiB | 205.7 MiB |
+| Long blocks: final-cycle RSS | 197.0 MiB | 195.2 MiB |
+| Long blocks: index + window + tail | 116.7 ms | 100.2 ms |
+
+The full TUI suite passed **211 tests**. A native Xvfb/xterm check showed
+cold transcript display in 219–256 ms, cached switches in 26–61 ms, first
+historical indexing in 222 ms, and subsequent scrolling in 19 ms. Rendering
+remained correct. These single navigation samples are functional smoke checks,
+not controlled latency comparisons; the repeated synthetic results above are
+the performance evidence.
+
+**Kept:** explicit native-grid release. It improves transient memory and latency,
+with a regression test proving the old grid closes before GC and another owner's
+grid remains usable. Standard final-cycle RSS increased by 9.4 MiB despite lower
+peak RSS; this is not a claim of a universal reduction in resident memory.
+
+**Rejected:** reducing indexing concurrency from four workers to two. In the
+initial paired probe, second/third cycles took 3.15/2.96 seconds versus
+1.72/1.76 seconds, while final RSS was effectively unchanged. Four workers remain.
+
+**Not kept:** reducing the Markdown scratch ceiling from 32,768 to 8,192 cells.
+The standard fixture rarely reaches that ceiling and cannot demonstrate a win.
+A long-block trial with both smaller scratch and native release had a median
+operation around 150 ms, versus 100 ms across the release-only repetitions.
+It adds native pagination/reparsing work; the trial did not justify that tradeoff.
+The 32,768-cell ceiling remains. Scheduler counts and allocator flags are unchanged.
+
+Reproduce with `scripts/tui_memory_cycles_bench.exs LABEL [long]` from the TUI
+package via `mix run --no-compile`. The script records RSS, PSS, anonymous resident
+memory, BEAM/binary/process memory and cache weight. Raw measurements, including
+rejected trials, are in
+[the native lifecycle results](measurements/rss-native-lifecycle-2026-09-29.json).
+
 ## Main conclusion
 
 Fix ownership and retention before tuning the runtime. There are confirmed cases

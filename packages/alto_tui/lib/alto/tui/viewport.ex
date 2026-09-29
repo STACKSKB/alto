@@ -93,7 +93,14 @@ defmodule Alto.TUI.Viewport do
       {^width, ^height, terminal} ->
         terminal
 
-      _ ->
+      previous ->
+        # Native grids can dwarf the BEAM resource handle. Release a replaced
+        # scratch grid now instead of waiting for heap pressure to trigger GC.
+        if previous do
+          {_, _, terminal} = previous
+          ExRatatui.safe_restore_terminal(terminal)
+        end
+
         terminal = ExRatatui.init_test_terminal(width, height)
         Process.put(key, {width, height, terminal})
         terminal
