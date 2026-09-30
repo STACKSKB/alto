@@ -74,6 +74,8 @@ defmodule Alto.TUI.HistoryTest do
   test "input submitted during a cold load survives navigating away", %{state: state} do
     state = State.select_task(state, "task-a")
     token = state.history_load.token
+    worker = state.history_load.pid
+    monitor = Process.monitor(worker)
     ExRatatui.textarea_set_value(state.textarea, "continue after loading")
     {:noreply, queued} = App.handle_event(%ExRatatui.Event.Key{code: "enter"}, state)
     on_exit(fn -> Alto.Input.close(queued.inputs["task-a"]) end)
@@ -89,6 +91,8 @@ defmodule Alto.TUI.HistoryTest do
     assert away.history_load == nil
     assert [%{text: "saved request"}] = away.entries["task-a"]
     assert_receive {:alto_tui_send_input, "task-a"}
+    # Hydration may publish input readiness before its final cache write finishes.
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 2000
   end
 
   test "cache eviction keeps recently revisited tasks", %{state: state, task: task} do

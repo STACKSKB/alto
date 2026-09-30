@@ -52,7 +52,7 @@ defmodule Alto.Input do
     max_bytes = Keyword.get(opts, :max_bytes, 64_000)
 
     if is_integer(max_messages) and max_messages in 1..1024 and
-         is_integer(max_bytes) and max_bytes in 1..1_000_000 do
+         is_integer(max_bytes) and max_bytes in 1..16_000_000 do
       {:ok,
        %{
          identity: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
@@ -243,7 +243,7 @@ defmodule Alto.Input do
     map_size(saved) == 7 and
       is_binary(saved.identity) and byte_size(saved.identity) in 1..128 and
       is_integer(saved.max_messages) and saved.max_messages in 1..1024 and
-      is_integer(saved.max_bytes) and saved.max_bytes in 1..1_000_000 and
+      is_integer(saved.max_bytes) and saved.max_bytes in 1..16_000_000 and
       is_list(saved.entries) and length(saved.entries) <= saved.max_messages and
       is_map(saved.receipts) and map_size(saved.receipts) <= 4096 and
       is_map(saved.keys) and map_size(saved.keys) <= 4096 and
@@ -295,9 +295,9 @@ defmodule Alto.Input do
 
   defp entry_bytes(%{text: text} = message) do
     # Routed metadata consumes capacity in addition to text.
-    byte_size(text) +
+    byte_size(text) + if(message[:content], do: :erlang.external_size(message.content), else: 0) +
       if(Map.has_key?(message, :recipient),
-        do: :erlang.external_size(Map.drop(message, [:text, :message_id])),
+        do: :erlang.external_size(Map.drop(message, [:text, :content, :message_id])),
         else: 0
       )
   end

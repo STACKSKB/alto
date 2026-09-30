@@ -104,6 +104,11 @@ defmodule Alto.TUI.View do
     }
 
   @doc "Resolve mouse coordinates to a semantic UI target."
+  def hit_target(%State{overlay: %{kind: :attachment_editor}}, width, height, x, y) do
+    rect = %Rect{x: 2, y: 2, width: max(width - 4, 1), height: max(height - 4, 1)}
+    if PaneLayout.contains?(rect, x, y), do: :overlay, else: :overlay_outside
+  end
+
   def hit_target(%State{overlay: overlay}, width, height, x, y) when not is_nil(overlay) do
     popup = overlay_rect(overlay, width, height)
     inner = content_rect(popup)
@@ -345,7 +350,7 @@ defmodule Alto.TUI.View do
     do: " code entry · NOWRAP · F6 prose" <> composer_activity_hint(state) <> " "
 
   defp composer_title(state),
-    do: " message · WRAP · F6 code" <> composer_activity_hint(state) <> " "
+    do: " message · WRAP · F6 code · F7 files" <> composer_activity_hint(state) <> " "
 
   defp composer_activity_hint(state) do
     if active_run?(state) do
@@ -634,6 +639,23 @@ defmodule Alto.TUI.View do
   end
 
   defp add_overlay(widgets, nil, _root), do: widgets
+
+  defp add_overlay(widgets, %{kind: :attachment_editor} = editor, root) do
+    rect = %Rect{x: 2, y: 2, width: max(root.width - 4, 1), height: max(root.height - 4, 1)}
+    title = " #{editor.title} · ^S save · Esc cancel "
+    title = if editor.error, do: title <> editor.error, else: title
+
+    widgets ++
+      [
+        {%Clear{}, rect},
+        {%ExRatatui.Widgets.Textarea{
+           state: editor.textarea,
+           style: style(fg: :white, bg: @panel_alt),
+           cursor_style: style(fg: :black, bg: @accent),
+           block: overlay_block(title)
+         }, rect}
+      ]
+  end
 
   defp add_overlay(widgets, menu, root) do
     rect = overlay_rect(menu, root.width, root.height)

@@ -27,7 +27,9 @@ defmodule Alto.Providers.OpenAICompatible do
       streaming: true,
       context_window: Keyword.get(opts, :context_window),
       tools: :function_calls,
-      vision: Keyword.get(opts, :supports_images, false)
+      input_modalities: Alto.InputModalities.configured(opts),
+      vision: "image" in Alto.InputModalities.configured(opts),
+      files: "file" in Alto.InputModalities.configured(opts)
     }
   end
 
@@ -57,7 +59,12 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp request(config, request, sink) do
     with {:ok, messages} <-
-           provider_messages(Map.fetch!(request, :messages), config.supports_images) do
+           provider_messages(Map.fetch!(request, :messages), %{
+             images: "image" in config.input_modalities,
+             audio: "audio" in config.input_modalities,
+             video: "video" in config.input_modalities,
+             files: "file" in config.input_modalities
+           }) do
       body =
         request
         |> Map.get(:options, %{})
@@ -77,19 +84,19 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_messages(messages, supports_images) do
+  defp provider_messages(messages, capabilities) do
     messages
     |> Enum.chunk_by(&match?(%{"role" => "tool"}, &1))
-    |> Alto.Result.traverse(&provider_group(&1, supports_images))
+    |> Alto.Result.traverse(&provider_group(&1, capabilities))
     |> case do
       {:ok, groups} -> {:ok, List.flatten(groups)}
       error -> error
     end
   end
 
-  defp provider_group([%{"role" => "tool"} | _] = messages, supports_images) do
+  defp provider_group([%{"role" => "tool"} | _] = messages, capabilities) do
     with {:ok, results} <-
-           Alto.Result.traverse(messages, &openai_tool_message(&1, supports_images)) do
+           Alto.Result.traverse(messages, &openai_tool_message(&1, capabilities)) do
       {tools, images} = Enum.unzip(results)
 
       case List.flatten(images) do
@@ -99,10 +106,10 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_group(messages, supports_images),
-    do: Alto.Result.traverse(messages, &provider_message(&1, supports_images))
+  defp provider_group(messages, capabilities),
+    do: Alto.Result.traverse(messages, &provider_message(&1, capabilities))
 
-  defp openai_tool_message(message, supports_images) do
+  defp openai_tool_message(message, capabilities) do
     message = Map.delete(message, "alto_anthropic_content")
 
     case Content.decode_transcript(Map.get(message, "content")) do
@@ -110,20 +117,16 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok, {message, []}}
 
       {:ok, content} ->
-        images = Enum.filter(content.blocks, &match?(%{"type" => "image"}, &1))
+        with {:ok, blocks} <- Content.map_media(content, capabilities, &openai_media/1) do
+          media = Enum.reject(blocks, &(&1["type"] == "text"))
 
-        cond do
-          images != [] and not supports_images ->
-            {:error, :model_does_not_support_images}
+          text =
+            for(%{"type" => "text", "text" => text} <- blocks, do: text)
+            |> Enum.join("\n")
+            |> append_attachment_marker(message["tool_call_id"], media)
 
-          true ->
-            text =
-              for(%{"type" => "text", "text" => text} <- content.blocks, do: text)
-              |> Enum.join("\n")
-              |> append_attachment_marker(message["tool_call_id"], images)
-
-            attachments = Enum.map(images, &{message["tool_call_id"], &1})
-            {:ok, {Map.put(message, "content", text), attachments}}
+          {:ok,
+           {Map.put(message, "content", text), Enum.map(media, &{message["tool_call_id"], &1})}}
         end
 
       {:error, reason} ->
@@ -133,8 +136,9 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp append_attachment_marker(text, _call_id, []), do: text
 
-  defp append_attachment_marker(text, call_id, _images) do
-    marker = "[Image attachment follows for tool call #{call_id}.]"
+  defp append_attachment_marker(text, call_id, media) do
+    kind = if Enum.all?(media, &(&1["type"] == "image_url")), do: "Image", else: "File"
+    marker = "[#{kind} attachment follows for tool call #{call_id}.]"
     if text == "", do: marker, else: text <> "\n" <> marker
   end
 
@@ -142,15 +146,17 @@ defmodule Alto.Providers.OpenAICompatible do
     content =
       Enum.flat_map(attachments, fn {call_id, image} ->
         [
-          Content.text("Image result from tool call #{call_id}:"),
-          openai_image(image)
+          Content.text(
+            "#{if(image["type"] == "image_url", do: "Image", else: "File")} result from tool call #{call_id}:"
+          ),
+          image
         ]
       end)
 
     %{"role" => "user", "content" => content}
   end
 
-  defp provider_message(message, supports_images) when is_map(message) do
+  defp provider_message(message, capabilities) when is_map(message) do
     message = message |> Map.delete("alto_anthropic_content") |> replayable_tool_arguments()
 
     case Content.decode_transcript(Map.get(message, "content")) do
@@ -158,7 +164,7 @@ defmodule Alto.Providers.OpenAICompatible do
         {:ok, message}
 
       {:ok, content} ->
-        with {:ok, blocks} <- Content.map_images(content, supports_images, &openai_image/1) do
+        with {:ok, blocks} <- Content.map_media(content, capabilities, &openai_media/1) do
           {:ok, Map.put(message, "content", blocks)}
         end
 
@@ -167,7 +173,7 @@ defmodule Alto.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_message(message, _supports_images),
+  defp provider_message(message, _capabilities),
     do: {:error, {:invalid_provider_message, message}}
 
   # A failed tool call remains in the audit transcript verbatim. Some endpoints
@@ -198,11 +204,36 @@ defmodule Alto.Providers.OpenAICompatible do
 
   defp replayable_tool_arguments(message), do: message
 
-  defp openai_image(%{"media_type" => media_type, "data" => data}) do
-    %{
-      "type" => "image_url",
-      "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}
-    }
+  defp openai_media(%{"type" => "image", "media_type" => media_type, "data" => data}) do
+    {:ok,
+     %{"type" => "image_url", "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}}}
+  end
+
+  defp openai_media(%{"type" => "file", "name" => name, "media_type" => media, "data" => data}) do
+    encode_file(name, media, data)
+  end
+
+  defp encode_file(_name, "image/" <> _ = media, data),
+    do: {:ok, %{"type" => "image_url", "image_url" => %{"url" => "data:#{media};base64,#{data}"}}}
+
+  defp encode_file(_name, media, data)
+       when media in ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"] do
+    format = if media in ["audio/mpeg", "audio/mp3"], do: "mp3", else: "wav"
+    {:ok, %{"type" => "input_audio", "input_audio" => %{"data" => data, "format" => format}}}
+  end
+
+  defp encode_file(_name, "audio/" <> _ = media, _data),
+    do: {:error, {:unsupported_audio_format, media}}
+
+  defp encode_file(_name, "video/" <> _ = media, _data),
+    do: {:error, {:unsupported_video_format, media}}
+
+  defp encode_file(name, media, data) do
+    {:ok,
+     %{
+       "type" => "file",
+       "file" => %{"filename" => name, "file_data" => "data:#{media};base64,#{data}"}
+     }}
   end
 
   defp models_result(chunks) do
@@ -231,7 +262,8 @@ defmodule Alto.Providers.OpenAICompatible do
             if(is_list(model["supported_reasoning_efforts"]),
               do: model["supported_reasoning_efforts"]
             ),
-          context_length: positive_value(model["context_length"])
+          context_length: positive_value(model["context_length"]),
+          input_modalities: Alto.InputModalities.from_model(model)
         }
 
         [Map.reject(normalized, fn {_key, value} -> is_nil(value) end)]
@@ -266,6 +298,7 @@ defmodule Alto.Providers.OpenAICompatible do
            ) do
       {:ok,
        Map.merge(config, %{
+         input_modalities: Alto.InputModalities.configured(opts),
          reasoning_effort: Keyword.get(opts, :reasoning_effort),
          reasoning_format: Alto.Reasoning.format(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),

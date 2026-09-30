@@ -3,6 +3,7 @@ defmodule Alto.CLI.Arguments do
 
   @switches [
     config: :string,
+    attach: :keep,
     no_config: :boolean,
     setup: :boolean,
     serve: :boolean,
@@ -53,6 +54,7 @@ defmodule Alto.CLI.Arguments do
     Set provider: nil for a providerless loop. Default tools only read the workspace.
 
     Sessions:
+      --attach FILE             attach a local file (repeat for multiple files)
       --resume ID               continue a persisted session with a follow-up task
       --sessions                list persisted sessions, then exit
       --no-session              do not persist this run (sessions default on)

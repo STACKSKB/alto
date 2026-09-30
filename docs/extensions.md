@@ -94,6 +94,92 @@ unchanged to execution; they are not interpreted as argument maps again.
 `Alto.Tool.run/4` combines preparation and execution for direct hosts. It runs
 callbacks in the caller; runner execution supplies approval and supervision.
 
+## Typed content
+
+Use `Alto.Content` for a user task, a provider's block-list response, or a tool's
+typed result. Ordinary tool maps and lists keep JSON text behavior even if they
+contain keys such as `type` or `data`. Constructors return provider-neutral maps
+with string keys. The wrapper, transcript and session all use those same blocks.
+
+```elixir
+{:ok, file} = Alto.Attachment.upload("report.pdf")
+{:ok, block} = Alto.Attachment.content(file)
+task = Alto.Content.new([Alto.Content.text("Summarize this report"), block])
+Alto.run(task, provider: provider)
+```
+
+`Alto.Attachment.update/2` edits staged text at its existing path; `content/1`
+reads its current bounded contents. `paste/2` splits UTF-8 text into byte-bounded
+files, preferring line boundaries and preserving every byte. Submission must
+freeze the resulting blocks; persisted content embeds bytes and never depends
+on a mutable staging path.
+
+`Alto.Content.file(name, media_type, base64)` represents model-facing input.
+`Alto.Content.artifact(name, media_type, base64)` represents downloadable output;
+requests see its file description, while history retains the bytes. Add
+`Alto.Tools.PublishFile` to snapshot bounded workspace-confined files as artifacts.
+Materialized outputs use a stable digest, so replay reuses paths and saved native
+history can recreate missing files. Hosts own staging retention and cleanup.
+
+The runner calls `Alto.Content.normalize_tool_result/2` before inserting typed
+content. `Alto.Content.decode_transcript/1` validates and wraps blocks for the
+provider; provider-specific source maps are built only for the request. See
+[configuration](configuration.md#generated-files-and-images) for provider transports,
+image generation and host limits, and [interactive input](interactive-input.md#typed-messages)
+for queued content.
+
+### Model-facing tool images
+
+```elixir
+content = Alto.Content.new([
+  Alto.Content.text("Screenshot after the change"),
+  Alto.Content.image("image/png", base64_data, 1280, 720)
+])
+```
+
+`Alto.Tools.ReadImage` reads workspace-confined PNG and JPEG files. It reads no
+more than the configured base64 limit permits, recognizes the format from file
+bytes, validates PNG header integrity or JPEG frame dimensions, and rejects
+images above the configured dimension or pixel limits. It returns an
+`Alto.Content` image block with base64 data; it does not invoke a shell command
+or require an image package.
+
+```elixir
+tools: [
+  {Alto.Tools.ReadImage,
+   max_encoded_bytes: 1_000_000,
+   max_dimension: 8_192,
+   max_pixels: 20_000_000}
+]
+```
+
+The tool accepts optional `max_width` and `max_height` arguments. A requested
+downsize fails with `:image_resize_unavailable` unless the tool is configured
+with a `processor:` function taking `(bytes, media_type, width, height)` or an MFA
+`{module, function, extra_arguments}` that returns `{:ok, encoded_bytes}`.
+Processor output is sniffed and
+checked against the byte, dimension, pixel, and requested-size limits before it
+is returned.
+
+Image delivery is opt-in at the provider as well. Declare the selected model's
+inputs using [provider capabilities](configuration.md#attachments-and-model-inputs).
+Both HTTP adapters reject unsupported image blocks before dispatch. OpenAI Chat Completions tool messages permit text only,
+so that adapter keeps all correlated tool replies textual and appends one user
+image message after the complete contiguous tool-reply group. Each base64 data
+URL has its source tool call ID in an adjacent text part. Anthropic requests
+receive native base64 image-source blocks inside the correlated tool result.
+
+The default `max_tool_result_bytes` still applies to the native typed value.
+Set that runner bound high enough for the configured encoded-image limit. The
+reader supports only PNG and JPEG, and resizing needs an explicitly configured
+backend.
+
+The typed-content contract independently caps custom image blocks at 8 MB of
+base64, 16,384 pixels per dimension, and 40 million pixels. It decodes the
+bounded payload, sniffs its PNG/JPEG metadata, and requires the actual media
+type and dimensions to equal the block's declared values. This also covers
+typed image results produced by custom tools.
+
 ## Approval decisions
 
 The `approval` run option accepts a decision literal (`:approve`, `:suspend`, or

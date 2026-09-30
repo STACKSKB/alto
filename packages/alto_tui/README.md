@@ -37,6 +37,7 @@ profiles. Backend and provider entries for the TUI are described below.
 | F2 | Select an approval mode |
 | F3 / F4 / F5 | Select provider / model / backend |
 | F6 | Switch prose/code entry |
+| F7 / Ctrl+G, F | Upload, edit, or remove attachments |
 | F8 / F9 | Approve / deny the pending request |
 | Ctrl+G, R | Select supported reasoning effort |
 | Ctrl+G, N | Start a new task in the current workspace |
@@ -58,6 +59,30 @@ lifetime of the TUI.
 Saved history remains viewable after a failed run, including when an unfinished
 dispatch prevents safely resuming. The activity indicator shows model waits,
 reasoning, tool execution, retries, and approval waits.
+
+## Attachments and pastes
+
+**F7** / **Ctrl+G, F** opens attachment management. Upload local text, images,
+PDFs or other files; edit a text attachment and save it with **Ctrl+S**, or
+cancel edits with **Esc**. Uploads are private copies, so editing them does not
+change the original file.
+
+Large composer pastes fold into editable UTF-8 files at 4,096 bytes or 20 newline
+characters, split into 32 KB chunks. Configure this in `tui: [paste_fold_bytes:
+4_096, paste_fold_lines: 20, paste_chunk_bytes: 32_000]`. **Ctrl+V** can stage
+PNG/JPEG images from local Wayland/X11 clipboards; other paste shortcuts retain
+the terminal's normal behavior.
+
+Submission freezes the edited content. Queued follow-ups and steering retain
+that snapshot, so later edits cannot change an already submitted message.
+Unsupported media leaves the draft intact. Queued media is checked against the
+running model, and a model switch does not inherit its predecessor's media
+permissions. Declare capabilities for your actual models as described in
+[configuration](../../docs/configuration.md#attachments-and-model-inputs).
+
+Image and document outputs are saved as private files and shown by path. Saved
+native history can recreate missing output files using stable content digests.
+Staging-file retention, including abandoned drafts, belongs to the host.
 
 ## Approvals and goals
 
@@ -133,7 +158,8 @@ controls. Shift+drag uses your terminal's own selection behavior.
 Copy uses desktop clipboard helpers when available, otherwise an OSC 52 request
 that your terminal must allow. Paste with the terminal's usual shortcut.
 Bracketed paste inserts multiline text without sending it. Ctrl+V reads the
-local clipboard when a helper is available, otherwise the last TUI selection.
+local clipboard when a helper is available, including PNG/JPEG image attachments,
+otherwise the last TUI selection.
 
 ## Providers and backends
 

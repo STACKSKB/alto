@@ -246,6 +246,14 @@ each independently.
  "task": "Explain this repository"}
 ```
 
+`task` also accepts a nonempty array of validated `Alto.Content` blocks for
+uploads: `text`, `image` (base64 bytes and verified dimensions), and `file`
+(name, MIME type and base64 bytes). A named output uses the `artifact` block
+with the same fields as `file`. See [typed content](docs/extensions.md#typed-content).
+Typed payloads are bounded to 16 MB, with the host transcript and connection
+`max_line_bytes` limits applying as well. The protocol does not grant access
+to a server-local path supplied by a client.
+
 `config` names a specification resolvable through the server's `Alto.Config`
 discovery (explicit `--config` path, `ALTO_CONFIG`, or the per-user XDG path)
 — the same trust boundary the CLI uses. It is never an inline module, loop
@@ -380,6 +388,9 @@ is not a claim that an execution had no persistence failures.
 ```
 
 `text` is required. `delivery` defaults to `steer`, or may be `follow_up`.
+It may be a validated content-block array for a multimodal user message;
+the server derives a bounded text summary and retains the typed bytes in the
+mailbox. Content contributes to capacity, checkpoint state and idempotency.
 Optional `to` selects an opaque agent address within that run's tree; omit it
 for the root input channel. Optional `in_reply_to` correlates a response.
 The runtime derives user identity; clients cannot set sender identity or roles.

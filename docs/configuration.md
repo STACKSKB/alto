@@ -145,6 +145,82 @@ For several selectable providers in one TUI, configure `provider_profiles`;
 its provider and model pickers remember choices across tasks. See the
 [TUI guide](../packages/alto_tui/README.md#providers-and-backends).
 
+## Attachments and model inputs
+
+The CLI accepts repeated `--attach FILE` arguments on new and resumed sessions:
+
+```sh
+mix alto --config profiles/review/alto.exs --attach report.pdf "Summarize this report"
+```
+
+Text files become named text blocks; PNG/JPEG images become validated image
+blocks; other files become named binary blocks. Uploads snapshot local files
+into private staging. Submitted bytes are embedded in history, so replay does
+not depend on the original path. See the [TUI guide](../packages/alto_tui/README.md#attachments-and-pastes)
+for uploads, editable large pastes and clipboard images.
+
+Declare inputs for the actual configured model with provider options such as
+`input_modalities: ["text", "image", "audio", "file"]`. Legacy `supports_images:
+true` and `supports_files: true` declare image/file support for one configured
+model. Catalog metadata takes precedence when selecting models, including
+OpenRouter architecture metadata and Codex `inputModalities`. For catalogs without
+metadata, use `model_input_modalities: %{"model-id" => ["text", "image"]}`.
+Unsupported or unknown media fails before dispatch. Switching or delegating to
+another model clears stale capabilities; queued, historical and tool media is
+checked too. Audio/video files cannot bypass checks through generic file support.
+
+| Provider | Input transport |
+| --- | --- |
+| OpenAI-compatible | Named base64 file parts; supported MP3/WAV becomes native `input_audio`; other audio formats and video transport are rejected |
+| Anthropic | Native PNG/JPEG image blocks and PDF documents; other uploaded binary formats are rejected |
+| Codex | Native image/audio parts and private document paths, inspected by its tools subject to its sandbox |
+
+The endpoint and selected model determine supported file formats. Alto does not
+extract arbitrary office-document text or convert files automatically.
+
+## Generated files and images
+
+The coding profile includes `Alto.Tools.PublishFile`: an agent creates a file
+with its configured tools, then calls `publish_file` with the workspace path.
+The tool returns a bounded snapshot as an output attachment. The CLI and TUI save
+artifacts privately and show their paths. Provider requests receive a text
+description of output artifacts, while their bytes remain in history.
+See [typed content](extensions.md#typed-content) for custom tools and hosts.
+
+For direct image generation through OpenRouter, configure an image model:
+
+```elixir
+[
+  provider: {Alto.Providers.Images,
+    model: image_model_id,
+    api_key: api_key,
+    input_modalities: ["text", "image"],
+    options: %{"size" => "1024x1024", "output_format" => "png"}},
+  tools: [],
+  provider_timeout: 610_000,
+  max_transcript_bytes: 16_000_000,
+  max_event_bytes: 16_000_000
+]
+```
+
+The adapter supports base64 output and reference images at `/images`, with
+optional `streaming: true`. Partial previews remain provisional; only completed
+images become artifacts. The model must support the requested options.
+OpenAI-compatible chat responses containing inline image/file parts or an
+`images` array also become artifacts. Remote output URLs are rejected rather
+than downloaded.
+
+Staging files are private (`0600`, directories `0700`) and bounded to 6 MB raw
+bytes. Typed file/artifact blocks are capped at 8 MB base64. Other host transcript,
+event, HTTP-response and tool-result limits still apply. The coding profile uses
+an 8.1 MB tool-result allowance and 16 MB transcript/event budgets. Other profiles
+must raise the default 64 KB tool-result limit for substantial binary artifacts.
+Staging-file retention and deletion belong to the host.
+
+Provider format references: [OpenRouter PDFs](https://openrouter.ai/docs/guides/overview/multimodal/pdfs),
+[OpenRouter image generation](https://openrouter.ai/docs/guides/overview/multimodal/image-generation)
+and [Anthropic PDFs](https://platform.claude.com/docs/en/build-with-claude/pdf-support).
+
 ## Coding tools and execution policy
 
 The supplied [`alto.agentic.exs`](../alto.agentic.exs) is a complete coding

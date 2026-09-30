@@ -10,7 +10,7 @@ defmodule Alto.Messaging.Transport.File do
   """
   @behaviour Alto.Messaging.Transport
   alias Alto.Persistence.Codec
-  @limit 4_000_000
+  @limit 20_000_000
 
   @impl true
   def open(opts) do

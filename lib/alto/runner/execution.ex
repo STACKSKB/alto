@@ -260,7 +260,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp input_message(entry),
-    do: %{"role" => "user", "content" => Alto.Messaging.message_text(entry)}
+    do: %{"role" => "user", "content" => Alto.Messaging.message_content(entry)}
 
   defp do_execute([], run, {:stop, output}), do: {:done, result(run, output, :success)}
 
@@ -731,8 +731,17 @@ defmodule Alto.Runner.Execution do
 
   defp complete_model(run, %{message: message, tool_calls: calls} = completion)
        when is_list(calls) do
+    valid_content =
+      if is_list(message), do: Alto.Content.decode_transcript(message), else: :not_content
+
     cond do
-      calls == [] and (not is_binary(message) or message == "") ->
+      match?({:error, _}, valid_content) ->
+        {:error, {:invalid_model_content, elem(valid_content, 1)}, run}
+
+      not (is_binary(message) or is_list(message) or is_nil(message)) ->
+        {:error, :invalid_model_content, run}
+
+      calls == [] and message in [nil, "", []] ->
         {:error, :empty_model_response, run}
 
       true ->

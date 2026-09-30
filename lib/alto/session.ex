@@ -504,6 +504,9 @@ defmodule Alto.Session do
   defp maybe_term(nil), do: nil
   defp maybe_term(term), do: encode_term(term)
 
+  defp preview_task(%Alto.Content{} = task),
+    do: task |> Alto.Content.text_value() |> String.slice(0, @max_task_preview)
+
   defp preview_task(task) when is_binary(task), do: String.slice(task, 0, @max_task_preview)
   defp preview_task(task), do: task |> inspect() |> String.slice(0, @max_task_preview)
 

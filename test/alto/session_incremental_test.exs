@@ -237,7 +237,11 @@ defmodule Alto.SessionIncrementalTest do
     assert run.conversation_retained_turns == 7
   end
 
-  test "message objects preserve Unicode and multimodal structure", %{id: id, opts: opts} do
+  test "message objects preserve Unicode, uploaded files, and generated artifacts", %{
+    dir: dir,
+    id: id,
+    opts: opts
+  } do
     message = %{
       "role" => "user",
       "content" => [
@@ -249,10 +253,42 @@ defmodule Alto.SessionIncrementalTest do
       ]
     }
 
-    {:ok, _} = save(id, [message], opts)
-    {:ok, _} = save(id, [message, assistant("received")], opts)
-    assert {:ok, %{"messages" => [^message]}} = Session.conversation(id, 1, opts)
-    assert {:ok, %{"messages" => [^message, _]}} = Session.transcript(id, opts)
+    alias Alto.Content
+
+    input = %{
+      "role" => "user",
+      "content" => [
+        Content.file(
+          "report.pdf",
+          "application/pdf",
+          Base.encode64(String.duplicate("%PDF-1.7 input", 5_000))
+        )
+      ]
+    }
+
+    output = %{
+      "role" => "assistant",
+      "content" => [
+        Content.artifact(
+          "answer.docx",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          Base.encode64(<<80, 75, 0, 255>>)
+        )
+      ]
+    }
+
+    messages = [message, input, output]
+    {:ok, _} = save(id, messages, opts)
+    {:ok, _} = save(id, messages ++ [assistant("received")], opts)
+    assert {:ok, %{"messages" => ^messages}} = Session.conversation(id, 1, opts)
+    assert {:ok, %{"messages" => latest}} = Session.transcript(id, opts)
+    assert latest == messages ++ [assistant("received")]
+    assert length(objects(dir, id, "message")) == 4
+
+    assert {:ok, %Content{blocks: blocks}} =
+             Content.decode_transcript(Enum.at(latest, 1)["content"])
+
+    assert blocks == input["content"]
   end
 
   test "continuation hosts share the original user turn identity" do

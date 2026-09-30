@@ -292,7 +292,11 @@ defmodule Alto.TUI.Backends.Codex do
       model: state.selected_model,
       effort:
         State.selected_effort(state) || (State.model_metadata(state) || %{})[:default_effort],
-      approval: if(state.approval_level == :review, do: :ask, else: state.approval_level)
+      approval: if(state.approval_level == :review, do: :ask, else: state.approval_level),
+      input_modalities:
+        data(state).options
+        |> Alto.InputModalities.bind(state.selected_model, State.model_metadata(state))
+        |> Keyword.fetch!(:input_modalities)
     ]
 
     run = %{
@@ -306,19 +310,26 @@ defmodule Alto.TUI.Backends.Codex do
       turn_id: nil,
       phase: "waiting for Codex connection",
       approval_level: state.approval_level,
+      input_provider: {:codex, opts},
       started_at_ms: System.system_time(:millisecond)
     }
 
-    async_send({:codex_turn_started, local_id}, fn ->
-      CodexBackend.start_turn(
-        client,
-        task["conversation_id"],
-        Alto.TUI.Goal.with_context(task, prompt),
-        opts
-      )
-    end)
+    case CodexBackend.check_input(prompt, opts) do
+      :ok ->
+        async_send({:codex_turn_started, local_id}, fn ->
+          CodexBackend.start_turn(
+            client,
+            task["conversation_id"],
+            Alto.TUI.Goal.with_context(task, prompt),
+            opts
+          )
+        end)
 
-    Host.attach_run(state, local_id, run, prompt, "starting Codex…")
+        Host.attach_run(state, local_id, run, prompt, "starting Codex…")
+
+      {:error, reason} ->
+        %{state | notice: "Cannot send: #{Host.human_error(reason)} · draft kept"}
+    end
   end
 
   defp maybe_load_codex_history(state) do

@@ -86,6 +86,27 @@ defmodule Alto.Listeners.Connection do
     end
   end
 
+  defp execute(
+         :send_message,
+         [run_id, %Alto.Content{} = content, to, delivery, key, reply_to],
+         registry
+       ) do
+    text = content |> Alto.Content.text_value() |> Alto.Text.truncate(63_000, "…")
+
+    Registry.request(
+      registry,
+      {:send_message, run_id,
+       [
+         text: text,
+         content: content.blocks,
+         to: to,
+         delivery: delivery,
+         idempotency_key: key,
+         in_reply_to: reply_to
+       ]}
+    )
+  end
+
   defp execute(:send_message, [run_id, text, to, delivery, key, reply_to], registry),
     do:
       Registry.request(

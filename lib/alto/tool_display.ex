@@ -86,6 +86,7 @@ defmodule Alto.ToolDisplay do
     label <> if(get(value, :truncated), do: " · more available", else: "")
   end
 
+  defp result_detail(_, value) when is_list(value), do: content_text(value)
   defp result_detail(_, value), do: detail(value)
 
   def detail(value) do
@@ -106,10 +107,32 @@ defmodule Alto.ToolDisplay do
     end
   end
 
-  def transcript(messages) do
-    {entries, _calls} = Enum.flat_map_reduce(messages, %{}, &transcript_entry/2)
+  def transcript(messages, opts \\ []) do
+    {entries, _calls} =
+      Enum.flat_map_reduce(messages, %{}, fn message, calls ->
+        {entries, calls} = transcript_entry(message, calls)
+        {entries ++ output_entries(message, opts), calls}
+      end)
+
     entries
   end
+
+  defp output_entries(%{"role" => role, "content" => blocks}, opts)
+       when role in ["assistant", "tool"] and is_list(blocks) do
+    if directory = opts[:attachment_directory] do
+      case Alto.Attachment.materialize(blocks, directory: directory) do
+        {:ok, files} ->
+          Enum.map(files, &%{kind: :system, text: "Output: #{&1.name}\n#{&1.path}"})
+
+        {:error, reason} ->
+          [%{kind: :error, text: "Cannot restore output: #{Alto.Display.error(reason)}"}]
+      end
+    else
+      []
+    end
+  end
+
+  defp output_entries(_, _), do: []
 
   defp transcript_entry(%{"role" => "assistant"} = message, calls) do
     calls =
@@ -122,13 +145,15 @@ defmodule Alto.ToolDisplay do
     content = message["content"]
 
     assistant =
-      if is_binary(content) and content != "", do: [%{kind: :assistant, text: content}], else: []
+      if content not in [nil, "", []],
+        do: [%{kind: :assistant, text: content_text(content)}],
+        else: []
 
     {Alto.Reasoning.entries(message) ++ assistant, calls}
   end
 
   defp transcript_entry(%{"role" => "user"} = message, calls),
-    do: {[%{kind: :user, text: Alto.Display.text(message["content"])}], calls}
+    do: {[%{kind: :user, text: user_content_text(message["content"])}], calls}
 
   defp transcript_entry(%{"role" => "tool"} = message, calls) do
     name = message["name"]
@@ -137,6 +162,37 @@ defmodule Alto.ToolDisplay do
   end
 
   defp transcript_entry(_, calls), do: {[], calls}
+
+  defp content_text(blocks) when is_list(blocks) do
+    case Alto.Content.decode_transcript(blocks) do
+      {:ok, content} -> Alto.Content.text_value(content)
+      _ -> Alto.Display.text(blocks)
+    end
+  end
+
+  defp content_text(value), do: Alto.Display.text(value)
+
+  defp user_content_text([first | rest] = blocks) do
+    case Alto.Content.decode_transcript(blocks) do
+      {:ok, _} ->
+        rest =
+          Enum.map(rest, fn
+            %{"type" => "text", "text" => "Attached file: " <> text} ->
+              name = text |> String.split("\n", parts: 2) |> hd()
+              Alto.Content.text("[File · #{name} · text/plain]")
+
+            block ->
+              block
+          end)
+
+        Alto.Content.text_value([first | rest])
+
+      _ ->
+        content_text(blocks)
+    end
+  end
+
+  defp user_content_text(value), do: content_text(value)
 
   defp range(args) do
     case {get(args, :start_line), get(args, :line_count), get(args, :offset)} do

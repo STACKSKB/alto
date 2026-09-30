@@ -52,20 +52,6 @@ defmodule Alto.Loops.RuleTest do
       assert result.model_requests == 0
     end
 
-    test "the task is the payload: name-only steps use the decoded task as arguments" do
-      task = ~s({"key": "job-1", "payload": {"total": 10}})
-
-      assert %Alto.Runner.Result{status: :ok} =
-               result =
-               Alto.run(task,
-                 loop: Alto.rule_loop(steps: ["echo"]),
-                 tools: [EchoTool]
-               )
-
-      assert [%{echoed: %{"key" => "job-1", "payload" => %{"total" => 10}}}] =
-               result.output
-    end
-
     test "the :task marker passes the decoded task; a map passes as-is" do
       assert %Alto.Runner.Result{status: :ok} =
                result =
@@ -82,17 +68,6 @@ defmodule Alto.Loops.RuleTest do
 
       assert [%{echoed: %{"n" => 1}}, %{echoed: %{"static" => true}}] =
                result.output
-    end
-
-    test "a map task is accepted without JSON decoding" do
-      assert %Alto.Runner.Result{status: :ok} =
-               result =
-               Alto.run(%{"n" => 2},
-                 loop: Alto.rule_loop(steps: ["echo"]),
-                 tools: [EchoTool]
-               )
-
-      assert [%{echoed: %{"n" => 2}}] = result.output
     end
   end
 

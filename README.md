@@ -61,6 +61,10 @@ Git tools, and agents:
 mix alto --config alto.agentic.exs "Run the tests and fix the failure"
 ```
 
+Attach local files with repeated `--attach FILE` arguments, including when
+resuming a session. Supported inputs depend on the selected model; see
+[attachments and model inputs](docs/configuration.md#attachments-and-model-inputs).
+
 For the terminal UI:
 
 ```sh

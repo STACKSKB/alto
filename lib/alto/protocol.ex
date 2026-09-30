@@ -31,7 +31,7 @@ defmodule Alto.Protocol do
       {:send_message,
        [
          {:required, "run_id", :binary},
-         {:required, "text", :binary},
+         {:required, "text", :content},
          {:optional, "to", :binary, nil},
          {:optional, "delivery", :delivery, :steer},
          {:optional, "idempotency_key", :binary, nil},
@@ -42,7 +42,7 @@ defmodule Alto.Protocol do
       {:start_run,
        [
          {:required, "config", :binary},
-         {:required, "task", :binary},
+         {:required, "task", :content},
          {:optional, "resume", :binary, nil}
        ]},
     "session_transcript" => {:session_transcript, [{:required, "session_id", :binary}]},
@@ -283,6 +283,15 @@ defmodule Alto.Protocol do
 
   defp validate_field("steer", :delivery), do: {:ok, :steer}
   defp validate_field("follow_up", :delivery), do: {:ok, :follow_up}
+
+  defp validate_field(value, :content) when is_binary(value) and value != "", do: {:ok, value}
+
+  defp validate_field([_ | _] = blocks, :content) do
+    case Alto.Content.normalize(Alto.Content.new(blocks), 16_000_000) do
+      {:ok, _} -> {:ok, Alto.Content.new(blocks)}
+      _ -> {:error, :invalid}
+    end
+  end
 
   defp validate_field(value, :binary) when is_binary(value), do: {:ok, value}
 

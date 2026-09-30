@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Highlight complete code-block rectangles and render only visible transcript
+  rows; retain absolute search/selection coordinates while scrolling.
+- Store conversation history incrementally with shared message objects and
+  configurable turn retention. Keep all turns by default and allow unlimited
+  model steps, shared model requests and stored history in the coding profile.
+- Store event bodies once, append smaller child-checkpoint changes, and reference
+  already saved transcripts in runner checkpoints. Updated readers retain old
+  logs and inline checkpoints; restart before writing the new formats.
+- Check selected-model input modalities before dispatch, preserve catalog
+  capabilities, reject unsupported queued media without losing the draft, and
+  encode supported MP3/WAV inputs as native audio parts.
+- Carry uploaded files and generated artifacts through user input, queued
+  messages, provider requests and saved sessions. Add repeatable CLI `--attach`,
+  native PDF input, image generation and the `publish_file` output tool.
+- Fold large TUI pastes into editable file chunks; use F7 to manage attachments
+  and Ctrl+S to save edits in place. Stage pasted clipboard images privately and
+  recover generated files from saved history.
+
 ## 0.0.2 — 2026-09-27
 
 Source-only Linux alpha release. Build the CLI or optional TUI from this tag.

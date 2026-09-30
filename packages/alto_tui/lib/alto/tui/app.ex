@@ -5,7 +5,7 @@ defmodule Alto.TUI.App do
 
   alias Alto.Event
   alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Menu, Backend, Search, Selection, State, View}
+  alias Alto.TUI.{Menu, Backend, Search, Selection, State, View, Attachments}
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -172,15 +172,20 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{kind: kind, code: "v", modifiers: ["ctrl"]}, state)
        when kind != "release" do
-    content =
-      case state.clipboard_read.() do
-        {:ok, text} -> text
-        _ -> state.clipboard_text
-      end
+    case state.clipboard_read.() do
+      {:ok, {:image, bytes, media}} ->
+        if state.overlay == nil and state.search == nil,
+          do: {:noreply, Attachments.paste_image(state, bytes, media)},
+          else: {:noreply, %{state | notice: "Close the popup/search to paste an image"}}
 
-    if content == nil,
-      do: {:noreply, %{state | notice: "Paste with your terminal's paste shortcut"}},
-      else: route_event(%Paste{content: content}, state)
+      {:ok, text} when is_binary(text) ->
+        route_event(%Paste{content: text}, state)
+
+      _ ->
+        if state.clipboard_text,
+          do: route_event(%Paste{content: state.clipboard_text}, state),
+          else: {:noreply, %{state | notice: "Paste with your terminal's paste shortcut"}}
+    end
   end
 
   defp route_event(%Resize{width: width, height: height}, state),
@@ -196,9 +201,11 @@ defmodule Alto.TUI.App do
        do: {:noreply, state |> Search.paste(content) |> View.reveal_search()}
 
   defp route_event(%Paste{content: content}, %{overlay: nil, focus: :composer} = state) do
-    ExRatatui.textarea_insert_str(state.textarea, content)
-    {:noreply, state}
+    {:noreply, Attachments.paste(state, content)}
   end
+
+  defp route_event(%Paste{content: content}, %{overlay: %{kind: :attachment_editor}} = state),
+    do: {:noreply, Attachments.editor_paste(state, content)}
 
   defp route_event(%Paste{content: content}, %{overlay: overlay} = state)
        when not is_nil(overlay),
@@ -208,8 +215,7 @@ defmodule Alto.TUI.App do
     do: {:noreply, state, render?: false}
 
   defp route_event(%Paste{content: content}, %{type_to_compose?: true} = state) do
-    ExRatatui.textarea_insert_str(state.textarea, content)
-    {:noreply, %{state | focus: :composer}}
+    {:noreply, Attachments.paste(state, content)}
   end
 
   defp route_event(%Paste{}, state), do: {:noreply, state, render?: false}
@@ -253,6 +259,7 @@ defmodule Alto.TUI.App do
       "m" -> {:noreply, open_overlay(state, :model)}
       "r" -> {:noreply, open_overlay(state, :effort)}
       "e" -> {:noreply, toggle_composer_mode(state)}
+      "f" -> {:noreply, Attachments.open(state)}
       "w" -> {:noreply, open_overlay(state, :project)}
       "x" -> {:noreply, State.close_workspace(state, state.selected_project_id)}
       "t" -> {:noreply, open_overlay(state, :task)}
@@ -275,6 +282,7 @@ defmodule Alto.TUI.App do
   defp route_event(%Key{code: "f4"}, state), do: {:noreply, open_overlay(state, :model)}
   defp route_event(%Key{code: "f5"}, state), do: {:noreply, open_overlay(state, :backend)}
   defp route_event(%Key{code: "f6"}, state), do: {:noreply, toggle_composer_mode(state)}
+  defp route_event(%Key{code: "f7"}, state), do: {:noreply, Attachments.open(state)}
   defp route_event(%Key{code: "f8"}, state), do: {:noreply, decide_approval(state, :approve)}
 
   defp route_event(%Key{code: "f9"}, state),
@@ -588,8 +596,18 @@ defmodule Alto.TUI.App do
   end
 
   defp submit(state, mode \\ :follow_up) do
-    prompt = state.textarea |> ExRatatui.textarea_get_value() |> String.trim()
+    text = state.textarea |> ExRatatui.textarea_get_value() |> String.trim()
 
+    case Attachments.prepare(state, text) do
+      {:ok, prompt} ->
+        submit_prompt(state, prompt, mode)
+
+      {:error, reason} ->
+        %{state | notice: "Cannot attach files: #{human_error(reason)} · draft kept"}
+    end
+  end
+
+  defp submit_prompt(state, prompt, mode) do
     cond do
       state.selected_project_id == nil ->
         %{state | notice: "Open a workspace first · ^G W"}
@@ -654,11 +672,13 @@ defmodule Alto.TUI.App do
   end
 
   defp queue_input(state, task_id, prompt, mode) do
-    with :ok <- input_route_available(state, task_id),
+    with :ok <- validate_queued_input(state, task_id, prompt),
+         :ok <- input_route_available(state, task_id),
          {:ok, state} <- ensure_input(state, task_id),
          input <- Map.fetch!(state.inputs, task_id),
          :ok <- one_follow_up_available(input, mode),
-         {:ok, _input_id} <- Alto.Messaging.send(input, text: prompt, delivery: mode) do
+         {:ok, _input_id} <-
+           Alto.Messaging.send(input, Attachments.message_options(prompt) ++ [delivery: mode]) do
       ExRatatui.textarea_set_value(state.textarea, "")
 
       state
@@ -668,6 +688,7 @@ defmodule Alto.TUI.App do
           %{selection: Map.take(state, @submission_selection)}
         end)
       )
+      |> Map.put(:attachments, [])
       |> Map.put(:notice, input_notice(mode))
     else
       {:error, :follow_up_pending} ->
@@ -678,6 +699,27 @@ defmodule Alto.TUI.App do
 
       {:error, reason} ->
         %{state | notice: "input not accepted: #{human_error(reason)} · draft kept"}
+    end
+  end
+
+  defp validate_queued_input(state, task_id, prompt) do
+    if Alto.InputModalities.required(prompt) == [] do
+      :ok
+    else
+      queued_input_provider(state, task_id) |> then(&Attachments.validate_provider(prompt, &1))
+    end
+  end
+
+  defp queued_input_provider(state, task_id) do
+    run = Enum.find_value(state.runs, fn {_id, run} -> if run.task_id == task_id, do: run end)
+
+    if run && run[:input_provider] do
+      run.input_provider
+    else
+      profile = State.selected_profile(state)
+
+      if profile && is_binary(state.selected_model) && state.selected_model != "",
+        do: runtime_provider(state, profile)
     end
   end
 
@@ -706,6 +748,7 @@ defmodule Alto.TUI.App do
       nil ->
         case Alto.Input.open(
                transport: state.run_options[:messaging_transport],
+               max_bytes: 16_000_000,
                id: "task-" <> task_id
              ) do
           {:ok, input} -> {:ok, put_in(state.inputs[task_id], input)}
@@ -738,12 +781,17 @@ defmodule Alto.TUI.App do
               Map.take(state, @submission_selection ++ [:transcript_scroll, :transcript_follow?])
 
             draft = ExRatatui.textarea_get_value(state.textarea)
+            draft_attachments = state.attachments
 
             next =
-              state |> Map.merge(Map.get(route, :selection, %{})) |> submit_backend(entry.text)
+              state
+              |> Map.merge(Map.get(route, :selection, %{}))
+              |> submit_backend(
+                if(entry[:content], do: Alto.Content.new(entry.content), else: entry.text)
+              )
 
             ExRatatui.textarea_set_value(state.textarea, draft)
-            next = Map.merge(next, foreground)
+            next = next |> Map.merge(foreground) |> Map.put(:attachments, draft_attachments)
 
             if task_running?(next, task_id) do
               clear_input_route(next, task_id)
@@ -751,7 +799,8 @@ defmodule Alto.TUI.App do
               case Alto.Messaging.send(input,
                      text: entry.text,
                      delivery: entry.mode,
-                     in_reply_to: entry[:in_reply_to]
+                     in_reply_to: entry[:in_reply_to],
+                     content: entry[:content]
                    ) do
                 {:ok, _receipt} ->
                   %{
@@ -825,6 +874,7 @@ defmodule Alto.TUI.App do
         with {:ok, state, task} <- ensure_task(state, prompt),
              {:ok, state} <- ensure_input(state, task["id"]),
              {:ok, run_options} <- run_options(state, profile),
+             :ok <- Attachments.validate_provider(prompt, run_options[:provider]),
              {:ok, handle, completion_ref, local_id} <- start_task(task, prompt, run_options) do
           attach_run(
             state,
@@ -833,6 +883,7 @@ defmodule Alto.TUI.App do
               kind: :alto,
               adapter: Backend.lookup(state.run_options, state.selected_backend),
               handle: handle,
+              input_provider: input_provider(run_options[:provider]),
               task_id: task["id"],
               ref: completion_ref,
               phase: "starting",
@@ -851,6 +902,13 @@ defmodule Alto.TUI.App do
         end
     end
   end
+
+  defp input_provider({module, options}),
+    do:
+      {module,
+       Keyword.take(options, [:model, :input_modalities, :supports_images, :supports_files])}
+
+  defp input_provider(nil), do: nil
 
   # The event sink must know its correlation id before Alto starts.
   defp deliver_event(owner, id, event) do
@@ -896,9 +954,10 @@ defmodule Alto.TUI.App do
     state = sync_run_task(state, run)
 
     state
-    |> State.append_entry(run.task_id, %{kind: :user, text: prompt})
+    |> State.append_entry(run.task_id, %{kind: :user, text: Attachments.summary(prompt)})
     |> Map.update!(:runs, &Map.put(&1, local_id, Map.put(run, :local_id, local_id)))
     |> Map.put(:notice, notice)
+    |> Map.put(:attachments, [])
     |> Map.put(:transcript_scroll, 0)
     |> Map.put(:transcript_follow?, true)
   end
@@ -917,7 +976,12 @@ defmodule Alto.TUI.App do
   end
 
   def ensure_task(%{selected_task_id: nil} = state, prompt) do
-    title = prompt |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 96)
+    title =
+      prompt
+      |> Attachments.summary()
+      |> String.split("\n", parts: 2)
+      |> hd()
+      |> String.slice(0, 96)
 
     opts = Keyword.put(state.catalog_opts, :backend, Atom.to_string(state.selected_backend))
 
@@ -1045,7 +1109,8 @@ defmodule Alto.TUI.App do
   defp runtime_provider(state, profile) do
     {module, options} =
       ProviderProfile.runtime_provider(profile, state.selected_model,
-        credentials_path: state.credentials_path
+        credentials_path: state.credentials_path,
+        model_metadata: State.model_metadata(state)
       )
 
     options = maybe_context_window(options, State.model_metadata(state))
@@ -1212,14 +1277,36 @@ defmodule Alto.TUI.App do
   end
 
   defp do_ingest_event(state, task_id, %Event{type: :model_completed, data: data}) do
-    State.update_usage(state, task_id, Map.get(data, :usage, %{}))
+    state = State.update_usage(state, task_id, Map.get(data, :usage, %{}))
+
+    state =
+      if is_list(data[:message]) do
+        text =
+          for(%{"type" => "text", "text" => text} <- data.message, do: text) |> Enum.join("\n")
+
+        last = State.current_entries(%{state | selected_task_id: task_id}) |> List.last()
+
+        cond do
+          text == "" -> state
+          last && last.kind == :assistant -> state
+          true -> State.append_entry(state, task_id, %{kind: :assistant, text: text})
+        end
+      else
+        state
+      end
+
+    Attachments.outputs(state, task_id, data[:message])
   end
 
   defp do_ingest_event(state, task_id, %Event{type: type, data: data})
        when type in [:tool_started, :tool_completed, :tool_failed] do
     entry = Alto.ToolDisplay.entry(type, data)
     key = {:tool, data[:operation_id] || data[:call_id]}
-    State.upsert_entry(state, task_id, key, entry)
+    state = State.upsert_entry(state, task_id, key, entry)
+
+    if type == :tool_completed and match?(%Alto.Content{}, data[:value]),
+      do: Attachments.outputs(state, task_id, data[:value]),
+      else: state
   end
 
   defp do_ingest_event(state, task_id, %Event{
@@ -1397,6 +1484,9 @@ defmodule Alto.TUI.App do
          modifiers: ["ctrl"]
        }),
        do: form_result(state, :choose)
+
+  defp overlay_key(%{overlay: %{kind: :attachment_editor}} = state, key),
+    do: Attachments.editor_key(state, key)
 
   defp overlay_key(state, key) do
     case Menu.key(state.overlay, key) do

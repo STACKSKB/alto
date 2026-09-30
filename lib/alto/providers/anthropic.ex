@@ -33,7 +33,9 @@ defmodule Alto.Providers.Anthropic do
       context_window: opts[:context_window],
       streaming: Keyword.get(opts, :streaming, true),
       tools: :client_tools,
-      vision: Keyword.get(opts, :supports_images, false)
+      input_modalities: Alto.InputModalities.configured(opts),
+      vision: "image" in Alto.InputModalities.configured(opts),
+      files: "file" in Alto.InputModalities.configured(opts)
     }
 
   @impl true
@@ -54,6 +56,7 @@ defmodule Alto.Providers.Anthropic do
            ) do
       {:ok,
        Map.merge(config, %{
+         input_modalities: Alto.InputModalities.configured(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),
          max_tokens: Keyword.get(opts, :max_tokens),
          thinking: Keyword.get(opts, :thinking),
@@ -80,7 +83,14 @@ defmodule Alto.Providers.Anthropic do
          :ok <- Alto.Context.Transcript.validate(request.messages),
          {systems, messages} <- Enum.split_with(request.messages, &(&1["role"] == "system")),
          {:ok, system_content} <- system_content(systems),
-         {:ok, messages} <- Alto.Result.traverse(messages, &message(&1, config.supports_images)) do
+         {:ok, messages} <-
+           Alto.Result.traverse(
+             messages,
+             &message(&1, %{
+               images: "image" in config.input_modalities,
+               files: "file" in config.input_modalities
+             })
+           ) do
       body =
         Map.merge(options, %{
           "model" => config.model,
@@ -130,8 +140,8 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp message(%{"role" => "tool"} = message, supports_images) do
-    with {:ok, content} <- anthropic_content(message["content"], supports_images) do
+  defp message(%{"role" => "tool"} = message, capabilities) do
+    with {:ok, content} <- anthropic_content(message["content"], capabilities) do
       {:ok,
        %{
          "role" => "user",
@@ -146,13 +156,13 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp message(%{"role" => role, "alto_anthropic_content" => content}, _supports_images)
+  defp message(%{"role" => role, "alto_anthropic_content" => content}, _capabilities)
        when role in ["user", "assistant"],
        do: {:ok, %{"role" => role, "content" => content}}
 
-  defp message(%{"role" => role} = message, supports_images)
+  defp message(%{"role" => role} = message, capabilities)
        when role in ["user", "assistant"] do
-    with {:ok, content} <- anthropic_content(message["content"], supports_images) do
+    with {:ok, content} <- anthropic_content(message["content"], capabilities) do
       calls =
         Enum.map(message["tool_calls"] || [], fn call ->
           input = JSON.decode!(call["function"]["arguments"])
@@ -174,10 +184,10 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp message(message, _supports_images),
+  defp message(message, _capabilities),
     do: {:error, {:invalid_anthropic_message, message}}
 
-  defp anthropic_content(value, supports_images) do
+  defp anthropic_content(value, capabilities) do
     case Content.decode_transcript(value) do
       :not_content when value in [nil, ""] ->
         {:ok, []}
@@ -186,7 +196,7 @@ defmodule Alto.Providers.Anthropic do
         {:ok, [%{"type" => "text", "text" => value}]}
 
       {:ok, content} ->
-        Content.map_images(content, supports_images, &anthropic_image/1)
+        Content.map_media(content, capabilities, &anthropic_media/1)
 
       {:error, reason} ->
         {:error, {:invalid_multimodal_content, reason}}
@@ -196,12 +206,30 @@ defmodule Alto.Providers.Anthropic do
     end
   end
 
-  defp anthropic_image(%{"media_type" => media_type, "data" => data}) do
-    %{
-      "type" => "image",
-      "source" => %{"type" => "base64", "media_type" => media_type, "data" => data}
-    }
+  defp anthropic_media(%{"type" => "image", "media_type" => media_type, "data" => data}) do
+    {:ok,
+     %{
+       "type" => "image",
+       "source" => %{"type" => "base64", "media_type" => media_type, "data" => data}
+     }}
   end
+
+  defp anthropic_media(%{
+         "type" => "file",
+         "name" => name,
+         "media_type" => "application/pdf",
+         "data" => data
+       }) do
+    {:ok,
+     %{
+       "type" => "document",
+       "title" => name,
+       "source" => %{"type" => "base64", "media_type" => "application/pdf", "data" => data}
+     }}
+  end
+
+  defp anthropic_media(%{"type" => "file", "media_type" => media}),
+    do: {:error, {:unsupported_anthropic_file_type, media}}
 
   defp send_request(body, config, sink) do
     headers = [

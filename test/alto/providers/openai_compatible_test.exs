@@ -316,6 +316,7 @@ defmodule Alto.Providers.OpenAICompatibleTest do
             "id" => "anthropic/claude-sonnet",
             "name" => "Claude Sonnet",
             "context_length" => 200_000,
+            "architecture" => %{"input_modalities" => ["text", "image"]},
             "supported_parameters" => ["tools", "reasoning"],
             "reasoning" => %{"supported_efforts" => ["low", "high"], "mandatory" => true}
           },
@@ -339,6 +340,7 @@ defmodule Alto.Providers.OpenAICompatibleTest do
                id: "anthropic/claude-sonnet",
                name: "Claude Sonnet",
                context_length: 200_000,
+               input_modalities: ["text", "image"],
                supported_parameters: ["tools", "reasoning"],
                reasoning: %{"supported_efforts" => ["low", "high"], "mandatory" => true}
              },

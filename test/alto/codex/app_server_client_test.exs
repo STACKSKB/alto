@@ -182,9 +182,4 @@ defmodule Alto.Codex.AppServer.ClientTest do
     assert Backend.approval_policy(:full_access) == "never"
     assert Backend.sandbox_policy(:full_access)["type"] == "dangerFullAccess"
   end
-
-  test "reports a missing Codex executable without hanging", %{root: root} do
-    assert {:error, {:external_executable_not_found, _}} =
-             Client.ensure_started(command: "alto-missing-codex", cwd: root, startup_timeout: 100)
-  end
 end

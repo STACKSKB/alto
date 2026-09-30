@@ -7,7 +7,7 @@ interface for your workflow.
 
 | Guide | What it covers |
 | --- | --- |
-| [Configuration](configuration.md) | Defaults, providers, multiple `alto.exs` profiles, sessions, and named runs |
+| [Configuration](configuration.md) | Defaults, providers, multiple `alto.exs` profiles, attachments, sessions, and named runs |
 | [Terminal UI](../packages/alto_tui/README.md) | Running the TUI, keyboard controls, workspaces, and backend composition |
 | [Examples](../examples/README.md) | Coding profile, repository maintenance, document intake, and an optional Oban host |
 | [Conversation revisions](conversations.md) | Saved history, dispatch fences, resuming, and branching |
@@ -15,13 +15,12 @@ interface for your workflow.
 | [Subagents](subagents.md) | Model selection, teams, inherited authority, child sessions, and isolated workspaces |
 | [Context reduction](context-reduction.md) | Triggers, reducers, pinned messages, and reduction limits |
 | [Tool batches](tool-batches.md) | Explicit concurrent calls and ordered outcomes |
-| [Multimodal content](multimodal-content.md) | Typed tool content and provider image support |
 
 ## Building with Alto
 
 | Contract | What it covers |
 | --- | --- |
-| [Extensions](extensions.md) | Prompts, providers, tools, approvals, middleware, executors, and host callbacks |
+| [Extensions](extensions.md) | Prompts, providers, tools, typed content, approvals, middleware, executors, and host callbacks |
 | [Loops](loop-contract.md) | Typed lifecycle events and a replaceable control policy |
 | [Execution hosts](runners.md) | Runner lifecycle, manual execution, shared components, and retention |
 | [Front-end protocol](../PROTOCOL.md) | Unix socket and WebSocket clients, events, approvals, sessions, and queues |

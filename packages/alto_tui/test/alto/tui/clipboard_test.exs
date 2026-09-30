@@ -70,6 +70,21 @@ defmodule Alto.TUI.ClipboardTest do
     assert capture_io(fn -> Clipboard.write("hello") end) == expected
   end
 
+  test "X11 image clipboard targets return binary image data", %{path: path} do
+    bytes = <<0x89, "PNG", 0, 255>>
+    File.write!(Path.join(path, "output"), bytes)
+
+    executable(path, "xclip", """
+    case "$*" in
+      '-selection clipboard -o -t TARGETS') /bin/echo 'image/png UTF8_STRING' ;;
+      '-selection clipboard -o -t image/png') /bin/cat "$CLIPBOARD_TEST_OUTPUT" ;;
+      *) exit 2 ;;
+    esac
+    """)
+
+    assert Clipboard.read() == {:ok, {:image, bytes, "image/png"}}
+  end
+
   defp executable(path, name, body) do
     file = Path.join(path, name)
     File.write!(file, "#!/bin/sh\n" <> body)

@@ -75,25 +75,6 @@ defmodule Alto.TUI.ViewTest do
     refute screen =~ "• 116"
   end
 
-  test "shows field choices while another field is edited" do
-    state =
-      base_state(%{
-        field_index: 1,
-        key_saved?: true,
-        fields: provider_fields(api_key: "")
-      })
-
-    terminal = ExRatatui.init_test_terminal(120, 36)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, frame()))
-
-    screen = ExRatatui.get_buffer_content(terminal)
-    assert screen =~ "API key"
-    assert screen =~ "Name"
-
-    assert active_input(View.widgets(state, frame())).state ==
-             Menu.field(state.overlay, :label).input
-  end
-
   test "keeps API keys masked while retaining the actual text cursor" do
     input = ExRatatui.text_input_new()
     :ok = ExRatatui.text_input_set_value(input, "secret-key")

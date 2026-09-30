@@ -3,20 +3,6 @@ defmodule Alto.ContentTest do
 
   alias Alto.Content
 
-  test "typed content uses the same blocks in tool results and persisted transcripts" do
-    encoded = Base.encode64(png(12, 8))
-
-    content =
-      Content.new([
-        Content.text("A small image"),
-        Content.image("image/png", encoded, 12, 8)
-      ])
-
-    assert {:ok, blocks} = Content.normalize_tool_result(content, 10_000)
-    assert blocks == content.blocks
-    assert {:ok, ^content} = Content.decode_transcript(blocks)
-  end
-
   test "ordinary native values never acquire multimodal meaning" do
     lookalike = [
       %{

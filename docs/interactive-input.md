@@ -40,6 +40,21 @@ next eligible run; the TUI keeps the composer draft and lets Enter retry
 delivery. Existing custom and Codex backends keep their established local
 follow-up queues and controls.
 
+## Typed messages
+
+Programmatic messaging can include validated content blocks:
+`Alto.Messaging.send(input, text: "summary", content: blocks)`. Text summaries
+remain limited to 64 KB. Typed bytes count against mailbox capacity, idempotency
+fingerprints and checkpoints; hosts can select up to 16 MB through
+`Alto.Input.open(max_bytes: 16_000_000)`. Queued messages retain submitted blocks,
+not mutable upload paths. Unsupported media is checked against the running model
+before dispatch.
+
+The [front-end protocol](../PROTOCOL.md) accepts validated block arrays in
+`start_run.task` and `send_message.text` as well as strings. Its line limit
+still applies to base64 uploads and output events (1 MiB by default). See
+[typed content](extensions.md#typed-content) for host construction and normalization.
+
 ## Shared user and agent messaging
 
 `Alto.Messaging.send/2` is the host-facing form of the same ingress used by

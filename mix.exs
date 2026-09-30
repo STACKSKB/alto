@@ -59,7 +59,6 @@ defmodule Alto.MixProject do
         "docs/tool-batches.md",
         "docs/interactive-input.md",
         "docs/conversations.md",
-        "docs/multimodal-content.md",
         "docs/extensions.md",
         "docs/sse-adapter.md",
         "docs/benchmarks.md",

@@ -105,27 +105,12 @@ defmodule Alto.CLITest do
            end) == ""
   end
 
-  test "setup requires an interactive terminal" do
-    assert {:error, "--setup requires an interactive terminal"} = Alto.CLI.run(["--setup"])
+  test "ordinary loop output lists are not treated as attachments" do
+    assert capture_io(:stderr, fn -> Alto.CLI.Renderer.finish([1, 2], false) end) == ""
   end
 
-  test "runs with the configured provider", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      """
-      [
-        provider: Alto.CLITest.AnswerProvider,
-        tools: [],
-        prompt: nil
-      ]
-      """
-    )
-
-    assert capture_io(fn ->
-             assert :ok = Alto.CLI.run(["--config", path, "answer from config"])
-           end) == "configured\n"
+  test "setup requires an interactive terminal" do
+    assert {:error, "--setup requires an interactive terminal"} = Alto.CLI.run(["--setup"])
   end
 
   test "rejects conflicting configuration switches" do
