@@ -28,8 +28,20 @@ and steering keep the resulting blocks, rather than mutable file references.
 
 For native HTTP providers, image input remains opt-in with `supports_images:
 true`. Binary input is separately opt-in with `supports_files: true`.
+These legacy flags declare support for a single configured model. Prefer
+`input_modalities: ["text", "image", "audio", "file"]` to declare its exact
+inputs. Catalog `input_modalities` (including OpenRouter architecture metadata
+and Codex `inputModalities`) take precedence when selecting models. Unsupported
+or unknown media capabilities fail before dispatch; switching models never
+inherits the previous model's declarations. For catalogs without metadata,
+configure `model_input_modalities: %{"model-id" => ["text", "image"]}`.
+The TUI keeps rejected drafts, and queued media is checked against the running
+model. Provider dispatch also checks historical and tool media in the request.
+Audio and video cannot bypass these checks as generic uploaded files.
 OpenAI-compatible endpoints receive named base64 `file` parts; the endpoint
-determines supported formats. Anthropic receives native PDF `document` blocks
+determines supported formats. Audio-capable models receive MP3/WAV as native
+`input_audio` parts; other audio formats and video transport are rejected.
+Anthropic receives native PDF `document` blocks
 and explicitly rejects other uploaded binary formats. Codex receives native
 image/audio parts and private file paths for documents, which its own tools
 can inspect subject to its sandbox. Arbitrary office-document extraction or
@@ -67,6 +79,7 @@ For direct image generation through OpenRouter, configure:
   provider: {Alto.Providers.Images,
     model: image_model_id,
     api_key: api_key,
+    input_modalities: ["text", "image"],
     options: %{"size" => "1024x1024", "output_format" => "png"}},
   tools: [],
   provider_timeout: 610_000,

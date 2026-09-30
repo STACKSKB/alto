@@ -672,7 +672,8 @@ defmodule Alto.TUI.App do
   end
 
   defp queue_input(state, task_id, prompt, mode) do
-    with :ok <- input_route_available(state, task_id),
+    with :ok <- validate_queued_input(state, task_id, prompt),
+         :ok <- input_route_available(state, task_id),
          {:ok, state} <- ensure_input(state, task_id),
          input <- Map.fetch!(state.inputs, task_id),
          :ok <- one_follow_up_available(input, mode),
@@ -698,6 +699,27 @@ defmodule Alto.TUI.App do
 
       {:error, reason} ->
         %{state | notice: "input not accepted: #{human_error(reason)} · draft kept"}
+    end
+  end
+
+  defp validate_queued_input(state, task_id, prompt) do
+    if Alto.InputModalities.required(prompt) == [] do
+      :ok
+    else
+      queued_input_provider(state, task_id) |> then(&Attachments.validate_provider(prompt, &1))
+    end
+  end
+
+  defp queued_input_provider(state, task_id) do
+    run = Enum.find_value(state.runs, fn {_id, run} -> if run.task_id == task_id, do: run end)
+
+    if run && run[:input_provider] do
+      run.input_provider
+    else
+      profile = State.selected_profile(state)
+
+      if profile && is_binary(state.selected_model) && state.selected_model != "",
+        do: runtime_provider(state, profile)
     end
   end
 
@@ -861,6 +883,7 @@ defmodule Alto.TUI.App do
               kind: :alto,
               adapter: Backend.lookup(state.run_options, state.selected_backend),
               handle: handle,
+              input_provider: input_provider(run_options[:provider]),
               task_id: task["id"],
               ref: completion_ref,
               phase: "starting",
@@ -879,6 +902,13 @@ defmodule Alto.TUI.App do
         end
     end
   end
+
+  defp input_provider({module, options}),
+    do:
+      {module,
+       Keyword.take(options, [:model, :input_modalities, :supports_images, :supports_files])}
+
+  defp input_provider(nil), do: nil
 
   # The event sink must know its correlation id before Alto starts.
   defp deliver_event(owner, id, event) do
@@ -1079,7 +1109,8 @@ defmodule Alto.TUI.App do
   defp runtime_provider(state, profile) do
     {module, options} =
       ProviderProfile.runtime_provider(profile, state.selected_model,
-        credentials_path: state.credentials_path
+        credentials_path: state.credentials_path,
+        model_metadata: State.model_metadata(state)
       )
 
     options = maybe_context_window(options, State.model_metadata(state))

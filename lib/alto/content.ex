@@ -74,11 +74,20 @@ defmodule Alto.Content do
   @doc "Translate all media blocks with explicit provider capabilities."
   def map_media(%__MODULE__{blocks: blocks}, capabilities, encode) do
     Alto.Result.traverse(blocks, fn
-      %{"type" => "image"} = block ->
-        if capabilities.images, do: encode.(block), else: {:error, :model_does_not_support_images}
+      %{"type" => type} = block when type in ["image", "file"] ->
+        modality = Alto.InputModalities.modality(block)
 
-      %{"type" => "file"} = block ->
-        if capabilities.files, do: encode.(block), else: {:error, :model_does_not_support_files}
+        key =
+          case modality do
+            "image" -> :images
+            "audio" -> :audio
+            "video" -> :video
+            "file" -> :files
+          end
+
+        if Map.get(capabilities, key, false),
+          do: encode.(block),
+          else: {:error, Alto.InputModalities.error(modality)}
 
       %{"type" => "artifact", "name" => name, "media_type" => media} ->
         {:ok, text("Generated file: #{name} (#{media})")}

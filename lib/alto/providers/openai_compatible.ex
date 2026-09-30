@@ -27,8 +27,9 @@ defmodule Alto.Providers.OpenAICompatible do
       streaming: true,
       context_window: Keyword.get(opts, :context_window),
       tools: :function_calls,
-      vision: Keyword.get(opts, :supports_images, false),
-      files: Keyword.get(opts, :supports_files, false)
+      input_modalities: Alto.InputModalities.configured(opts),
+      vision: "image" in Alto.InputModalities.configured(opts),
+      files: "file" in Alto.InputModalities.configured(opts)
     }
   end
 
@@ -59,8 +60,10 @@ defmodule Alto.Providers.OpenAICompatible do
   defp request(config, request, sink) do
     with {:ok, messages} <-
            provider_messages(Map.fetch!(request, :messages), %{
-             images: config.supports_images,
-             files: config.supports_files
+             images: "image" in config.input_modalities,
+             audio: "audio" in config.input_modalities,
+             video: "video" in config.input_modalities,
+             files: "file" in config.input_modalities
            }) do
       body =
         request
@@ -207,6 +210,25 @@ defmodule Alto.Providers.OpenAICompatible do
   end
 
   defp openai_media(%{"type" => "file", "name" => name, "media_type" => media, "data" => data}) do
+    encode_file(name, media, data)
+  end
+
+  defp encode_file(_name, "image/" <> _ = media, data),
+    do: {:ok, %{"type" => "image_url", "image_url" => %{"url" => "data:#{media};base64,#{data}"}}}
+
+  defp encode_file(_name, media, data)
+       when media in ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"] do
+    format = if media in ["audio/mpeg", "audio/mp3"], do: "mp3", else: "wav"
+    {:ok, %{"type" => "input_audio", "input_audio" => %{"data" => data, "format" => format}}}
+  end
+
+  defp encode_file(_name, "audio/" <> _ = media, _data),
+    do: {:error, {:unsupported_audio_format, media}}
+
+  defp encode_file(_name, "video/" <> _ = media, _data),
+    do: {:error, {:unsupported_video_format, media}}
+
+  defp encode_file(name, media, data) do
     {:ok,
      %{
        "type" => "file",
@@ -240,7 +262,8 @@ defmodule Alto.Providers.OpenAICompatible do
             if(is_list(model["supported_reasoning_efforts"]),
               do: model["supported_reasoning_efforts"]
             ),
-          context_length: positive_value(model["context_length"])
+          context_length: positive_value(model["context_length"]),
+          input_modalities: Alto.InputModalities.from_model(model)
         }
 
         [Map.reject(normalized, fn {_key, value} -> is_nil(value) end)]
@@ -275,6 +298,7 @@ defmodule Alto.Providers.OpenAICompatible do
            ) do
       {:ok,
        Map.merge(config, %{
+         input_modalities: Alto.InputModalities.configured(opts),
          reasoning_effort: Keyword.get(opts, :reasoning_effort),
          reasoning_format: Alto.Reasoning.format(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),

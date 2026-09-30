@@ -41,6 +41,7 @@ defmodule Alto.Providers.ImagesTest do
 
     opts = [
       model: "image/model",
+      input_modalities: ["text", "image"],
       options: %{"size" => "1024x1024"},
       req_options: [adapter: Adapter]
     ]

@@ -37,7 +37,12 @@ defmodule Alto.Harness.ProviderProfile do
   def runtime_provider(%__MODULE__{} = profile, model, opts \\ [])
       when is_binary(model) and model != "" do
     {module, options} = Alto.Harness.ProviderStore.resolve(profile, opts)
-    {module, Keyword.put(options, :model, model)}
+
+    metadata =
+      opts[:model_metadata] ||
+        if(is_list(profile.models), do: Enum.find(profile.models, &(&1.id == model)))
+
+    {module, Alto.InputModalities.bind(options, model, metadata)}
   end
 
   @doc "Fetch or return the profile's bounded model catalog."

@@ -11,7 +11,7 @@ defmodule Alto.Runner.MultimodalTest do
 
   defmodule Provider do
     @behaviour Alto.Provider
-    def describe(_), do: %{}
+    def describe(_), do: %{input_modalities: ["text", "image"]}
 
     def stream(request, _, opts) do
       if Enum.any?(request.messages, &(&1["role"] == "tool")) or opts[:capture] do

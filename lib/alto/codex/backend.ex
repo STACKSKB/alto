@@ -76,7 +76,8 @@ defmodule Alto.Codex.Backend do
     model = Keyword.get(opts, :model)
     approval = Keyword.get(opts, :approval, :ask)
 
-    with {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval, opts),
+    with :ok <- validate_input(client, prompt, opts),
+         {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval, opts),
          {:ok, result} <-
            Client.start_turn(client, turn_params(thread_id, prompt, opts)),
          turn_id when is_binary(turn_id) <- get_in(result, ["turn", "id"]) do
@@ -84,6 +85,33 @@ defmodule Alto.Codex.Backend do
     else
       nil -> {:error, :codex_turn_id_missing}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Check native media; ordinary documents become tool-readable file paths."
+  def check_input(prompt, opts),
+    do:
+      Alto.InputModalities.check(
+        Alto.InputModalities.required(prompt) -- ["file"],
+        Alto.InputModalities.configured(opts)
+      )
+
+  @doc "Resolve the selected model's capabilities before sending image or audio input."
+  def validate_input(client, prompt, opts) do
+    cond do
+      Alto.InputModalities.required(prompt) -- ["file"] == [] ->
+        :ok
+
+      Keyword.has_key?(opts, :input_modalities) ->
+        check_input(prompt, opts)
+
+      true ->
+        with {:ok, models} <- models(client) do
+          metadata =
+            Enum.find(models, &(&1.id == opts[:model] or (is_nil(opts[:model]) and &1.default?)))
+
+          check_input(prompt, Alto.InputModalities.bind(opts, opts[:model], metadata))
+        end
     end
   end
 
@@ -210,7 +238,8 @@ defmodule Alto.Codex.Backend do
       description: Map.get(model, "description"),
       default?: Map.get(model, "isDefault", false),
       default_effort: Map.get(model, "defaultReasoningEffort"),
-      efforts: Map.get(model, "supportedReasoningEfforts", [])
+      efforts: Map.get(model, "supportedReasoningEfforts", []),
+      input_modalities: Alto.InputModalities.from_model(model)
     }
   end
 

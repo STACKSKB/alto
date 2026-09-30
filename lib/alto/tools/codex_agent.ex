@@ -288,25 +288,29 @@ defmodule Alto.Tools.CodexAgent do
   end
 
   defp send_input(turn, entry, :steer) do
-    Client.request(
-      turn.client,
-      "turn/steer",
-      %{
-        "threadId" => turn.thread_id,
-        "expectedTurnId" => turn.turn_id,
-        "input" => Backend.user_input(input_content(entry))
-      },
-      Keyword.get(turn.opts, :request_timeout, 5_000)
-    )
+    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
+         do:
+           Client.request(
+             turn.client,
+             "turn/steer",
+             %{
+               "threadId" => turn.thread_id,
+               "expectedTurnId" => turn.turn_id,
+               "input" => Backend.user_input(input_content(entry))
+             },
+             Keyword.get(turn.opts, :request_timeout, 5_000)
+           )
   end
 
   defp send_input(turn, entry, :next_turn) do
-    Client.request(
-      turn.client,
-      "turn/start",
-      Backend.turn_params(turn.thread_id, input_content(entry), turn.opts),
-      Keyword.get(turn.opts, :request_timeout, 5_000)
-    )
+    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
+         do:
+           Client.request(
+             turn.client,
+             "turn/start",
+             Backend.turn_params(turn.thread_id, input_content(entry), turn.opts),
+             Keyword.get(turn.opts, :request_timeout, 5_000)
+           )
   end
 
   defp delivered_turn(turn, %{"turnId" => id}, :steer) when id == turn.turn_id, do: {:ok, turn}

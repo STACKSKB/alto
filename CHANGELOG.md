@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Check selected-model input modalities before dispatch, preserve catalog
+  capabilities, reject unsupported queued media without losing the draft, and
+  encode supported MP3/WAV inputs as native audio parts.
 - Carry uploaded files and generated artifacts through user input, queued
   messages, provider requests and saved sessions. Add repeatable CLI `--attach`,
   native PDF input, image generation and the `publish_file` output tool.

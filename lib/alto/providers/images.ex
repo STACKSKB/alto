@@ -15,7 +15,8 @@ defmodule Alto.Providers.Images do
     do: %{
       protocol: :image_generation,
       model: opts[:model],
-      vision: true,
+      vision: "image" in Keyword.get(opts, :input_modalities, ["text"]),
+      input_modalities: Keyword.get(opts, :input_modalities, ["text"]),
       tools: :none,
       output_modalities: ["image"]
     }
@@ -32,6 +33,7 @@ defmodule Alto.Providers.Images do
     endpoint_opts = HTTPOptions.endpoint_options(opts, "https://openrouter.ai/api/v1", "/images")
 
     with {:ok, config} <- HTTPOptions.validate(endpoint_opts, HTTPOptions.stream_schema()),
+         :ok <- Alto.InputModalities.check_request(request, __MODULE__, opts),
          {:ok, prompt, references} <- input(request.messages) do
       options = Keyword.get(opts, :options, %{})
 

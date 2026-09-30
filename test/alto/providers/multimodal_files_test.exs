@@ -155,4 +155,47 @@ defmodule Alto.Providers.MultimodalFilesTest do
             %{message: [_, %{"type" => "artifact", "name" => "image-1.png", "data" => ^data}]}} =
              Alto.Providers.OpenAICompatible.Stream.result(state)
   end
+
+  test "audio cannot bypass model gating as a generic file and uses native audio parts" do
+    data = Base.encode64("RIFF")
+
+    request = %{
+      messages: [%{"role" => "user", "content" => [Content.file("clip.wav", "audio/wav", data)]}],
+      tools: []
+    }
+
+    Process.put(:multimodal_response, JSON.encode!(%{choices: [%{message: %{content: "ok"}}]}))
+    opts = [model: "audio", supports_files: true, req_options: [adapter: Adapter]]
+
+    assert {:error, :model_does_not_support_audio} =
+             OpenAICompatible.stream(request, fn _ -> :ok end, opts)
+
+    refute_receive {:wire, _}
+
+    assert {:ok, _} =
+             OpenAICompatible.stream(
+               request,
+               fn _ -> :ok end,
+               Keyword.put(opts, :input_modalities, ["text", "audio"])
+             )
+
+    assert_receive {:wire, body}
+
+    assert [%{"type" => "input_audio", "input_audio" => %{"data" => ^data, "format" => "wav"}}] =
+             get_in(body, ["messages", Access.at(0), "content"])
+
+    image_file = Content.file("clip.gif", "image/gif", Base.encode64("GIF89a"))
+    request = put_in(request.messages, [%{"role" => "user", "content" => [image_file]}])
+
+    assert {:error, :model_does_not_support_images} =
+             OpenAICompatible.stream(request, fn _ -> :ok end, opts)
+
+    video = Content.file("clip.mp4", "video/mp4", Base.encode64("video"))
+    request = put_in(request.messages, [%{"role" => "user", "content" => [video]}])
+
+    assert {:error, :model_does_not_support_video} =
+             OpenAICompatible.stream(request, fn _ -> :ok end, opts)
+
+    refute_receive {:wire, _}
+  end
 end

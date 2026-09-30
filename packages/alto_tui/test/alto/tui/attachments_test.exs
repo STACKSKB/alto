@@ -197,4 +197,45 @@ defmodule Alto.TUI.AttachmentsTest do
     assert next.notice == state.notice
     assert [%{kind: :tool}] = State.current_entries(next)
   end
+
+  test "unsupported media preserves the draft for new runs and checks the running model for queues",
+       %{state: state} do
+    profile = %Alto.Harness.ProviderProfile{
+      id: "models",
+      provider: {Alto.Providers.OpenAICompatible, model: "vision", supports_images: true},
+      models: [
+        %{id: "text", input_modalities: ["text"]},
+        %{id: "vision", input_modalities: ["text", "image"]}
+      ]
+    }
+
+    signature = <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>
+    ihdr = <<1::32, 1::32, 8, 2, 0, 0, 0>>
+    png = signature <> <<13::32, "IHDR", ihdr::binary, :erlang.crc32(["IHDR", ihdr])::32>>
+    state = %{state | profiles: [profile], selected_provider_id: "models", selected_model: "text"}
+    state = Attachments.paste_image(state, png, "image/png")
+    draft = ExRatatui.textarea_get_value(state.textarea)
+    {:noreply, denied} = App.handle_event(%Key{code: "enter"}, state)
+    assert denied.runs == %{}
+    assert denied.notice =~ "draft kept"
+    assert denied.attachments == state.attachments
+    assert ExRatatui.textarea_get_value(denied.textarea) == draft
+
+    running = %{
+      denied
+      | selected_task_id: "task",
+        selected_model: "vision",
+        runs: %{
+          "run" => %{
+            task_id: "task",
+            input_provider: {Alto.Providers.OpenAICompatible, input_modalities: ["text"]}
+          }
+        }
+    }
+
+    {:noreply, denied} = App.handle_event(%Key{code: "enter"}, running)
+    assert denied.notice =~ "draft kept"
+    refute Map.has_key?(denied.inputs, "task")
+    assert ExRatatui.textarea_get_value(denied.textarea) == draft
+  end
 end

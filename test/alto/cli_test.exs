@@ -105,6 +105,10 @@ defmodule Alto.CLITest do
            end) == ""
   end
 
+  test "ordinary loop output lists are not treated as attachments" do
+    assert capture_io(:stderr, fn -> Alto.CLI.Renderer.finish([1, 2], false) end) == ""
+  end
+
   test "setup requires an interactive terminal" do
     assert {:error, "--setup requires an interactive terminal"} = Alto.CLI.run(["--setup"])
   end

@@ -124,11 +124,18 @@ defmodule Alto.TUI.Attachments do
   def message_options(text), do: [text: text]
 
   @doc "Reject unsupported input before a run takes ownership of the draft."
+  def validate_provider(%Content{} = content, {:codex, opts}),
+    do: Alto.Codex.Backend.check_input(content, opts)
+
   def validate_provider(%Content{} = content, {module, opts})
       when module in [Alto.Providers.OpenAICompatible, Alto.Providers.Anthropic] do
+    modalities = Alto.InputModalities.configured(opts)
+
     capabilities = %{
-      images: Keyword.get(opts, :supports_images, false),
-      files: Keyword.get(opts, :supports_files, false)
+      images: "image" in modalities,
+      files: "file" in modalities,
+      audio: module == Alto.Providers.OpenAICompatible and "audio" in modalities,
+      video: false
     }
 
     case Content.map_media(content, capabilities, fn
@@ -143,6 +150,17 @@ defmodule Alto.TUI.Attachments do
       error -> error
     end
   end
+
+  def validate_provider(%Content{} = content, {module, opts}),
+    do:
+      Alto.InputModalities.check_request(
+        %{messages: [%{"content" => content.blocks}]},
+        module,
+        opts
+      )
+
+  def validate_provider(%Content{} = content, nil),
+    do: Alto.InputModalities.check_content(content, [])
 
   def validate_provider(_, _), do: :ok
 

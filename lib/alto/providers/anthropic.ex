@@ -33,8 +33,9 @@ defmodule Alto.Providers.Anthropic do
       context_window: opts[:context_window],
       streaming: Keyword.get(opts, :streaming, true),
       tools: :client_tools,
-      vision: Keyword.get(opts, :supports_images, false),
-      files: Keyword.get(opts, :supports_files, false)
+      input_modalities: Alto.InputModalities.configured(opts),
+      vision: "image" in Alto.InputModalities.configured(opts),
+      files: "file" in Alto.InputModalities.configured(opts)
     }
 
   @impl true
@@ -55,6 +56,7 @@ defmodule Alto.Providers.Anthropic do
            ) do
       {:ok,
        Map.merge(config, %{
+         input_modalities: Alto.InputModalities.configured(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),
          max_tokens: Keyword.get(opts, :max_tokens),
          thinking: Keyword.get(opts, :thinking),
@@ -84,7 +86,10 @@ defmodule Alto.Providers.Anthropic do
          {:ok, messages} <-
            Alto.Result.traverse(
              messages,
-             &message(&1, %{images: config.supports_images, files: config.supports_files})
+             &message(&1, %{
+               images: "image" in config.input_modalities,
+               files: "file" in config.input_modalities
+             })
            ) do
       body =
         Map.merge(options, %{

@@ -4,7 +4,7 @@ defmodule Alto.MultimodalTest do
 
   defmodule Provider do
     @behaviour Alto.Provider
-    def describe(_), do: %{}
+    def describe(_), do: %{input_modalities: ["text", "file"]}
 
     def stream(request, _sink, opts) do
       send(opts[:owner], {:request, request})
@@ -127,11 +127,5 @@ defmodule Alto.MultimodalTest do
              Alto.CLI.Arguments.parse(["--attach", "one.pdf", "--attach", "two.png", "summarize"])
 
     assert Keyword.get_values(options, :attach) == ["one.pdf", "two.png"]
-  end
-
-  test "the CLI does not treat ordinary loop output lists as attachments" do
-    assert ExUnit.CaptureIO.capture_io(:stderr, fn ->
-             Alto.CLI.Renderer.finish([1, 2], false)
-           end) == ""
   end
 end

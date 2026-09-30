@@ -6,6 +6,10 @@ defmodule Alto.Provider do
   requesting text only (for example, context reduction). Adapters translate it
   to their wire protocol. Reduction never dispatches returned tool calls, even
   if an adapter or model ignores this hint.
+
+  Multimodal adapters declare the selected model's `input_modalities` in
+  `describe/1` or configured options. Undeclared media is rejected before
+  `stream/3`, including media retained in history and tool results.
   """
 
   @doc "Observe every attempted request, including retries and reductions. Observers run inside the provider call's timeout and cancellation boundary, fail independently, and do not count as streamed output."
@@ -25,7 +29,9 @@ defmodule Alto.Provider do
   def stream(provider, request, sink, opts) do
     {observers, opts} = Keyword.pop(opts, :alto_request_observers, [])
     Enum.each(observers, &Alto.Events.notify(&1, request))
-    provider.stream(request, sink, opts)
+
+    with :ok <- Alto.InputModalities.check_request(request, provider, opts),
+         do: provider.stream(request, sink, opts)
   end
 
   @doc "Discover models through the optional provider callback, without host observers."
@@ -49,6 +55,7 @@ defmodule Alto.Provider do
           required(:id) => String.t(),
           optional(:name) => String.t(),
           optional(:context_length) => pos_integer(),
+          optional(:input_modalities) => [String.t()],
           optional(:supported_parameters) => [String.t()],
           optional(:reasoning) => map(),
           optional(:efforts) => [String.t() | map()]

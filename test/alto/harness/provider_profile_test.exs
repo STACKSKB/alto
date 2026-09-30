@@ -21,7 +21,7 @@ defmodule Alto.Harness.ProviderProfileTest do
     end
 
     defp report(kind, opts) do
-      Keyword.validate!(opts, [:owner, :base_url, :model, :timeout])
+      Keyword.validate!(opts, [:owner, :base_url, :model, :timeout, :input_modalities])
       if opts[:owner], do: send(opts[:owner], {kind, opts})
     end
   end
@@ -52,7 +52,9 @@ defmodule Alto.Harness.ProviderProfileTest do
                tools: []
              )
 
-    selected = Keyword.put(connection, :model, "large")
+    selected =
+      connection |> Keyword.put(:model, "large") |> Keyword.put(:input_modalities, ["text"])
+
     assert_received {:describe, ^selected}
     assert_received {:stream, ^selected}
     assert_received {:observed, %{messages: [_ | _]}}
