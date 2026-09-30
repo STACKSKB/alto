@@ -823,14 +823,6 @@ defmodule Alto.FrontEnd.RegistryTest do
       {:ok, [reclaimed]} = Registry.request(registry, {:queue_claim, 1, "station-1", nil})
       assert :ok = Registry.request(registry, {:queue_ack, reclaimed.claim_id})
       assert %{pending: 0, claimed: 0} = Alto.Queue.request(queue, :count)
-    end
-
-    test "ack of a dead claim and queue-less registries fail closed", %{
-      registry: registry,
-      root: root,
-      queue: queue
-    } do
-      start_registry(registry, root, queue: queue)
       assert {:error, :not_found} = Registry.request(registry, {:queue_ack, "clm-ghost"})
       assert {:error, :not_found} = Registry.request(registry, {:queue_release, "clm-ghost"})
     end

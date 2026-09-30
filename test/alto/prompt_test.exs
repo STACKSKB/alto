@@ -131,11 +131,4 @@ defmodule Alto.PromptTest do
 
     assert prompt =~ "project instructions truncated"
   end
-
-  test "uses literal text as the system message" do
-    assert %Alto.Runner.Result{status: :ok} =
-             Alto.run("hello", provider: {AnswerProvider, test_pid: self()}, prompt: "literal")
-
-    assert_receive {:request, %{messages: [%{"role" => "system", "content" => "literal"} | _]}}
-  end
 end

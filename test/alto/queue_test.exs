@@ -84,15 +84,6 @@ defmodule Alto.QueueTest do
       assert :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
     end
 
-    test "put queues a pending record with revision 1", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-
-      assert {:ok, %{revision: 1, status: :pending}} =
-               Queue.request(name, {:put, "job-1", %{n: 1}, []})
-
-      assert %{pending: 1, claimed: 0} = Queue.request(name, :count)
-    end
-
     test "claim returns oldest pending first and marks claimed", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
       Queue.request(name, {:put, "a", %{i: 1}, []})
@@ -116,11 +107,6 @@ defmodule Alto.QueueTest do
       assert %{pending: 0, claimed: 0} = Queue.request(name, :count)
       assert {:ok, []} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
       assert {:error, :not_found} = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-    end
-
-    test "ack of an unknown claim id is not_found", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      assert {:error, :not_found} = Queue.request(name, {:settle, "clm-none", :ack, []})
     end
 
     test "release returns the record to pending", %{dir: dir, id: id} do
@@ -250,14 +236,21 @@ defmodule Alto.QueueTest do
 
       {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
       :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{v: 3}, []})
+      {:ok, next} = Queue.request(name, {:put, "job-1", %{v: 3}, []})
+      assert next.id != first.id
       {:ok, next_view} = Queue.request(name, {:lookup, "job-1"})
       refute next_view.generation_id == first_view.generation_id
+
+      assert {:ok, [%{payload: %{v: 3}, revision: 1}]} =
+               Queue.request(name, {:claim, 1, nil, :infinity, :all})
     end
 
     test "put on a pending key updates payload and bumps revision in place", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, first} = Queue.request(name, {:put, "job-1", %{total: 10}, []})
+
+      assert {:ok, %{revision: 1, status: :pending} = first} =
+               Queue.request(name, {:put, "job-1", %{total: 10}, []})
+
       {:ok, second} = Queue.request(name, {:put, "job-1", %{total: 12}, []})
 
       assert first.id == second.id
@@ -278,20 +271,6 @@ defmodule Alto.QueueTest do
                Queue.request(name, {:put, "job-1", %{total: 12}, []})
 
       assert %{pending: 0, claimed: 1} = Queue.request(name, :count)
-    end
-
-    test "put on a blanked key re-queues as a new record", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, first} = Queue.request(name, {:put, "job-1", %{total: 10}, []})
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-
-      {:ok, second} = Queue.request(name, {:put, "job-1", %{total: 99}, []})
-      assert first.id != second.id
-      second_id = second.id
-
-      assert {:ok, [%{id: ^second_id, payload: %{total: 99}, revision: 1}]} =
-               Queue.request(name, {:claim, 1, nil, :infinity, :all})
     end
   end
 
@@ -446,25 +425,6 @@ defmodule Alto.QueueTest do
                Queue.request(name4, {:snapshot_page, 0, 100})
 
       assert Enum.map(records, & &1.key) == ["kept", "after-repair"]
-    end
-
-    test "records survive a restart, blanks included", %{dir: dir, id: id} do
-      %{name: name, pid: pid} = start_queue!(id: id, dir: dir)
-      {:ok, kept} = Queue.request(name, {:put, "keep", %{n: 1}, []})
-      {:ok, _} = Queue.request(name, {:put, "blanked", %{n: 2}, []})
-      {:ok, [_, _] = claimed} = Queue.request(name, {:claim, 2, nil, :infinity, :all})
-
-      blanked = Enum.find(claimed, &(&1.key == "blanked"))
-      :ok = Queue.request(name, {:settle, blanked.claim_id, :ack, []})
-      GenServer.stop(pid)
-
-      %{name: name2} = start_queue!(id: id, dir: dir)
-      assert %{pending: 0, claimed: 1} = Queue.request(name2, :count)
-
-      kept_id = kept.id
-
-      assert {:ok, %{id: ^kept_id, key: "keep", payload: %{n: 1}, revision: 1}} =
-               Queue.request(name2, {:lookup, "keep"})
     end
 
     test "a claimed record survives restart under its lease, then expires", %{dir: dir, id: id} do

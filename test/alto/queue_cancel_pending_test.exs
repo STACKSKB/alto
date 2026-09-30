@@ -24,6 +24,7 @@ defmodule Alto.QueueCancelPendingTest do
     assert :ok = Queue.request(name, {:settle, claim_id, :release, []})
     assert :ok = Queue.request(name, {:cancel_pending, "job"})
     assert {:error, :not_found} = Queue.request(name, {:lookup, "job"})
+    assert {:error, :not_found} = Queue.request(name, {:cancel_pending, "missing"})
   end
 
   test "cancelled pending record stays absent after restart", %{dir: dir, name: name} do
@@ -35,9 +36,5 @@ defmodule Alto.QueueCancelPendingTest do
     {:ok, _} = Queue.start_link(id: "q", dir: dir, name: name2)
     assert {:error, :not_found} = Queue.request(name2, {:lookup, "job"})
     assert {:ok, []} = Queue.request(name2, {:claim, 1, nil, :infinity, :all})
-  end
-
-  test "missing key is reported", %{name: name} do
-    assert {:error, :not_found} = Queue.request(name, {:cancel_pending, "missing"})
   end
 end
