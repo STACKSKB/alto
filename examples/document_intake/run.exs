@@ -1,5 +1,5 @@
 #!/usr/bin/env elixir
-Application.ensure_all_started(:alto)
+Application.ensure_all_started(:alto_contrib)
 Code.require_file("lib/intake.ex", __DIR__)
 Code.require_file("lib/cli.ex", __DIR__)
 
@@ -25,7 +25,7 @@ case System.argv() do
   _ ->
     IO.puts(
       :stderr,
-      "usage: mix run examples/document_intake/run.exs INPUT.md OUTPUT_DIR [--config CONFIG.exs] [--title TEXT] [--summary TEXT] [--field KEY=VALUE]"
+      "usage: mix run ../../examples/document_intake/run.exs INPUT.md OUTPUT_DIR [--config CONFIG.exs] [--title TEXT] [--summary TEXT] [--field KEY=VALUE]"
     )
 
     System.halt(2)

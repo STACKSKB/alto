@@ -1,15 +1,18 @@
 # Alto front-end protocol — v1
 
 Status: **implemented (v1).** This document fixes the wire contract for
-processes that talk to a running Alto core: graphical front ends, other
+processes that talk to an Alto contrib resident host: graphical front ends, other
 agents, and scripts. `input` and `reload` remain reserved (v1 servers reply
 `unsupported`); the other messages below are part of the v1 contract.
 
 The governing idea: **the envelope is the protocol; transports are framing.**
-The core Alto process listens for typed inputs — from a human, an agent, or
+The contrib host listens for typed inputs — from a human, an agent, or
 another program — and streams typed facts back out. Which toolkit renders the
 human-facing view is a client decision this
 protocol deliberately does not make.
+
+This wire protocol and its transports live in `Alto.Contrib.Protocol` and
+`Alto.Contrib.Listeners`; runtime events and approval contracts remain core.
 
 ## Design principles
 

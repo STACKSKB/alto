@@ -9,6 +9,7 @@
 *.ez
 *.tar
 /alto
+/packages/alto_contrib/alto
 /.zcode/
 /alto-[0-9]*/
 /packages/alto_tui/alto_tui-[0-9]*/

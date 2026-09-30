@@ -22,4 +22,6 @@ approvals, cancellation, and resource bounds.
   transforms, provider-aware context estimates, hooks, trusted commands, and
   optional renderers and provider adapters.
 
-Each example has its own run instructions and integration checks.
+The repository maintenance and document intake runners execute from
+`packages/alto_contrib`; Oban declares contrib as a host dependency. Each example
+has its own run instructions and integration checks.

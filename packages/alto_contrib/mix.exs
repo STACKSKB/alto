@@ -14,7 +14,11 @@ defmodule AltoContrib.MixProject do
           else: ["lib"]
         ),
       escript: [name: "alto", main_module: Alto.Contrib.CLI],
-      package: [licenses: ["MIT"], files: ["lib", "mix.exs", "README.md", "LICENSE"]],
+      package: [
+        licenses: ["MIT"],
+        links: %{"Source" => "https://github.com/STACKSKB/alto"},
+        files: ["lib", "mix.exs", "README.md", "LICENSE"]
+      ],
       deps: deps()
     ]
   end
@@ -25,8 +29,12 @@ defmodule AltoContrib.MixProject do
   defp deps do
     root = Path.expand("../..", __DIR__)
 
+    checkout? =
+      __DIR__ == Path.join([root, "packages", "alto_contrib"]) and
+        File.exists?(Path.join(root, "lib/alto.ex"))
+
     alto =
-      if File.exists?(Path.join(root, "mix.exs")),
+      if System.get_env("ALTO_HEX_BUILD") != "1" and checkout?,
         do: {:alto, path: root},
         else: {:alto, "~> 0.0.2"}
 

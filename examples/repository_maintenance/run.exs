@@ -1,5 +1,5 @@
 #!/usr/bin/env elixir
-Application.ensure_all_started(:alto)
+Application.ensure_all_started(:alto_contrib)
 Code.require_file("lib/workflow.ex", __DIR__)
 Code.require_file("lib/webhook_inbox.ex", __DIR__)
 
@@ -67,7 +67,7 @@ case System.argv() do
   _ ->
     IO.puts(
       :stderr,
-      "usage: mix run examples/repository_maintenance/run.exs REPOSITORY REPORT.json | " <>
+      "usage: mix run ../../examples/repository_maintenance/run.exs REPOSITORY REPORT.json | " <>
         "apply REPOSITORY MANIFEST.json MANIFEST_SHA256"
     )
 

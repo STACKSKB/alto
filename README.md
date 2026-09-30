@@ -1,9 +1,20 @@
 # Alto
 
-Alto is a lightweight, customizable agent harness written in Elixir. Use it as a
-terminal coding assistant, run a task from the command line, or compose it into
-an application. It handles the model/tool loop, streaming, approvals,
-cancellation, and saved sessions while you choose how the agent works.
+Alto is a small, composable execution runtime written in Elixir. It handles
+bounded model and tool execution, approvals, cancellation, owned children,
+typed content, and saved-session recovery. Hosts choose the agent's policy
+and implementations.
+
+The repository contains three independently built packages:
+
+| Package | Owns | Depends on |
+| --- | --- | --- |
+| `alto` (repository root) | Execution contracts, shared correctness mechanisms, persistence and recovery | Elixir/OTP and `nimble_options` |
+| [`alto_contrib`](packages/alto_contrib/README.md) | Providers, coding tools, Git workspaces, external clients, CLI/server hosts, prompts and application defaults | `alto` |
+| [`alto_tui`](packages/alto_tui/README.md) | Terminal interface, task catalog, workspace navigation and UI state | `alto` and `alto_contrib` |
+
+Dependencies point toward core. Installing `alto` does not install HTTP adapters,
+server transports or terminal libraries.
 
 The goal is an **xmonad-like agent harness**: configure it in real code, compose
 small parts, and replace the parts that do not fit your workflow. An `alto.exs`
@@ -26,8 +37,8 @@ them for different models, projects, or sessions.
   require approval, and runs can be cancelled. Saved sessions retain history;
   interrupted effects retain their uncertainty.
 
-Alto includes streaming OpenAI-compatible and Anthropic providers, file and
-command tools, context reduction, subagents and messaging, and Git workspaces.
+Alto contrib supplies streaming OpenAI-compatible and Anthropic providers, file
+and command tools, context reducers, agent tools, and Git workspace implementations.
 The optional TUI also supports a Codex backend. Each can be selected and composed
 through configuration.
 
@@ -119,15 +130,18 @@ Add Alto from source to your application's dependencies:
 {:alto, git: "https://github.com/STACKSKB/alto.git"}
 ```
 
-The same configuration works through the library API:
+A host using the supplied implementations can depend on
+`{:alto_contrib, path: "../alto/packages/alto_contrib"}` from a local checkout.
+This dependency includes the matching core checkout. Compose application defaults explicitly:
 
 ```elixir
 {:ok, options} = Alto.Contrib.Config.load("profiles/review/alto.exs")
-%Alto.Runner.Result{status: :ok, output: answer} = Alto.run("Review the parser", options)
+%Alto.Runner.Result{status: :ok, output: answer} = Alto.Contrib.run("Review the parser", options)
 ```
 
-`Alto.start/2`, `Alto.await/2`, and `Alto.cancel/2` support asynchronous runs.
-Use `Alto.resume/3` for follow-ups, `Alto.rule_loop/1` for providerless workflows,
+`Alto.Contrib.start/2` and `Alto.Contrib.resume/3` apply the same application defaults.
+`Alto.await/2` and `Alto.cancel/2` operate on their runtime handles. Hosts supplying
+all policies themselves can use `Alto.run/2`, `Alto.start/2`, and `Alto.resume/3`. Use `Alto.rule_loop/1` for providerless workflows,
 or `Alto.loop/2` to supply your own control policy. A resident service can expose
 runs and saved sessions to clients over Unix sockets or WebSockets.
 

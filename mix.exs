@@ -37,7 +37,6 @@ defmodule Alto.MixProject do
         "README.md",
         "LICENSE",
         "CHANGELOG.md",
-        "PROTOCOL.md",
         "docs/README.md",
         "docs/configuration.md",
         "docs/delayed-queue.md",
@@ -52,12 +51,8 @@ defmodule Alto.MixProject do
         "docs/interactive-input.md",
         "docs/conversations.md",
         "docs/extensions.md",
-        "docs/sse-adapter.md",
         "docs/benchmarks.md",
-        "bench/tool_batches.exs",
-        "examples/README.md",
-        "examples/repository_maintenance",
-        "examples/document_intake"
+        "bench/tool_batches.exs"
       ]
     ]
   end

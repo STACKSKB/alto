@@ -20,7 +20,7 @@ defmodule AltoObanExample.MixProject do
 
   defp deps do
     [
-      {:alto, path: "../.."},
+      {:alto_contrib, path: "../../packages/alto_contrib"},
       {:ecto_sql, "~> 3.14"},
       {:oban, "~> 2.24"},
       {:postgrex, "~> 0.22"}

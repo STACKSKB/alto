@@ -7,7 +7,7 @@ alias Alto.TUI.{App, State}
 alias ExRatatui.{CellSession, Event.Mouse}
 
 Code.ensure_loaded!(Alto.TUI.Backends.Native)
-{:ok, projects, tasks} = Alto.Harness.Catalog.navigation()
+{:ok, projects, tasks} = Alto.TUI.Catalog.navigation()
 ids = System.argv()
 if ids == [], do: raise("pass two or more saved session IDs")
 

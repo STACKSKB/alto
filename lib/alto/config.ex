@@ -1,10 +1,10 @@
 defmodule Alto.Config do
   @moduledoc """
-  Trusted, compiled Elixir configuration for an Alto run.
+  Policy-neutral run defaults and shared execution limits.
 
-  A configuration file evaluates to a keyword list. The CLI owns its renderer and
-  cancellation handle; configuration composes the working directory,
-  loop, provider, tools, prompt, approval policy, and bounded runner options.
+  Host applications compose these ordinary keyword options with their provider,
+  tools and policies. Configuration-file evaluation and per-user paths belong
+  to `Alto.Contrib.Config` in the optional application package.
   """
 
   @authority_limits [

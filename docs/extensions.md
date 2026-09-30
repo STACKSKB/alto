@@ -5,6 +5,27 @@ around lifecycle events, configure trusted commands, transform model supplied
 tool input, select an optional renderer or front end, and choose provider
 adapters without changing the runner.
 
+## Package contracts
+
+Core contains the execution engine and shared contracts. Optional implementations
+live in `alto_contrib`; UI state and task navigation live in `alto_tui`. Contrib
+and TUI import core, and core never imports either application. The independent
+core build and compiled-module boundary tests enforce this direction.
+
+Trusted tools declare `runtime_operation/1` to bind owned delegation or messaging
+semantics independently of their module or model-visible name. The runtime still
+owns admission, approval, cancellation, inherited authority and accounting.
+Hosts provide `agent_prepare` (`fn(prepared, tool_options)`), `agent_models`
+(`fn(arguments, tool_context, tool_options)`) and `child_provider_resolver`
+(`fn(profile_key, model)`) callbacks when those policies are needed. Contrib
+composes its provider catalog implementation through these callbacks.
+
+`Alto.Resource` defines retained child-resource acquisition, use, freezing,
+recovery and stable identity. `Alto.Contrib.Workspaces` implements it for Git
+workspaces; execution does not inspect its struct or backend modules. Retained
+resources remain trusted host choices, subject to the shared deadline,
+authority and checkpoint boundaries.
+
 ## System prompts
 
 The `:prompt` run option accepts literal text, `nil` to omit the system message,
@@ -207,13 +228,14 @@ failure. The default policy is `{:deny, :policy_denied}`.
 
 ## Usage accounting
 
-Execution normalizes provider usage once with `Alto.Usage.normalize/1` and carries
+Provider adapters decode wire usage in contrib and return canonical fields.
+Execution normalizes canonical usage with `Alto.Usage.normalize/1` and carries
 one atom-keyed accounting map through results, events, checkpoints and front ends.
 The map includes cumulative counts, latest-request counts, a context window and
 `requests`. A present `requests` field identifies serialized accounting; otherwise
 normalization treats the value as one provider response. `Alto.Usage.merge/2` adds
 cumulative fields and replaces latest-request fields only when the right-hand map
-reports a request. Codex cumulative snapshots use `Alto.Usage.from_codex/1` and
+reports a request. Codex cumulative snapshots use `Alto.Contrib.Usage.from_codex/1` and
 retain `requests: 0` because the server does not provide a request count.
 
 ## Context estimates
@@ -406,13 +428,16 @@ it a temporary home. Additional language runtimes or caches outside `/usr` and
 
 ## Project instruction inputs
 
-`project_instructions: :auto` loads `alto.md` or `AGENTS.md`. A host can instead
+Contrib hosts interpret `project_instructions: :auto` by loading `alto.md` or
+`AGENTS.md`. A contrib host can instead
 provide `[files: ["CUSTOM.md"], max_bytes: 16_000]`, or `nil` to disable discovery.
 Candidates must resolve inside the workspace and be regular files. The loader
 reads only the configured prefix plus four bytes for UTF-8 boundary handling,
 rejects malformed retained text, and marks truncation. It does not scan or validate
 the omitted tail. Prompt builders remain replaceable, and resume retains the
-stored prompt rather than reloading these files.
+stored prompt rather than reloading these files. Core accepts `nil`, an explicit
+instructions map, or a one-argument loader returning `{:ok, map | nil}`. It has
+no project-file discovery policy.
 
 Provider adapters can honor the protocol-neutral request hint `tool_choice: :none`
 while retaining schemas needed by historical tool messages. The built-in
@@ -473,7 +498,8 @@ compaction: [strategy: {Alto.Contrib.Context.Reducers.Handoff, []}]
 
 A retry callback returns `:stop` or `{:retry, delay_ms, reason}`. Execution still
 refuses to replay an attempt after output delivery and enforces the attempt and
-time budgets. Omitted retry policy preserves the existing transient policy;
+time budgets. Contrib supplies the transient retry policy. Bare core stops retries without
+an explicit policy;
 `provider_retries: 0` disables retries. Omitted presentation emits the tool name.
 Completion events retain the native result in `value`; consumers render it with
 `Alto.Contrib.ToolDisplay` or their own presentation function. Tool-title presenter failures

@@ -33,7 +33,9 @@ model calls. Concurrent calls from a reducer serialize through that shared run
 state. Compaction never refreshes deadlines or execution budgets, and its count
 is preserved in approval checkpoints.
 
-Compaction is disabled by default. When enabled, the default allowance is one
+Compaction is disabled by default. Bare core requires an explicit reducer
+strategy. Contrib composition supplies `Alto.Contrib.Context.Reducers.Summary`
+when a host enables compaction without specifying one. When enabled, the default allowance is one
 reduction per run. Custom reducers implement `Alto.Context.Reducer.compact/3`;
 they can call the bounded model function or perform deterministic reduction
 without a provider. A session is required to

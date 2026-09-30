@@ -3,7 +3,9 @@
 Alto's optional terminal interface provides streaming conversations, model and
 provider selection, approvals, saved tasks, workspaces, search, and subagent
 inspection. It runs local Alto workflows and supports configurable backends,
-including Codex. The native ExRatatui dependency stays in this package.
+including Codex. The native ExRatatui dependency stays in this package. The TUI depends on core
+and contrib; neither package depends on the TUI. Task catalogs, folder navigation,
+preferences and worktree UI actions are owned here.
 
 ## Run it
 
@@ -14,6 +16,12 @@ cd packages/alto_tui
 mix deps.get
 mix alto.tui --config ../../alto.agentic.exs
 ```
+
+Local builds use the sibling core and contrib checkouts. This package is a
+standalone source-built Mix application. Its existing atomic NIF extraction
+workaround uses a dependency compiler override, which Hex packaging rejects.
+A Hex release needs an upstream fix or a separately distributable native build
+fix; core and contrib distributions have no native dependency.
 
 Use `--project PATH` to open a workspace, `--catalog PATH` for a separate task
 catalog, `--credentials PATH` for a provider credential store, and `--log PATH`

@@ -4,8 +4,13 @@ defmodule AltoTUI.MixProject do
   def project do
     alto_path = Path.expand("../..", __DIR__)
 
+    checkout? =
+      __DIR__ == Path.join([alto_path, "packages", "alto_tui"]) and
+        File.exists?(Path.join(alto_path, "lib/alto.ex")) and
+        System.get_env("ALTO_HEX_BUILD") != "1"
+
     alto_dep =
-      if File.exists?(Path.join(alto_path, "mix.exs")) do
+      if checkout? do
         {:alto, path: alto_path}
       else
         {:alto, "~> 0.0.2"}
@@ -14,7 +19,7 @@ defmodule AltoTUI.MixProject do
     contrib_path = Path.expand("../alto_contrib", __DIR__)
 
     contrib_dep =
-      if File.exists?(Path.join(contrib_path, "mix.exs")),
+      if checkout? and File.exists?(Path.join(contrib_path, "mix.exs")),
         do: {:alto_contrib, path: contrib_path},
         else: {:alto_contrib, "~> 0.0.2"}
 
@@ -26,7 +31,7 @@ defmodule AltoTUI.MixProject do
       start_permanent: Mix.env() == :prod,
       package: [
         licenses: ["MIT"],
-        links: %{"Source" => "https://github.com/STACKSKB/alto/tree/v0.0.2/packages/alto_tui"},
+        links: %{"Source" => "https://github.com/STACKSKB/alto"},
         files: ["lib", "build", "mix.exs", "README.md", "LICENSE"]
       ],
       deps: [

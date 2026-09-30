@@ -21,7 +21,7 @@ EOF
 
 (cd "$consumer_dir" && MIX_ENV=prod mix deps.get --only prod --no-archives)
 (cd "$consumer_dir" && MIX_ENV=prod mix run --no-start -e '
-  unless Code.ensure_loaded?(Alto.TUI) or Code.ensure_loaded?(ExRatatui) do
+  unless Enum.any?([Alto.Contrib, Alto.TUI, Req, Plug, ExRatatui], &Code.ensure_loaded?/1) do
     {:ok, _apps} = Application.ensure_all_started(:alto)
 
     defmodule ConsumerSmoke.Echo do
@@ -43,6 +43,6 @@ EOF
       raise "providerless rule smoke returned an unexpected result: #{inspect(result)}"
     end
   else
-    raise "optional TUI dependency leaked into the production consumer"
+    raise "optional application dependency leaked into the production consumer"
   end
 ')

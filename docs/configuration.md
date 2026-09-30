@@ -6,6 +6,12 @@ shared configuration, read environment variables, and construct custom modules
 or callbacks. Keep as many config files as your workflows need; the filename is
 a convention, and `--config` accepts any path.
 
+CLI commands below run from `packages/alto_contrib`; TUI commands run from
+`packages/alto_tui`. File loading and host defaults belong to contrib. Library
+hosts opt in with `Alto.Contrib.configure/1` or use `Alto.Contrib.run/2`. Direct
+core runs accept explicit policies; they do not discover project files, select
+a reducer, or infer a provider retry policy.
+
 ## Defaults and config selection
 
 `Alto.default_config()` returns the library defaults. Use `Keyword.merge/2` or
@@ -298,7 +304,7 @@ Library calls take the same keyword list, with a provider supplied by the host:
 
 ```elixir
 {:ok, options} = Alto.Contrib.Config.load("profiles/review/alto.exs")
-result = Alto.run("Review the parser", options)
+result = Alto.Contrib.run("Review the parser", options)
 ```
 
 `mix alto --serve --config FILE` exposes the selected config as `"default"`.
