@@ -38,6 +38,12 @@ defmodule Alto.Tools.CodexAgent do
   def run(%{task: task, model: model}, context, opts) do
     context = Alto.Tool.context(context)
 
+    # Capabilities declared for the configured model do not follow task overrides.
+    opts =
+      if model == opts[:model],
+        do: opts,
+        else: Keyword.drop(opts, [:input_modalities, :supports_images, :supports_files])
+
     with_client(context, opts, fn client ->
       with :ok <- Client.subscribe(client),
            {:ok, turn} <-

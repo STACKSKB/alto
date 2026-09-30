@@ -184,6 +184,34 @@ defmodule Alto.Tools.CodexAgentTest do
     assert {:ok, %{status: :delivered}} = Alto.Input.request(input, {:receipt, later.message_id})
   end
 
+  test "a delegated model override cannot inherit audio permissions from its configured model",
+       context do
+    {:ok, input} = Alto.Input.start_link()
+    {module, settings} = context.tool
+
+    tool =
+      {module, Keyword.merge(settings, model: "first-model", input_modalities: ["text", "audio"])}
+
+    {:ok, handle} =
+      Alto.start(
+        %{"task" => "live", "model" => "second-model"},
+        opts(context, input: input, tools: [tool])
+      )
+
+    wait_for(context.log, "turn/start")
+
+    {:ok, _receipt} =
+      Alto.Messaging.send(input,
+        text: "transcribe clip",
+        content: [Alto.Content.file("clip.wav", "audio/wav", Base.encode64("RIFF"))]
+      )
+
+    assert %Alto.Runner.Result{status: :error} = Alto.await(handle)
+    sent = requests(context.log)
+    assert Enum.any?(sent, &(&1["method"] == "model/list"))
+    refute Enum.any?(sent, &(&1["method"] == "turn/steer"))
+  end
+
   test "Codex messages have runtime provenance and duplicate tool calls send once", context do
     {:ok, router} = Alto.Messaging.start_link()
     {:ok, inbox} = Alto.Input.start_link()
