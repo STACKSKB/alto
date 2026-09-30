@@ -1,21 +1,5 @@
-defmodule Alto.ReasoningTest do
+defmodule Alto.ProviderFieldsTest do
   use ExUnit.Case, async: true
-  alias Alto.Reasoning
-
-  test "effort choices are capability-based, including Codex and mandatory reasoning" do
-    assert Reasoning.efforts(%{id: "unknown", supported_parameters: ["reasoning"]}) == []
-
-    assert Reasoning.efforts(%{
-             efforts: [%{"reasoningEffort" => "high"}, %{"reasoningEffort" => "low"}]
-           }) == ["high", "low"]
-
-    assert Reasoning.efforts(%{
-             "reasoning" => %{"supported_efforts" => ["none", "high"], "mandatory" => true}
-           }) == ["high"]
-
-    assert "max" in Reasoning.efforts(%{reasoning: %{"supported_efforts" => nil}})
-    assert Reasoning.efforts(%{reasoning: %{mandatory: true}}) == []
-  end
 
   defmodule Provider do
     def describe(_), do: %{}
@@ -29,16 +13,16 @@ defmodule Alto.ReasoningTest do
          tool_calls: [],
          reasoning: "summary",
          provider_fields: %{
-           "reasoning_details" => [
-             %{"type" => "reasoning.summary", "summary" => "summary", "index" => 0}
-           ],
+           "opaque_extension" => %{"value" => "preserved"},
+           "content" => "overwritten",
+           "tool_calls" => [%{"id" => "injected"}],
            "role" => "system"
          }
        }}
     end
   end
 
-  test "reasoning survives a saved conversation and cannot overwrite message roles" do
+  test "opaque provider metadata survives resume without replacing message structure" do
     dir = Path.join(System.tmp_dir!(), "alto-reasoning-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
     opts = [provider: {Provider, owner: self()}, tools: [], session: :new, session_dir: dir]
@@ -51,6 +35,7 @@ defmodule Alto.ReasoningTest do
     assert_receive {:reasoning_request, request}
     assistant = Enum.find(request.messages, &(&1["role"] == "assistant"))
     assert assistant["content"] == "answer"
-    assert Alto.Reasoning.text(assistant) == "summary"
+    assert assistant["opaque_extension"] == %{"value" => "preserved"}
+    refute Map.has_key?(assistant, "tool_calls")
   end
 end

@@ -237,7 +237,7 @@ defmodule Alto.TUI.State do
   @doc "Models already fetched or embedded in a provider profile."
   def known_models(state, profile), do: Map.get(state.models, profile.id, profile.models)
 
-  def effort_choices(state), do: Alto.Reasoning.efforts(model_metadata(state))
+  def effort_choices(state), do: Alto.Contrib.Reasoning.efforts(model_metadata(state))
 
   def effort_key(state),
     do: {state.selected_backend, state.selected_provider_id, state.selected_model}

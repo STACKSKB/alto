@@ -42,7 +42,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
     assert_received {:event, %{type: :model_reasoning_delta, data: %{text: "Checking "}}}
     assert_received {:event, %{type: :model_reasoning_delta, data: %{text: "files."}}}
     refute_received {:event, %{type: :model_reasoning_delta}}
-    assert Alto.Reasoning.text(completion.provider_fields) == "Checking files."
+    assert Alto.Contrib.Reasoning.text(completion.provider_fields) == "Checking files."
   end
 
   test "reasoning IDs do not reorder signed blocks during replay" do
@@ -109,7 +109,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
     refute_received %{type: :model_delta}
     assert_received %{type: :model_reasoning_delta, data: %{text: "Provider explanation"}}
 
-    assert Alto.Reasoning.text(%{
+    assert Alto.Contrib.Reasoning.text(%{
              "reasoning_details" => [%{"type" => "reasoning.encrypted", "data" => "secret"}]
            }) == ""
   end

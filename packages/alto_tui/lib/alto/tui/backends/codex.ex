@@ -647,7 +647,7 @@ defmodule Alto.TUI.Backends.Codex do
   end
 
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
-    State.put_usage(state, run.task_id, Alto.Usage.from_codex(usage))
+    State.put_usage(state, run.task_id, Alto.Contrib.Usage.from_codex(usage))
   end
 
   defp apply_codex_run_event(state, run, "item/started", %{"item" => item}) do

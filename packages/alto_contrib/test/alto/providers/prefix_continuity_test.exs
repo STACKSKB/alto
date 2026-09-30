@@ -49,7 +49,7 @@ defmodule Alto.Contrib.Providers.PrefixContinuityTest do
        %{
          message: "done",
          tool_calls: [],
-         usage: %{"prompt_tokens" => 100, "prompt_tokens_details" => %{"cached_tokens" => 0}}
+         usage: %{input_tokens: 100, cached_input_tokens: 0}
        }}
     end
   end

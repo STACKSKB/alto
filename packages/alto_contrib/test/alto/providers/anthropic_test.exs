@@ -171,7 +171,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
     assert completion.message == "Done"
     assert [%{id: "next", name: "read_file", arguments_json: args}] = completion.tool_calls
     assert JSON.decode!(args) == %{"path" => "next.md"}
-    assert completion.usage["input_tokens"] == 20
+    assert completion.usage.input_tokens == 20
     assert_received {:request, http}
     assert http.url.path == "/v1/messages"
     assert Req.Request.get_header(http, "x-api-key") == ["test-secret"]
@@ -360,7 +360,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
              %{id: "call-1", name: "read_file", arguments_json: ~s({"path":"README.md"})}
            ]
 
-    assert completion.usage == %{"input_tokens" => 3, "output_tokens" => 7}
+    assert completion.usage == Alto.Usage.normalize(%{input_tokens: 3, output_tokens: 7})
     assert_received {:event, %Alto.Event{type: :model_reasoning_delta, data: %{text: "inspect "}}}
     assert_received {:event, %Alto.Event{type: :model_reasoning_delta, data: %{text: "first"}}}
     assert_received {:event, %Alto.Event{type: :model_delta, data: %{text: "Done"}}}

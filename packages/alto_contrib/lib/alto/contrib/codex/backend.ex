@@ -239,7 +239,7 @@ defmodule Alto.Contrib.Codex.Backend do
       default?: Map.get(model, "isDefault", false),
       default_effort: Map.get(model, "defaultReasoningEffort"),
       efforts: Map.get(model, "supportedReasoningEfforts", []),
-      input_modalities: Alto.InputModalities.from_model(model)
+      input_modalities: Alto.Contrib.Providers.ModelMetadata.input_modalities(model)
     }
   end
 

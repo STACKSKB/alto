@@ -11,9 +11,9 @@ defmodule Alto.Runner.SerialUsageTest do
          message: "done",
          tool_calls: [],
          usage: %{
-           "prompt_tokens" => 800,
-           "completion_tokens" => 40,
-           "prompt_tokens_details" => %{"cached_tokens" => 500}
+           "input_tokens" => 800,
+           "output_tokens" => 40,
+           "cached_input_tokens" => 500
          }
        }}
     end

@@ -24,9 +24,9 @@ defmodule Alto.TUI.AppTest do
          message: "Finished.",
          tool_calls: [],
          usage: %{
-           "prompt_tokens" => 1_000,
-           "completion_tokens" => 20,
-           "prompt_tokens_details" => %{"cached_tokens" => 600}
+           "input_tokens" => 1_000,
+           "output_tokens" => 20,
+           "cached_input_tokens" => 600
          }
        }}
     end

@@ -137,7 +137,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   defp consume_content(state, _, _), do: state
 
   defp consume_reasoning(state, delta, sink) do
-    text = Alto.Reasoning.text(delta)
+    text = Alto.Contrib.Reasoning.text(delta)
     if text != "", do: sink.(Event.live(:model_reasoning_delta, %{text: text}))
 
     fields =

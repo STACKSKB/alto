@@ -43,7 +43,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
     with {:ok, config} <- config(opts),
          {:ok, body} <- request_body(request, config) do
-      send_request(body, config, sink)
+      Alto.Contrib.Usage.completion(send_request(body, config, sink))
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
@@ -75,7 +75,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
     options =
       if config.thinking, do: Map.put_new(options, "thinking", config.thinking), else: options
 
-    options = Alto.Reasoning.apply_options(options, :anthropic, config.reasoning_effort)
+    options = Alto.Contrib.Reasoning.apply_options(options, :anthropic, config.reasoning_effort)
     unsupported = Map.keys(options) -- @options
     max_tokens = Map.get(options, "max_tokens", config.max_tokens || 4_096)
 

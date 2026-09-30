@@ -750,9 +750,9 @@ defmodule Alto.Runner.Execution do
 
       true ->
         fields =
-          Map.take(
+          Map.drop(
             Map.get(completion, :provider_fields, %{}),
-            ["reasoning", "reasoning_content", "reasoning_details", "alto_anthropic_content"]
+            ["role", "content", "tool_calls", "tool_call_id", "name"]
           )
 
         assistant = Map.merge(assistant_message(message, calls), fields)

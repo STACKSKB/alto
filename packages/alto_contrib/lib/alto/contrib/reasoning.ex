@@ -1,4 +1,4 @@
-defmodule Alto.Reasoning do
+defmodule Alto.Contrib.Reasoning do
   @moduledoc "Provider-advertised effort choices and request parameter mapping."
   @gateway_efforts ~w(none minimal low medium high xhigh max)
 

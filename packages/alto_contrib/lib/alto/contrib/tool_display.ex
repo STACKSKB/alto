@@ -153,7 +153,7 @@ defmodule Alto.Contrib.ToolDisplay do
         do: [%{kind: :assistant, text: content_text(content)}],
         else: []
 
-    {Alto.Reasoning.entries(message) ++ assistant, calls}
+    {Alto.Contrib.Reasoning.entries(message) ++ assistant, calls}
   end
 
   defp transcript_entry(%{"role" => "user"} = message, calls),

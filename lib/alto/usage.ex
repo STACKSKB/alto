@@ -2,7 +2,7 @@ defmodule Alto.Usage do
   @moduledoc """
   Provider-neutral token accounting as an atom-keyed map.
 
-  Provider aliases normalize once at ingestion. Accounting maps flow unchanged
+  Adapters decode their wire fields before ingestion. Accounting maps flow unchanged
   through execution, events, results and front ends; cache reads remain separate
   from total input and the most recent request remains separate from totals.
   """
@@ -10,11 +10,10 @@ defmodule Alto.Usage do
   @cumulative ~w(input_tokens output_tokens total_tokens cached_input_tokens requests)a
   @empty Map.new(@cumulative ++ [:last_input_tokens, :last_cached_input_tokens], &{&1, 0})
          |> Map.put(:context_window, nil)
-  @input ~w(prompt_tokens input_tokens prompt_token_count inputTokenCount inputTokens)
-  @output ~w(completion_tokens output_tokens candidates_token_count outputTokenCount outputTokens)
-  @cached ~w(cache_read_input_tokens cached_input_tokens cachedContentTokenCount cachedInputTokens)
-  @total ~w(total_tokens total_token_count totalTokenCount totalTokens)
-  @codex_fields ~w(inputTokens outputTokens totalTokens cachedInputTokens)
+  @input ~w(input_tokens)
+  @output ~w(output_tokens)
+  @cached ~w(cached_input_tokens)
+  @total ~w(total_tokens)
 
   @type t :: %{
           input_tokens: non_neg_integer(),
@@ -41,18 +40,16 @@ defmodule Alto.Usage do
 
   def valid?(_), do: false
 
-  @doc "Normalize provider usage or a serialized accounting map; string keys take precedence."
+  @doc "Normalize canonical request usage or a serialized accounting map; string keys take precedence."
   @spec normalize(term()) :: t()
   def normalize(usage) when is_map(usage) do
     usage = normalize_keys(usage)
     accounting? = Map.has_key?(usage, "requests")
 
-    input =
-      integer(usage, @input) + integer(usage, ~w(cache_read_input_tokens)) +
-        integer(usage, ~w(cache_creation_input_tokens))
+    input = integer(usage, @input)
 
     output = integer(usage, @output)
-    cached = min(max(integer(usage, @cached), nested_cached(usage)), input)
+    cached = min(integer(usage, @cached), input)
     last_input = integer(usage, ~w(last_input_tokens), input)
 
     %{
@@ -89,40 +86,6 @@ defmodule Alto.Usage do
 
   defp rate(_, 0), do: 0.0
   defp rate(cached, input), do: cached / input * 100.0
-
-  @doc "Project a cumulative Codex thread/tokenUsage snapshot; its request count is unknown."
-  @spec from_codex(term()) :: t()
-  def from_codex(usage) when is_map(usage) do
-    usage = normalize_keys(usage)
-
-    case usage do
-      %{"total" => total, "last" => last} when is_map(total) and is_map(last) ->
-        total = total |> normalize_keys() |> Map.take(@codex_fields) |> normalize()
-        last = last |> normalize_keys() |> Map.take(@codex_fields) |> normalize()
-
-        %{
-          total
-          | last_input_tokens: last.input_tokens,
-            last_cached_input_tokens: last.cached_input_tokens,
-            context_window: integer(usage, ~w(modelContextWindow), nil),
-            requests: 0
-        }
-
-      _ ->
-        new()
-    end
-  end
-
-  def from_codex(_), do: new()
-
-  defp nested_cached(map) do
-    Enum.find_value(~w(prompt_tokens_details input_tokens_details), 0, fn parent ->
-      case map[parent] do
-        nested when is_map(nested) -> integer(normalize_keys(nested), ~w(cached_tokens))
-        _ -> nil
-      end
-    end)
-  end
 
   defp integer(map, keys, default \\ 0) do
     Enum.find_value(keys, default, fn key ->

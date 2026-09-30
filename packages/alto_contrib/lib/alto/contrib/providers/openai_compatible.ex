@@ -53,7 +53,8 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
 
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
-    with {:ok, config} <- config(opts), do: request(config, request, sink)
+    with {:ok, config} <- config(opts),
+         do: Alto.Contrib.Usage.completion(request(config, request, sink))
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
   end
@@ -75,7 +76,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
           "stream" => true
         })
         |> maybe_put_tools(Map.get(request, :tools, []))
-        |> Alto.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
+        |> Alto.Contrib.Reasoning.apply_options(config.reasoning_format, config.reasoning_effort)
         |> Alto.Contrib.Providers.PromptCache.compatible(request, config)
 
       body =
@@ -264,7 +265,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
               do: model["supported_reasoning_efforts"]
             ),
           context_length: positive_value(model["context_length"]),
-          input_modalities: Alto.InputModalities.from_model(model)
+          input_modalities: Alto.Contrib.Providers.ModelMetadata.input_modalities(model)
         }
 
         [Map.reject(normalized, fn {_key, value} -> is_nil(value) end)]
@@ -301,7 +302,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
        Map.merge(config, %{
          input_modalities: Alto.InputModalities.configured(opts),
          reasoning_effort: Keyword.get(opts, :reasoning_effort),
-         reasoning_format: Alto.Reasoning.format(opts),
+         reasoning_format: Alto.Contrib.Reasoning.format(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),
          headers:
            headers(opts, [{"accept", "text/event-stream"}, {"content-type", "application/json"}]),

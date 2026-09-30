@@ -25,14 +25,14 @@ defmodule Alto.Contrib.FrontEnd.RegistryTest do
          %{
            message: "finished",
            tool_calls: [],
-           usage: %{"prompt_tokens" => 4, "completion_tokens" => 2}
+           usage: %{"input_tokens" => 4, "output_tokens" => 2}
          }}
       else
         {:ok,
          %{
            message: nil,
            tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}],
-           usage: %{"prompt_tokens" => 3, "completion_tokens" => 1}
+           usage: %{"input_tokens" => 3, "output_tokens" => 1}
          }}
       end
     end

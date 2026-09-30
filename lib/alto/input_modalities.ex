@@ -3,9 +3,7 @@ defmodule Alto.InputModalities do
   @modalities ~w(text image audio video file)
 
   def from_model(model) when is_map(model) do
-    value =
-      model[:input_modalities] || model["input_modalities"] || model["inputModalities"] ||
-        get_in(model, ["architecture", "input_modalities"])
+    value = model[:input_modalities] || model["input_modalities"]
 
     if is_list(value), do: Enum.filter(value, &(&1 in @modalities)) |> Enum.uniq()
   end

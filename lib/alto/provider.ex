@@ -10,6 +10,13 @@ defmodule Alto.Provider do
   Multimodal adapters declare the selected model's `input_modalities` in
   `describe/1` or configured options. Undeclared media is rejected before
   `stream/3`, including media retained in history and tool results.
+
+  Adapters return canonical token usage (`input_tokens`, `output_tokens`,
+  `cached_input_tokens`, and optional `total_tokens`), decoded from their own
+  wire fields. `Alto.Usage` owns aggregation and serialized accounting.
+  `provider_fields` retains opaque adapter metadata in the transcript, subject
+  to transcript bounds. It cannot replace role, content, tool calls, call IDs,
+  or names. Adapters own decoding and filtering that metadata on subsequent calls.
   """
 
   @doc "Observe every attempted request, including retries and reductions. Observers run inside the provider call's timeout and cancellation boundary, fail independently, and do not count as streamed output."

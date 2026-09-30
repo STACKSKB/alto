@@ -129,7 +129,15 @@ defmodule Alto.Contrib.Providers.Images do
 
     def result(%{error: error}) when not is_nil(error), do: {:error, error}
     def result(%{images: []}), do: {:error, :empty_image_response}
-    def result(state), do: {:ok, %{message: state.images, tool_calls: [], usage: state.usage}}
+
+    def result(state),
+      do:
+        {:ok,
+         %{
+           message: state.images,
+           tool_calls: [],
+           usage: Alto.Contrib.Usage.normalize(state.usage)
+         }}
 
     defp image_integrity(bytes, media) when media in ["image/png", "image/jpeg"] do
       case Alto.Image.Metadata.inspect(bytes, %{max_dimension: 16_384, max_pixels: 40_000_000}) do
