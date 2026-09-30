@@ -1,6 +1,6 @@
 # SSE parser selection
 
-Both provider adapters use `Alto.Providers.SSE`, backed by
+Both provider adapters use `Alto.Contrib.Providers.SSE`, backed by
 [`server_sent_events` 1.1](https://hexdocs.pm/server_sent_events/ServerSentEvents.html).
 The library handles field interpretation, optional whitespace and multiline data.
 It supports incremental parsing but does not impose Alto's byte limits, preserve

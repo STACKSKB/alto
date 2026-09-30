@@ -82,7 +82,11 @@ defmodule Alto.TUI.ApprovalViewTest do
     args = %{"path" => "hello.txt", "content" => content}
 
     assert {:ok, prepared, details} =
-             Alto.Tools.WriteFile.prepare(args, %{cwd: root}, Alto.Tools.WriteFile.options())
+             Alto.Contrib.Tools.WriteFile.prepare(
+               args,
+               %{cwd: root},
+               Alto.Contrib.Tools.WriteFile.options()
+             )
 
     assert details.preview == %{content: content, truncated: false}
     assert prepared.content == content
@@ -126,7 +130,11 @@ defmodule Alto.TUI.ApprovalViewTest do
     args = %{"path" => "large.txt", "content" => content}
 
     assert {:ok, _, details} =
-             Alto.Tools.WriteFile.prepare(args, %{cwd: root}, Alto.Tools.WriteFile.options())
+             Alto.Contrib.Tools.WriteFile.prepare(
+               args,
+               %{cwd: root},
+               Alto.Contrib.Tools.WriteFile.options()
+             )
 
     assert details.preview.truncated
     assert String.valid?(details.preview.content)
@@ -154,8 +162,11 @@ defmodule Alto.TUI.ApprovalViewTest do
       ]
     }
 
-    opts = Map.put(Alto.Tools.EditFile.options(), :preview_bytes, 12)
-    assert {:ok, prepared, details} = Alto.Tools.EditFile.prepare(args, %{cwd: root}, opts)
+    opts = Map.put(Alto.Contrib.Tools.EditFile.options(), :preview_bytes, 12)
+
+    assert {:ok, prepared, details} =
+             Alto.Contrib.Tools.EditFile.prepare(args, %{cwd: root}, opts)
+
     assert details.replacements == 2
     assert details.preview.truncated
     assert File.read!(Path.join(root, "edit.txt")) == original

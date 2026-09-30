@@ -1,7 +1,8 @@
 defmodule Alto.Runner.SerialHybridTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Event, Session}
+  alias Alto.Event
+  alias Alto.Session
 
   defmodule NativeTool do
     use Alto.Tool, name: :native, execution_mode: :parallel, approval: :never

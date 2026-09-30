@@ -19,7 +19,11 @@ defmodule Alto.Runner.Execution do
   def abort(context, {:cancelled, reason}), do: cancelled(reason, context)
   def abort(context, reason), do: result(context, nil, :error, reason)
 
-  alias Alto.Runner.Execution.{Call, Children, Events, Model, Operation}
+  alias Alto.Runner.Execution.Call
+  alias Alto.Runner.Execution.Children
+  alias Alto.Runner.Execution.Events
+  alias Alto.Runner.Execution.Model
+  alias Alto.Runner.Execution.Operation
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
   alias Alto.Runner.Execution.Session, as: RunSession
   alias Alto.Event
@@ -860,7 +864,7 @@ defmodule Alto.Runner.Execution do
        when operation in [:spawn_agents, :start_agents] do
     Call.run(
       fn ->
-        (run.agent_prepare || (&Alto.Subagents.Models.prepare(&1, run, &2))).(prepared, opts)
+        if run.agent_prepare, do: run.agent_prepare.(prepared, opts), else: {:ok, prepared}
       end,
       Budget.timeout(run.budget, run.tool_timeout),
       run.cancel_ref

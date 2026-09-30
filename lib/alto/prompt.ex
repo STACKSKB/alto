@@ -4,7 +4,7 @@ defmodule Alto.Prompt do
   @type context :: %{
           required(:cwd) => binary(),
           required(:tools) => [Alto.Tool.spec()],
-          optional(:project_instructions) => Alto.Project.instructions() | nil
+          optional(:project_instructions) => map() | nil
         }
   @type builder :: binary() | nil | (context() -> binary())
 

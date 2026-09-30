@@ -1,7 +1,9 @@
 defmodule Alto.TUI.ApprovalControlsTest do
   use ExUnit.Case, async: false
 
-  alias Alto.TUI.{App, State, View}
+  alias Alto.TUI.App
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias ExRatatui.Event.Mouse
 
   defmodule Provider do
@@ -21,7 +23,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "test",
             label: "Test",
             provider: {Provider, model: "test/model"}

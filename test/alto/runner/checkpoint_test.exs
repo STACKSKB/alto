@@ -1,6 +1,7 @@
 defmodule Alto.Runner.CheckpointTest do
   use ExUnit.Case, async: false
-  alias Alto.Runner.{Checkpoint, Serial}
+  alias Alto.Runner.Checkpoint
+  alias Alto.Runner.Serial
 
   defmodule First do
     use Alto.Tool, name: :first, execution_mode: :exclusive, approval: :never

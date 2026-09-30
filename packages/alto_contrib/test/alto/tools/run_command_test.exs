@@ -1,0 +1,348 @@
+defmodule Alto.Contrib.Tools.RunCommandTest do
+  use ExUnit.Case, async: false
+
+  alias Alto.Contrib.Tools.RunCommand
+
+  @stop_observer File.regular?("/proc/self/status") || System.find_executable("ps")
+
+  @trampoline_binaries System.find_executable("kill") && System.find_executable("sh") &&
+                         @stop_observer
+  @fallback_binaries System.find_executable("elixir") && System.find_executable("erl")
+
+  # Compile-time conditional skips. Each tag records why the platform
+  # integration test is skipped, and is nil when the test can run.
+  @trampoline_skip if @trampoline_binaries,
+                     do: nil,
+                     else:
+                       "kill(1), sh(1), and procfs or ps(1) are required to test the process-group trampoline"
+
+  @fallback_skip if @fallback_binaries,
+                   do: nil,
+                   else: "elixir(1) and erl(1) are required to probe degraded cleanup"
+
+  setup do
+    root = Path.join(System.tmp_dir!(), "alto-command-#{System.unique_integer([:positive])}")
+    File.mkdir!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    %{root: root, context: %{session_id: "test", cwd: root}}
+  end
+
+  defp prepared_run(tool, arguments, context, opts \\ []) do
+    with {:ok, prepared, _details} <- tool.prepare(arguments, context, opts),
+         do: tool.run(prepared, context, opts)
+  end
+
+  test "runs one executable directly and captures its exit", %{context: context} do
+    assert {:ok,
+            %{
+              output: "hello",
+              exit_status: 0,
+              termination: :exit,
+              truncated: false,
+              timed_out: false
+            }} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "printf", "args" => ["%s", "hello"]},
+               context
+             )
+  end
+
+  test "finite commands see stdin EOF instead of waiting until the deadline", %{context: context} do
+    assert {:ok, %{exit_status: 0, timed_out: false, output: ""}} =
+             prepared_run(RunCommand, %{"program" => "cat", "timeout_ms" => 5_000}, context)
+
+    assert {:ok, %{exit_status: 1, timed_out: false}} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "grep", "args" => ["main"], "timeout_ms" => 5_000},
+               context
+             )
+  end
+
+  test "drains after the output limit while retaining bounded head and tail", %{context: context} do
+    assert {:ok,
+            %{
+              output: "def",
+              exit_status: 0,
+              termination: :exit,
+              truncated: true
+            }} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "printf", "args" => ["abcdef"], "max_output_bytes" => 3},
+               context
+             )
+  end
+
+  test "retains the final diagnostic tail after a capped command exits", %{context: context} do
+    assert {:ok, result} =
+             prepared_run(
+               RunCommand,
+               %{
+                 "program" => "sh",
+                 "args" => [
+                   "-c",
+                   "printf 'head-output'; printf '%0256d' 0; sleep 0.01; printf 'final-error' >&2; exit 7"
+                 ],
+                 "max_output_bytes" => 12
+               },
+               context
+             )
+
+    assert result.exit_status == 7
+    assert result.termination == :exit
+    assert result.truncated
+    assert result.output =~ "final-error"
+    assert byte_size(result.output) <= 12
+  end
+
+  test "retains both ends and an elision marker for larger caps", %{context: context} do
+    content = "START" <> String.duplicate("😀", 100) <> "END"
+
+    assert {:ok, result} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "printf", "args" => ["%s", content], "max_output_bytes" => 64},
+               context
+             )
+
+    assert String.starts_with?(result.output, "START")
+    assert String.ends_with?(result.output, "END")
+    assert result.output =~ "output truncated"
+    assert String.valid?(result.output)
+    assert byte_size(result.output) <= 64
+  end
+
+  test "keeps split UTF-8 output as text at a capture edge", %{context: context} do
+    assert {:ok, result} =
+             prepared_run(
+               RunCommand,
+               %{
+                 "program" => "sh",
+                 "args" => [
+                   "-c",
+                   "printf 'prefix'; printf '\\360\\237\\230'; sleep 0.01; printf '\\200'"
+                 ],
+                 "max_output_bytes" => 8
+               },
+               context
+             )
+
+    assert result.truncated
+    refute Map.has_key?(result, :output_base64)
+    assert String.valid?(result.output)
+    assert byte_size(result.output) <= 8
+  end
+
+  test "encodes genuinely binary output instead of forcing UTF-8", %{context: context} do
+    assert {:ok, result} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "sh", "args" => ["-c", "printf '\\377\\376'"]},
+               context
+             )
+
+    assert result.encoding == "base64"
+    assert Base.decode64!(result.output_base64) == <<255, 254>>
+  end
+
+  # The deadline covers process spawn and trampoline setup as well as
+  # execution, so the budget must fit scheduling delays under parallel load.
+  test "closes a command that passes its deadline", %{context: context} do
+    assert {:ok,
+            %{
+              exit_status: nil,
+              termination: :timeout,
+              timed_out: true
+            }} =
+             prepared_run(
+               RunCommand,
+               %{"program" => "sleep", "args" => ["5"], "timeout_ms" => 100},
+               context
+             )
+  end
+
+  test "does not invoke a shell to resolve command syntax", %{context: context} do
+    assert {:error, {:executable_not_found, "printf hello"}} =
+             prepared_run(RunCommand, %{"program" => "printf hello"}, context)
+  end
+
+  @tag skip: @trampoline_skip
+  test "cleans up descendants after the top-level program exits", %{root: root, context: context} do
+    marker = Path.join(root, "orphaned")
+
+    assert {:ok, %{exit_status: 0}} =
+             prepared_run(
+               RunCommand,
+               %{
+                 "program" => "sh",
+                 "args" => ["-c", "(sleep 0.2; touch orphaned) >/dev/null 2>&1 &"]
+               },
+               context
+             )
+
+    Process.sleep(350)
+    refute File.exists?(marker)
+  end
+
+  @tag skip: @trampoline_skip
+  test "kills the process group when the calling task is killed", %{
+    root: root,
+    context: context
+  } do
+    pidfile = Path.join(root, "cmd.pid")
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        result =
+          prepared_run(
+            RunCommand,
+            %{"program" => "sh", "args" => ["-c", "echo $$ > #{pidfile}; exec sleep 300"]},
+            context
+          )
+
+        send(parent, {:caller_done, result})
+      end)
+
+    wait_until(fn -> File.exists?(pidfile) end)
+    child_pid = pidfile |> File.read!() |> String.trim() |> String.to_integer()
+
+    # Mirrors how Alto.Runner.Serial tears down an in-flight tool task with
+    # Task.shutdown(task, :brutal_kill) on cancellation or tool timeout.
+    Process.exit(caller, :kill)
+
+    wait_until(fn -> not os_process_alive?(child_pid) end)
+    refute os_process_alive?(child_pid)
+  end
+
+  @tag skip: @fallback_skip
+  test "logs a degradation warning and still bounds execution without trampoline binaries", %{
+    root: root
+  } do
+    bin = Path.join(root, "bin")
+    File.mkdir!(bin)
+    File.ln_s!(System.find_executable("erl"), Path.join(bin, "erl"))
+    File.ln_s!("/bin/sleep", Path.join(bin, "sleep"))
+    File.ln_s!("/usr/bin/dirname", Path.join(bin, "dirname"))
+    File.ln_s!("/usr/bin/basename", Path.join(bin, "basename"))
+    File.ln_s!("/usr/bin/readlink", Path.join(bin, "readlink"))
+    File.ln_s!("/usr/bin/cut", Path.join(bin, "cut"))
+    File.ln_s!("/usr/bin/sed", Path.join(bin, "sed"))
+    File.ln_s!("/usr/bin/mkdir", Path.join(bin, "mkdir"))
+
+    script = """
+    {:ok, _} = Application.ensure_all_started(:logger)
+    context = %{session_id: "probe", cwd: #{inspect(root)}}
+
+    {:ok, prepared, _details} =
+      Alto.Contrib.Tools.RunCommand.prepare(
+        %{"program" => "sleep", "args" => ["1"], "timeout_ms" => 10}, context
+      )
+
+    IO.inspect(Alto.Contrib.Tools.RunCommand.run(prepared, context), limit: :infinity)
+    {:ok, eof_result} = Alto.Contrib.Command.run(%{"program" => #{inspect(System.find_executable("cat"))}, "timeout_ms" => 2_000}, context)
+    IO.inspect(eof_result, label: "fallback_stdin_eof")
+    """
+
+    {output, status} =
+      System.cmd(System.find_executable("elixir"), code_paths() ++ ["-e", script],
+        env: [{"PATH", bin}],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, "fallback probe failed: #{output}"
+    assert output =~ "termination: :timeout"
+    assert output =~ "process-group cleanup"
+    assert output =~ "fallback_stdin_eof"
+    assert output =~ "exit_status: 0"
+    assert output =~ "timed_out: false"
+  end
+
+  # The os_pid of a port is assigned asynchronously after Port.open, so a child
+  # that is slow to appear must not be misreported as exited-before-start nor
+  # leak as a stopped process. The window itself is internal to ERTS and cannot
+  # be widened from outside; this probe exercises delayed child startup through
+  # a PATH-shimmed shell to guard the wait-and-resume machinery around it.
+  @tag skip: @trampoline_skip
+  test "runs a command whose child starts slowly under the trampoline", %{root: root} do
+    bin = Path.join(root, "bin")
+    File.mkdir!(bin)
+
+    real_sh = System.find_executable("sh")
+
+    File.write!(Path.join(bin, "sh"), """
+    #!/bin/sh
+    sleep 0.2
+    exec #{real_sh} "$@"
+    """)
+
+    File.chmod!(Path.join(bin, "sh"), 0o755)
+
+    trampoline_names = [
+      "kill",
+      "sleep",
+      "printf",
+      "erl",
+      "dirname",
+      "basename",
+      "readlink",
+      "cut",
+      "sed",
+      "mkdir"
+    ]
+
+    for name <- trampoline_names do
+      File.ln_s!(System.find_executable(name), Path.join(bin, name))
+    end
+
+    script = """
+    {:ok, _} = Application.ensure_all_started(:logger)
+    context = %{session_id: "probe", cwd: #{inspect(root)}}
+
+    {:ok, prepared, _details} =
+      Alto.Contrib.Tools.RunCommand.prepare(
+        %{"program" => "printf", "args" => ["%s", "slow"], "timeout_ms" => 10_000}, context
+      )
+
+    IO.inspect(Alto.Contrib.Tools.RunCommand.run(prepared, context), limit: :infinity)
+    """
+
+    {output, status} =
+      System.cmd(System.find_executable("elixir"), code_paths() ++ ["-e", script],
+        env: [{"PATH", bin}],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, "slow-start probe failed: #{output}"
+    assert output =~ "output: \"slow\""
+    assert output =~ "termination: :exit"
+    refute output =~ "process-group cleanup"
+  end
+
+  defp wait_until(fun, attempts \\ 200)
+
+  defp wait_until(_fun, 0), do: flunk("condition not met within timeout")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp os_process_alive?(pid) do
+    {_output, status} = System.cmd("kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
+    status == 0
+  end
+
+  defp code_paths,
+    do:
+      Enum.flat_map(
+        [:alto, :alto_contrib, :nimble_options],
+        &["-pa", Application.app_dir(&1, "ebin")]
+      )
+end

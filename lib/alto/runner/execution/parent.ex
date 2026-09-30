@@ -1,7 +1,11 @@
 defmodule Alto.Runner.Execution.Parent do
   @moduledoc "Durable parent batch boundaries shared by execution hosts."
-  alias Alto.Runner.{Budget, Checkpoint}
-  alias Alto.Runner.Execution.{Call, Children, History, Operation}
+  alias Alto.Runner.Budget
+  alias Alto.Runner.Checkpoint
+  alias Alto.Runner.Execution.Call
+  alias Alto.Runner.Execution.Children
+  alias Alto.Runner.Execution.History
+  alias Alto.Runner.Execution.Operation
   alias Alto.Subagents.Continuation
 
   def options(opts) do

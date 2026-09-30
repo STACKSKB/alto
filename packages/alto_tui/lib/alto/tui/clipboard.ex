@@ -130,7 +130,7 @@ defmodule Alto.TUI.Clipboard do
       max_output_bytes: 6_000_000
     }
 
-    case Alto.Command.Executors.Unsandboxed.execute(invocation) do
+    case Alto.Contrib.Command.Executors.Unsandboxed.execute(invocation) do
       {:ok, %{exit_status: 0, truncated: false} = result} ->
         if result[:encoding] == "base64",
           do: Base.decode64(result.output_base64),

@@ -11,7 +11,8 @@ defmodule Alto.Runner do
   Checkpoint support is a host capability: unsupported packets must fail closed.
   """
 
-  alias Alto.Runner.{Handle, Result}
+  alias Alto.Runner.Handle
+  alias Alto.Runner.Result
   @type outcome :: Result.t()
   @callback run(term(), keyword()) :: outcome()
   @callback start(term(), keyword()) :: {:ok, term()} | {:error, term()}

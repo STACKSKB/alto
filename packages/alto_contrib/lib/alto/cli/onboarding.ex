@@ -1,7 +1,7 @@
 defmodule Alto.Contrib.CLI.Onboarding do
   @moduledoc false
 
-  alias Alto.Credentials
+  alias Alto.Contrib.Credentials
 
   @provider_id "openrouter"
   @display_limit 30

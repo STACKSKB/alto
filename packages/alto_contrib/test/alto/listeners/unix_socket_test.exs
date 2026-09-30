@@ -1,7 +1,7 @@
 defmodule Alto.Contrib.Listeners.UnixSocketTest do
   use ExUnit.Case, async: true
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.UnixSocket
   alias Alto.TestSupport.EchoTool
   alias Alto.TestSupport.GuardedEchoTool
@@ -40,7 +40,7 @@ defmodule Alto.Contrib.Listeners.UnixSocketTest do
          [
            provider: ToolThenAnswerProvider,
            tools: [GuardedEchoTool],
-           approval: &Alto.Approval.socket/2,
+           approval: &Alto.Contrib.Approval.socket/2,
            approval_timeout: @approval_timeout_ms
          ]}
 

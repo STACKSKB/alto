@@ -1,7 +1,7 @@
 defmodule Alto.Contrib.Listeners.WebServerTest do
   use ExUnit.Case, async: false
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.WebServer
   alias Alto.TestSupport.EchoTool
   alias Alto.TestSupport.GuardedEchoTool
@@ -47,7 +47,7 @@ defmodule Alto.Contrib.Listeners.WebServerTest do
          [
            provider: ToolThenAnswerProvider,
            tools: [GuardedEchoTool],
-           approval: &Alto.Approval.socket/2,
+           approval: &Alto.Contrib.Approval.socket/2,
            approval_timeout: @approval_timeout_ms
          ]}
 

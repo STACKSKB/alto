@@ -1,6 +1,7 @@
 defmodule Alto.TUI.Search do
   @moduledoc "Transient literal conversation search, independent of sessions and agent input."
-  alias Alto.TUI.{State, Transcript}
+  alias Alto.TUI.State
+  alias Alto.TUI.Transcript
   alias ExRatatui.Style
   alias ExRatatui.Text.{Line, Span}
   @max_matches 1000

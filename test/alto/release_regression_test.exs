@@ -1,7 +1,10 @@
 defmodule Alto.ReleaseRegressionTest do
   use ExUnit.Case, async: false
 
-  alias Alto.{Consumer, OperationLog, Ops, Queue}
+  alias Alto.Consumer
+  alias Alto.OperationLog
+  alias Alto.Ops
+  alias Alto.Queue
 
   defmodule StrictProvider do
     @behaviour Alto.Provider

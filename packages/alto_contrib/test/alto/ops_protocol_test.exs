@@ -10,10 +10,10 @@ defmodule Alto.OpsProtocolTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
   alias Alto.OperationLog
-  alias Alto.Protocol
+  alias Alto.Contrib.Protocol
   alias Alto.Queue
 
   setup do

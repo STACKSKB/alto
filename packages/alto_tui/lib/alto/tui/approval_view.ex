@@ -3,7 +3,7 @@ defmodule Alto.TUI.ApprovalView do
 
   @doc "Present the actual prepared action, including its folder and execution constraints."
   def text(request) do
-    request = Alto.Protocol.encode_term(request)
+    request = Alto.Contrib.Protocol.encode_term(request)
     args = Map.get(request, "arguments") || %{}
     details = Map.get(request, "details") || %{}
     tool = Map.get(request, "tool", "Action")
@@ -20,7 +20,7 @@ defmodule Alto.TUI.ApprovalView do
         file_text(tool, details, args)
 
       true ->
-        Alto.Display.label(tool) <>
+        Alto.Contrib.Display.label(tool) <>
           sections([{"Requested action", args} | Enum.sort(Map.to_list(details))])
     end
   end
@@ -95,7 +95,7 @@ defmodule Alto.TUI.ApprovalView do
   end
 
   defp preview(content) when is_binary(content) or is_nil(content), do: content
-  defp preview(other), do: Alto.Display.result(other)
+  defp preview(other), do: Alto.Contrib.Display.result(other)
 
   defp edit_sections([edit]), do: [{"Find", edit["old_text"]}, {"Replace with", edit["new_text"]}]
 
@@ -144,7 +144,9 @@ defmodule Alto.TUI.ApprovalView do
   defp sections(items) do
     items
     |> Enum.reject(fn {_, v} -> v in [nil, "", %{}, []] end)
-    |> Enum.map_join(fn {label, v} -> "\n\n" <> Alto.Display.label(label) <> "\n" <> value(v) end)
+    |> Enum.map_join(fn {label, v} ->
+      "\n\n" <> Alto.Contrib.Display.label(label) <> "\n" <> value(v)
+    end)
   end
 
   defp value(value) when is_binary(value), do: visible(value)

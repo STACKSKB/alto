@@ -8,7 +8,8 @@ defmodule Alto.Runner.Execution.Transcript do
   alias Alto.Event
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
-  alias Alto.Runner.Execution.{Events, Model}
+  alias Alto.Runner.Execution.Events
+  alias Alto.Runner.Execution.Model
 
   def append(run, message) do
     message_bytes = byte_size(JSON.encode!(message))

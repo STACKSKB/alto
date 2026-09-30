@@ -6,8 +6,8 @@ defmodule Alto.Contrib.Listeners.Connection do
   framing and delivery; command handlers return results before encoding.
   """
 
-  alias Alto.FrontEnd.Registry
-  alias Alto.Protocol
+  alias Alto.Contrib.FrontEnd.Registry
+  alias Alto.Contrib.Protocol
 
   @default_max_line_bytes 1_048_576
   @claim_envelope_reserve 2_048

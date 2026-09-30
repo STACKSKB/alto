@@ -62,7 +62,7 @@ checks its exact revision and admits the child's decision under its lock, before
 activating use. Rejected validation or admission leaves the worked workspace
 unchanged for a later valid attempt. A failure after admission remains uncertain
 and requires reconciliation. Custom hosts can compose this boundary through
-`Alto.Workspaces.resume/5`, supplying separate admission and execution callbacks.
+`Alto.Contrib.Workspaces.resume/5`, supplying separate admission and execution callbacks.
 Recursive parent continuations are outside this path. Custom loop checkpoint
 and transition callbacks must be pure. Lifecycle retirement
 remains explicit host work after every child is joined and the parent is settled.

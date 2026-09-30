@@ -69,7 +69,7 @@ try do
   legacy =
     current
     |> Map.put("data", Alto.Session.encode_term(event.data))
-    |> Map.put("wire_data", Alto.Protocol.encode_term(event.data))
+    |> Map.put("wire_data", Alto.Contrib.Protocol.encode_term(event.data))
 
   event_result = %{
     legacy_bytes: byte_size(JSON.encode!(legacy)),

@@ -2,7 +2,7 @@ defmodule Alto.Contrib.Listeners.ConnectionSessionEventsTest do
   use ExUnit.Case, async: true
 
   alias Alto.Event
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
   alias Alto.Session
 
@@ -24,7 +24,7 @@ defmodule Alto.Contrib.Listeners.ConnectionSessionEventsTest do
     script = """
     {:ok, page} = Alto.Session.events(#{inspect(id)}, session_dir: #{inspect(dir)})
     {:error, _} = Alto.Session.decode_term(hd(page.events)["data"])
-    {:ok, registry} = Alto.FrontEnd.Registry.start_link(name: nil,
+    {:ok, registry} = Alto.Contrib.FrontEnd.Registry.start_link(name: nil,
       session_dir: #{inspect(dir)}, config_resolver: fn _ -> {:error, :unknown} end)
     Enum.each(Alto.Contrib.Listeners.Connection.command_lines(#{inspect(command)}, registry), &IO.write/1)
     """

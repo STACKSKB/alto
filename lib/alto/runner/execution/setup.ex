@@ -1,13 +1,14 @@
 defmodule Alto.Runner.Execution.Setup do
   @moduledoc "Build execution capabilities from trusted run options."
-  alias Alto.{Session, Usage}
+  alias Alto.Session
+  alias Alto.Usage
   alias Alto.Context.Transcript
   alias Alto.Runner.Budget
 
   @limits_options Alto.Config.execution_limits()
   @limits_schema NimbleOptions.new!(@limits_options)
 
-  @option_fields ~w(provider_profiles credentials_path agent_prepare child_provider_resolver input messaging async_agents
+  @option_fields ~w(agent_prepare agent_models child_provider_resolver input messaging async_agents
                     agent_scheduler execution_owner checkpoint_version subagent_ticket child_profile
                     child_resume parent_expires_at_ms continuation_store cancel_ref session
                     session_dir retry_policy tool_presenter)a
@@ -130,13 +131,6 @@ defmodule Alto.Runner.Execution.Setup do
 
     run = options |> Map.merge(initial) |> Map.merge(settings)
 
-    run =
-      Map.put(
-        run,
-        :agent_models,
-        opts[:agent_models] || (&Alto.Subagents.Models.list(&1, run, &2))
-      )
-
     if Alto.AgentIdentity.valid?(agent_identity),
       do: {:ok, run},
       else: {:error, {:invalid_option, :agent_identity, agent_identity}}
@@ -205,8 +199,9 @@ defmodule Alto.Runner.Execution.Setup do
     instructions =
       case opts[:project_instructions] do
         nil -> {:ok, nil}
-        :auto -> Alto.Project.load(cwd)
-        options when is_list(options) -> Alto.Project.load(cwd, options)
+        instructions when is_map(instructions) -> {:ok, instructions}
+        loader when is_function(loader, 1) -> loader.(cwd)
+        value -> {:error, {:invalid_option, :project_instructions, value}}
       end
 
     with {:ok, instructions} <- instructions,
@@ -246,7 +241,7 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   @compaction_schema [
-    strategy: [type: :any, default: {Alto.Context.Reducers.Summary, []}],
+    strategy: [type: :any, required: true],
     max_compactions: [type: :pos_integer, default: 1],
     keep_recent_messages: [type: :pos_integer, default: 10],
     keep_initial_messages: [type: :non_neg_integer, default: 0],

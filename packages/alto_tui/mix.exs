@@ -11,6 +11,13 @@ defmodule AltoTUI.MixProject do
         {:alto, "~> 0.0.2"}
       end
 
+    contrib_path = Path.expand("../alto_contrib", __DIR__)
+
+    contrib_dep =
+      if File.exists?(Path.join(contrib_path, "mix.exs")),
+        do: {:alto_contrib, path: contrib_path},
+        else: {:alto_contrib, "~> 0.0.2"}
+
     [
       app: :alto_tui,
       version: "0.0.2",
@@ -24,6 +31,7 @@ defmodule AltoTUI.MixProject do
       ],
       deps: [
         alto_dep,
+        contrib_dep,
         {:ex_ratatui, "~> 0.13.1"},
         # Patch the existing transitive dependency until upstream extracts NIFs atomically.
         {:rustler_precompiled, "== 0.9.0",

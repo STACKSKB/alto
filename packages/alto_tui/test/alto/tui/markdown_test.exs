@@ -1,6 +1,9 @@
 defmodule Alto.TUI.MarkdownTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.{Markdown, Transcript, Viewport, Selection}
+  alias Alto.TUI.Markdown
+  alias Alto.TUI.Transcript
+  alias Alto.TUI.Viewport
+  alias Alto.TUI.Selection
   alias ExRatatui.{CellSession, Text}
   alias ExRatatui.Event.{Key, Mouse}
   alias ExRatatui.Layout.Rect

@@ -69,7 +69,7 @@ defmodule Alto.TUI.Subagents do
 
   def saved_value(encoded) do
     case Alto.Session.decode_term(encoded) do
-      {:ok, value} -> Alto.Display.error(value)
+      {:ok, value} -> Alto.Contrib.Display.error(value)
       _ -> "[saved value unavailable]"
     end
   end
@@ -133,7 +133,7 @@ defmodule Alto.TUI.Subagents do
             text
 
           %{type: type, data: info} when type in [:tool_started, :tool_completed, :tool_failed] ->
-            "\n" <> Alto.TUI.Transcript.text(Alto.ToolDisplay.entry(type, info)) <> "\n"
+            "\n" <> Alto.TUI.Transcript.text(Alto.Contrib.ToolDisplay.entry(type, info)) <> "\n"
 
           %{type: :input_received, data: info} ->
             "\ninput › " <> info.text <> "\n"
@@ -150,8 +150,12 @@ defmodule Alto.TUI.Subagents do
     update(state, task, data, fn agent ->
       result = data[:result]
       status = if result, do: to_string(result.status), else: to_string(data.status)
-      output = if result && result[:output], do: Alto.Display.error(result.output), else: ""
-      reason = if result && result[:reason], do: Alto.Display.error(result.reason), else: ""
+
+      output =
+        if result && result[:output], do: Alto.Contrib.Display.error(result.output), else: ""
+
+      reason =
+        if result && result[:reason], do: Alto.Contrib.Display.error(result.reason), else: ""
 
       %{
         agent

@@ -6,7 +6,8 @@ defmodule Alto.Runner.Execution.Events do
   session, session directory, and tool context; live events need only the
   retention and sink fields.
   """
-  alias Alto.{Event, Session}
+  alias Alto.Event
+  alias Alto.Session
 
   def record(run, %Event{domain: :durable} = event) do
     errors =

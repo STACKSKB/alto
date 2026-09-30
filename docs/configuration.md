@@ -38,8 +38,8 @@ Save this as `alto.exs` for read-only model-assisted work:
 ```elixir
 Alto.default_config()
 |> Keyword.merge(
-  tools: [Alto.Tools.ListFiles, Alto.Tools.ReadFile, Alto.Tools.SearchFiles],
-  prompt: &Alto.Prompts.Coding.build/1,
+  tools: [Alto.Contrib.Tools.ListFiles, Alto.Contrib.Tools.ReadFile, Alto.Contrib.Tools.SearchFiles],
+  prompt: &Alto.Contrib.Prompts.Coding.build/1,
   project_instructions: :auto,
   max_steps: 48,
   run_timeout: 30 * 60 * 1_000
@@ -78,7 +78,7 @@ relative to its own file, then overrides the values it needs.
 
 Keyword.merge(base,
   provider:
-    {Alto.Providers.OpenAICompatible,
+    {Alto.Contrib.Providers.OpenAICompatible,
      base_url: "https://openrouter.ai/api/v1",
      api_key: System.fetch_env!("OPENROUTER_API_KEY"),
      model: System.fetch_env!("ALTO_REVIEW_MODEL")}
@@ -93,7 +93,7 @@ Keyword.merge(base,
 Keyword.merge(base,
   loop: Alto.chat_loop(),
   tools: [],
-  prompt: &Alto.Prompts.Chat.build/1,
+  prompt: &Alto.Contrib.Prompts.Chat.build/1,
   project_instructions: nil
 )
 ```
@@ -105,7 +105,7 @@ Keyword.merge(base,
 
 Keyword.merge(base,
   provider:
-    {Alto.Providers.OpenAICompatible,
+    {Alto.Contrib.Providers.OpenAICompatible,
      base_url: "http://localhost:1234/v1",
      model: System.fetch_env!("ALTO_LOCAL_MODEL")}
 )
@@ -180,7 +180,7 @@ extract arbitrary office-document text or convert files automatically.
 
 ## Generated files and images
 
-The coding profile includes `Alto.Tools.PublishFile`: an agent creates a file
+The coding profile includes `Alto.Contrib.Tools.PublishFile`: an agent creates a file
 with its configured tools, then calls `publish_file` with the workspace path.
 The tool returns a bounded snapshot as an output attachment. The CLI and TUI save
 artifacts privately and show their paths. Provider requests receive a text
@@ -191,7 +191,7 @@ For direct image generation through OpenRouter, configure an image model:
 
 ```elixir
 [
-  provider: {Alto.Providers.Images,
+  provider: {Alto.Contrib.Providers.Images,
     model: image_model_id,
     api_key: api_key,
     input_modalities: ["text", "image"],
@@ -238,9 +238,9 @@ profile protects `.git` from ordinary file edits and commands, and gives Git
 mutation its own approved tool. Bubblewrap commands have a writable workspace,
 a read-only runtime, a fresh temporary directory, and network disabled by
 default. Executor `network: :inherit` enables network access;
-`Alto.Command.Executors.Unsandboxed` selects host execution.
+`Alto.Contrib.Command.Executors.Unsandboxed` selects host execution.
 
-Set `approval: &Alto.Approval.interactive/2` for terminal decisions or
+Set `approval: &Alto.Contrib.Approval.interactive/2` for terminal decisions or
 `approval: :approve` for an explicitly trusted unattended workflow. Custom
 callbacks can make policy decisions from the prepared request. See
 [extensions](extensions.md#approval-decisions) for those contracts.
@@ -297,7 +297,7 @@ An attempt that has already streamed output is not automatically replayed.
 Library calls take the same keyword list, with a provider supplied by the host:
 
 ```elixir
-{:ok, options} = Alto.Config.load("profiles/review/alto.exs")
+{:ok, options} = Alto.Contrib.Config.load("profiles/review/alto.exs")
 result = Alto.run("Review the parser", options)
 ```
 
@@ -309,7 +309,7 @@ Keyword.merge(base,
   sessions: true,
   runs: %{
     "review" => [max_steps: 48],
-    "chat" => [loop: Alto.chat_loop(), tools: [], prompt: &Alto.Prompts.Chat.build/1]
+    "chat" => [loop: Alto.chat_loop(), tools: [], prompt: &Alto.Contrib.Prompts.Chat.build/1]
   }
 )
 ```

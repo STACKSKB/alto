@@ -1,8 +1,9 @@
 defmodule Alto.TUI.State do
   @moduledoc "State and catalog projection for the Alto terminal client."
 
-  alias Alto.Harness.Catalog
-  alias Alto.Harness.{ProviderProfile, ProviderStore}
+  alias Alto.TUI.Catalog
+  alias Alto.Contrib.ProviderProfile
+  alias Alto.Contrib.ProviderStore
   alias Alto.Session
   alias Alto.Usage
   alias Alto.TUI.Preferences
@@ -109,7 +110,8 @@ defmodule Alto.TUI.State do
 
     root = opts |> Keyword.get(:project, File.cwd!()) |> Path.expand()
 
-    credentials_path = Keyword.get(opts, :credentials_path, Alto.Credentials.default_path())
+    credentials_path =
+      Keyword.get(opts, :credentials_path, Alto.Contrib.Credentials.default_path())
 
     if not Alto.TUI.Backend.valid?(Alto.TUI.Backend.configured(run_options)),
       do: raise(ArgumentError, "invalid tui_backends")
@@ -315,7 +317,7 @@ defmodule Alto.TUI.State do
         %{
           state
           | leader?: false,
-            notice: "Could not close workspace: #{Alto.Display.error(reason)}"
+            notice: "Could not close workspace: #{Alto.Contrib.Display.error(reason)}"
         }
     end
   end
@@ -776,7 +778,7 @@ defmodule Alto.TUI.State do
     case Session.conversation(session_id, :latest, Keyword.take(opts, [:session_dir])) do
       {:ok, %{"messages" => messages}} ->
         messages
-        |> Alto.ToolDisplay.transcript(
+        |> Alto.Contrib.ToolDisplay.transcript(
           attachment_directory: Path.join(Session.dir(opts), "attachments")
         )
         |> bounded_entries()
@@ -785,7 +787,7 @@ defmodule Alto.TUI.State do
         [
           %{
             kind: :system,
-            text: "Could not load saved conversation: #{Alto.Display.error(reason)}"
+            text: "Could not load saved conversation: #{Alto.Contrib.Display.error(reason)}"
           }
         ]
     end
@@ -893,7 +895,8 @@ defmodule Alto.TUI.State do
       {:error, reason} ->
         %{
           state
-          | notice: "Selection applies now but could not be saved: #{Alto.Display.error(reason)}"
+          | notice:
+              "Selection applies now but could not be saved: #{Alto.Contrib.Display.error(reason)}"
         }
     end
   end

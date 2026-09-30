@@ -3,17 +3,17 @@ defmodule Alto.Contrib.CLI do
 
   alias Alto.Contrib.CLI.Arguments
   alias Alto.Contrib.CLI.Onboarding
-  alias Alto.Config
+  alias Alto.Contrib.Config
   alias Alto.Contrib.CLI.Renderer
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.UnixSocket
   alias Alto.Contrib.Listeners.WebServer
   alias Alto.Contrib.Listeners.Webhook
-  alias Alto.Providers.OpenAICompatible
+  alias Alto.Contrib.Providers.OpenAICompatible
   alias Alto.Session
-  alias Alto.Tools.ListFiles
-  alias Alto.Tools.ReadFile
-  alias Alto.Tools.SearchFiles
+  alias Alto.Contrib.Tools.ListFiles
+  alias Alto.Contrib.Tools.ReadFile
+  alias Alto.Contrib.Tools.SearchFiles
 
   @spec main([binary()]) :: no_return()
   def main(argv) do
@@ -87,11 +87,11 @@ defmodule Alto.Contrib.CLI do
     with {:ok, files} <-
            Alto.Result.traverse(
              paths,
-             &Alto.Attachment.upload(&1,
+             &Alto.Contrib.Attachment.upload(&1,
                directory: Path.join(Alto.Session.dir(config), "attachments")
              )
            ),
-         {:ok, blocks} <- Alto.Result.traverse(files, &Alto.Attachment.content/1),
+         {:ok, blocks} <- Alto.Result.traverse(files, &Alto.Contrib.Attachment.content/1),
          content = Alto.Content.new([Alto.Content.text(task) | blocks]),
          {:ok, _} <-
            Alto.Content.normalize(content, Keyword.get(config, :max_transcript_bytes, 8_000_000)),
@@ -100,8 +100,8 @@ defmodule Alto.Contrib.CLI do
 
   defp run_task(options, task, run_options) do
     case Keyword.get(options, :resume) do
-      nil -> Alto.run(task, run_options)
-      session_id -> Alto.resume(session_id, task, run_options)
+      nil -> Alto.Contrib.run(task, run_options)
+      session_id -> Alto.Contrib.resume(session_id, task, run_options)
     end
   end
 
@@ -151,7 +151,7 @@ defmodule Alto.Contrib.CLI do
   ## webhook endpoints such as `"job"`). The WebSocket client's config field
   ## defaults to `"default"`, and `start_run` with any other name fails with
   ## `unknown_config`. Runs started this way have no terminal to prompt on,
-  ## so approval defaults to `Alto.Approval.socket/2`; configured decisions are honored.
+  ## so approval defaults to `Alto.Contrib.Approval.socket/2`; configured decisions are honored.
 
   @default_serve_port 4_747
   @default_webhook_port 4_748
@@ -237,7 +237,7 @@ defmodule Alto.Contrib.CLI do
     with {:ok, run_options} <- common_run_options(config) do
       {:ok,
        run_options
-       |> Keyword.put_new(:approval, &Alto.Approval.socket/2)
+       |> Keyword.put_new(:approval, &Alto.Contrib.Approval.socket/2)
        |> Keyword.drop([
          :listeners,
          :queue,
@@ -384,7 +384,7 @@ defmodule Alto.Contrib.CLI do
 
       run_options =
         run_options
-        |> Keyword.put_new(:approval, &Alto.Approval.interactive/2)
+        |> Keyword.put_new(:approval, &Alto.Contrib.Approval.interactive/2)
         |> configure_session(options)
         |> Keyword.put_new(:cwd, File.cwd!())
         |> Alto.Events.attach(&send(renderer, {:event, &1}))
@@ -407,7 +407,7 @@ defmodule Alto.Contrib.CLI do
        configured
        |> Keyword.put(:provider, provider)
        |> Keyword.put_new(:tools, [ListFiles, ReadFile, SearchFiles])
-       |> Keyword.put_new(:prompt, if(provider, do: &Alto.Prompts.Coding.build/1))
+       |> Keyword.put_new(:prompt, if(provider, do: &Alto.Contrib.Prompts.Coding.build/1))
        |> Keyword.put_new(:project_instructions, :auto)}
     end
   end
@@ -484,5 +484,5 @@ defmodule Alto.Contrib.CLI do
   defp format_reason(:compaction_requires_provider),
     do: "transcript limit reached, but compaction needs a provider"
 
-  defp format_reason(reason), do: Alto.Display.error(reason)
+  defp format_reason(reason), do: Alto.Contrib.Display.error(reason)
 end

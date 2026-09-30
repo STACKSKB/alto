@@ -1,7 +1,9 @@
 defmodule Alto.TUI.SelectionScrollTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{Selection, Transcript, Window}
+  alias Alto.TUI.Selection
+  alias Alto.TUI.Transcript
+  alias Alto.TUI.Window
   alias ExRatatui.Event.{Key, Mouse, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Widgets.{Block, Paragraph}

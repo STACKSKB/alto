@@ -1,7 +1,9 @@
 defmodule Alto.TUI.RunLifecycleTest do
   use ExUnit.Case, async: false
 
-  alias Alto.TUI.{App, State, View}
+  alias Alto.TUI.App
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias ExRatatui.Event.Key
   alias ExRatatui.Runtime
 
@@ -103,7 +105,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert {:ok, %{"messages" => messages}} =
              Alto.Session.transcript(session_id, session_dir: Path.join(root, "sessions"))
 
-    assert Alto.ToolDisplay.transcript(messages) == expected
+    assert Alto.Contrib.ToolDisplay.transcript(messages) == expected
   end
 
   test "a queued follow-up starts after completion without changing the foreground draft", %{
@@ -322,7 +324,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe"]),
         tools: [ApprovalProbe],
-        approval: &Alto.Approval.interactive/2
+        approval: &Alto.Contrib.Approval.interactive/2
       )
 
     submit(app, "{}")
@@ -356,7 +358,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe"]),
         tools: [ApprovalProbe],
-        approval: &Alto.Approval.interactive/2,
+        approval: &Alto.Contrib.Approval.interactive/2,
         approval_timeout: 500
       )
 
@@ -374,7 +376,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe", "approval_probe"]),
         tools: [ApprovalProbe],
-        approval: &Alto.Approval.interactive/2
+        approval: &Alto.Contrib.Approval.interactive/2
       )
 
     submit(app, "{}")
@@ -403,7 +405,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         provider: nil,
         loop: Alto.rule_loop(steps: ["approval_probe"]),
         tools: [ApprovalProbe],
-        approval: &Alto.Approval.interactive/2,
+        approval: &Alto.Contrib.Approval.interactive/2,
         tui: [approval_reviewer: reviewer]
       )
 
@@ -435,7 +437,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert state(app).runs == %{}
     task = State.selected_task(state(app))
     assert task["goal"] == %{"objective" => "Fix the rendering regression", "status" => "active"}
-    assert {:ok, catalog} = Alto.Harness.Catalog.read(state(app).catalog_opts)
+    assert {:ok, catalog} = Alto.TUI.Catalog.read(state(app).catalog_opts)
     assert hd(catalog["tasks"])["goal"] == task["goal"]
 
     goal_action(app, "pause")
@@ -489,7 +491,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     app =
       start_app(root,
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "controlled",
             label: "Controlled",
             provider: {ControlledProvider, owner: self(), model: "test"},
@@ -498,7 +500,7 @@ defmodule Alto.TUI.RunLifecycleTest do
         ],
         loop: Alto.default_loop(),
         tools: [ApprovalProbe],
-        approval: &Alto.Approval.interactive/2,
+        approval: &Alto.Contrib.Approval.interactive/2,
         session_history: :settled
       )
 
@@ -587,7 +589,7 @@ defmodule Alto.TUI.RunLifecycleTest do
       options ||
         [
           provider_profiles: [
-            %Alto.Harness.ProviderProfile{
+            %Alto.Contrib.ProviderProfile{
               id: "controlled",
               label: "Controlled",
               provider: {ControlledProvider, owner: self(), model: "test"},

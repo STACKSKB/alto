@@ -6,7 +6,8 @@ defmodule Alto.Runner.Execution.Model do
   """
 
   require Logger
-  alias Alto.{Event, Usage}
+  alias Alto.Event
+  alias Alto.Usage
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
 
@@ -230,7 +231,7 @@ defmodule Alto.Runner.Execution.Model do
   defp outcome_kind(_), do: :error
 
   defp retry_decision(caps, reason, attempt) do
-    policy = caps.retry_policy || (&Alto.Retry.Transient.decide/2)
+    policy = caps.retry_policy || fn _, _ -> :stop end
 
     case Call.run(
            fn ->

@@ -5,11 +5,14 @@ defmodule Alto.Runner.Execution.Children do
   Operations return the supplied execution map with only their owned fields
   changed; validation helpers accept minimal maps containing the fields used.
   """
-  alias Alto.{Event, Usage}
-  alias Alto.Runner.{Budget, Result}
+  alias Alto.Event
+  alias Alto.Usage
+  alias Alto.Runner.Budget
+  alias Alto.Runner.Result
   alias Alto.Subagents.Continuation
   alias Alto.Tool.Arguments
-  alias Alto.Runner.Execution.{Events, Operation}
+  alias Alto.Runner.Execution.Events
+  alias Alto.Runner.Execution.Operation
 
   @spawn_schema NimbleOptions.new!(
                   id: [type: Arguments.text(1, :infinity), required: true],
@@ -26,7 +29,7 @@ defmodule Alto.Runner.Execution.Children do
                   ]
                 )
 
-  @inherited_options ~w(provider_profiles credentials_path agent_prepare agent_models child_provider_resolver provider_retries retry_policy tool_presenter checkpoint_version
+  @inherited_options ~w(agent_prepare agent_models child_provider_resolver provider_retries retry_policy tool_presenter checkpoint_version
                         parent_expires_at_ms approval continuation_store
                         session_dir conversation_retained_turns max_conversation_bytes)a ++
                        (Alto.Config.authority_fields() --
@@ -392,8 +395,9 @@ defmodule Alto.Runner.Execution.Children do
        when is_binary(key) and is_binary(model) do
     resolve_provider(
       fn ->
-        resolver = run.child_provider_resolver || (&Alto.Subagents.Models.provider(&1, &2, run))
-        resolver.(key, model)
+        if run.child_provider_resolver,
+          do: run.child_provider_resolver.(key, model),
+          else: {:error, :child_provider_resolver_required}
       end,
       run
     )

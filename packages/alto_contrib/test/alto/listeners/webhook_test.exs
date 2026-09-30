@@ -7,7 +7,7 @@ defmodule Alto.Contrib.Listeners.WebhookTest do
 
   use ExUnit.Case, async: false
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Ingress.HMAC
   alias Alto.Contrib.Ingress.IdentityHeader
   alias Alto.Contrib.Listeners.Webhook

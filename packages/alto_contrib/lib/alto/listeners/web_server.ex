@@ -153,7 +153,7 @@ defmodule Alto.Contrib.Listeners.WebServer do
     @moduledoc false
     @behaviour WebSock
 
-    alias Alto.FrontEnd.Registry
+    alias Alto.Contrib.FrontEnd.Registry
     alias Alto.Contrib.Listeners.Connection
 
     @impl true

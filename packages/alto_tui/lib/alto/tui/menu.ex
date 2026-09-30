@@ -96,9 +96,12 @@ defmodule Alto.TUI.Menu do
     saved = if path == "", do: Map.get(menu, :folders, []), else: []
 
     {found, completion, error} =
-      case Alto.Harness.Folders.suggest(path, base) do
-        {:ok, %{folders: folders, completion: completion}} -> {folders, completion, nil}
-        {:error, reason} -> {[], nil, "Could not list folders: " <> Alto.Display.error(reason)}
+      case Alto.TUI.Folders.suggest(path, base) do
+        {:ok, %{folders: folders, completion: completion}} ->
+          {folders, completion, nil}
+
+        {:error, reason} ->
+          {[], nil, "Could not list folders: " <> Alto.Contrib.Display.error(reason)}
       end
 
     Map.merge(menu, %{

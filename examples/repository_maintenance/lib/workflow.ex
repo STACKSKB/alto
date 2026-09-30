@@ -1,9 +1,9 @@
 defmodule RepositoryMaintenance.Workflow do
   @moduledoc "Durable CI failure intake, isolated repair, review manifest, and explicit apply."
 
-  alias Alto.Command
+  alias Alto.Contrib.Command
   alias Alto.AtomicFile
-  alias Alto.Tools.Git
+  alias Alto.Contrib.Tools.Git
 
   @max_report_bytes 64_000
   @max_patch_bytes 1_000_000
@@ -151,14 +151,14 @@ defmodule RepositoryMaintenance.Workflow do
 
       _ ->
         with {:ok, provider} <- provider_options(opts) do
-          Alto.run(report["failure"],
+          Alto.Contrib.run(report["failure"],
             cwd: checkout,
-            provider: {Alto.Providers.OpenAICompatible, provider},
+            provider: {Alto.Contrib.Providers.OpenAICompatible, provider},
             tools: [
-              Alto.Tools.ReadFile,
-              Alto.Tools.SearchFiles,
-              Alto.Tools.EditFile,
-              Alto.Tools.WriteFile
+              Alto.Contrib.Tools.ReadFile,
+              Alto.Contrib.Tools.SearchFiles,
+              Alto.Contrib.Tools.EditFile,
+              Alto.Contrib.Tools.WriteFile
             ],
             approval: :approve,
             max_steps: Keyword.get(opts, :max_steps, 8)

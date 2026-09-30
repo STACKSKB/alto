@@ -3,7 +3,10 @@ defmodule Alto.Runner.ResumeContextObservationTest do
 
   alias Alto.Context.Transcript
 
-  alias Alto.Test.ResumeContextFixture.{PayloadTool, Provider, OtherProvider, Reducer}
+  alias Alto.Test.ResumeContextFixture.PayloadTool
+  alias Alto.Test.ResumeContextFixture.Provider
+  alias Alto.Test.ResumeContextFixture.OtherProvider
+  alias Alto.Test.ResumeContextFixture.Reducer
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-resume-usage-#{System.unique_integer([:positive])}")

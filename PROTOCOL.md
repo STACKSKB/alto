@@ -419,7 +419,7 @@ Admission to a captured mailbox returns `input_checkpointed` until restore.
 Transport selection is trusted host configuration, not a wire-request field.
 The registry keeps channels with its bounded retained-run window; they are
 released on eviction. Trusted hosts can inspect unconsumed root submissions with
-`Alto.FrontEnd.Registry.request(registry, {:input_status, run_id})`.
+`Alto.Contrib.FrontEnd.Registry.request(registry, {:input_status, run_id})`.
 
 **`cancel`** — cooperative cancellation via the existing handle API.
 

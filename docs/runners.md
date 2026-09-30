@@ -156,7 +156,7 @@ their outcomes. Other owners can retain the existing repeated-await behavior or
 release explicitly. Custom runners may implement the optional `release/1`
 callback; unsupported runners return `{:error, :unsupported}`.
 
-`Alto.FrontEnd.Registry` also accepts `max_retained_event_bytes` (8,000,000 per run),
+`Alto.Contrib.FrontEnd.Registry` also accepts `max_retained_event_bytes` (8,000,000 per run),
 `max_finished_bytes` (32,000,000 across finished run records), and
 `max_subscriber_bytes` (32,000,000 across buffered subscriber notifications).
 Existing count limits still apply. Finished outcomes are published before

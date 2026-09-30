@@ -1,6 +1,9 @@
 defmodule Alto.OperationLogDeltaTest do
   use ExUnit.Case, async: true
-  alias Alto.{OperationLog, Persistence.Codec, Persistence.Delta, Subagents.Continuation}
+  alias Alto.OperationLog
+  alias Alto.Persistence.Codec
+  alias Alto.Persistence.Delta
+  alias Alto.Subagents.Continuation
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-ledger-delta-#{System.unique_integer([:positive])}")

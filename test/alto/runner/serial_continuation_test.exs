@@ -1,7 +1,8 @@
 defmodule Alto.Runner.SerialContinuationTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Event, OperationLog}
+  alias Alto.Event
+  alias Alto.OperationLog
   alias Alto.Subagents.Continuation
 
   defmodule Parent do

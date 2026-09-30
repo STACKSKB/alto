@@ -1,6 +1,6 @@
 defmodule Alto.Contrib.Listeners.ConnectionMessagingTest do
   use ExUnit.Case, async: true
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
 
   defmodule Provider do

@@ -271,7 +271,7 @@ defmodule Alto.CLITest do
         #{approval_option}
         provider: nil,
         cwd: #{inspect(root)},
-        tools: [Alto.Tools.WriteFile],
+        tools: [Alto.Contrib.Tools.WriteFile],
         listeners: [{Alto.CLITest.CaptureListener, []}],
         runs: %{"rule" => [loop: Alto.rule_loop(steps: ["write_file"])]}
       ]
@@ -283,13 +283,13 @@ defmodule Alto.CLITest do
       try do
         assert_receive {:registry, registry}, 2_000
         registry_monitor = Process.monitor(registry)
-        :ok = Alto.FrontEnd.Registry.request(registry, {:attach, self(), nil, 1, []})
+        :ok = Alto.Contrib.FrontEnd.Registry.request(registry, {:attach, self(), nil, 1, []})
         client = self()
 
         puller =
           Task.async(fn ->
             Stream.repeatedly(fn ->
-              Alto.FrontEnd.Registry.pull(registry, client, 100)
+              Alto.Contrib.FrontEnd.Registry.pull(registry, client, 100)
               Process.sleep(10)
             end)
             |> Stream.run()
@@ -299,14 +299,20 @@ defmodule Alto.CLITest do
           task = JSON.encode!(%{path: "approved.txt", content: "configured write"})
 
           assert {:ok, id} =
-                   Alto.FrontEnd.Registry.request(registry, {:start_run, "rule", task, []})
+                   Alto.Contrib.FrontEnd.Registry.request(
+                     registry,
+                     {:start_run, "rule", task, []}
+                   )
 
           unless @approval do
             assert_receive {:alto_notification, {:approval_request, ^id, request}}, 2_000
             refute File.exists?(Path.join(root, "approved.txt"))
 
             :ok =
-              Alto.FrontEnd.Registry.request(registry, {:approval_response, request.id, :approve})
+              Alto.Contrib.FrontEnd.Registry.request(
+                registry,
+                {:approval_response, request.id, :approve}
+              )
           end
 
           assert_receive {:alto_notification, {:result, ^id, %{status: :ok}}}, 2_000
@@ -334,7 +340,7 @@ defmodule Alto.CLITest do
       cwd: #{inspect(root)},
       session: nil,
       loop: Alto.rule_loop(steps: ["write_file"]),
-      tools: [Alto.Tools.WriteFile],
+      tools: [Alto.Contrib.Tools.WriteFile],
       approval: :approve
     ]
     """)

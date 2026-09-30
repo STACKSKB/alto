@@ -1,6 +1,8 @@
 defmodule Alto.TUI.HistoryTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.{History, State, App}
+  alias Alto.TUI.History
+  alias Alto.TUI.State
+  alias Alto.TUI.App
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-history-#{System.unique_integer([:positive])}")

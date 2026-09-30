@@ -85,18 +85,18 @@ defmodule Alto.TUI.FolderInteractionTest do
   test "filesystem suggestions exclude files, respect hidden prefixes, and reject multiline paths" do
     root = temporary_folders(["alpha", ".hidden"])
     File.write!(Path.join(root, "a-file"), "not a directory")
-    assert {:ok, %{folders: [folder]}} = Alto.Harness.Folders.suggest("a", root)
+    assert {:ok, %{folders: [folder]}} = Alto.TUI.Folders.suggest("a", root)
     assert folder == root <> "/alpha/"
-    assert {:ok, %{folders: [hidden]}} = Alto.Harness.Folders.suggest(".", root)
+    assert {:ok, %{folders: [hidden]}} = Alto.TUI.Folders.suggest(".", root)
     assert hidden == root <> "/.hidden/"
-    assert {:error, _} = Alto.Harness.Folders.suggest("bad\npath", root)
+    assert {:error, _} = Alto.TUI.Folders.suggest("bad\npath", root)
   end
 
   test "completion considers matches beyond the fifty displayed suggestions" do
     root = temporary_folders(Enum.map(1..55, &("aaa-" <> Integer.to_string(&1))) ++ ["az-last"])
 
     assert {:ok, %{folders: folders, completion: prefix}} =
-             Alto.Harness.Folders.suggest("a", root)
+             Alto.TUI.Folders.suggest("a", root)
 
     assert length(folders) == 50
     assert prefix == root <> "/a"

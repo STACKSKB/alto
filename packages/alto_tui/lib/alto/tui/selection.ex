@@ -5,7 +5,8 @@ defmodule Alto.TUI.Selection do
   selectable content rectangles. Alt+drag explicitly opts into UI text.
   """
 
-  alias Alto.TUI.{Layout, SelectionRegions}
+  alias Alto.TUI.Layout
+  alias Alto.TUI.SelectionRegions
   alias ExRatatui.{CellSession, Style}
   alias ExRatatui.Event.{FocusLost, Key, Mouse, Paste, Resize}
   alias ExRatatui.Layout.Rect

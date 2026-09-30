@@ -1,8 +1,10 @@
 defmodule Alto.Runner.ParentContinuationTest do
   use ExUnit.Case, async: false
 
-  alias Alto.{Event, OperationLog}
-  alias Alto.Runner.{Budget.Account, Checkpoint}
+  alias Alto.Event
+  alias Alto.OperationLog
+  alias Alto.Runner.Budget.Account
+  alias Alto.Runner.Checkpoint
   alias Alto.Subagents.Continuation
 
   defmodule ParentLoop do

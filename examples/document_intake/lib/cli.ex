@@ -61,5 +61,5 @@ defmodule DocumentIntakeCLI do
     do: {:error, {:unknown_option, flag}}
 
   def load_config(nil), do: {:ok, nil}
-  def load_config(path), do: Alto.Config.load(path)
+  def load_config(path), do: Alto.Contrib.Config.load(path)
 end

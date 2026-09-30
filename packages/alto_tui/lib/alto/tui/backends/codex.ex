@@ -1,8 +1,8 @@
 defmodule Alto.TUI.Backends.Codex do
   @moduledoc "Codex account, protocol, approval and interactive lifecycle contributions."
   @behaviour Alto.TUI.Backend
-  alias Alto.Codex.AppServer.Client, as: CodexClient
-  alias Alto.Codex.Backend, as: CodexBackend
+  alias Alto.Contrib.Codex.AppServer.Client, as: CodexClient
+  alias Alto.Contrib.Codex.Backend, as: CodexBackend
   alias Alto.TUI.State
   alias Alto.TUI.App, as: Host
 

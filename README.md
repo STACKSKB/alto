@@ -88,7 +88,7 @@ Start with the shipped defaults and override ordinary Elixir values:
 # alto.exs
 Alto.default_config()
 |> Keyword.merge(
-  tools: [Alto.Tools.ListFiles, Alto.Tools.ReadFile, Alto.Tools.SearchFiles],
+  tools: [Alto.Contrib.Tools.ListFiles, Alto.Contrib.Tools.ReadFile, Alto.Contrib.Tools.SearchFiles],
   max_steps: 48,
   run_timeout: 30 * 60 * 1_000
 )
@@ -122,7 +122,7 @@ Add Alto from source to your application's dependencies:
 The same configuration works through the library API:
 
 ```elixir
-{:ok, options} = Alto.Config.load("profiles/review/alto.exs")
+{:ok, options} = Alto.Contrib.Config.load("profiles/review/alto.exs")
 %Alto.Runner.Result{status: :ok, output: answer} = Alto.run("Review the parser", options)
 ```
 

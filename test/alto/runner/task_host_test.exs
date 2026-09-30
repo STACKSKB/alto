@@ -1,6 +1,7 @@
 defmodule Alto.Runner.TaskHostTest do
   use ExUnit.Case, async: true
-  alias Alto.Runner.{Result, TaskHost}
+  alias Alto.Runner.Result
+  alias Alto.Runner.TaskHost
 
   test "a detached handle remains usable after its creator exits" do
     parent = self()

@@ -5,7 +5,9 @@ defmodule Alto.Session.Conversation do
   """
 
   alias Alto.Context.Transcript
-  alias Alto.{DurableLog, Session, Storage}
+  alias Alto.DurableLog
+  alias Alto.Session
+  alias Alto.Storage
   alias Alto.Session.Conversation.Store
 
   @version 5

@@ -1,0 +1,350 @@
+defmodule Alto.OpsTest do
+  @moduledoc """
+  conformance: bounded read-only operator inspection.
+
+  Pagination and payload limits hold; stale claims read accurately;
+  parked work survives restart; mutating recovery still requires the
+  existing queue/ledger identities; unknown work is never safely
+  retryable. The surface grants no new authority by construction
+  (no mutating function exists here).
+  """
+
+  use ExUnit.Case, async: true
+
+  alias Alto.OperationLog
+  alias Alto.Ops
+  alias Alto.Queue
+
+  setup context do
+    dir = Path.join(System.tmp_dir!(), "alto-ops-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    tag = System.unique_integer([:positive])
+    qname = :"ops_q_#{tag}"
+    lname = :"ops_l_#{tag}"
+
+    {:ok, _} =
+      Queue.start_link(
+        id: "q#{tag}",
+        dir: Path.join(dir, "q"),
+        name: qname,
+        lease_ms: Map.get(context, :lease_ms, 5_000)
+      )
+
+    {:ok, _} = OperationLog.start_link(id: "l#{tag}", dir: Path.join(dir, "l"), name: lname)
+
+    %{dir: dir, queue: qname, ledger: lname, tag: tag}
+  end
+
+  test "accepted and claimed work retain native identity without payloads", %{queue: q, ledger: l} do
+    {:ok, _} =
+      Queue.request(q, {:admit, "/hooks/events:del-1", %{"body" => "private-queue-payload"}, []})
+
+    {:ok, _} = Queue.request(q, {:put, "job-9", %{"total" => 1}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "station-1", :infinity, :all})
+
+    {:ok, %{items: items}} = Ops.list(q, l, limit: 20)
+    by_key = Map.new(items, &{&1.key, &1})
+
+    assert %{status: :claimed, live: %{key: "/hooks/events:del-1", claim_id: claim_id}} =
+             by_key["/hooks/events:del-1"]
+
+    assert claim_id == claimed.claim_id
+    assert %{status: :accepted, live: %{key: "job-9"}, ledger: nil} = by_key["job-9"]
+
+    # Correlation is inbox key + claim identity, never an invented run.
+    assert by_key["/hooks/events:del-1"].live.id == claimed.id
+    assert by_key["/hooks/events:del-1"].safe_to_retry == false
+    refute Map.has_key?(by_key["/hooks/events:del-1"].live, :payload)
+    refute Map.has_key?(by_key["/hooks/events:del-1"], :operation_key)
+    refute JSON.encode!(Alto.Contrib.Protocol.encode_term(items)) =~ "private-queue-payload"
+  end
+
+  test "inspection accepts a registered ledger reference", %{queue: queue, ledger: ledger} do
+    name = {:alto_ops_ledger, System.unique_integer([:positive])}
+    :yes = :global.register_name(name, Process.whereis(ledger))
+    on_exit(fn -> :global.unregister_name(name) end)
+
+    {:ok, _} = Queue.request(queue, {:put, "job", %{}, []})
+
+    assert {:ok, %{items: [%{key: "job", status: :accepted}]}} =
+             Ops.list(queue, {:global, name})
+  end
+
+  @tag lease_ms: 50
+  test "stale claims are visible accurately without mutating", %{queue: q, ledger: l} do
+    {:ok, _} = Queue.request(q, {:admit, "src:stale", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "slow", :infinity, :all})
+    Process.sleep(120)
+
+    assert {:ok, item} = Ops.get(q, l, "src:stale")
+    assert item.status == :claimed
+    assert item.stale == true
+    assert item.live.claim_id == claimed.claim_id
+    assert item.live.lease_until_ms == claimed.lease_until_ms
+  end
+
+  test "inspection reaches live work beyond the oldest bounded page", %{queue: q, ledger: l} do
+    for n <- 1..105 do
+      {:ok, _} = Queue.request(q, {:put, "job-#{n}", %{n: n}, []})
+    end
+
+    assert {:ok, item} = Ops.get(q, l, "job-105")
+    assert item.status == :accepted
+    assert item.key == "job-105"
+
+    assert {:ok, %{items: page, next_cursor: nil}} = Ops.list(q, l, limit: 20, cursor: 100)
+
+    assert Enum.map(page, & &1.key) == [
+             "job-101",
+             "job-102",
+             "job-103",
+             "job-104",
+             "job-105"
+           ]
+  end
+
+  test "parked work lists with bounded evidence and survives restart", %{
+    dir: dir,
+    queue: q,
+    ledger: l,
+    tag: tag
+  } do
+    {:ok, _} = Queue.request(q, {:admit, "src:park-me", %{"body" => "x"}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, "src:park-me", "print", "src:park-me", nil})
+    :ok = OperationLog.request(l, {:attempt, "src:park-me", claimed.claim_id})
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:outcome, "src:park-me", claimed.claim_id, :requires_operator,
+         %{
+           park_reason: :handler_crashed,
+           token: "private-evidence-token",
+           detail: String.duplicate("x", 5_000)
+         }}
+      )
+
+    :ok = Queue.request(q, {:settle, claimed.claim_id, :ack, []})
+
+    {:ok, %{items: [parked]}} = Ops.list(q, l, filter: :parked)
+    assert parked.key == "src:park-me"
+    assert parked.status == :parked
+    assert parked.safe_to_retry == false
+    assert {:decided, :requires_operator, evidence} = parked.ledger.status
+    assert byte_size(evidence) <= 501
+    refute JSON.encode!(Alto.Contrib.Protocol.encode_term(parked)) =~ "private-evidence-token"
+
+    # Restart both stores over the same logs: parked work is still found.
+    GenServer.stop(Process.whereis(q))
+    GenServer.stop(Process.whereis(l))
+    Process.sleep(10)
+
+    q2 = :"ops_q2_#{tag}"
+    l2 = :"ops_l2_#{tag}"
+    {:ok, _} = Queue.start_link(id: "q#{tag}", dir: Path.join(dir, "q"), name: q2)
+    {:ok, _} = OperationLog.start_link(id: "l#{tag}", dir: Path.join(dir, "l"), name: l2)
+
+    assert {:ok, %{items: [found]}} = Ops.list(q2, l2, filter: :parked)
+    assert found.key == "src:park-me"
+  end
+
+  test "unknown work is never shown as safely retryable", %{queue: q, ledger: l} do
+    {:ok, _} = Queue.request(q, {:admit, "src:mystery", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, "src:mystery", "print", "src:mystery", nil})
+    :ok = OperationLog.request(l, {:attempt, "src:mystery", claimed.claim_id})
+
+    {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
+    assert item.key == "src:mystery"
+    assert item.safe_to_retry == false
+    assert item.recovery =~ "never blind retry"
+    refute item.recovery =~ "safely retry"
+  end
+
+  test "recovery identities are exposed without exposing the recovery payload", %{
+    queue: q,
+    ledger: l
+  } do
+    {:ok, _} = Queue.request(q, {:admit, "src:identity", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:intent, "src:identity", "print", "src:identity",
+         %{
+           generation_id: "recovery-generation",
+           payload: "private-recovery-payload"
+         }}
+      )
+
+    :ok = OperationLog.request(l, {:attempt, "src:identity", claimed.claim_id})
+
+    assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
+    assert item.ledger.revision == 2
+    assert item.ledger.current_attempt == claimed.claim_id
+    assert item.ledger.recovery.generation_id == "recovery-generation"
+    assert Map.keys(item.ledger.recovery) == [:generation_id]
+    refute Map.has_key?(item.live, :payload)
+    refute Map.has_key?(item.ledger.recovery, :payload)
+    refute JSON.encode!(Alto.Contrib.Protocol.encode_term(item)) =~ "private-recovery-payload"
+  end
+
+  test "interrupted workspace inspection excludes retained private contents", %{
+    queue: q,
+    ledger: l
+  } do
+    packet = %{
+      version: 2,
+      status: "in_progress",
+      action: "create",
+      workspace: %{secret: "private"}
+    }
+
+    :ok = OperationLog.request(l, {:retain, "workspace", "workspace", nil, "attempt", packet})
+
+    assert {:ok, item} = Ops.get(q, l, "workspace")
+    assert item.status == :unknown
+    assert item.live == nil
+    assert item.ledger.recovery == nil
+
+    assert item.ledger.status ==
+             {:checkpointed, Map.take(packet, [:version, :status, :action]), "attempt"}
+
+    refute Map.has_key?(item.ledger, :checkpoint)
+    refute JSON.encode!(Alto.Contrib.Protocol.encode_term(item)) =~ "private"
+
+    :ok = OperationLog.request(l, {:intent, "evidence", "tool", nil, nil})
+    :ok = OperationLog.request(l, {:attempt, "evidence", "attempt"})
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:outcome, "evidence", "attempt", :completed,
+         %{token: "private-token", detail: "operator evidence"}}
+      )
+
+    assert {:ok, completed} = Ops.get(q, l, "evidence")
+    assert {:decided, :completed, evidence} = completed.ledger.status
+    assert evidence =~ "[redacted]"
+    assert evidence =~ "operator evidence"
+    refute JSON.encode!(Alto.Contrib.Protocol.encode_term(completed)) =~ "private-token"
+  end
+
+  test "ledger projections preserve display keys beside semantic operation keys", %{
+    queue: q,
+    ledger: l
+  } do
+    {:ok, _} = Queue.request(q, {:put, "job-display", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    operation_key = "business-generation:" <> claimed.generation_id
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:intent, operation_key, "print", "job-display",
+         %{key: "job-display", generation_id: claimed.generation_id, payload: %{}}}
+      )
+
+    :ok = OperationLog.request(l, {:attempt, operation_key, claimed.claim_id})
+
+    assert {:ok, %{items: [item]}} = Ops.list(q, l, filter: :unknown)
+    assert item.key == "job-display"
+    assert item.live.key == "job-display"
+    assert item.ledger.operation_key == operation_key
+    assert item.live.generation_id == claimed.generation_id
+    assert item.ledger.current_attempt == claimed.claim_id
+  end
+
+  test "a completed business generation remains visible beside a new live generation", %{
+    queue: q,
+    ledger: l
+  } do
+    {:ok, _} = Queue.request(q, {:put, "same-display", %{}, []})
+    {:ok, [old_claim]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    old_operation = "business-generation:" <> old_claim.generation_id
+
+    :ok =
+      OperationLog.request(
+        l,
+        {:intent, old_operation, "print", "same-display",
+         %{
+           key: "same-display",
+           generation_id: old_claim.generation_id
+         }}
+      )
+
+    :ok = OperationLog.request(l, {:attempt, old_operation, old_claim.claim_id})
+    :ok = OperationLog.request(l, {:outcome, old_operation, old_claim.claim_id, :completed, %{}})
+    :ok = Queue.request(q, {:settle, old_claim.claim_id, :ack, []})
+    {:ok, _} = Queue.request(q, {:put, "same-display", %{}, []})
+
+    assert {:ok, %{items: items}} = Ops.list(q, l)
+    assert Enum.map(items, & &1.key) == ["same-display", "same-display"]
+    assert Enum.map(items, & &1.status) == [:accepted, :completed]
+    assert Enum.at(items, 0).live.operation_key != old_operation
+    assert Enum.at(items, 1).ledger.operation_key == old_operation
+  end
+
+  test "restored work joins ledger state by its explicit operation key", %{queue: q, ledger: l} do
+    operation_key = "src:restored-operation"
+    {:ok, _} = Queue.request(q, {:restore, operation_key, "generation-1", %{}, []})
+    {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+    :ok = OperationLog.request(l, {:intent, operation_key, "print", claimed.key, nil})
+    :ok = OperationLog.request(l, {:attempt, operation_key, claimed.claim_id})
+
+    assert {:ok, %{items: [item]}} = Ops.list(q, l)
+    assert item.status == :unknown
+    assert item.key == claimed.key
+    assert item.ledger.operation_key == operation_key
+    assert item.live.claim_id == claimed.claim_id
+  end
+
+  test "completed work lists terminal outcomes; pagination and limits hold", %{
+    queue: q,
+    ledger: l
+  } do
+    for n <- 1..5 do
+      key = "src:done-#{n}"
+      {:ok, _} = Queue.request(q, {:admit, key, %{}, []})
+      {:ok, [claimed]} = Queue.request(q, {:claim, 1, "w", :infinity, :all})
+      :ok = OperationLog.request(l, {:intent, key, "print", key, nil})
+      :ok = OperationLog.request(l, {:attempt, key, claimed.claim_id})
+      :ok = OperationLog.request(l, {:outcome, key, claimed.claim_id, :completed, %{n: n}})
+      :ok = Queue.request(q, {:settle, claimed.claim_id, :ack, []})
+    end
+
+    {:ok, %{items: page1, next_cursor: cursor}} = Ops.list(q, l, filter: :completed, limit: 2)
+    assert length(page1) == 2
+    assert cursor == 2
+
+    {:ok, %{items: page2, next_cursor: cursor2}} =
+      Ops.list(q, l, filter: :completed, limit: 2, cursor: cursor)
+
+    assert length(page2) == 2
+    assert cursor2 == 4
+
+    {:ok, %{items: page3, next_cursor: nil}} =
+      Ops.list(q, l, filter: :completed, limit: 2, cursor: cursor2)
+
+    assert length(page3) == 1
+    assert Enum.all?(page1 ++ page2 ++ page3, &(&1.status == :completed))
+
+    assert {:error, {:invalid_limit, 0}} = Ops.list(q, l, limit: 0)
+    assert {:error, {:invalid_limit, 101}} = Ops.list(q, l, limit: 101)
+    assert {:error, {:invalid_cursor, -1}} = Ops.list(q, l, cursor: -1)
+    assert {:error, {:invalid_filter, :bogus}} = Ops.list(q, l, filter: :bogus)
+    assert {:error, :not_found} = Ops.get(q, l, "src:missing")
+  end
+
+  test "store outages are reported instead of looking empty", %{queue: q, ledger: l} do
+    for store <- [l, q] do
+      GenServer.stop(Process.whereis(store))
+      assert {:error, {:ops_unavailable, {:noproc, _}}} = Ops.list(q, l)
+      assert {:error, {:ops_unavailable, {:noproc, _}}} = Ops.get(q, l, "missing")
+    end
+  end
+end

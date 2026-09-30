@@ -5,7 +5,9 @@ defmodule Alto.Runner.Serial do
   See `docs/runners.md#manual-execution` for the admission protocol.
   """
   @behaviour Alto.Runner
-  alias Alto.Runner.{Execution, Result, TaskHost}
+  alias Alto.Runner.Execution
+  alias Alto.Runner.Result
+  alias Alto.Runner.TaskHost
 
   defmodule Ticket do
     @moduledoc "A one-use capability to admit the next frame."

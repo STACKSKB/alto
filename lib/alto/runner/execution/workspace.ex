@@ -1,6 +1,7 @@
 defmodule Alto.Runner.Execution.Workspace do
   @moduledoc "Optional resource setup and capture around an arbitrary worker callback."
-  alias Alto.Runner.{Budget, Result}
+  alias Alto.Runner.Budget
+  alias Alto.Runner.Result
   @default_tool_timeout 125_000
   def execute(task, opts, manager, snapshot, identity, execute) do
     budget = Keyword.fetch!(opts, :budget)

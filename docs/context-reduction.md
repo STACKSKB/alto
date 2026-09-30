@@ -6,7 +6,7 @@ Compaction is composed from a trigger, a reducer, and an allowance:
 [
   loop: Alto.default_loop(context: Alto.Context.Window.new(compact_at: 0.85)),
   compaction: [
-    strategy: {Alto.Context.Reducers.Handoff, []},
+    strategy: {Alto.Contrib.Context.Reducers.Handoff, []},
     max_compactions: 8,
     keep_recent_messages: 12,
     keep_initial_messages: 1,

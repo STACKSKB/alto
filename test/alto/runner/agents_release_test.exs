@@ -1,7 +1,10 @@
 defmodule Alto.Runner.AgentsReleaseTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Runner.{Agents, Handle, Result, TaskHost}
+  alias Alto.Runner.Agents
+  alias Alto.Runner.Handle
+  alias Alto.Runner.Result
+  alias Alto.Runner.TaskHost
 
   defmodule FailedSubscriptionRunner do
     def subscribe(_, _), do: {:error, :subscription_unavailable}

@@ -10,7 +10,7 @@ defmodule Alto.Contrib.Listeners.Webhook do
 
   use GenServer
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
 
   @default_max_body_bytes 262_144
   @default_max_delivery_ids 10_000

@@ -1,7 +1,11 @@
 defmodule Alto.TUI.AttachmentsTest do
   use ExUnit.Case, async: true
-  alias Alto.{Attachment, Content}
-  alias Alto.TUI.{App, Attachments, State, View}
+  alias Alto.Contrib.Attachment
+  alias Alto.Content
+  alias Alto.TUI.App
+  alias Alto.TUI.Attachments
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias ExRatatui.Event.{Key, Mouse, Paste}
 
   setup do
@@ -144,26 +148,32 @@ defmodule Alto.TUI.AttachmentsTest do
 
     messages = [%{"role" => "assistant", "content" => blocks}]
     directory = Path.join(root, "saved-outputs")
-    entries = Alto.ToolDisplay.transcript(messages, attachment_directory: directory)
+    entries = Alto.Contrib.ToolDisplay.transcript(messages, attachment_directory: directory)
     path = entries |> List.last() |> Map.fetch!(:text) |> String.split("\n") |> List.last()
     assert File.read!(path) == "%PDF-1.7\nanswer"
     File.rm!(path)
-    assert Alto.ToolDisplay.transcript(messages, attachment_directory: directory) == entries
+
+    assert Alto.Contrib.ToolDisplay.transcript(messages, attachment_directory: directory) ==
+             entries
+
     assert File.read!(path) == "%PDF-1.7\nanswer"
 
     assert :ok =
-             Attachments.validate_provider(Content.new(blocks), {Alto.Providers.Anthropic, []})
+             Attachments.validate_provider(
+               Content.new(blocks),
+               {Alto.Contrib.Providers.Anthropic, []}
+             )
 
     uploaded =
       Content.new([Content.file("file.pdf", "application/pdf", Base.encode64("%PDF-1.7"))])
 
     assert {:error, :model_does_not_support_files} =
-             Attachments.validate_provider(uploaded, {Alto.Providers.Anthropic, []})
+             Attachments.validate_provider(uploaded, {Alto.Contrib.Providers.Anthropic, []})
 
     assert :ok =
              Attachments.validate_provider(
                uploaded,
-               {Alto.Providers.Anthropic, supports_files: true}
+               {Alto.Contrib.Providers.Anthropic, supports_files: true}
              )
 
     assert state.attachments == []
@@ -185,7 +195,9 @@ defmodule Alto.TUI.AttachmentsTest do
     assert {:ok, _} = Attachment.update(hd(files), "changed after sending")
     refute Content.text_value(entry.content) =~ "changed after sending"
 
-    [replayed] = Alto.ToolDisplay.transcript([%{"role" => "user", "content" => entry.content}])
+    [replayed] =
+      Alto.Contrib.ToolDisplay.transcript([%{"role" => "user", "content" => entry.content}])
+
     assert replayed.text =~ "paste-1.txt"
     refute replayed.text =~ "pasted text"
   end
@@ -200,9 +212,9 @@ defmodule Alto.TUI.AttachmentsTest do
 
   test "unsupported media preserves the draft for new runs and checks the running model for queues",
        %{state: state} do
-    profile = %Alto.Harness.ProviderProfile{
+    profile = %Alto.Contrib.ProviderProfile{
       id: "models",
-      provider: {Alto.Providers.OpenAICompatible, model: "vision", supports_images: true},
+      provider: {Alto.Contrib.Providers.OpenAICompatible, model: "vision", supports_images: true},
       models: [
         %{id: "text", input_modalities: ["text"]},
         %{id: "vision", input_modalities: ["text", "image"]}
@@ -228,7 +240,7 @@ defmodule Alto.TUI.AttachmentsTest do
         runs: %{
           "run" => %{
             task_id: "task",
-            input_provider: {Alto.Providers.OpenAICompatible, input_modalities: ["text"]}
+            input_provider: {Alto.Contrib.Providers.OpenAICompatible, input_modalities: ["text"]}
           }
         }
     }

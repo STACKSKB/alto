@@ -10,10 +10,10 @@ defmodule Alto.TUI.Backends.Native do
     case task["conversation_id"] do
       conversation_id when is_binary(conversation_id) ->
         with {:ok, resume_opts} <- resume_options(conversation_id, run_options),
-             do: Alto.start(prompt, Keyword.merge(run_options, resume_opts))
+             do: Alto.Contrib.start(prompt, Keyword.merge(run_options, resume_opts))
 
       _none ->
-        Alto.start(prompt, Keyword.put(run_options, :session, :new))
+        Alto.Contrib.start(prompt, Keyword.put(run_options, :session, :new))
     end
   end
 

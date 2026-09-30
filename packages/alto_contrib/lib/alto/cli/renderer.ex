@@ -48,9 +48,12 @@ defmodule Alto.Contrib.CLI.Renderer do
          %Event{type: :tool_completed, data: %{value: %Alto.Content{} = content}},
          _status?
        ) do
-    case Alto.Attachment.materialize(content) do
-      {:ok, files} -> Enum.each(files, &IO.puts(:stderr, "[output: #{&1.name}] #{&1.path}"))
-      {:error, reason} -> IO.puts(:stderr, "Cannot save output: #{Alto.Display.error(reason)}")
+    case Alto.Contrib.Attachment.materialize(content) do
+      {:ok, files} ->
+        Enum.each(files, &IO.puts(:stderr, "[output: #{&1.name}] #{&1.path}"))
+
+      {:error, reason} ->
+        IO.puts(:stderr, "Cannot save output: #{Alto.Contrib.Display.error(reason)}")
     end
 
     false
@@ -67,12 +70,12 @@ defmodule Alto.Contrib.CLI.Renderer do
       {:ok, content} ->
         if not streamed?, do: IO.write(Alto.Content.text_value(content))
 
-        case Alto.Attachment.materialize(content) do
+        case Alto.Contrib.Attachment.materialize(content) do
           {:ok, files} ->
             Enum.each(files, &IO.puts("\nOutput: #{&1.name}\n#{&1.path}"))
 
           {:error, reason} ->
-            IO.puts(:stderr, "Cannot save output: #{Alto.Display.error(reason)}")
+            IO.puts(:stderr, "Cannot save output: #{Alto.Contrib.Display.error(reason)}")
         end
 
       _ ->

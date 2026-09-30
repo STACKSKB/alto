@@ -7,7 +7,7 @@ defmodule Alto.Contrib.Listeners.ConnectionQueueTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
 
   setup do

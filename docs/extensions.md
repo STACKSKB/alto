@@ -9,9 +9,9 @@ adapters without changing the runner.
 
 The `:prompt` run option accepts literal text, `nil` to omit the system message,
 or a function receiving the prompt context. For example, use
-`prompt: "Answer concisely"` or `prompt: &Alto.Prompts.Coding.build/1`.
+`prompt: "Answer concisely"` or `prompt: &Alto.Contrib.Prompts.Coding.build/1`.
 Capture options in a closure, such as
-`prompt: &Alto.Prompts.Chat.build(&1, identity: "Answer concisely.")`.
+`prompt: &Alto.Contrib.Prompts.Chat.build(&1, identity: "Answer concisely.")`.
 CLI runs read this option from the selected configuration file.
 A resumed conversation retains its stored system message.
 
@@ -25,8 +25,8 @@ runner option. For example, `alto.agentic.exs` observes its OpenRouter provider:
 require Logger
 
 provider =
-  Alto.Provider.observe({Alto.Providers.OpenAICompatible, provider_options}, fn request ->
-    report = Alto.Providers.PrefixContinuity.report(request)
+  Alto.Provider.observe({Alto.Contrib.Providers.OpenAICompatible, provider_options}, fn request ->
+    report = Alto.Contrib.Providers.PrefixContinuity.report(request)
     Logger.debug(fn -> "Alto prefix continuity: #{inspect(report)}" end)
   end)
 ```
@@ -61,7 +61,7 @@ path_transform = fn args, context ->
 end
 
 tools = [
-  Alto.Tool.transform(Alto.Tools.ReadFile, path_transform)
+  Alto.Tool.transform(Alto.Contrib.Tools.ReadFile, path_transform)
 ]
 ```
 
@@ -102,13 +102,13 @@ contain keys such as `type` or `data`. Constructors return provider-neutral maps
 with string keys. The wrapper, transcript and session all use those same blocks.
 
 ```elixir
-{:ok, file} = Alto.Attachment.upload("report.pdf")
-{:ok, block} = Alto.Attachment.content(file)
+{:ok, file} = Alto.Contrib.Attachment.upload("report.pdf")
+{:ok, block} = Alto.Contrib.Attachment.content(file)
 task = Alto.Content.new([Alto.Content.text("Summarize this report"), block])
 Alto.run(task, provider: provider)
 ```
 
-`Alto.Attachment.update/2` edits staged text at its existing path; `content/1`
+`Alto.Contrib.Attachment.update/2` edits staged text at its existing path; `content/1`
 reads its current bounded contents. `paste/2` splits UTF-8 text into byte-bounded
 files, preferring line boundaries and preserving every byte. Submission must
 freeze the resulting blocks; persisted content embeds bytes and never depends
@@ -117,7 +117,7 @@ on a mutable staging path.
 `Alto.Content.file(name, media_type, base64)` represents model-facing input.
 `Alto.Content.artifact(name, media_type, base64)` represents downloadable output;
 requests see its file description, while history retains the bytes. Add
-`Alto.Tools.PublishFile` to snapshot bounded workspace-confined files as artifacts.
+`Alto.Contrib.Tools.PublishFile` to snapshot bounded workspace-confined files as artifacts.
 Materialized outputs use a stable digest, so replay reuses paths and saved native
 history can recreate missing files. Hosts own staging retention and cleanup.
 
@@ -137,7 +137,7 @@ content = Alto.Content.new([
 ])
 ```
 
-`Alto.Tools.ReadImage` reads workspace-confined PNG and JPEG files. It reads no
+`Alto.Contrib.Tools.ReadImage` reads workspace-confined PNG and JPEG files. It reads no
 more than the configured base64 limit permits, recognizes the format from file
 bytes, validates PNG header integrity or JPEG frame dimensions, and rejects
 images above the configured dimension or pixel limits. It returns an
@@ -146,7 +146,7 @@ or require an image package.
 
 ```elixir
 tools: [
-  {Alto.Tools.ReadImage,
+  {Alto.Contrib.Tools.ReadImage,
    max_encoded_bytes: 1_000_000,
    max_dimension: 8_192,
    max_pixels: 20_000_000}
@@ -185,8 +185,8 @@ typed image results produced by custom tools.
 The `approval` run option accepts a decision literal (`:approve`, `:suspend`, or
 `{:deny, reason}`) or a two-argument function receiving the display-safe
 approval request and tool context maps. Use closures to bind
-options. Built-in prompts are `&Alto.Approval.interactive/2` and
-`&Alto.Approval.socket/2`. `Alto.Approval.delegated/3` can be wrapped in a
+options. Built-in prompts are `&Alto.Contrib.Approval.interactive/2` and
+`&Alto.Contrib.Approval.socket/2`. `Alto.Contrib.Approval.delegated/3` can be wrapped in a
 closure when it needs options.
 
 The runtime projects tool contexts through `Alto.Tool.context/1`: `session_id`,
@@ -282,14 +282,14 @@ Command `:policy` is a function `(arguments, context)` returning
 extra_arguments}` tuple, or a literal `{:error, reason}` denial. MFA callbacks
 receive arguments and context before the extra arguments. Use this data form
 when a narrowed child tool profile must survive a durable checkpoint. The default is
-`&Alto.Command.resolve/2`, which validates bounded arguments and resolves the
+`&Alto.Contrib.Command.resolve/2`, which validates bounded arguments and resolves the
 requested program before approval. Capture options in a closure to restrict it:
 
 ```elixir
 allowed = ["git", "printf"]
 policy = fn arguments, context ->
   if arguments["program"] in allowed,
-    do: Alto.Command.resolve(arguments, context),
+    do: Alto.Contrib.Command.resolve(arguments, context),
     else: {:error, :program_not_allowed}
 end
 ```
@@ -308,9 +308,9 @@ share the argument contract. Scalar and list validation returns
 `NimbleOptions.ValidationError`; executable lookup, NUL bytes, and aggregate argv
 size retain their command-specific errors.
 
-The library keeps executor selection explicit. `Alto.Command` still defaults to
+The library keeps executor selection explicit. `Alto.Contrib.Command` still defaults to
 `Unsandboxed` for trusted host workflows. CLI configurations opt in by including
-`Alto.Tools.RunCommand` with the chosen executor in `tools:`. The shipped coding
+`Alto.Contrib.Tools.RunCommand` with the chosen executor in `tools:`. The shipped coding
 profile selects Bubblewrap with networking disabled and existing `.git` metadata
 read-only.
 Ordinary workspace files remain writable. This protects metadata, not all work
@@ -329,8 +329,8 @@ setting; ordinary command and analysis tools keep `.git` protected.
 Native file tools can apply the same policy through the existing transform seam:
 
 ```elixir
-Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"])
-Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"])
+Alto.Contrib.Tools.ProtectPaths.wrap(Alto.Contrib.Tools.WriteFile, [".git"])
+Alto.Contrib.Tools.ProtectPaths.wrap(Alto.Contrib.Tools.EditFile, [".git"])
 ```
 
 The wrapper rejects lexical and resolved targets within protected paths, including
@@ -344,11 +344,11 @@ Compose limits with tool specifications in the host's `alto.exs`:
 
 ```elixir
 tools: [
-  {Alto.Tools.WriteFile, max_bytes: 512_000, preview_bytes: 2_048},
-  {Alto.Tools.EditFile, max_file_bytes: 2_000_000, max_edits: 50},
-  {Alto.Tools.ReadFile, max_bytes: 32_000},
-  {Alto.Tools.ListFiles, max_entries: 200},
-  {Alto.Tools.SearchFiles, max_files: 500, max_matches: 50, max_line_graphemes: 200}
+  {Alto.Contrib.Tools.WriteFile, max_bytes: 512_000, preview_bytes: 2_048},
+  {Alto.Contrib.Tools.EditFile, max_file_bytes: 2_000_000, max_edits: 50},
+  {Alto.Contrib.Tools.ReadFile, max_bytes: 32_000},
+  {Alto.Contrib.Tools.ListFiles, max_entries: 200},
+  {Alto.Contrib.Tools.SearchFiles, max_files: 500, max_matches: 50, max_line_graphemes: 200}
 ]
 ```
 
@@ -374,10 +374,10 @@ Use `Alto.Tool.prepare/4` or `Alto.Tool.run/4` for standalone invocations.
 
 ## Retained subprocesses
 
-MCP and Codex server options, and `Alto.Tools.FFF.tools/1`, accept an `executor:` using the same
-`Alto.Command.Executor` contract as command tools. Executors may implement the
+MCP and Codex server options, and `Alto.Contrib.Tools.FFF.tools/1`, accept an `executor:` using the same
+`Alto.Contrib.Command.Executor` contract as command tools. Executors may implement the
 optional `open(prepared, transport_options)` callback, returning an
-`Alto.External.Process`. Forward transport options, including `:line` for bounded
+`Alto.Contrib.External.Process`. Forward transport options, including `:line` for bounded
 OTP line framing. MCP and Codex `max_message_bytes` limits count JSON payload bytes,
 excluding LF or CRLF. They reject oversized or unterminated frames before decoding.
 The shared JSON-RPC host owns request deadlines and process lifetime. An executor without `open/2`
@@ -388,12 +388,12 @@ Server argv comes from trusted host configuration; model-facing command argument
 limits do not apply.
 
 ```elixir
-sandbox = {Alto.Command.Executors.Bubblewrap,
+sandbox = {Alto.Contrib.Command.Executors.Bubblewrap,
   network: :disabled, protected_paths: [".git"],
   env: %{"MY_TOOL_SETTING" => "value"}}
 
-Alto.Tools.FFF.tools(command: "/usr/local/bin/fff-mcp", executor: sandbox)
-{Alto.Tools.Ripwire, executable: "/usr/local/bin/ripwire", executor: sandbox}
+Alto.Contrib.Tools.FFF.tools(command: "/usr/local/bin/fff-mcp", executor: sandbox)
+{Alto.Contrib.Tools.Ripwire, executable: "/usr/local/bin/ripwire", executor: sandbox}
 ```
 
 Put sandbox environment variables in the executor's `env:` option. Bubblewrap
@@ -432,8 +432,8 @@ its policy decision. Built-in implementations use the same callbacks as host cod
 | `loop.context` | `%{check: fn(request, provider_info)}` | `Alto.Context.Window.new/1` |
 | `loop.subagents` | Limits map with `admit: fn(agents, context)` | `Alto.Subagents.bounded/1` |
 | `compaction[:strategy]` | `Alto.Context.Reducer.compact/3` | `Reducers.Summary`, `Reducers.Handoff` |
-| `retry_policy` | `fn(reason, attempt)` | `&Alto.Retry.Transient.decide/2` |
-| `tool_presenter` | `fn(name, arguments)` | `&Alto.ToolDisplay.summary/2` |
+| `retry_policy` | `fn(reason, attempt)` | `&Alto.Contrib.Retry.Transient.decide/2` |
+| `tool_presenter` | `fn(name, arguments)` | `&Alto.Contrib.ToolDisplay.summary/2` |
 
 Context and child policies are maps containing functions. Capture host state in
 closures. A context check returns `{:ok, :unavailable}`, `{:ok, budget}` with a
@@ -466,9 +466,9 @@ structured `compact/3` contract.
 Built-in reducers use the same module configuration as host reducers.
 
 ```elixir
-retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 100, max_delay: 2_000),
-tool_presenter: &Alto.ToolDisplay.summary/2,
-compaction: [strategy: {Alto.Context.Reducers.Handoff, []}]
+retry_policy: &Alto.Contrib.Retry.Transient.decide(&1, &2, base_delay: 100, max_delay: 2_000),
+tool_presenter: &Alto.Contrib.ToolDisplay.summary/2,
+compaction: [strategy: {Alto.Contrib.Context.Reducers.Handoff, []}]
 ```
 
 A retry callback returns `:stop` or `{:retry, delay_ms, reason}`. Execution still
@@ -476,7 +476,7 @@ refuses to replay an attempt after output delivery and enforces the attempt and
 time budgets. Omitted retry policy preserves the existing transient policy;
 `provider_retries: 0` disables retries. Omitted presentation emits the tool name.
 Completion events retain the native result in `value`; consumers render it with
-`Alto.ToolDisplay` or their own presentation function. Tool-title presenter failures
+`Alto.Contrib.ToolDisplay` or their own presentation function. Tool-title presenter failures
 fall back to the tool name; presentation cannot change tool input or authorization.
 
 `Alto.Events.combine/1` composes synchronous sinks in order, isolating sink

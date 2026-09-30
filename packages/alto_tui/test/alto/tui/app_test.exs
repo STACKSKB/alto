@@ -1,7 +1,9 @@
 defmodule Alto.TUI.AppTest do
   use ExUnit.Case, async: false
 
-  alias Alto.TUI.{App, State, View}
+  alias Alto.TUI.App
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias Alto.TUI.Backends.Codex
   alias ExRatatui.Event.{Key, Mouse}
   alias ExRatatui.Runtime
@@ -184,7 +186,7 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "test",
             label: "Test Provider",
             provider: {Provider, model: "test/model"},
@@ -715,7 +717,7 @@ defmodule Alto.TUI.AppTest do
     File.mkdir!(folder)
     {:ok, state} = State.open_workspace(state, folder)
     other = state.selected_project_id
-    {:ok, task} = Alto.Harness.Catalog.create_task(other, "Saved task", state.catalog_opts)
+    {:ok, task} = Alto.TUI.Catalog.create_task(other, "Saved task", state.catalog_opts)
     state = %{State.put_task(state, task) | dimensions: {150, 42}}
     ExRatatui.textarea_insert_str(state.textarea, "keep draft")
     rows = State.rail_rows(state)
@@ -735,7 +737,7 @@ defmodule Alto.TUI.AppTest do
     assert closed.selected_project_id == original
     assert closed.selected_task_id == nil
     refute Enum.any?(State.rail_rows(closed), &(&1.id in [other, task["id"]]))
-    assert {:ok, _projects, tasks} = Alto.Harness.Catalog.navigation(state.catalog_opts)
+    assert {:ok, _projects, tasks} = Alto.TUI.Catalog.navigation(state.catalog_opts)
     assert tasks[other] == [task]
     assert File.dir?(folder)
     assert ExRatatui.textarea_get_value(closed.textarea) == "keep draft"
@@ -1504,10 +1506,10 @@ defmodule Alto.TUI.AppTest do
         session_dir: Path.join(context.root, "sessions")
       )
 
-    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
 
     {:ok, _task} =
-      Alto.Harness.Catalog.create_task(project["id"], "custom task",
+      Alto.TUI.Catalog.create_task(project["id"], "custom task",
         path: context.catalog,
         backend: "custom"
       )
@@ -1654,7 +1656,7 @@ defmodule Alto.TUI.AppTest do
 
   test "failed task history remains visible behind a resume dispatch fence", context do
     session_dir = Path.join(context.root, "sessions")
-    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
     {:ok, id} = Alto.Session.create("failed run", %{}, session_dir: session_dir)
 
     messages = [
@@ -1666,13 +1668,13 @@ defmodule Alto.TUI.AppTest do
     {:ok, _} = Alto.Session.mark_dispatched(id, ["unfinished-tool"], session_dir: session_dir)
 
     {:ok, task} =
-      Alto.Harness.Catalog.create_task(project["id"], "failed run",
+      Alto.TUI.Catalog.create_task(project["id"], "failed run",
         path: context.catalog,
         conversation_id: id
       )
 
     {:ok, _} =
-      Alto.Harness.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+      Alto.TUI.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
 
     state = state!(context, session_dir: session_dir)
     assert Enum.any?(State.current_entries(state), &(&1.text == "Important findings survived"))
@@ -1687,7 +1689,7 @@ defmodule Alto.TUI.AppTest do
 
   test "reopening a failed task restores separate and shared child activity", context do
     opts = [session_dir: Path.join(context.root, "sessions")]
-    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
     {:ok, parent} = Alto.Session.create("parent", %{}, opts)
 
     {:ok, _} =
@@ -1750,13 +1752,13 @@ defmodule Alto.TUI.AppTest do
       )
 
     {:ok, task} =
-      Alto.Harness.Catalog.create_task(project["id"], "failed parent",
+      Alto.TUI.Catalog.create_task(project["id"], "failed parent",
         path: context.catalog,
         conversation_id: parent
       )
 
     {:ok, _} =
-      Alto.Harness.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+      Alto.TUI.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
 
     {:ok, _} = Alto.Session.mark_dispatched(parent, ["unsettled"], opts)
     state = state!(context, opts)
@@ -1785,9 +1787,7 @@ defmodule Alto.TUI.AppTest do
     assert state.selected_model == "chosen/model"
 
     {:ok, task} =
-      Alto.Harness.Catalog.create_task(state.selected_project_id, "existing",
-        path: context.catalog
-      )
+      Alto.TUI.Catalog.create_task(state.selected_project_id, "existing", path: context.catalog)
 
     state = State.put_task(state, task) |> State.new_task() |> State.select_task(task["id"])
     assert state.selected_model == "chosen/model"
@@ -1805,7 +1805,7 @@ defmodule Alto.TUI.AppTest do
     session_dir = Path.join(context.root, "sessions")
 
     assert {:ok, project} =
-             Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+             Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
 
     assert {:ok, session_id} =
              Alto.Session.create("durable usage", %{}, session_dir: session_dir)
@@ -1830,7 +1830,7 @@ defmodule Alto.TUI.AppTest do
              )
 
     assert {:ok, _task} =
-             Alto.Harness.Catalog.create_task(project["id"], "durable usage",
+             Alto.TUI.Catalog.create_task(project["id"], "durable usage",
                path: context.catalog,
                conversation_id: session_id
              )
@@ -1844,13 +1844,13 @@ defmodule Alto.TUI.AppTest do
 
   test "a Codex thread ID collision never hydrates native session history", context do
     session_dir = Path.join(context.root, "sessions")
-    {:ok, project} = Alto.Harness.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
     {:ok, id} = Alto.Session.create("native secret", %{}, session_dir: session_dir)
     messages = [%{"role" => "assistant", "content" => "native-only history"}]
     {:ok, _snapshot} = Alto.Session.persist_settled(id, messages, 19, session_dir: session_dir)
 
     {:ok, task} =
-      Alto.Harness.Catalog.create_task(project["id"], "Codex task",
+      Alto.TUI.Catalog.create_task(project["id"], "Codex task",
         path: context.catalog,
         backend: "codex",
         conversation_id: id
@@ -1861,7 +1861,7 @@ defmodule Alto.TUI.AppTest do
     assert State.current_entries(state) == []
 
     {:ok, _task} =
-      Alto.Harness.Catalog.update_task(task["id"], %{"backend" => "alto"}, path: context.catalog)
+      Alto.TUI.Catalog.update_task(task["id"], %{"backend" => "alto"}, path: context.catalog)
 
     native = state!(context, session_dir: session_dir)
     assert [%{kind: :assistant, text: "native-only history"}] = State.current_entries(native)
@@ -2208,7 +2208,7 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "broken",
             label: "Broken",
             provider: {FailingProvider, []},
@@ -2246,11 +2246,12 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "local",
             label: "Local",
             provider:
-              {Alto.Providers.OpenAICompatible, base_url: "http://old.test/v1", timeout: 777},
+              {Alto.Contrib.Providers.OpenAICompatible,
+               base_url: "http://old.test/v1", timeout: 777},
             models: [%{id: "original", name: "original"}],
             default_model: "original"
           }
@@ -2278,7 +2279,7 @@ defmodule Alto.TUI.AppTest do
     [profile] = saved.profiles
     assert profile.label == "Updated"
     assert profile.models == [%{id: "original", name: "original"}]
-    assert {Alto.Providers.OpenAICompatible, options} = profile.provider
+    assert {Alto.Contrib.Providers.OpenAICompatible, options} = profile.provider
     assert options[:timeout] == 777
     assert options[:base_url] == "http://new.test/v1"
     refute Keyword.has_key?(options, :api_key)
@@ -2289,10 +2290,10 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "local",
             label: "Local",
-            provider: {Alto.Providers.OpenAICompatible, base_url: "http://local.test/v1"},
+            provider: {Alto.Contrib.Providers.OpenAICompatible, base_url: "http://local.test/v1"},
             models: [%{id: "original"}, %{id: "chosen"}],
             default_model: "original"
           }
@@ -2325,8 +2326,8 @@ defmodule Alto.TUI.AppTest do
     assert saved.overlay == nil
     assert saved.selected_model == "chosen"
     assert state!(context, credentials_path: context.credentials).selected_model == "chosen"
-    assert {:ok, credentials} = Alto.Credentials.load(context.credentials)
-    assert Alto.Credentials.get(credentials, "local", "api_key") == "new-private-key"
+    assert {:ok, credentials} = Alto.Contrib.Credentials.load(context.credentials)
+    assert Alto.Contrib.Credentials.get(credentials, "local", "api_key") == "new-private-key"
 
     form = configure.(saved)
     field = Enum.find(form.overlay.items, &(&1[:key] == :model))
@@ -2340,11 +2341,11 @@ defmodule Alto.TUI.AppTest do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "openrouter",
             label: "OpenRouter",
             provider:
-              {Alto.Providers.OpenAICompatible,
+              {Alto.Contrib.Providers.OpenAICompatible,
                base_url: "https://openrouter.ai/api/v1", model: "existing/model"},
             models: [%{id: "existing/model", name: "existing/model"}]
           }
@@ -2404,12 +2405,12 @@ defmodule Alto.TUI.AppTest do
     assert saved.overlay == nil
     assert saved.selected_provider_id == "acme"
 
-    %{provider: {Alto.Providers.OpenAICompatible, options}} =
+    %{provider: {Alto.Contrib.Providers.OpenAICompatible, options}} =
       Enum.find(saved.profiles, &(&1.id == "acme"))
 
     refute Keyword.has_key?(options, :api_key)
-    assert {:ok, credentials} = Alto.Credentials.load(context.credentials)
-    assert Alto.Credentials.get(credentials, "acme", "api_key") == "super-secret-key"
+    assert {:ok, credentials} = Alto.Contrib.Credentials.load(context.credentials)
+    assert Alto.Contrib.Credentials.get(credentials, "acme", "api_key") == "super-secret-key"
     assert {:ok, %{mode: mode}} = File.stat(context.credentials)
     assert Bitwise.band(mode, 0o077) == 0
   end
@@ -2436,7 +2437,7 @@ defmodule Alto.TUI.AppTest do
              ]}
         ],
         provider_profiles: [
-          %Alto.Harness.ProviderProfile{
+          %Alto.Contrib.ProviderProfile{
             id: "test",
             label: "Test Provider",
             provider: {Provider, []},

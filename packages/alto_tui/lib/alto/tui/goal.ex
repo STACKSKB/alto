@@ -1,7 +1,9 @@
 defmodule Alto.TUI.Goal do
   @moduledoc "Persistent task objectives managed through the gear menu."
-  alias Alto.TUI.{App, Menu, State}
-  alias Alto.Harness.Catalog
+  alias Alto.TUI.App
+  alias Alto.TUI.Menu
+  alias Alto.TUI.State
+  alias Alto.TUI.Catalog
 
   def open(state) do
     task = State.selected_task(state)

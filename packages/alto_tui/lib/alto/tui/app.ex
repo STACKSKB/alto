@@ -4,8 +4,16 @@ defmodule Alto.TUI.App do
   use ExRatatui.App
 
   alias Alto.Event
-  alias Alto.Harness.{Catalog, ProviderProfile, ProviderStore}
-  alias Alto.TUI.{Menu, Backend, Search, Selection, State, View, Attachments}
+  alias Alto.TUI.Catalog
+  alias Alto.Contrib.ProviderProfile
+  alias Alto.Contrib.ProviderStore
+  alias Alto.TUI.Menu
+  alias Alto.TUI.Backend
+  alias Alto.TUI.Search
+  alias Alto.TUI.Selection
+  alias Alto.TUI.State
+  alias Alto.TUI.View
+  alias Alto.TUI.Attachments
   alias ExRatatui.Event.{Key, Mouse, Paste, Resize}
 
   @submission_selection [
@@ -549,7 +557,7 @@ defmodule Alto.TUI.App do
           {:noreply, form_result(%{state | overlay: pending.form}, {:submit, result["cwd"]})}
         else
           state =
-            case Alto.Harness.Catalog.navigation(state.catalog_opts) do
+            case Alto.TUI.Catalog.navigation(state.catalog_opts) do
               {:ok, projects, tasks} -> %{state | projects: projects, tasks: tasks}
               _ -> state
             end
@@ -558,7 +566,7 @@ defmodule Alto.TUI.App do
         end
 
       {:error, reason} ->
-        error = "Could not create worktree: #{Alto.Display.error(reason)}"
+        error = "Could not create worktree: #{Alto.Contrib.Display.error(reason)}"
 
         {:noreply,
          if(visible?,
@@ -1032,8 +1040,8 @@ defmodule Alto.TUI.App do
     configured = Keyword.get(state.run_options, :approval)
 
     if state.approval_override? or is_nil(configured) or
-         configured == (&Alto.Approval.interactive/2) do
-      &Alto.Approval.delegated/2
+         configured == (&Alto.Contrib.Approval.interactive/2) do
+      &Alto.Contrib.Approval.delegated/2
     else
       configured
     end
@@ -1300,7 +1308,7 @@ defmodule Alto.TUI.App do
 
   defp do_ingest_event(state, task_id, %Event{type: type, data: data})
        when type in [:tool_started, :tool_completed, :tool_failed] do
-    entry = Alto.ToolDisplay.entry(type, data)
+    entry = Alto.Contrib.ToolDisplay.entry(type, data)
     key = {:tool, data[:operation_id] || data[:call_id]}
     state = State.upsert_entry(state, task_id, key, entry)
 
@@ -1412,7 +1420,7 @@ defmodule Alto.TUI.App do
 
     configure =
       case State.selected_profile(state) do
-        %{provider: {Alto.Providers.OpenAICompatible, _}} = profile ->
+        %{provider: {Alto.Contrib.Providers.OpenAICompatible, _}} = profile ->
           [%{label: "⚙ Configure #{profile.label}…", value: {:configure_provider, profile.id}}]
 
         _other ->
@@ -1926,7 +1934,7 @@ defmodule Alto.TUI.App do
     profile = Enum.find(state.profiles, &(&1.id == profile_id))
 
     configure =
-      if match?(%{provider: {Alto.Providers.OpenAICompatible, _}}, profile) do
+      if match?(%{provider: {Alto.Contrib.Providers.OpenAICompatible, _}}, profile) do
         [
           %{
             label: "Configure #{profile.label} credentials…",
@@ -2084,7 +2092,7 @@ defmodule Alto.TUI.App do
         else: []
 
     found =
-      case Alto.Harness.Folders.suggest(path, form.base) do
+      case Alto.TUI.Folders.suggest(path, form.base) do
         {:ok, %{folders: folders}} -> folders
         _ -> []
       end
@@ -2106,9 +2114,9 @@ defmodule Alto.TUI.App do
     do: form_result(state, {:submit, Menu.value(form, :path)})
 
   defp form_result(state, {:create, path}) do
-    case Alto.Harness.Folders.create(path, state.overlay.base) do
+    case Alto.TUI.Folders.create(path, state.overlay.base) do
       {:ok, root} -> form_result(state, {:submit, root})
-      {:error, reason} -> put_in(state.overlay.error, Alto.Display.error(reason))
+      {:error, reason} -> put_in(state.overlay.error, Alto.Contrib.Display.error(reason))
     end
   end
 
@@ -2124,7 +2132,10 @@ defmodule Alto.TUI.App do
         put_in(state.overlay.error, "Enter a folder path on one line.")
 
       {:error, reason} ->
-        put_in(state.overlay.error, "Could not open workspace: #{Alto.Display.error(reason)}")
+        put_in(
+          state.overlay.error,
+          "Could not open workspace: #{Alto.Contrib.Display.error(reason)}"
+        )
     end
   end
 
@@ -2145,7 +2156,7 @@ defmodule Alto.TUI.App do
         send(
           owner,
           {:alto_worktree_created, token,
-           Alto.Harness.Worktrees.create(form.source, args, state.catalog_opts)}
+           Alto.TUI.Worktrees.create(form.source, args, state.catalog_opts)}
         )
       end)
 
@@ -2287,5 +2298,5 @@ defmodule Alto.TUI.App do
     end
   end
 
-  def human_error(term), do: Alto.Display.error(term, limit: 1_000)
+  def human_error(term), do: Alto.Contrib.Display.error(term, limit: 1_000)
 end

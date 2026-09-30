@@ -104,7 +104,7 @@ defmodule Alto.Contrib.Listeners.UnixSocket do
   defmodule Handler do
     @moduledoc false
     use ThousandIsland.Handler
-    alias Alto.FrontEnd.Registry
+    alias Alto.Contrib.FrontEnd.Registry
     alias Alto.Contrib.Listeners.Connection
     alias ThousandIsland.Socket
 

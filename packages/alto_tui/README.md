@@ -164,17 +164,17 @@ otherwise the last TUI selection.
 ## Providers and backends
 
 `provider_profiles` configures selectable model providers. Each entry is an
-`Alto.Harness.ProviderProfile` with a `{module, options}` provider. `models` is
+`Alto.Contrib.ProviderProfile` with a `{module, options}` provider. `models` is
 `:discover` or a list of atom-keyed model catalog maps. For example:
 
 ```elixir
 Alto.default_config()
 |> Keyword.merge(
   provider_profiles: [
-    %Alto.Harness.ProviderProfile{
+    %Alto.Contrib.ProviderProfile{
       id: "local",
       label: "Local models",
-      provider: {Alto.Providers.OpenAICompatible, base_url: "http://localhost:1234/v1"},
+      provider: {Alto.Contrib.Providers.OpenAICompatible, base_url: "http://localhost:1234/v1"},
       models: [%{id: "coder", name: "Coder", context_length: 32_000}]
     }
   ],

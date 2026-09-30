@@ -1,6 +1,9 @@
 defmodule Alto.TUI.SearchTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.{App, Search, State, View}
+  alias Alto.TUI.App
+  alias Alto.TUI.Search
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias ExRatatui.Event.{Key, Paste, Resize}
 
   setup do

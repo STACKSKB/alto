@@ -1,4 +1,4 @@
-defmodule Alto.FrontEnd.RegistrySessionsTest do
+defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
   @moduledoc """
   : explicit served-agent session persistence and resume.
 
@@ -11,7 +11,7 @@ defmodule Alto.FrontEnd.RegistrySessionsTest do
 
   use ExUnit.Case, async: true
 
-  alias Alto.FrontEnd.Registry
+  alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
   alias Alto.TestSupport.ToolThenAnswerProvider
 

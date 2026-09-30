@@ -4,7 +4,7 @@ defmodule AltoObanExample.Worker do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"run" => run, "payload" => %{"body" => body}}}) do
     with {:ok, run_options} <- AltoObanExample.Runs.fetch(run),
-         %Alto.Runner.Result{status: :ok} <- Alto.run(body, run_options) do
+         %Alto.Runner.Result{status: :ok} <- Alto.Contrib.run(body, run_options) do
       :ok
     else
       %Alto.Runner.Result{verdict: :unknown} ->

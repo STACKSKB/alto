@@ -262,7 +262,7 @@ defmodule DocumentIntake do
           provider_timeout: Keyword.get(opts, :provider_timeout, 30_000)
         ]
 
-        case Alto.run(extraction_prompt(record), run_opts) do
+        case Alto.Contrib.run(extraction_prompt(record), run_opts) do
           %Alto.Runner.Result{status: :ok} = result ->
             case JSON.decode(Map.get(result, :output, "")) do
               {:ok, candidate} -> apply_candidate(record, candidate, "alto")

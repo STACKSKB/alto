@@ -1,0 +1,15 @@
+defmodule Alto.Contrib.Providers.InvalidStreamJSONTest do
+  use ExUnit.Case, async: true
+
+  test "both stream parsers report malformed JSON without exceptions or response bodies" do
+    for stream <- [
+          Alto.Contrib.Providers.OpenAICompatible.Stream,
+          Alto.Contrib.Providers.Anthropic.Stream
+        ],
+        payload <- ["not-json PRIVATE-BODY", "{\"private\":", "\"\\uZZZZ PRIVATE-BODY\""] do
+      state = stream.consume(stream.new(), payload, fn _ -> flunk("unexpected stream output") end)
+      assert {:error, {:invalid_stream_json, message}} = stream.result(state)
+      assert message == "Invalid JSON in provider stream"
+    end
+  end
+end

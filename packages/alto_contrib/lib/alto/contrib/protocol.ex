@@ -1,0 +1,282 @@
+defmodule Alto.Contrib.Protocol do
+  @moduledoc """
+  Envelope codec for the Alto front-end protocol v1 (the protocol contract).
+
+  The envelope is the protocol; transports are framing. This module is pure
+  and host-independent: it encodes server-to-client messages and decodes
+  client-to-server commands, and defines the lossy term encoding for event
+  data and approval details. Exactness lives in the durable log, never on the
+  wire. The optional command envelope dispatches only to trusted callbacks
+  configured by the resident application; no client-supplied modules or atoms
+  are resolved, and the default registry has no commands enabled.
+
+  Every encoder takes `max_line_bytes` and never emits a truncated envelope:
+  an oversized message returns `{:error, :overflow}` so the transport can send
+  an `overflow` notice instead. One consequence of the spec's `attached`
+  shape, which nests the replayed event envelopes: a replay larger than
+  `max_line_bytes` also overflows, so listeners must bound their retained
+  buffers accordingly.
+  """
+
+  alias Alto.Event
+
+  @version 1
+  @domains ~w(durable live)
+  @unsupported_fields %{"start_run" => ["overrides"], "session_transcript" => ["limit", "cursor"]}
+  @command_specs %{
+    "runs" => {:runs, []},
+    "list_agents" => {:list_agents, [{:required, "run_id", :binary}]},
+    "send_message" =>
+      {:send_message,
+       [
+         {:required, "run_id", :binary},
+         {:required, "text", :content},
+         {:optional, "to", :binary, nil},
+         {:optional, "delivery", :delivery, :steer},
+         {:optional, "idempotency_key", :binary, nil},
+         {:optional, "in_reply_to", :binary, nil}
+       ]},
+    "sessions" => {:sessions, []},
+    "start_run" =>
+      {:start_run,
+       [
+         {:required, "config", :binary},
+         {:required, "task", :content},
+         {:optional, "resume", :binary, nil}
+       ]},
+    "session_transcript" => {:session_transcript, [{:required, "session_id", :binary}]},
+    "approval_response" =>
+      {:approval_response,
+       [{:required, "request_id", :binary}, {:required, "decision", :decision}]},
+    "command" => {:command, [{:required, "name", :binary}, {:required, "payload", :map}]},
+    "attach" =>
+      {:attach,
+       [
+         {:optional, "run_id", :binary, nil},
+         {:optional, "from_seq", {:integer, 1}, 1},
+         {:optional, "domains", :domains, [:durable, :live]}
+       ]},
+    "session_events" =>
+      {:session_events,
+       [
+         {:required, "session_id", :binary},
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "run_id", :binary, nil}
+       ]},
+    "cancel" => {:cancel, [{:required, "run_id", :binary}, {:optional, "reason", :binary, nil}]},
+    "queue_claim" =>
+      {:queue_claim, [{:optional, "count", {:integer, 1}, 1}, {:optional, "by", :binary, nil}]},
+    "queue_ack" => {:queue_ack, [{:required, "claim_id", :binary}]},
+    "queue_release" => {:queue_release, [{:required, "claim_id", :binary}]},
+    "ops_list" =>
+      {:ops_list,
+       [
+         {:optional, "limit", {:integer, 1}, 20},
+         {:optional, "cursor", {:integer, 0}, 0},
+         {:optional, "filter", :filter, nil}
+       ]},
+    "reload" => {:reload, [{:required, "config", :binary}]}
+  }
+
+  @type command_kind ::
+          :attach
+          | :start_run
+          | :send_message
+          | :list_agents
+          | :sessions
+          | :runs
+          | :session_transcript
+          | :session_events
+          | :cancel
+          | :approval_response
+          | :queue_claim
+          | :queue_ack
+          | :queue_release
+          | :ops_list
+          | :reload
+          | :auth
+          | :input
+          | :command
+  @type command :: {command_kind(), String.t(), [term()]}
+
+  @doc "The protocol version this codec speaks."
+  @spec version() :: pos_integer()
+  def version, do: @version
+
+  ## Term encoding
+
+  defdelegate encode_term(term), to: Alto.TermProjection
+  defdelegate encode_key(key), to: Alto.TermProjection
+
+  ## Server → client encoding
+
+  @doc "Encode one bounded server envelope from its type, correlation id, and payload."
+  @spec envelope(String.t(), String.t() | nil, map(), pos_integer()) ::
+          {:ok, iodata()} | {:error, :overflow}
+  def envelope(type, id, payload, max_line_bytes) do
+    payload = encode_term(payload) |> Map.merge(%{"type" => type, "id" => id})
+    encode(payload, max_line_bytes)
+  end
+
+  @doc "Encode one registry notification with its domain wire shape."
+  def notification(id, {:event, run_id, seq, %Event{} = event}, max) do
+    envelope("event", id, Map.put(event_object(seq, event), "run_id", run_id), max)
+  end
+
+  def notification(id, {:attached, run_id, gap, head_seq, replay}, max) do
+    envelope(
+      "attached",
+      id,
+      %{
+        run_id: run_id,
+        gap: gap,
+        head_seq: head_seq,
+        events: Enum.map(replay, fn {seq, event} -> event_object(seq, event) end)
+      },
+      max
+    )
+  end
+
+  def notification(id, {:approval_request, run_id, request}, max),
+    do: envelope("approval_request", id, %{run_id: run_id, request: request}, max)
+
+  def notification(id, {:approval_resolved, run_id, request, decision}, max),
+    do:
+      envelope(
+        "approval_resolved",
+        id,
+        %{run_id: run_id, request: request, decision: decision},
+        max
+      )
+
+  def notification(id, {:overflow, run_id, domain, last_seq}, max),
+    do: envelope("overflow", id, %{run_id: run_id, domain: domain, last_seq: last_seq}, max)
+
+  def notification(id, {:result, run_id, result}, max),
+    do: envelope("result", id, Map.put(result, :run_id, run_id), max)
+
+  defp event_object(seq, %Event{} = event) do
+    %{
+      "seq" => seq,
+      "domain" => Atom.to_string(event.domain),
+      "at_ms" => event.at_ms,
+      "event" => %{"type" => Atom.to_string(event.type), "data" => event.data}
+    }
+  end
+
+  defp encode(payload, max_line_bytes) do
+    line = [JSON.encode!(Map.put(payload, "v", @version)), "\n"]
+
+    if IO.iodata_length(line) <= max_line_bytes do
+      {:ok, line}
+    else
+      {:error, :overflow}
+    end
+  end
+
+  ## Client → server decoding
+
+  @doc """
+  Decode one NDJSON command line. Malformed JSON, a missing envelope header,
+  or a wrong major version decode to `{:error, :invalid}`; a well-formed
+  envelope with an unknown type decodes to `{:error, {:unknown_type, id}}` so
+  the receiver can echo the correlation token; a field the v1 server must
+  reject (start_run overrides) decodes to `{:error, :unsupported}`.
+
+  Commands have the shape `{kind, id, args}`. Arguments follow the order of
+  the trusted command schema; reserved auth/input commands carry their
+  original envelope as their sole argument.
+  """
+  @spec decode_command(binary()) ::
+          {:ok, command()}
+          | {:error, :invalid}
+          | {:error, {:unknown_type, String.t()}}
+          | {:error, :unsupported}
+  def decode_command(line) when is_binary(line) do
+    case JSON.decode(line) do
+      {:ok, %{"v" => @version, "type" => type, "id" => id} = object}
+      when is_binary(type) and is_binary(id) and id != "" ->
+        decode_object(type, id, object)
+
+      {:ok, _other} ->
+        {:error, :invalid}
+
+      {:error, _error} ->
+        {:error, :invalid}
+    end
+  end
+
+  defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, [object]}}
+
+  defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, [object]}}
+
+  defp decode_object(type, id, object) do
+    case @command_specs do
+      %{^type => {command, fields}} ->
+        if Enum.any?(Map.get(@unsupported_fields, type, []), &Map.has_key?(object, &1)) do
+          {:error, :unsupported}
+        else
+          with {:ok, values} <- Alto.Result.traverse(fields, &decode_field(object, &1)),
+               do: {:ok, {command, id, values}}
+        end
+
+      _ ->
+        {:error, {:unknown_type, id}}
+    end
+  end
+
+  defp decode_field(object, {:required, key, :binary}),
+    do: validate_field(Map.get(object, key), :nonempty_binary)
+
+  defp decode_field(object, {:required, key, type}),
+    do: validate_field(Map.get(object, key), type)
+
+  defp decode_field(object, {:optional, key, type, default}) do
+    case Map.get(object, key) do
+      nil -> {:ok, default}
+      value -> validate_field(value, type)
+    end
+  end
+
+  defp validate_field("steer", :delivery), do: {:ok, :steer}
+  defp validate_field("follow_up", :delivery), do: {:ok, :follow_up}
+
+  defp validate_field(value, :content) when is_binary(value) and value != "", do: {:ok, value}
+
+  defp validate_field([_ | _] = blocks, :content) do
+    case Alto.Content.normalize(Alto.Content.new(blocks), 16_000_000) do
+      {:ok, _} -> {:ok, Alto.Content.new(blocks)}
+      _ -> {:error, :invalid}
+    end
+  end
+
+  defp validate_field(value, :binary) when is_binary(value), do: {:ok, value}
+
+  defp validate_field(value, {:integer, minimum})
+       when is_integer(value) and value >= minimum,
+       do: {:ok, value}
+
+  defp validate_field(value, :filter)
+       when value in ["all", "accepted", "claimed", "parked", "unknown", "completed"],
+       do: {:ok, value}
+
+  defp validate_field(domains, :domains) when is_list(domains) and domains != [] do
+    if Enum.all?(domains, &(&1 in @domains)) do
+      {:ok, Enum.map(domains, &String.to_existing_atom/1)}
+    else
+      {:error, :invalid}
+    end
+  end
+
+  defp validate_field(value, :nonempty_binary) when is_binary(value) and value != "",
+    do: {:ok, value}
+
+  defp validate_field(value, :map) when is_map(value), do: {:ok, value}
+  defp validate_field("approve", :decision), do: {:ok, :approve}
+
+  defp validate_field(%{"deny" => reason}, :decision) when is_binary(reason),
+    do: {:ok, {:deny, reason}}
+
+  defp validate_field(_value, _type), do: {:error, :invalid}
+end

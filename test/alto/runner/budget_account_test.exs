@@ -1,7 +1,8 @@
 defmodule Alto.Runner.BudgetAccountTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{OperationLog, Runner.Budget.Account}
+  alias Alto.OperationLog
+  alias Alto.Runner.Budget.Account
 
   setup do
     dir =

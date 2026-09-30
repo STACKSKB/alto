@@ -2,7 +2,8 @@ defmodule Alto.MessagingTransportTest do
   # OS flock subprocess startup is not the behavior under test. Avoid
   # competing with the async suite for a deliberately short lock deadline.
   use ExUnit.Case, async: false
-  alias Alto.{Input, Messaging}
+  alias Alto.Input
+  alias Alto.Messaging
 
   defmodule Custom do
     @behaviour Alto.Messaging.Transport

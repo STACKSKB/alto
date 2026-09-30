@@ -22,7 +22,7 @@ end
 
 for id <- System.argv() do
   {:ok, snapshot} = Alto.Session.conversation(id)
-  entries = Alto.ToolDisplay.transcript(snapshot["messages"])
+  entries = Alto.Contrib.ToolDisplay.transcript(snapshot["messages"])
   {us, index} = :timer.tc(fn -> Alto.TUI.Transcript.index(entries, 84) end)
   {draw, _} = :timer.tc(fn -> Alto.TUI.Transcript.window(index, max(index.rows - 60, 0), 40) end)
   IO.inspect(%{session: id, index_ms: us / 1000, viewport_ms: draw / 1000, rows: index.rows})

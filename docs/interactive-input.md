@@ -86,7 +86,7 @@ inspect or send to children from a host, supply a router explicitly:
 ```elixir
 {:ok, router} = Alto.Messaging.start_link()
 {:ok, run} = Alto.start("Review the parser", messaging: router, provider: provider,
-  tools: Alto.Tools.agents(), loop: loop)
+  tools: Alto.Contrib.Tools.agents(), loop: loop)
 {:ok, agents} = Alto.Messaging.list(router)
 Alto.Messaging.send(router, agent_id, text: "Please check empty input")
 ```

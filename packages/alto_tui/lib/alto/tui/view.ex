@@ -2,7 +2,10 @@ defmodule Alto.TUI.View do
   @moduledoc "ExRatatui renderer and deterministic hit targets for Alto's terminal client."
 
   alias Alto.TUI.Layout, as: PaneLayout
-  alias Alto.TUI.{Backend, Menu, Search, State}
+  alias Alto.TUI.Backend
+  alias Alto.TUI.Menu
+  alias Alto.TUI.Search
+  alias Alto.TUI.State
   alias Alto.Usage
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style

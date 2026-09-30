@@ -10,11 +10,6 @@ defmodule Alto.Application do
       {DynamicSupervisor,
        name: Alto.Session.WriterSupervisor, strategy: :one_for_one, max_children: 64},
       {Task.Supervisor, name: Alto.TaskSupervisor},
-      {Registry, keys: :unique, name: Alto.External.Registry},
-      {DynamicSupervisor,
-       name: Alto.External.Supervisor,
-       strategy: :one_for_one,
-       max_children: Application.get_env(:alto, :max_external_clients, 64)},
       # Optional runner lifecycle hosts own supervised execution tasks.
       {DynamicSupervisor, name: Alto.AgentSupervisor, strategy: :one_for_one}
     ]

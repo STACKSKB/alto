@@ -1,7 +1,9 @@
 defmodule Alto.TUI.ViewTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{Menu, State, View}
+  alias Alto.TUI.Menu
+  alias Alto.TUI.State
+  alias Alto.TUI.View
   alias ExRatatui.Widgets.{Paragraph, TextInput}
 
   test "tool output and metadata remain visible in the transcript and context" do

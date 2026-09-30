@@ -5,7 +5,9 @@ defmodule Alto.Runner.ToolBatch do
   Jobs return bounded results in source order. See `docs/tool-batches.md` for
   admission, cancellation, and ownership guarantees.
   """
-  alias Alto.Runner.{Budget, Execution.Call, Execution.Tool}
+  alias Alto.Runner.Budget
+  alias Alto.Runner.Execution.Call
+  alias Alto.Runner.Execution.Tool
 
   def run(jobs, caps) when is_list(jobs) and length(jobs) <= 32 do
     limit = caps.max_tool_result_bytes

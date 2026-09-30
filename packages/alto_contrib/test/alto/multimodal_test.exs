@@ -1,6 +1,9 @@
 defmodule Alto.MultimodalTest do
   use ExUnit.Case, async: true
-  alias Alto.{Content, Input, Messaging, Session}
+  alias Alto.Content
+  alias Alto.Input
+  alias Alto.Messaging
+  alias Alto.Session
 
   defmodule Provider do
     @behaviour Alto.Provider
@@ -35,7 +38,7 @@ defmodule Alto.MultimodalTest do
     ]
 
     result =
-      Alto.run(task,
+      Alto.Contrib.run(task,
         provider: {Provider, owner: self(), message: output},
         session: :new,
         session_dir: root
@@ -85,7 +88,10 @@ defmodule Alto.MultimodalTest do
     assert same == receipt
     assert {:ok, snapshot} = Input.request(input, :snapshot)
     assert snapshot.bytes > byte_size("next")
-    result = Alto.run("first", provider: {Provider, owner: self()}, input: input, cwd: root)
+
+    result =
+      Alto.Contrib.run("first", provider: {Provider, owner: self()}, input: input, cwd: root)
+
     assert result.status == :ok
     assert result.model_requests == 2
     assert_receive {:request, %{messages: [%{"content" => "first"}]}}
@@ -101,12 +107,12 @@ defmodule Alto.MultimodalTest do
     ]
 
     assert {:ok, {:start_run, "1", ["default", %Content{blocks: ^task}, nil]}} =
-             Alto.Protocol.decode_command(
+             Alto.Contrib.Protocol.decode_command(
                JSON.encode!(%{v: 1, type: "start_run", id: "1", config: "default", task: task})
              )
 
     assert {:error, _} =
-             Alto.Protocol.decode_command(
+             Alto.Contrib.Protocol.decode_command(
                JSON.encode!(%{
                  v: 1,
                  type: "start_run",
@@ -117,7 +123,7 @@ defmodule Alto.MultimodalTest do
              )
 
     assert {:ok, {:start_run, "1", ["default", "read", nil]}} =
-             Alto.Protocol.decode_command(
+             Alto.Contrib.Protocol.decode_command(
                JSON.encode!(%{v: 1, type: "start_run", id: "1", config: "default", task: "read"})
              )
   end

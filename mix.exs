@@ -5,7 +5,7 @@ defmodule Alto.MixProject do
     [
       app: :alto,
       version: "0.0.2",
-      description: "A bounded, composable BEAM-native coding-agent harness",
+      description: "A bounded, composable BEAM-native execution runtime",
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -23,9 +23,7 @@ defmodule Alto.MixProject do
 
   defp deps do
     [
-      {:req, "~> 0.7.4"},
-      {:nimble_options, "~> 1.1"},
-      {:server_sent_events, "~> 1.1"}
+      {:nimble_options, "~> 1.1"}
     ]
   end
 

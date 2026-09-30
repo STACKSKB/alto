@@ -15,18 +15,18 @@ defmodule Alto.TUI do
   def prepare_catalog(config, opts \\ []) do
     catalog_opts = Alto.TUI.State.catalog_options(config, opts)
 
-    case Alto.Harness.Catalog.read(catalog_opts) do
+    case Alto.TUI.Catalog.read(catalog_opts) do
       {:ok, _catalog} ->
         :ok
 
       {:error, reason} ->
-        if Alto.Harness.Catalog.invalid_data?(reason) do
+        if Alto.TUI.Catalog.invalid_data?(reason) do
           path =
-            Keyword.get(catalog_opts, :path, Alto.Harness.Catalog.default_path(catalog_opts))
+            Keyword.get(catalog_opts, :path, Alto.TUI.Catalog.default_path(catalog_opts))
             |> Path.expand()
 
           if confirm_catalog_overwrite(path, reason, opts),
-            do: Alto.Harness.Catalog.replace_invalid(catalog_opts),
+            do: Alto.TUI.Catalog.replace_invalid(catalog_opts),
             else: {:error, {:catalog_overwrite_declined, path}}
         else
           {:error, reason}
@@ -107,6 +107,6 @@ defmodule Alto.TUI do
     if Keyword.keyword?(config), do: {:ok, config}, else: {:error, {:invalid_tui_config, config}}
   end
 
-  defp resolve_config(path) when is_binary(path), do: Alto.Config.load(path)
+  defp resolve_config(path) when is_binary(path), do: Alto.Contrib.Config.load(path)
   defp resolve_config(other), do: {:error, {:invalid_tui_config, other}}
 end

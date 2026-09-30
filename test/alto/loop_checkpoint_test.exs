@@ -1,7 +1,8 @@
 defmodule Alto.LoopCheckpointTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Loops.{Default, Rule}
+  alias Alto.Loops.Default
+  alias Alto.Loops.Rule
 
   test "default loop uses the current spec after loading state" do
     spec = Alto.loop(Default, context: %{window: 1}, subagents: %{depth: 2})

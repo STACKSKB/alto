@@ -1,6 +1,7 @@
 defmodule Alto.TUI.SavedSession do
   @moduledoc "Disposable, incrementally replayed usage and child-activity projections."
-  alias Alto.{Session, Usage}
+  alias Alto.Session
+  alias Alto.Usage
   alias Alto.TUI.Subagents
   @fields ~w(agent_id id parent session_id model backend status phase activity result)a
   @max_log 16_000_000

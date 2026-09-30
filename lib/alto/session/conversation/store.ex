@@ -1,6 +1,9 @@
 defmodule Alto.Session.Conversation.Store do
   @moduledoc false
-  alias Alto.{AtomicFile, BoundedFile, Session, Storage}
+  alias Alto.AtomicFile
+  alias Alto.BoundedFile
+  alias Alto.Session
+  alias Alto.Storage
 
   @chunk_messages 64
   @max_bytes 16_000_000

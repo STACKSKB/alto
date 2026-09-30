@@ -1,7 +1,8 @@
 defmodule Alto.TUI.TranscriptLiteralIndexTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.{Cache, Transcript}
+  alias Alto.TUI.Cache
+  alias Alto.TUI.Transcript
   alias ExRatatui.Text.Line
 
   test "literal windows and plain groups preserve full rendered lines" do

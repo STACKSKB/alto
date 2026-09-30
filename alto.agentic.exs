@@ -12,7 +12,7 @@ require Logger
 mix_home = System.get_env("MIX_HOME") || Path.join(System.user_home!(), ".mix")
 
 command_executor =
-  {Alto.Command.Executors.Bubblewrap,
+  {Alto.Contrib.Command.Executors.Bubblewrap,
    network: :disabled,
    protected_paths: [".git"],
    read_only_paths: [mix_home],
@@ -34,13 +34,13 @@ openrouter_options =
   ]
   |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
 
-openrouter_provider = {Alto.Providers.OpenAICompatible, openrouter_options}
+openrouter_provider = {Alto.Contrib.Providers.OpenAICompatible, openrouter_options}
 
 openrouter_provider =
   if System.get_env("ALTO_REQUEST_DIAGNOSTICS") == "1" do
     Alto.Provider.observe(openrouter_provider, fn request ->
       Logger.debug(fn ->
-        report = Alto.Providers.PrefixContinuity.report(request)
+        report = Alto.Contrib.Providers.PrefixContinuity.report(request)
         "Alto prefix continuity: #{inspect(report)}"
       end)
     end)
@@ -65,10 +65,10 @@ fff_tools =
   case external.("FFF_MCP", "fff-mcp") do
     nil ->
       # Existing Alto search remains a bounded degraded mode, not an FFF clone.
-      [Alto.Tools.SearchFiles]
+      [Alto.Contrib.Tools.SearchFiles]
 
     executable ->
-      Alto.Tools.FFF.tools(executable: executable, executor: external_executor.(executable))
+      Alto.Contrib.Tools.FFF.tools(executable: executable, executor: external_executor.(executable))
   end
 
 ripwire_tools =
@@ -77,38 +77,38 @@ ripwire_tools =
       []
 
     executable ->
-      [{Alto.Tools.Ripwire, executable: executable, executor: external_executor.(executable)}]
+      [{Alto.Contrib.Tools.Ripwire, executable: executable, executor: external_executor.(executable)}]
   end
 
 codex_agent =
-  {Alto.Tools.CodexAgent,
+  {Alto.Contrib.Tools.CodexAgent,
    command: System.get_env("CODEX_BIN") || "codex", model: System.get_env("ALTO_CODEX_MODEL")}
 
 tools =
   [
-    Alto.Tools.ListFiles,
-    Alto.Tools.ReadFile,
-    Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
-    Alto.Tools.PublishFile,
-    Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
-    {Alto.Tools.GitInspect, executor: command_executor},
+    Alto.Contrib.Tools.ListFiles,
+    Alto.Contrib.Tools.ReadFile,
+    Alto.Contrib.Tools.ProtectPaths.wrap(Alto.Contrib.Tools.EditFile, [".git"]),
+    Alto.Contrib.Tools.PublishFile,
+    Alto.Contrib.Tools.ProtectPaths.wrap(Alto.Contrib.Tools.WriteFile, [".git"]),
+    {Alto.Contrib.Tools.GitInspect, executor: command_executor},
     # Git mutation is a distinct, explicitly approved capability.
-    {Alto.Tools.GitMutate,
+    {Alto.Contrib.Tools.GitMutate,
      executor:
-       {Alto.Command.Executors.Bubblewrap,
+       {Alto.Contrib.Command.Executors.Bubblewrap,
         Keyword.put(elem(command_executor, 1), :protected_paths, [])}},
-    {Alto.Tools.RunCommand, executor: command_executor},
-    {Alto.Tools.RunShell, executor: command_executor}
+    {Alto.Contrib.Tools.RunCommand, executor: command_executor},
+    {Alto.Contrib.Tools.RunShell, executor: command_executor}
   ] ++
-    if(vision_enabled, do: [Alto.Tools.ReadImage], else: []) ++
+    if(vision_enabled, do: [Alto.Contrib.Tools.ReadImage], else: []) ++
     fff_tools ++
     ripwire_tools ++
-    [codex_agent] ++ Alto.Tools.agents()
+    [codex_agent] ++ Alto.Contrib.Tools.agents()
 
 Alto.default_config()
 |> Keyword.merge(
   provider_profiles: [
-    %Alto.Harness.ProviderProfile{
+    %Alto.Contrib.ProviderProfile{
       id: "openrouter",
       label: "OpenRouter",
       provider: openrouter_provider,
@@ -147,9 +147,9 @@ Alto.default_config()
        command: System.get_env("CODEX_BIN") || "codex",
        model: System.get_env("ALTO_CODEX_MODEL")}
   ],
-  tool_presenter: &Alto.ToolDisplay.summary/2,
-  approval: &Alto.Approval.interactive/2,
-  prompt: &Alto.Prompts.Coding.build/1,
+  tool_presenter: &Alto.Contrib.ToolDisplay.summary/2,
+  approval: &Alto.Contrib.Approval.interactive/2,
+  prompt: &Alto.Contrib.Prompts.Coding.build/1,
   tui: [
     type_to_compose: true,
     narrow_context: :adaptive,
@@ -170,13 +170,13 @@ Alto.default_config()
   max_transcript_bytes: 16_000_000,
   max_event_bytes: 16_000_000,
   compaction: [
-    strategy: {Alto.Context.Reducers.Handoff, []},
+    strategy: {Alto.Contrib.Context.Reducers.Handoff, []},
     max_compactions: 8,
     keep_recent_messages: 12,
     keep_initial_messages: 1,
     max_input_bytes: 1_000_000,
     max_handoff_bytes: 24_000
   ],
-  retry_policy: &Alto.Retry.Transient.decide(&1, &2, base_delay: 500, max_delay: 5_000),
+  retry_policy: &Alto.Contrib.Retry.Transient.decide(&1, &2, base_delay: 500, max_delay: 5_000),
   provider_retries: 3
 )

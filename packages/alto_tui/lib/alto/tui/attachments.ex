@@ -1,7 +1,9 @@
 defmodule Alto.TUI.Attachments do
   @moduledoc "File-backed composer attachments, paste folding and in-place editing."
-  alias Alto.{Attachment, Content}
-  alias Alto.TUI.{Menu, State}
+  alias Alto.Contrib.Attachment
+  alias Alto.Content
+  alias Alto.TUI.Menu
+  alias Alto.TUI.State
   alias ExRatatui.Event.Key
   @max_draft_bytes 12_000_000
   @max_attachments 512
@@ -125,22 +127,22 @@ defmodule Alto.TUI.Attachments do
 
   @doc "Reject unsupported input before a run takes ownership of the draft."
   def validate_provider(%Content{} = content, {:codex, opts}),
-    do: Alto.Codex.Backend.check_input(content, opts)
+    do: Alto.Contrib.Codex.Backend.check_input(content, opts)
 
   def validate_provider(%Content{} = content, {module, opts})
-      when module in [Alto.Providers.OpenAICompatible, Alto.Providers.Anthropic] do
+      when module in [Alto.Contrib.Providers.OpenAICompatible, Alto.Contrib.Providers.Anthropic] do
     modalities = Alto.InputModalities.configured(opts)
 
     capabilities = %{
       images: "image" in modalities,
       files: "file" in modalities,
-      audio: module == Alto.Providers.OpenAICompatible and "audio" in modalities,
+      audio: module == Alto.Contrib.Providers.OpenAICompatible and "audio" in modalities,
       video: false
     }
 
     case Content.map_media(content, capabilities, fn
            %{"type" => "file", "media_type" => media}
-           when module == Alto.Providers.Anthropic and media != "application/pdf" ->
+           when module == Alto.Contrib.Providers.Anthropic and media != "application/pdf" ->
              {:error, {:unsupported_anthropic_file_type, media}}
 
            block ->
@@ -289,7 +291,7 @@ defmodule Alto.TUI.Attachments do
         open(state)
 
       {:error, reason} ->
-        %{state | overlay: %{editor | error: Alto.Display.error(reason)}}
+        %{state | overlay: %{editor | error: Alto.Contrib.Display.error(reason)}}
     end
   end
 
@@ -328,5 +330,6 @@ defmodule Alto.TUI.Attachments do
     end
   end
 
-  defp error(state, reason), do: %{state | notice: Alto.Display.error(reason) <> " · draft kept"}
+  defp error(state, reason),
+    do: %{state | notice: Alto.Contrib.Display.error(reason) <> " · draft kept"}
 end

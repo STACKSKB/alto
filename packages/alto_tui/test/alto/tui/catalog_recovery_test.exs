@@ -3,7 +3,7 @@ defmodule Alto.TUI.CatalogRecoveryTest do
 
   import ExUnit.CaptureIO
 
-  alias Alto.Harness.Catalog
+  alias Alto.TUI.Catalog
   alias Alto.TUI.State
 
   test "invalid TUI settings fail before registering a project" do

@@ -5,14 +5,14 @@
 Add the agent tools without defining agent presets:
 
 ```elixir
-Alto.Tools.agents()
+Alto.Contrib.Tools.agents()
 ```
 
 This exposes `list_agent_models`, `spawn_agents`, `start_agents`, `wait_agents`,
 `list_agents`, and `send_message`. Backends come from the
 run's existing `provider_profiles`, or its current provider when profiles are
 omitted. The shipped `alto.agentic.exs` uses OpenRouter's model discovery and
-registers `Alto.Tools.CodexAgent`, which also makes the `codex` backend available.
+registers `Alto.Contrib.Tools.CodexAgent`, which also makes the `codex` backend available.
 The TUI forwards its configured providers and credential-store location.
 There is no separate agent catalog or fixed list of agent roles.
 
@@ -39,16 +39,16 @@ result bounds still apply.
 Users can explicitly restrict models and/or tool exposure:
 
 ```elixir
-Alto.Tools.agents(models: %{"openrouter" => ["vendor/model-a", "vendor/model-b"]})
-Alto.Tools.agents(only: [:spawn_agents])
-Alto.Tools.agents(only: [:list_agent_models, :spawn_agents], models: %{"codex" => ["model-id"]})
+Alto.Contrib.Tools.agents(models: %{"openrouter" => ["vendor/model-a", "vendor/model-b"]})
+Alto.Contrib.Tools.agents(only: [:spawn_agents])
+Alto.Contrib.Tools.agents(only: [:list_agent_models, :spawn_agents], models: %{"codex" => ["model-id"]})
 ```
 
 An explicit `models:` map advertises those model IDs without needing remote
 discovery and rejects selections outside the map, including omitted backends.
 An empty map permits no models. `only:` selects tool names; omitting it includes
 the whole agent tool set, including future additions. Individual specifications
-such as `{Alto.Tools.SpawnAgents, models: %{"openrouter" => ["vendor/model-id"]}}`
+such as `{Alto.Contrib.Tools.SpawnAgents, models: %{"openrouter" => ["vendor/model-id"]}}`
 remain usable. The communication tools use the same bounded input channels as
 user steering.
 
@@ -61,7 +61,7 @@ provider credentials are resolved from current configuration at dispatch.
 `credentials_path:` optionally selects the provider credential store.
 
 The Codex backend runs the chosen model through a providerless rule-loop child
-and `Alto.Tools.CodexAgent`. Register the adapter in runtime `tools` and hide its
+and `Alto.Contrib.Tools.CodexAgent`. Register the adapter in runtime `tools` and hide its
 direct invocation from parent `model_tools`, as the shipped profile does. Each
 invocation owns a private App Server process. It uses read-only filesystem
 sandboxing, disables sandbox network access, rejects permission escalation,
@@ -443,7 +443,7 @@ A host can opt a bounded subagent policy into independent Git checkouts:
 ```elixir
 {:ok, ledger} = Alto.OperationLog.start_link(
   id: "workspaces", name: nil, dir: "/private/alto-state/operations", max_ops: 128)
-manager = Alto.Workspaces.new(
+manager = Alto.Contrib.Workspaces.new(
   root: "/private/alto-state/workspaces", ledger: ledger)
 policy = Alto.Subagents.bounded(
   max_depth: 1, max_children: 4, max_concurrency: 2, workspaces: manager)
@@ -453,15 +453,15 @@ policy = Alto.Subagents.bounded(
 For local linked worktrees, select the other built-in backend:
 
 ```elixir
-manager = Alto.Workspaces.new(
+manager = Alto.Contrib.Workspaces.new(
   root: "/private/alto-state/worktrees", ledger: ledger,
-  backend: Alto.Workspaces.GitWorktree)
+  backend: Alto.Contrib.Workspaces.GitWorktree)
 
 # Use this manager in the same bounded subagent policy, or expose a tool:
-tools = [{Alto.Tools.CreateWorktree, manager: manager}]
+tools = [{Alto.Contrib.Tools.CreateWorktree, manager: manager}]
 
 # Direct callers may select a committed ref and an optional new branch:
-{:ok, snapshot} = Alto.Workspaces.prepare(manager, "/projects/app",
+{:ok, snapshot} = Alto.Contrib.Workspaces.prepare(manager, "/projects/app",
   ref: "HEAD", branch: "feature/experiment")
 ```
 
@@ -490,7 +490,7 @@ cwd. Descendants inherit the manager along with existing authority and budgets.
 Use a unique child ID for each assignment within a root execution: an already
 used workspace is retained for review and cannot execute that assignment again.
 
-The default `Alto.Workspaces.Git` clone backend requires an ordinary repository with a `.git`
+The default `Alto.Contrib.Workspaces.Git` clone backend requires an ordinary repository with a `.git`
 directory and a clean source checkout. Dirty sources, linked source worktrees,
 submodules, source-local filters, alternates and symlinked paths are rejected
 explicitly. Ignored build output is neither cloned nor captured; it does not consume checkout bounds.
@@ -518,12 +518,12 @@ failures propagate an unknown verdict to the parent.
 
 Completed child results contain a `workspace` map with its ID, revision,
 status and metadata, including the source commit and frozen patch hash.
-`Alto.Workspaces.get/2` inspects it; `patch/2` returns the bounded immutable Git
+`Alto.Contrib.Workspaces.get/2` inspects it; `patch/2` returns the bounded immutable Git
 diff. Hosts can also use `prepare/2`, `create/3`, `use/4` and `freeze/3` directly
 with an optional backend implementing `snapshot/2`, `checkout/3` and `diff/3`.
 `prepare/3` accepts backend snapshot options such as a worktree ref; these are
 captured in metadata without changing the manager's lifecycle configuration.
-`prepare/2` returns an `Alto.Workspaces.Snapshot` carrying the expanded source
+`prepare/2` returns an `Alto.Contrib.Workspaces.Snapshot` carrying the expanded source
 separately from provider-owned metadata. A backend that supports reviewed
 integration may additionally implement `prepare_apply/4`, `verify_apply/4`
 and `apply/4`; the manager supplies the retained source to verification and

@@ -1,6 +1,7 @@
 defmodule Alto.TUI.SavedSessionTest do
   use ExUnit.Case, async: true
-  alias Alto.{Session, Event}
+  alias Alto.Session
+  alias Alto.Event
   alias Alto.TUI.SavedSession
 
   setup do

@@ -1,0 +1,329 @@
+defmodule Alto.Contrib.Codex.Backend do
+  @moduledoc """
+  First-class Codex execution backend for the Alto TUI.
+
+  This is intentionally not an `Alto.Provider`: Codex App Server owns its agent
+  loop, tools, context, and compaction. Alto owns project/task navigation, the
+  TUI, approval presentation, and telemetry projection for these runs.
+  """
+
+  alias Alto.Contrib.Codex.AppServer.Client
+
+  @client_keys [
+    :command,
+    :args,
+    :cwd,
+    :env,
+    :startup_timeout,
+    :request_timeout,
+    :max_message_bytes,
+    :max_pending_requests,
+    :max_ready_waiters,
+    :max_subscribers
+  ]
+
+  @doc "Connect, subscribe the caller, and read the current account snapshot."
+  def connect(opts \\ [], subscriber \\ self()) do
+    client_opts = client_options(opts) |> Keyword.put(:instance, subscriber)
+
+    with {:ok, client} <- Client.ensure_started(client_opts),
+         :ok <- Client.subscribe(client, subscriber),
+         {:ok, account} <- Client.account(client) do
+      {:ok, %{client: client, account: account}}
+    end
+  end
+
+  @doc "Fetch model and quota information after ChatGPT authentication."
+  def refresh(client) do
+    with {:ok, models} <- models(client),
+         {:ok, limits} <- Client.rate_limits(client) do
+      {:ok, %{models: models, rate_limits: limits}}
+    end
+  end
+
+  @doc "Read the bounded, paginated model catalog for UI and delegated agents."
+  def models(client), do: model_pages(client, nil, [], 100)
+
+  defp model_pages(_client, _cursor, _pages, 0), do: {:error, :codex_model_page_limit}
+
+  defp model_pages(client, cursor, pages, remaining) do
+    with {:ok, %{"data" => models} = result} <- Client.models(client, cursor) do
+      pages = [Enum.map(models, &normalize_model/1) | pages]
+
+      case result["nextCursor"] do
+        nil -> {:ok, pages |> Enum.reverse() |> List.flatten()}
+        next -> model_pages(client, next, pages, remaining - 1)
+      end
+    end
+  end
+
+  @doc "Read a persisted Codex thread and project its visible items into Alto TUI entries."
+  def history(client, thread_id) when is_binary(thread_id) do
+    with {:ok, result} <- Client.read_thread(client, thread_id),
+         turns when is_list(turns) <- get_in(result, ["thread", "turns"]) do
+      {:ok, Enum.flat_map(turns, &history_turn/1)}
+    else
+      nil -> {:error, :codex_thread_history_missing}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:invalid_codex_thread_history, other}}
+    end
+  end
+
+  @doc "Start or resume a Codex thread and begin one turn."
+  def start_turn(client, thread_id, prompt, opts)
+      when (is_binary(prompt) or is_struct(prompt, Alto.Content)) and is_list(opts) do
+    cwd = opts |> Keyword.fetch!(:cwd) |> Path.expand()
+    model = Keyword.get(opts, :model)
+    approval = Keyword.get(opts, :approval, :ask)
+
+    with :ok <- validate_input(client, prompt, opts),
+         {:ok, thread_id} <- ensure_thread(client, thread_id, cwd, model, approval, opts),
+         {:ok, result} <-
+           Client.start_turn(client, turn_params(thread_id, prompt, opts)),
+         turn_id when is_binary(turn_id) <- get_in(result, ["turn", "id"]) do
+      {:ok, %{thread_id: thread_id, turn_id: turn_id}}
+    else
+      nil -> {:error, :codex_turn_id_missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Check native media; ordinary documents become tool-readable file paths."
+  def check_input(prompt, opts),
+    do:
+      Alto.InputModalities.check(
+        Alto.InputModalities.required(prompt) -- ["file"],
+        Alto.InputModalities.configured(opts)
+      )
+
+  @doc "Resolve the selected model's capabilities before sending image or audio input."
+  def validate_input(client, prompt, opts) do
+    cond do
+      Alto.InputModalities.required(prompt) -- ["file"] == [] ->
+        :ok
+
+      Keyword.has_key?(opts, :input_modalities) ->
+        check_input(prompt, opts)
+
+      true ->
+        with {:ok, models} <- models(client) do
+          metadata =
+            Enum.find(models, &(&1.id == opts[:model] or (is_nil(opts[:model]) and &1.default?)))
+
+          check_input(prompt, Alto.InputModalities.bind(opts, opts[:model], metadata))
+        end
+    end
+  end
+
+  @doc false
+  def turn_params(thread_id, prompt, opts) do
+    approval = Keyword.get(opts, :approval, :ask)
+
+    %{
+      "threadId" => thread_id,
+      "input" => user_input(prompt),
+      "cwd" => opts |> Keyword.fetch!(:cwd) |> Path.expand(),
+      "model" => opts[:model],
+      "effort" => opts[:effort],
+      "summary" => "auto",
+      "approvalPolicy" => approval_policy(approval),
+      "sandboxPolicy" => sandbox_policy(approval)
+    }
+  end
+
+  @doc "Translate typed input to App Server text, image and audio parts."
+  def user_input(%Alto.Content{blocks: blocks}) do
+    Enum.flat_map(blocks, fn
+      %{"type" => "text", "text" => text} ->
+        [%{"type" => "text", "text" => text}]
+
+      %{"type" => "image", "media_type" => media, "data" => data} ->
+        [%{"type" => "image", "url" => "data:#{media};base64,#{data}"}]
+
+      %{"type" => "file", "media_type" => "audio/" <> _ = media, "data" => data} ->
+        [%{"type" => "audio", "url" => "data:#{media};base64,#{data}"}]
+
+      block ->
+        # App Server has no document input part. Keep a private local copy so
+        # Codex can inspect it with its own file tools within its permissions.
+        case Alto.Contrib.Attachment.materialize([block]) do
+          {:ok, [file]} ->
+            [%{"type" => "text", "text" => "Attached file: #{file.name}\n#{file.path}"}]
+
+          {:error, reason} ->
+            raise ArgumentError, "Cannot stage Codex attachment: #{inspect(reason)}"
+        end
+    end)
+  end
+
+  def user_input(text) when is_binary(text), do: [%{"type" => "text", "text" => text}]
+
+  @doc "Open the managed ChatGPT OAuth URL with an injectable platform opener."
+  def open_url(url, opts \\ []) when is_binary(url) do
+    case Keyword.get(opts, :open_url) do
+      fun when is_function(fun, 1) -> fun.(url)
+      nil -> platform_open(url)
+      other -> {:error, {:invalid_open_url, other}}
+    end
+  end
+
+  @doc "Whether the current App Server account is subscription-backed ChatGPT auth."
+  def chatgpt_account?(%{"account" => %{"type" => "chatgpt"}}), do: true
+  def chatgpt_account?(_account), do: false
+
+  def account_label(%{"account" => %{"type" => "chatgpt"} = account}) do
+    plan = account |> Map.get("planType", "unknown") |> to_string() |> String.upcase()
+    email = Map.get(account, "email")
+    if is_binary(email) and email != "", do: "ChatGPT #{plan} · #{email}", else: "ChatGPT #{plan}"
+  end
+
+  def account_label(%{"account" => %{"type" => "apiKey"}}), do: "Codex API key (not subscription)"
+  def account_label(_account), do: "ChatGPT · signed out"
+
+  def primary_rate_limit(%{"rateLimits" => %{} = limits}), do: Map.get(limits, "primary")
+  def primary_rate_limit(_limits), do: nil
+
+  def approval_policy(:ask), do: "on-request"
+  def approval_policy(:read_only), do: "never"
+  def approval_policy(:full_access), do: "never"
+
+  def sandbox_mode(:ask), do: "workspace-write"
+  def sandbox_mode(:read_only), do: "read-only"
+  def sandbox_mode(:full_access), do: "danger-full-access"
+
+  def sandbox_policy(:ask),
+    do: %{"type" => "workspaceWrite", "writableRoots" => [], "networkAccess" => false}
+
+  def sandbox_policy(:read_only), do: %{"type" => "readOnly", "networkAccess" => false}
+  def sandbox_policy(:full_access), do: %{"type" => "dangerFullAccess"}
+
+  defp ensure_thread(client, thread_id, cwd, model, approval, opts) do
+    params = thread_params(cwd, model, approval, opts)
+
+    result =
+      if is_binary(thread_id),
+        do: Client.resume_thread(client, Map.put(params, "threadId", thread_id)),
+        else: Client.start_thread(client, params)
+
+    with {:ok, result} <- result, do: extract_thread_id(result)
+  end
+
+  defp thread_params(cwd, model, approval, opts) do
+    %{
+      "cwd" => cwd,
+      "model" => model,
+      "approvalPolicy" => approval_policy(approval),
+      "sandbox" => sandbox_mode(approval),
+      "approvalsReviewer" => "user",
+      "serviceName" => "alto"
+    }
+    |> then(fn params ->
+      if opts[:dynamic_tools],
+        do: Map.put(params, "dynamicTools", opts[:dynamic_tools]),
+        else: params
+    end)
+  end
+
+  defp extract_thread_id(result) do
+    case get_in(result, ["thread", "id"]) do
+      id when is_binary(id) -> {:ok, id}
+      _other -> {:error, :codex_thread_id_missing}
+    end
+  end
+
+  defp normalize_model(model) do
+    %{
+      id: Map.get(model, "model") || Map.fetch!(model, "id"),
+      name: Map.get(model, "displayName") || Map.get(model, "id"),
+      description: Map.get(model, "description"),
+      default?: Map.get(model, "isDefault", false),
+      default_effort: Map.get(model, "defaultReasoningEffort"),
+      efforts: Map.get(model, "supportedReasoningEfforts", []),
+      input_modalities: Alto.InputModalities.from_model(model)
+    }
+  end
+
+  defp history_turn(%{"items" => items}) when is_list(items),
+    do: items |> Enum.map(&item_entry/1) |> Enum.reject(&is_nil/1)
+
+  defp history_turn(_turn), do: []
+
+  def item_entry(%{"type" => "userMessage", "content" => content}) when is_list(content) do
+    text =
+      content
+      |> Enum.flat_map(fn
+        %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+        _other -> []
+      end)
+      |> Enum.join("\n")
+
+    if text == "", do: nil, else: %{kind: :user, text: text}
+  end
+
+  def item_entry(%{"type" => "agentMessage", "text" => text}) when is_binary(text),
+    do: %{kind: :codex_assistant, text: text}
+
+  def item_entry(%{"type" => "reasoning"} = item) do
+    case reasoning_text(item) do
+      "" -> nil
+      text -> %{kind: :reasoning, text: text}
+    end
+  end
+
+  def item_entry(%{"type" => "plan", "text" => text}) when is_binary(text),
+    do: %{kind: :system, text: "plan\n" <> text}
+
+  def item_entry(%{"type" => type} = item)
+      when type in ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"],
+      do: %{kind: :tool, text: item_summary(item), detail: item_detail(item)}
+
+  def item_entry(_item), do: nil
+
+  def reasoning_text(item) do
+    summary = Enum.filter(item["summary"] || [], &is_binary/1) |> Enum.join("\n\n")
+
+    if summary != "",
+      do: summary,
+      else: Enum.filter(item["content"] || [], &is_binary/1) |> Enum.join("\n\n")
+  end
+
+  def item_summary(%{"type" => "commandExecution", "command" => command}),
+    do: "command · " <> Alto.Contrib.Display.text(command)
+
+  def item_summary(%{"type" => "fileChange"}), do: "file changes"
+
+  def item_summary(%{"type" => "mcpToolCall", "server" => server, "tool" => tool}),
+    do: "MCP · #{server}/#{tool}"
+
+  def item_summary(%{"type" => "mcpToolCall", "tool" => tool}), do: "MCP · #{tool}"
+  def item_summary(%{"type" => "dynamicToolCall", "tool" => tool}), do: "tool · #{tool}"
+  def item_summary(_item), do: nil
+
+  defp item_detail(item), do: item |> Map.drop(["id", "type"]) |> Alto.Contrib.Display.result()
+
+  defp client_options(opts), do: Keyword.take(opts, @client_keys)
+
+  defp platform_open(url) do
+    candidates =
+      case :os.type() do
+        {:unix, :darwin} -> [{"open", [url]}]
+        {:win32, _name} -> [{"cmd.exe", ["/c", "start", "", url]}]
+        _other -> [{"xdg-open", [url]}, {"gio", ["open", url]}]
+      end
+
+    case Enum.find_value(candidates, fn {command, args} ->
+           if executable = System.find_executable(command), do: {executable, args}
+         end) do
+      {executable, args} ->
+        case System.cmd(executable, args, stderr_to_stdout: true) do
+          {_output, 0} -> :ok
+          {output, status} -> {:error, {:browser_open_failed, status, String.trim(output)}}
+        end
+
+      nil ->
+        {:error, :browser_opener_not_found}
+    end
+  rescue
+    error -> {:error, {:browser_open_failed, Exception.message(error)}}
+  end
+end

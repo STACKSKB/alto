@@ -6,7 +6,8 @@ defmodule Alto.Runner.Checkpoint do
   See `docs/checkpoints.md#portability-and-bounds` for restoration and storage constraints.
   """
   alias Alto.Runner.Budget
-  alias Alto.Persistence.{Codec, Retained}
+  alias Alto.Persistence.Codec
+  alias Alto.Persistence.Retained
   alias Alto.OperationLog
   @limit 1_000_000
   @continuation_format 4

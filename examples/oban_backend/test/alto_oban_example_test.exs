@@ -44,7 +44,7 @@ defmodule AltoObanExampleTest do
         else: System.delete_env("WEBHOOK_SECRET")
     end)
 
-    assert {:ok, options} = Alto.Config.load("alto.exs")
+    assert {:ok, options} = Alto.Contrib.Config.load("alto.exs")
 
     assert nil == options[:provider]
     assert %{"event_flow" => _run_options} = options[:runs]

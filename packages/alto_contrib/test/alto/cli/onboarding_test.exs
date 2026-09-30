@@ -2,7 +2,7 @@ defmodule Alto.Contrib.CLI.OnboardingTest do
   use ExUnit.Case, async: true
 
   alias Alto.Contrib.CLI.Onboarding
-  alias Alto.Credentials
+  alias Alto.Contrib.Credentials
 
   defmodule CatalogProvider do
     def list_models(opts), do: {:ok, Keyword.fetch!(opts, :models)}

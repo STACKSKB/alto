@@ -1,7 +1,8 @@
 defmodule Alto.Runner.SerialChildSessionsTest do
   use ExUnit.Case, async: true
 
-  alias Alto.{Event, Session}
+  alias Alto.Event
+  alias Alto.Session
 
   defmodule BatchLoop do
     @behaviour Alto.Loop

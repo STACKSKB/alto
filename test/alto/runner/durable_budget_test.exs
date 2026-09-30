@@ -1,6 +1,8 @@
 defmodule Alto.Runner.DurableBudgetTest do
   use ExUnit.Case, async: true
-  alias Alto.{OperationLog, Runner.Budget, Runner.Budget.Account}
+  alias Alto.OperationLog
+  alias Alto.Runner.Budget
+  alias Alto.Runner.Budget.Account
 
   defmodule Guarded do
     use Alto.Tool, name: :guarded_budget, execution_mode: :exclusive, approval: :required

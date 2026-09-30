@@ -1,0 +1,747 @@
+defmodule Alto.Runner.SerialCompactionTest do
+  @moduledoc """
+  Bounded recovery compaction with explicit repeat limits, shared budgets,
+  durable summaries, and conversation-safe boundaries.
+  """
+
+  use ExUnit.Case, async: true
+
+  alias Alto.Event
+  alias Alto.Session
+  alias Alto.TestSupport.EchoTool
+
+  defmodule ScriptedProvider do
+    @behaviour Alto.Provider
+
+    @impl true
+    def describe(_opts), do: %{}
+
+    @impl true
+    def stream(request, _sink, opts) do
+      if test_pid = opts[:test_pid] do
+        send(test_pid, {:stream_call, request.messages})
+        send(test_pid, {:stream_request, request})
+      end
+
+      cond do
+        summarize?(request.messages) and opts[:summary] != :disabled ->
+          case Keyword.get(opts, :summary, "squib summary") do
+            {:error, reason} -> {:error, reason}
+            summary -> {:ok, %{message: summary, tool_calls: []}}
+          end
+
+        tool_message?(request.messages) and opts[:after_tool] != :tool_call ->
+          {:ok, %{message: String.duplicate("f", 150), tool_calls: []}}
+
+        true ->
+          {:ok,
+           %{
+             message: nil,
+             tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
+           }}
+      end
+    end
+
+    defp summarize?(messages) do
+      Enum.any?(messages, fn
+        %{"role" => "user", "content" => "Summarize this agent work" <> _} -> true
+        _other -> false
+      end)
+    end
+
+    defp tool_message?(messages), do: Enum.any?(messages, &(&1["role"] == "tool"))
+  end
+
+  defmodule HandoffProvider do
+    @behaviour Alto.Provider
+
+    @impl true
+    def describe(_opts), do: %{}
+
+    @impl true
+    def stream(request, sink, _opts) do
+      cond do
+        Enum.any?(request.messages, fn
+          %{"role" => "user", "content" => "Prepare a context handoff" <> _} -> true
+          _other -> false
+        end) ->
+          sink.(Event.live(:model_delta, %{text: ~s({"design":"internal\\njson"})}))
+          sink.(Event.live(:model_reasoning_delta, %{text: "internal reducer reasoning"}))
+
+          {:ok,
+           %{
+             message:
+               JSON.encode!(%{
+                 design: "Keep the runtime bounded.",
+                 pointers: "lib/alto/runner/serial.ex",
+                 handoff: "The echo tool completed.",
+                 next_step: "Return the final answer."
+               }),
+             tool_calls: []
+           }}
+
+        Enum.any?(request.messages, &(&1["role"] == "tool")) ->
+          {:ok, %{message: String.duplicate("f", 50), tool_calls: []}}
+
+        true ->
+          {:ok,
+           %{
+             message: nil,
+             tool_calls: [%{id: "c1", name: "echo", arguments_json: ~s({"value":"hi"})}]
+           }}
+      end
+    end
+  end
+
+  defmodule CustomReducer do
+    @behaviour Alto.Context.Reducer
+    def compact(input, model, opts) do
+      send(opts[:owner], {:custom_input, input.text})
+
+      with {:ok, %{message: content}} <-
+             model.(%{
+               messages: [
+                 %{"role" => "user", "content" => "Summarize this agent work: " <> input.text}
+               ]
+             }) do
+        {:ok, %{content: "Domain state: " <> content, data: %{}}}
+      end
+    end
+  end
+
+  defmodule ConcurrentReducer do
+    @behaviour Alto.Context.Reducer
+
+    def compact(_input, model, opts) do
+      results =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            model.(%{messages: [%{"role" => "user", "content" => "Summarize this agent work"}]})
+          end)
+        end
+        |> Enum.map(&Task.await/1)
+
+      send(opts[:owner], {:concurrent_reduction, results})
+      {:error, :probe_complete}
+    end
+  end
+
+  defmodule DeterministicReducer do
+    @behaviour Alto.Context.Reducer
+
+    @impl true
+    def compact(input, _model, opts) do
+      send(opts[:owner], {:deterministic_input, input.text})
+      {:ok, %{content: "Retained domain state.", data: %{}}}
+    end
+  end
+
+  defmodule CrashingReducer do
+    @behaviour Alto.Context.Reducer
+    def compact(_input, _model, _opts), do: exit(:reducer_crash)
+  end
+
+  defmodule BlockingReducer do
+    @behaviour Alto.Context.Reducer
+    def compact(_input, _model, opts) do
+      send(opts[:owner], {:reducer_started, self()})
+
+      receive do
+        :release -> {:ok, %{content: "unused", data: %{}}}
+      end
+    end
+  end
+
+  defmodule NativeBatchLoop do
+    @behaviour Alto.Loop
+
+    def init(_task, _spec) do
+      calls =
+        for id <- ["first", "second"],
+            do: %{
+              id: id,
+              name: "echo",
+              arguments_json: JSON.encode!(%{value: String.duplicate("x", 300)})
+            }
+
+      {:continue, 0, [{:run_tools, %{calls: calls, max_concurrency: 2}}]}
+    end
+
+    def handle_event(%Event{type: :tool_completed}, count, _) do
+      if count == 1,
+        do: {{:stop, :done}, 2, []},
+        else: {:continue, 1, []}
+    end
+  end
+
+  test "batch settlement records earlier tool outcomes before later compaction", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
+             Alto.Contrib.run(
+               String.duplicate("t", 800),
+               base_opts(
+                 loop: Alto.loop(NativeBatchLoop),
+                 prompt: nil,
+                 session: :new,
+                 session_dir: dir,
+                 max_transcript_bytes: 1500,
+                 compaction: [
+                   strategy: {DeterministicReducer, owner: self()},
+                   keep_recent_messages: 1
+                 ]
+               )
+             )
+
+    assert result.output == :done
+
+    assert Enum.filter(
+             Enum.map(result.events, & &1.type),
+             &(&1 in [:tool_completed, :context_compacted])
+           ) ==
+             [:tool_completed, :context_compacted, :tool_completed]
+  end
+
+  setup do
+    dir = Path.join(System.tmp_dir!(), "alto-compact-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    %{dir: dir}
+  end
+
+  defp base_opts(extra) do
+    [provider: {ScriptedProvider, test_pid: self()}, tools: [EchoTool]] ++ extra
+  end
+
+  test "one compaction recovers the run and records the summary fact", %{dir: dir} do
+    # A large task message fills the budget so the final answer overflows it.
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
+             Alto.Contrib.run(
+               String.duplicate("t", 200),
+               base_opts(
+                 max_transcript_bytes: 500,
+                 compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
+                 session: :new,
+                 session_dir: dir
+               )
+             )
+
+    assert result.output == String.duplicate("f", 150)
+    # Two model steps plus the single summarization call.
+    assert result.model_requests == 3
+
+    assert %Event{type: :context_compacted, data: data} =
+             Enum.find(result.events, &(&1.type == :context_compacted))
+
+    assert data.dropped_messages == 1
+    assert :ok = Alto.Context.Transcript.validate(result.messages)
+    assert data.summary_bytes > 0
+
+    assert Enum.any?(result.messages, fn
+             %{"role" => "user", "content" => "[alto compaction" <> _} -> true
+             _other -> false
+           end)
+
+    assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
+
+    compacted_records =
+      Enum.filter(records, &(&1["type"] == "event" and &1["event"] == "context_compacted"))
+
+    assert [%{"data" => encoded}] = compacted_records
+    assert {:ok, %{strategy: :summary, summary: "squib summary"}} = Session.decode_term(encoded)
+  end
+
+  test "a caller composes a domain-specific context reducer", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
+             Alto.Contrib.run(
+               String.duplicate("t", 200),
+               base_opts(
+                 max_transcript_bytes: 520,
+                 compaction: [
+                   strategy: {CustomReducer, owner: self()},
+                   keep_recent_messages: 1,
+                   max_summary_bytes: 200
+                 ],
+                 session: :new,
+                 session_dir: dir
+               )
+             )
+
+    assert_received {:custom_input, input}
+    assert String.contains?(input, String.duplicate("t", 200))
+    assert Enum.any?(result.messages, &String.contains?(&1["content"] || "", "Domain state:"))
+    assert :ok = Alto.Context.Transcript.validate(result.messages)
+  end
+
+  test "compaction cannot make an extra provider call past the global budget", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :error} =
+             result =
+             Alto.Contrib.run(
+               String.duplicate("t", 200),
+               base_opts(
+                 max_model_requests: 2,
+                 max_transcript_bytes: 500,
+                 compaction: [keep_recent_messages: 1],
+                 session: :new,
+                 session_dir: dir
+               )
+             )
+
+    assert_received {:stream_call, _}
+    assert_received {:stream_call, _}
+    refute_received {:stream_call, _}
+    refute Enum.any?(result.events, &(&1.type == :context_compacted))
+  end
+
+  test "the default permits one compaction", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
+             result =
+             Alto.Contrib.run("go",
+               provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
+               tools: [EchoTool],
+               max_transcript_bytes: 400,
+               compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
+               session: :new,
+               session_dir: dir
+             )
+
+    compacted = Enum.filter(result.events, &(&1.type == :context_compacted))
+    assert length(compacted) == 1
+    assert hd(compacted).data.compaction_count == 1
+  end
+
+  test "an explicit limit permits repeat reductions and stops at that limit", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 800}} =
+             result =
+             Alto.Contrib.run("go",
+               provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
+               tools: [EchoTool],
+               max_transcript_bytes: 800,
+               compaction: [
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: :new,
+               session_dir: dir
+             )
+
+    compacted = Enum.filter(result.events, &(&1.type == :context_compacted))
+    assert Enum.map(compacted, & &1.data.compaction_count) == [1, 2]
+    assert Enum.all?(compacted, &(&1.data.reason == :transcript_limit))
+    assert :ok = Alto.Context.Transcript.validate(result.messages)
+
+    assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
+
+    assert Enum.count(
+             records,
+             &(&1["type"] == "event" and &1["event"] == "context_compacted")
+           ) == 2
+  end
+
+  test "a deterministic reducer works without a provider through the public reduction API", %{
+    dir: dir
+  } do
+    session = Session.generate_id()
+
+    assert {:ok, run} =
+             Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+               provider: nil,
+               max_transcript_bytes: 10_000,
+               compaction: [
+                 strategy: {DeterministicReducer, owner: self()},
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: session,
+               session_dir: dir
+             )
+
+    state = run
+
+    state =
+      Enum.reduce(1..4, state, fn index, state ->
+        message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+        assert {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+        state
+      end)
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.reduce(state, reason: :model_context_pressure)
+
+    assert state.compaction_count == 1
+    assert state.model_requests == 0
+    assert_received {:deterministic_input, first_input}
+    assert String.contains?(first_input, String.duplicate("1", 120))
+
+    state =
+      Enum.reduce(5..8, state, fn index, state ->
+        message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+        assert {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+        state
+      end)
+
+    assert {:ok, state} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert state.compaction_count == 2
+    assert state.model_requests == 0
+    assert :ok = Alto.Context.Transcript.validate(Enum.reverse(state.messages_rev))
+
+    assert {:error, {:compaction_limit, 2}, same} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert same.messages_rev == state.messages_rev
+    assert same.compaction_count == 2
+  end
+
+  test "an ineffective reduction does not consume a compaction slot", %{dir: dir} do
+    session = Session.generate_id()
+
+    assert {:ok, run} =
+             Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+               provider: nil,
+               max_transcript_bytes: 1_000,
+               compaction: [
+                 strategy: {DeterministicReducer, owner: self()},
+                 max_compactions: 2,
+                 keep_recent_messages: 1,
+                 max_summary_bytes: 200
+               ],
+               session: session,
+               session_dir: dir
+             )
+
+    state = run
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.append(state, %{
+               "role" => "user",
+               "content" => String.duplicate("more", 80)
+             })
+
+    assert {:ok, state} =
+             Alto.Runner.Execution.Transcript.append(state, %{
+               "role" => "user",
+               "content" => String.duplicate("older", 60)
+             })
+
+    before = state.messages_rev
+
+    assert {:error, {:compaction_insufficient_headroom, _}, state} =
+             Alto.Runner.Execution.Transcript.reduce(state, required_headroom: 950)
+
+    assert state.messages_rev == before
+    assert state.compaction_count == 0
+  end
+
+  test "concurrent reducer model callbacks share the run step cap", %{dir: dir} do
+    state = reduction_state(dir, {ConcurrentReducer, owner: self()})
+    state = %{state | provider: {ScriptedProvider, test_pid: self()}, max_steps: 1}
+
+    assert {:error, :probe_complete, failed} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert_receive {:concurrent_reduction, results}
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert {:error, {:model_step_limit, 1}} in results
+    assert failed.model_requests == 1
+    assert_receive {:stream_call, _}
+    refute_receive {:stream_call, _}
+  end
+
+  test "context-limit result explains uncompactable retained history", %{dir: dir} do
+    result =
+      Alto.Contrib.run("exceeds the tiny test budget",
+        provider: {ScriptedProvider, test_pid: self()},
+        loop: Alto.default_loop(context: Alto.Context.Window.new(max_tokens: 1)),
+        session: :new,
+        session_dir: dir,
+        compaction: [keep_recent_messages: 12]
+      )
+
+    assert result.status == :error
+    assert {:context_limit, %{compaction_reason: :transcript_uncompactable}} = result.reason
+    refute_receive {:stream_call, _}
+  end
+
+  test "fully retained history records why compaction cannot run", %{dir: dir} do
+    state = reduction_state(dir, {CrashingReducer, []})
+    state = %{state | compaction: Keyword.put(state.compaction, :keep_recent_messages, 100)}
+
+    assert {:error, :transcript_uncompactable, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    assert failed.model_requests == state.model_requests
+
+    assert Enum.any?(
+             Alto.EventBuffer.to_list(failed.event_buffer),
+             &(&1.type == :context_compact_failed and &1.data.error == :transcript_uncompactable)
+           )
+
+    assert Alto.Contrib.Display.error(:transcript_uncompactable) =~ "all messages are retained"
+  end
+
+  test "a reducer crash is reported and leaves transcript and accounting intact", %{dir: dir} do
+    state = reduction_state(dir, {CrashingReducer, []})
+
+    assert {:error, {:participant_failed, :reducer_crash}, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    assert failed.transcript_bytes == state.transcript_bytes
+    assert failed.compaction_count == state.compaction_count
+    assert failed.model_requests == state.model_requests
+    assert failed.usage == state.usage
+
+    assert Enum.any?(
+             Alto.EventBuffer.to_list(failed.event_buffer),
+             &(&1.type == :context_compact_failed)
+           )
+  end
+
+  test "cancelling a running reducer leaves transcript and accounting intact", %{dir: dir} do
+    cancel_ref = make_ref()
+    state = reduction_state(dir, {BlockingReducer, owner: self()}, cancel_ref)
+    caller = Task.async(fn -> Alto.Runner.Execution.Transcript.reduce(state) end)
+
+    assert_receive {:reducer_started, worker}
+    send(caller.pid, {:alto_cancel, cancel_ref, :operator_stop})
+
+    assert {:error, {:cancelled, :operator_stop}, unchanged} = Task.await(caller)
+    refute Process.alive?(worker)
+    assert unchanged.messages_rev == state.messages_rev
+    assert unchanged.transcript_bytes == state.transcript_bytes
+    assert unchanged.compaction_count == state.compaction_count
+    assert unchanged.model_requests == state.model_requests
+    assert unchanged.usage == state.usage
+  end
+
+  defp reduction_state(dir, strategy, cancel_ref \\ nil) do
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
+        provider: nil,
+        max_transcript_bytes: 10_000,
+        compaction: [
+          strategy: strategy,
+          max_compactions: 2,
+          keep_recent_messages: 1,
+          max_summary_bytes: 200
+        ],
+        session: Session.generate_id(),
+        session_dir: dir,
+        cancel_ref: cancel_ref
+      )
+
+    Enum.reduce(1..3, run, fn index, state ->
+      message = %{"role" => "user", "content" => String.duplicate("#{index}", 120)}
+      {:ok, state} = Alto.Runner.Execution.Transcript.append(state, message)
+      state
+    end)
+  end
+
+  test "handoff strategy creates structured artifacts and a generated next step", %{dir: dir} do
+    owner = self()
+
+    assert %Alto.Runner.Result{status: :ok} =
+             result =
+             Alto.Contrib.run(String.duplicate("t", 300),
+               provider: {HandoffProvider, []},
+               event_sink: fn event -> send(owner, {:handoff_event, event}) end,
+               tools: [EchoTool],
+               max_transcript_bytes: 600,
+               compaction: [
+                 strategy: {Alto.Contrib.Context.Reducers.Handoff, []},
+                 keep_recent_messages: 1,
+                 max_handoff_bytes: 400,
+                 artifact_dir: Path.join(dir, "h")
+               ],
+               session: :new,
+               session_dir: dir
+             )
+
+    assert result.output == String.duplicate("f", 50)
+    assert :ok = Alto.Context.Transcript.validate(result.messages)
+
+    assert %Event{type: :context_compacted, data: data} =
+             Enum.find(result.events, &(&1.type == :context_compacted))
+
+    assert_received {:handoff_event, %Event{type: :context_compaction_progress}}
+    refute_received {:handoff_event, %Event{type: :model_delta}}
+    refute_received {:handoff_event, %Event{type: :model_reasoning_delta}}
+    assert data.strategy == :handoff
+    assert data.next_step == "Return the final answer."
+    artifact = JSON.decode!(File.read!(data.artifact_path))
+    assert artifact["design"] == "Keep the runtime bounded."
+    assert artifact["pointers"] == "lib/alto/runner/serial.ex"
+    assert Enum.any?(result.messages, &String.contains?(&1["content"] || "", "# Next step"))
+
+    assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
+
+    compacted_records =
+      Enum.filter(records, &(&1["type"] == "event" and &1["event"] == "context_compacted"))
+
+    assert [%{"data" => encoded}] = compacted_records
+    assert {:ok, ^data} = Session.decode_term(encoded)
+  end
+
+  test "compaction stays off unless enabled", %{dir: dir} do
+    test_pid = self()
+
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
+             _result =
+             Alto.Contrib.run("go",
+               provider: {ScriptedProvider, summary: :disabled, after_tool: :tool_call},
+               tools: [EchoTool],
+               max_transcript_bytes: 400,
+               session: :new,
+               session_dir: dir,
+               event_sink: fn event -> send(test_pid, {:evt, event}) end
+             )
+
+    refute_received {:evt, %Event{type: :context_compacting}}
+  end
+
+  test "compaction without a session fails closed", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :error, reason: :compaction_requires_session} =
+             _result =
+             Alto.Contrib.run(
+               "go",
+               base_opts(max_transcript_bytes: 200, compaction: true, session_dir: dir)
+             )
+  end
+
+  test "a failed summary degrades to the transcript error with an event", %{dir: dir} do
+    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 500}} =
+             result =
+             Alto.Contrib.run("go",
+               provider: {ScriptedProvider, summary: {:error, :kaput}, after_tool: :tool_call},
+               tools: [EchoTool],
+               max_transcript_bytes: 500,
+               compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
+               session: :new,
+               session_dir: dir
+             )
+
+    assert Enum.any?(result.events, &(&1.type == :context_compact_failed))
+  end
+
+  test "oversized reduction input fails intact and a raised bound includes early requirements", %{
+    dir: dir
+  } do
+    marker = "EARLY_REQUIREMENT_MUST_SURVIVE"
+
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open(marker,
+        provider: {ScriptedProvider, test_pid: self()},
+        max_transcript_bytes: 300_000,
+        compaction: [strategy: {DeterministicReducer, owner: self()}, keep_recent_messages: 1],
+        session: Session.generate_id(),
+        session_dir: dir
+      )
+
+    state = run
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{
+        "role" => "user",
+        "content" => String.duplicate("x", 120_000)
+      })
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{"role" => "user", "content" => "Continue."})
+
+    assert {:error, {:compaction_input_limit, _, 100_000}, failed} =
+             Alto.Runner.Execution.Transcript.reduce(state)
+
+    assert failed.messages_rev == state.messages_rev
+    refute_received {:deterministic_input, _}
+    state = %{state | compaction: Keyword.put(state.compaction, :max_input_bytes, 200_000)}
+    assert {:ok, _} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert_received {:deterministic_input, input}
+    assert input =~ marker
+    assert input =~ String.duplicate("x", 120_000)
+  end
+
+  test "hosts can pin initial requirements while reducing later history", %{dir: dir} do
+    {:ok, run} =
+      Alto.Runner.Execution.Setup.open("Pinned requirement",
+        provider: {ScriptedProvider, test_pid: self()},
+        max_transcript_bytes: 20_000,
+        compaction: [
+          strategy: {DeterministicReducer, owner: self()},
+          keep_initial_messages: 1,
+          keep_recent_messages: 1
+        ],
+        session: Session.generate_id(),
+        session_dir: dir
+      )
+
+    state = run
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{
+        "role" => "user",
+        "content" => String.duplicate("work", 500)
+      })
+
+    {:ok, state} =
+      Alto.Runner.Execution.Transcript.append(state, %{"role" => "user", "content" => "Continue."})
+
+    assert {:ok, reduced} = Alto.Runner.Execution.Transcript.reduce(state)
+    assert hd(Enum.reverse(reduced.messages_rev))["content"] == "Pinned requirement"
+    assert_received {:deterministic_input, input}
+    refute input =~ "Pinned requirement"
+  end
+
+  test "built-in reducers retain the conversation prefix or honor isolated request mode", %{
+    dir: dir
+  } do
+    for mode <- [:transcript, :isolated] do
+      {:ok, run} =
+        Alto.Runner.Execution.Setup.open("EARLY_CONSTRAINT",
+          provider: {ScriptedProvider, test_pid: self()},
+          tools: [EchoTool],
+          max_transcript_bytes: 20_000,
+          compaction: [
+            strategy: Alto.Contrib.Context.Reducers.Summary,
+            request_mode: mode,
+            keep_recent_messages: 1
+          ],
+          session: Session.generate_id(),
+          session_dir: dir
+        )
+
+      state = run
+
+      {:ok, state} =
+        Alto.Runner.Execution.Transcript.append(state, %{
+          "role" => "assistant",
+          "content" => String.duplicate("work", 500)
+        })
+
+      {:ok, state} =
+        Alto.Runner.Execution.Transcript.append(state, %{
+          "role" => "user",
+          "content" => "Continue."
+        })
+
+      assert {:ok, _reduced} = Alto.Runner.Execution.Transcript.reduce(state)
+      assert_received {:stream_call, request}
+      assert_received {:stream_request, envelope}
+      assert envelope.tool_choice == :none
+
+      if mode == :transcript do
+        assert [%{"function" => %{"name" => "echo"}}] = envelope.tools
+      else
+        assert envelope.tools == []
+      end
+
+      if mode == :transcript do
+        assert Enum.drop(request, -1) == Enum.drop(Enum.reverse(state.messages_rev), -1)
+      else
+        assert length(request) == 1
+      end
+
+      assert JSON.encode!(request) =~ "EARLY_CONSTRAINT"
+    end
+  end
+end

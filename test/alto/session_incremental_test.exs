@@ -1,6 +1,7 @@
 defmodule Alto.SessionIncrementalTest do
   use ExUnit.Case, async: true
-  alias Alto.{Session, Context.Transcript}
+  alias Alto.Session
+  alias Alto.Context.Transcript
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-incremental-#{System.unique_integer([:positive])}")

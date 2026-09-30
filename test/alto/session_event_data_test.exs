@@ -1,6 +1,8 @@
 defmodule Alto.SessionEventDataTest do
   use ExUnit.Case, async: true
-  alias Alto.{Session, Event, Protocol}
+  alias Alto.Session
+  alias Alto.Event
+  alias Alto.TermProjection, as: Protocol
 
   test "one body retains typed keys, structs, tuples, and Unicode exactly" do
     data = %{
