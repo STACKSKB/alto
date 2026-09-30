@@ -26,11 +26,14 @@ defmodule Alto.Session.Writer do
   end
 
   defp writer(key) do
-    case Registry.lookup(Alto.Session.WriterRegistry, key) do
-      [{pid, _}] ->
+    # A DOWN notification can reach the caller before Registry removes the
+    # dead owner's entry. Resolve through :via's liveness check so retries
+    # cannot repeatedly select that same dead writer.
+    case Registry.whereis_name({Alto.Session.WriterRegistry, key}) do
+      pid when is_pid(pid) ->
         {:ok, pid}
 
-      [] ->
+      :undefined ->
         case DynamicSupervisor.start_child(Alto.Session.WriterSupervisor, {__MODULE__, key}) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
