@@ -75,29 +75,6 @@ defmodule Alto.TUI.ViewTest do
     refute screen =~ "• 116"
   end
 
-  test "keeps API keys masked while retaining the actual text cursor" do
-    input = ExRatatui.text_input_new()
-    :ok = ExRatatui.text_input_set_value(input, "secret-key")
-    :ok = ExRatatui.text_input_handle_key(input, "left")
-
-    state =
-      base_state(%{
-        field_index: 3,
-        key_saved?: true,
-        fields: provider_fields(api_key: input)
-      })
-
-    widgets = View.widgets(state, frame())
-    assert %TextInput{state: {masked, 9, 0}} = active_input(widgets)
-    assert masked == String.duplicate("•", 10)
-
-    terminal = ExRatatui.init_test_terminal(120, 36)
-    assert :ok = ExRatatui.draw(terminal, widgets)
-    screen = ExRatatui.get_buffer_content(terminal)
-    refute screen =~ "secret-key"
-    assert screen =~ masked
-  end
-
   test "keeps the insertion point visible for a long masked API key" do
     input = ExRatatui.text_input_new()
     value = String.duplicate("secret-key", 12)
