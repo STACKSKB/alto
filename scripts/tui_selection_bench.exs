@@ -1,4 +1,4 @@
-# Run from the repository root: mix run scripts/tui_selection_bench.exs
+# From packages/alto_tui: mix run ../../scripts/tui_selection_bench.exs
 # Measures event handling plus native rendering (not terminal-emulator latency).
 alias Alto.TUI.Selection
 alias ExRatatui.{CellSession, Style}

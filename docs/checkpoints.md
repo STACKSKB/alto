@@ -39,7 +39,6 @@ allowance; their distinct dispatch identities remain in the bounded ledger.
 attempt has revision `grant + 1`; hosts must not reuse an old checkpoint
 approval following a later uncertain dispatch. Queue-full admission and crashes
 between the grant and queue restoration remain host recovery responsibilities.
-The Zekkyou task host implements these policies.
 
 The `:resume_checkpoint` request accepts an opaque bounded JSON decision map. It is a generic
 host decision boundary, not a tool permission policy. First decision wins by
@@ -98,4 +97,4 @@ explicit checkpoint version checks still apply.
 
 Packets captured before the runner refactor are deliberately rejected rather
 than guessed into the new format. Reconcile any suspended operations before
-upgrading; completed session transcripts remain resumable. See [runner migration](runners.md).
+upgrading; completed session transcripts remain resumable. See [execution hosts](runners.md).

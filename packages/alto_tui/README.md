@@ -1,10 +1,13 @@
 # Alto TUI
 
-`alto_tui` is Alto's optional terminal UI example. It keeps the native ExRatatui
-dependency outside the core production build while using the same host-owned
-approval, execution, cancellation, session, and protocol boundaries.
+Alto's optional terminal interface provides streaming conversations, model and
+provider selection, approvals, saved tasks, workspaces, search, and subagent
+inspection. It runs local Alto workflows and supports configurable backends,
+including Codex. The native ExRatatui dependency stays in this package.
 
-From an Alto checkout, run the working example profile with:
+## Run it
+
+From an Alto checkout:
 
 ```sh
 cd packages/alto_tui
@@ -12,356 +15,215 @@ mix deps.get
 mix alto.tui --config ../../alto.agentic.exs
 ```
 
-The existing `rustler_precompiled` dependency is pinned and patched at build time
-to replace native libraries atomically. Its unpatched extraction can crash a
-running TUI with `SIGBUS` when another build overwrites the mapped library.
-For a checkout built before this fix, rebuild that dependency once in each used
-environment: `mix deps.compile rustler_precompiled` and
-`MIX_ENV=test mix deps.compile rustler_precompiled`. Fresh builds apply the patch
-automatically; no new dependency or native toolchain is required.
+Use `--project PATH` to open a workspace, `--catalog PATH` for a separate task
+catalog, `--credentials PATH` for a provider credential store, and `--log PATH`
+for a diagnostic log. `mix alto.tui --help` lists the options.
 
-While the TUI is open, standard console Logger handlers are muted and logs go to
-`$ALTO_STATE_HOME/alto/logs/tui.log` (or `$XDG_STATE_HOME/alto/logs/tui.log`, defaulting
-to `~/.local/state/alto/logs/tui.log`). Use `--log PATH` to choose another file, or
-pass `log_path: PATH` to `Alto.TUI.run/2`. Logs rotate at 5 MB with three archives.
-Console logging is restored when the TUI exits, including after a run-time failure.
-Existing file handlers remain active. Custom handlers must also avoid writing to
-the terminal while it is in use.
+You can supply your own `alto.exs` for each model or workflow. See the
+[configuration guide](../../docs/configuration.md) for shared bases and multiple
+profiles. Backend and provider entries for the TUI are described below.
 
-The example profile's request-prefix diagnostics are opt-in: set
-`ALTO_REQUEST_DIAGNOSTICS=1` to include them in the log. Debug messages, warnings,
-and errors never belong directly on the active TUI screen.
+## Everyday controls
 
-The example hosts runs locally in its process tree. A separate application can
-reuse the UI components and connect them to a persistent service through Alto's
-transport APIs. The profile and maintained application examples are documented in
-[`examples/README.md`](../../examples/README.md).
+`Ctrl+G` opens the gear menu and acts as a leader for the shortcuts below.
 
-Press Enter to send a message. While a turn is running, Enter queues one follow-up
-for that task; it starts after the current turn succeeds. A second follow-up
-stays in the composer until the queued message has started. Queued messages are
-kept in memory for the lifetime of the TUI.
-Press **Ctrl+G, S** to turn the queued follow-up into a steer, delivered at the
-next safe model boundary after dispatched tools settle. This keeps your current
-draft intact. **Ctrl+Enter** sends a draft as a steer; with an empty draft it
-promotes the queued follow-up. Steering requires a backend that supports it.
-Pending messages appear below the current response and in the context pane.
-When delivered, their queue notice disappears and each message becomes a separate
-`you ›` turn before its response, including when native input continues the same run.
+| Control | Action |
+| --- | --- |
+| Enter | Send a message, or queue one follow-up during a run |
+| Shift+Enter | Insert a newline |
+| Ctrl+Enter | Send the draft as a steer, or promote a queued follow-up |
+| Ctrl+G, S | Promote the queued follow-up to steering |
+| Esc | Close the current popup/drawer, or cancel the selected run |
+| F2 | Select an approval mode |
+| F3 / F4 / F5 | Select provider / model / backend |
+| F6 | Switch prose/code entry |
+| F8 / F9 | Approve / deny the pending request |
+| Ctrl+G, R | Select supported reasoning effort |
+| Ctrl+G, N | Start a new task in the current workspace |
+| Ctrl+G, T | Open tasks |
+| Ctrl+G, W | Open workspace actions |
+| Ctrl+G, X | Close the selected workspace |
+| Ctrl+G, D | Toggle the details pane or drawer |
+| Ctrl+G, G | Edit the task goal |
+| Ctrl+G, U | Inspect subagents |
+| Ctrl+F | Search the loaded conversation |
 
-Provider and model choices are remembered across tasks, workspace switches, and
-TUI restarts. Each backend/provider pair keeps its own model choice.
-Saved task history remains viewable after a failed run, including when an
-unfinished tool dispatch prevents safely resuming that run.
+While a turn runs, Enter queues one follow-up for that task. A second follow-up
+stays in the composer until the queued one starts. Steering arrives at the next
+safe model boundary after dispatched tools settle, when the backend supports
+it. Cancellation, failure, or a session-save failure pauses queued input; press
+Enter with an empty composer to send it. Queued input stays in memory for the
+lifetime of the TUI.
 
-The status bar shows whether Alto is waiting for the model, executing a tool, or
-waiting for approval. Click the labeled Approve or Deny buttons, or press F8 or F9,
-to answer a pending request. Approval actions keep focus in context; F8/F9 used
-from another pane preserve that pane’s focus. A narrow context drawer stays open
-after a decision until you close it with Esc. Esc stops the selected task's run and preserves your
-draft. If a popup or the compact details
-drawer is open, the first Esc closes it. Cancellation, failure, or a session-save
-failure pauses the queued follow-up; press Enter with an empty composer to send it.
+Saved history remains viewable after a failed run, including when an unfinished
+dispatch prevents safely resuming. The activity indicator shows model waits,
+reasoning, tool execution, retries, and approval waits.
 
-After a failed or cancelled run, Enter sends an existing draft or queued follow-up
-from the transcript/context pane too. If there is no message ready, the TUI points
-you to the composer. A failed restart appears in chat and keeps the draft.
-Cancelled subagent calls retain an unknown outcome, allowing the conversation to
-continue without replaying them. Older cancelled sessions with a stranded dispatch
-marker recover on the next follow-up only when the owning run has a recorded
-cancellation; the model receives explicit uncertainty and reconciliation guidance.
-Active or crashed runs without that evidence keep their dispatch protection.
+## Approvals and goals
 
-**F2** opens approval choices: ASK, READ, AUTO, and **REVIEW · approve for me**.
-An explicit choice overrides the configured native approval policy. AUTO also
-resolves waiting approvals immediately. The native TUI consults the current
-choice for subsequent requests, including child runs. Codex sandbox changes take
-effect on its next turn; requests already reaching the TUI use the current choice.
+Use the labeled Approve/Deny buttons or F8/F9 for a pending request. The details
+pane shows the command, file-change preview, or other prepared operation.
+Approval authorizes that operation. An explicit F2 mode overrides the configured
+native approval policy. AUTO also resolves waiting approvals immediately; Codex
+sandbox changes take effect on its next turn.
 
-Configure any two-argument approver in your Elixir config (`alto.exs`, or the file
-passed with `--config`), then select REVIEW:
-
-```elixir
-tui: [
-  approval_reviewer: fn request, context ->
-    MyClassifier.approve?(request, context)
-  end
-]
-```
-
-The callback receives the prepared request (`id`, `run_id`, `call_id`, `tool`,
-`arguments`, `execution_mode`, `details`) and execution context. It may call an
-LLM, a local classifier, or ordinary Elixir logic. Return `true` / `:approve`, or
-`false` / `{:deny, reason}`. Exceptions, invalid decisions, and timeouts do not
-approve the request. `approval_timeout` bounds review time; cancellation cleans
-up pending reviews. Native callbacks receive the runner's tool context; Codex
-callbacks receive `cwd`, `session_id`, and `metadata`. REVIEW requires a callback
-and does not silently fall back to AUTO.
-
-**Ctrl+G, G** opens the task goal editor. Enter an objective and press Enter to
-save it on the selected task, creating a task if needed. The editor shows the
-current status and provides **Pause**, **Resume**, **Complete**, and **Clear goal**
-actions. Use Tab or arrow keys to select an action, then Enter; Esc cancels.
-The chat draft stays intact. Goals survive TUI restarts and appear in the context
-pane. Active objectives accompany the next run's initial message on either
-backend. Goal controls do not start, cancel, or automatically continue runs;
-changes during a run apply when the next run starts.
-
-Assistant replies and reasoning render Markdown headings, emphasis, and code.
-Tool output uses a six-line, 1,200-byte preview with an explicit truncation
-marker. Opening search exposes the longer retained tool details; closing search
-restores compact previews. The model and session keep their original tool results.
-
-**Ctrl+F** searches the current loaded conversation, including user messages,
-assistant replies, code, and tool/edit details. Matching is literal and
-case-insensitive; punctuation has no special meaning. Type or paste a query,
-then use **Enter / Shift+Enter**, **F3 / Shift+F3**, or **↓ / ↑** for next/previous
-occurrence, wrapping at the ends. **Ctrl+U** clears the query; **Esc** closes
-search without sending the draft or stopping a run.
-
-During search the context side panel shows matching excerpts beside the
-conversation and draft. **Tab** or **Ctrl+G, D** moves between results and the
-conversation; on narrow terminals it opens or closes a results drawer. Clicking
-an excerpt jumps to its position and closes the narrow drawer. Esc restores the
-previous context visibility and focus. Pending approvals keep priority over search;
-a new approval closes search while respecting the automatic-opening preference. The bottom bar always shows **Prev / Next / current/total**
-controls, including when context is hidden or the terminal is narrow. Visible
-matches are highlighted; matches in Markdown source syntax that has no visible
-glyph remain available as excerpts in the results. Resizing does not change
-the occurrence count. Search is temporary TUI state, clears when switching
-tasks, and never becomes agent input or a persisted session event.
-
-Host configuration uses `%Alto.Harness.ProviderProfile{}` entries in
-`provider_profiles`, with a `{module, options}` provider and either `:discover`
-or atom-keyed catalog maps:
-
-```elixir
-provider_profiles: [
-  %Alto.Harness.ProviderProfile{
-    id: "local",
-    provider: {Alto.Providers.OpenAICompatible, base_url: "http://localhost:1234/v1"},
-    models: [%{id: "coder", name: "Coder", context_length: 32_000}]
-  }
-]
-```
-
-Omitted labels and credential IDs use the profile ID; an omitted default model
-uses the provider's `:model` option. Explicit profiles do not accept map/keyword
-shorthands or string-only model catalogs.
-
-Forms share the menu navigation: use Tab or Up/Down to select a field or action.
-The selected field is edited above the list; Left/Right moves its cursor. Enter
-advances to the next field or submits the last field, and Ctrl+S submits directly.
-API keys stay masked. Folder forms use Tab for path completion.
-
-While a run is active, the conversation border shows an animated stage and elapsed
-time, including waiting for the model, thinking, receiving text, running tools,
-and retrying a connection. Codex connection and model-catalog waits are visible too.
-
-**Ctrl+G R** opens reasoning effort for models whose catalogs advertise choices.
-The clickable `R:` setting shows the current value; choices are remembered per
-backend/provider/model for this TUI session and apply to the next turn. Provider
-default restores the provider's configured behavior. Unknown capabilities do not
-get guessed effort values. For explicitly configured model catalogs, add an
-`efforts: ["low", "high"]` list using the provider's supported values.
-
-Readable provider reasoning appears as `thinking ›` before the answer and remains
-selectable and available in saved history. Codex may supply summaries; encrypted
-or redacted data is not displayed. The native Anthropic adapter emits thinking
-when its complete response arrives; it is not a streaming adapter. Its provider
-options accept `thinking: %{"type" => "adaptive"}` for models that support that mode.
-OpenAI-compatible proxies can set `reasoning_format: :openrouter` when they expect
-nested `reasoning.effort`; other endpoints use `reasoning_effort` by default.
-
-Drag with the left mouse button to select conversation text, context data, your
-composer draft, or entered form values. Selection stays inside its starting box.
-Hold the drag at the top or bottom of a conversation/context pane to scroll;
-scrolling runs at the same speed in either direction. You can also use the wheel while
-holding the drag. Moving back inside or releasing stops autoscroll. Copy includes
-the full selected range, including rows that have moved off-screen.
-Controls, titles, status bars, and placeholder hints are not selectable by
-default. Hold **Alt** while dragging to deliberately select UI text. Ordinary
-clicks still operate controls, and dragging over a button never activates it.
-
-**Ctrl+C** or **Alt+C** copies selected text. **Right-click without Shift** opens
-a compact Copy menu with the shortcut shown in muted text. Selecting text does
-not open a popup or toolbar. Esc dismisses the menu, then clears selection.
-Ctrl+C without a selection retains its cancel/quit behavior. Ctrl+Shift+A selects
-visible content; adding Alt explicitly includes UI text.
-
-Selection freezes the rendered widgets and captures compact text once per gesture.
-It reuses native buffers between gestures and indexes only boundary rows during
-dragging. This avoids exporting every terminal cell or rebuilding conversation
-history on mouse-down or motion. Long scrolled paragraphs are frozen to their
-visible rows, so dragging does not reflow off-screen history. Run `mix run scripts/tui_selection_bench.exs` from the Alto
-repository root to measure event handling plus native drawing.
-
-Copy uses `wl-copy`, `xclip`, `xsel`, or `pbcopy` when available. Otherwise it sends
-an OSC 52 request, including over SSH and through tmux; the terminal must allow
-clipboard writes. The notice distinguishes a desktop copy from an unconfirmed
-terminal request. Shift+drag and Shift+right-click are handled by the terminal,
-so their behavior and native copy menu depend on the terminal application.
-
-Paste with your terminal's usual shortcut (often Ctrl+Shift+V or Cmd+V). Bracketed
-paste inserts text without submitting it, including multiline text and form fields.
-Ctrl+V also reads the local clipboard using `wl-paste`, `xclip`, `xsel`, or `pbpaste`
-when available; otherwise it inserts the last selection copied in this TUI.
-
-Start a task with **Ctrl+G, N** in the current folder, or click a workspace name
-in the sidebar to compose a new task in that folder. **Ctrl+G, T** also includes a New task action.
-
-Click **+ New workspace** or use **Ctrl+G, W → Open another folder** to open a different folder. Enter an
-existing folder path and press Enter (or click Open folder).
-Relative paths start from the current workspace; `~` addresses your home folder.
-Alto remembers the folder, selects it, and prepares a new task while preserving
-your draft. Matching subfolders appear below the input as you type. Up/Down
-highlights a suggestion; Tab copies it into the input, and Enter opens it. Continue
-with Down to reach the action buttons, or use Tab when no further completion is
-available. Click a
-suggestion to copy its path and browse its subfolders. Tab extends the typed path to the longest common prefix of matching
-folders. For example, `/hom` becomes `/home/`, regardless of the current workspace.
-Use **Ctrl+O** or click **Choose folder** to open the folder chooser. Saved workspaces
-appear when the field is empty; otherwise it lists filesystem matches. Type to
-filter, use Up/Down or click a folder to copy it into the form, then press Enter to
-open it. Esc returns from the chooser without changing the typed path.
-**Ctrl+N** or **Create folder** creates and opens the typed path, including missing
-parent directories. **Ctrl+U** clears the field.
-The details pane stays beside the transcript and composer on wide terminals, and
-its seam can be dragged to change its width. On narrow terminals it opens as a
-drawer, with a full-screen fallback on very small terminals. Esc closes the drawer
-and restores the previous focus. The details pane shows the full working folder. Existing runs continue
-in their original folders. Use Ctrl+G, W to switch between saved workspaces.
-
-Use **Ctrl+G, W → Create worktree…** to create a local linked Git worktree from
-the selected workspace. Enter a name and a starting ref (HEAD by default).
-Leave the branch field empty for a detached checkout, or enter a new branch
-name. Creation uses committed files and leaves uncommitted source changes
-untouched. On completion Alto opens a new task in the worktree and preserves
-your draft; existing tasks continue in their original directories. Escape
-dismisses the progress popup without cancelling creation or switching tasks
-when it finishes. Worktrees and their ledger are stored beside the harness
-catalog, outside the source repository, and remembered across TUI restarts.
-Closing a workspace only hides it; it does not delete its Git worktree.
-
-Close a workspace with the **×** on its sidebar row, **Ctrl+G, X**, or
-**Ctrl+G, W → Close workspace**. Closing hides it without cancelling running work
-or deleting files, tasks, or transcripts. Reopen its folder to restore its tasks.
-You can close the last workspace and open another when ready.
-
-Errors and returned tool data use readable messages and labeled fields. Provider
-failures retain the HTTP status and supplied explanation; file and command results
-show paths, exit codes, and output. Saved history uses the same presentation.
-User and assistant messages retain their original code and prose.
-
-Approval requests start at the top of the context pane, including when the next
-queued request becomes active. Commands show the prepared command line, folder,
-reason and execution limits. File changes show paths, replacement text and a
-preview; other tools use readable labels. Approval still authorizes the original
-prepared operation, not the display text. Context scrolling stops at the last
-useful wrapped row, including after resizing or changing requests.
-
-Large selections reuse cached interior-row rectangles and index their two boundary rows.
-Highlighting changes cell colors without redrawing the selected text.
-Consecutive mouse-motion events are coalesced before drawing, including remote
-terminal sessions; releases, key presses, resize events and other messages keep
-their order.
-
-Model discovery loads provider modules before checking their capabilities, so a
-fresh process can fetch the catalogue without a manual configuration round-trip.
-
-## Backend composition
-
-`tui_backends` is the complete ordered backend list. The UI no longer injects
-native Alto or Codex entries. Existing custom-only lists remain custom-only;
-include the built-ins explicitly when wanted:
-
-```elixir
-tui_backends: [
-  alto: {Alto.TUI.Backends.Native, label: "Alto native"},
-  codex: {Alto.TUI.Backends.Codex, label: "Codex · ChatGPT"},
-  custom: {MyBackend, []}
-]
-```
-
-The coding profile includes both built-ins. A saved task retains its backend
-identity; if that backend is omitted, it cannot start until configured again.
-New tasks select the first configured backend. Names are not reserved.
-
-Runner adapters implement `Alto.TUI.Backend.start/4` and `cancel/3`. They receive
-the catalog task, prompt, composed run options and backend options. Native Alto
-uses this contract, including session resume. Existing custom runner adapters
-need no new callbacks.
-
-Interactive adapters implement `ui/3` and `cancel/3`. Codex uses this contract to
-own its connection, sign-in, models, approvals, streaming updates and cancellation.
-Optional `ui/3` contributions are available to runner adapters too. Return
-`:pass` to retain the host behavior. Events include initialization, selection,
-submission, picker contributions, messages, model metadata, activity and settings
-labels; see `Alto.TUI.Backend` and the built-in implementations for return shapes.
-Messages are offered to configured adapters, including inactive adapters with
-running tasks. Protocol approval requests carry their own responder; the host
-provides the shared approval controls.
-
-Adapters are trusted host code with access to UI state. They must preserve their
-protocol's approval and runtime controls. Native durable-input support is a
-capability supplied by the adapter, not a special case for the `:alto` identifier.
-Configure the Codex connection with options on its `tui_backends` entry.
-
-## Subagent activity
-
-**Ctrl+G, U** opens the current task's subagent list. Select a child to view its
-model, parent ID, current stage, streamed activity, tool summaries and final result
-in the context pane (a drawer on narrow terminals). **Esc** returns to context
-and keeps focus there; a second Esc closes a narrow drawer. Leaving the child view
-does not stop the parent while inspecting a child. Repeated labels remain
-separate because the list uses stable agent IDs. Approvals keep priority.
-Live activity is bounded. Reopening a native task rebuilds child and grandchild
-activity from durable session logs, including failed/cancelled children and
-shared-session children. The inspector shows the saved session ID and completion
-reason. Missing completion records are marked **no saved completion**, not assumed
-running or successful. This read-only inspection also works behind a resume fence.
-Discovery scans at most 4,096 session headers and retains 256 children; a notice
-reports truncation or unreadable discovered sessions. Transient streaming fragments
-that were never committed to history cannot be reconstructed.
-
-### Navigation performance
-
-Saved native conversations load in cancellable background work. The rail responds
-immediately; transcript entries appear before saved child activity is discovered.
-Recently used tasks and rendered transcript tails remain in bounded caches.
-Messages submitted during loading are retained, including when navigating away.
-
-See the [performance audit](../../docs/tui-performance-audit.md) for measured
-click-to-frame results, the reproducible navigation benchmark, and remaining
-scrolling, streaming, and persistence work.
-
-### Memory budgets
-
-The TUI detaches small display strings from oversized saved-file buffers and uses
-one owner-aware budget for derived Markdown, wrapping, transcript and search
-caches. Configure budgets in `alto.exs`:
+REVIEW delegates a decision to a configured two-argument callback:
 
 ```elixir
 [
-  max_event_bytes: 8_000_000,
   tui: [
-    render_cache_bytes: 16_000_000,
-    history_cache_bytes: 12_000_000
+    approval_reviewer: fn request, context ->
+      MyClassifier.approve?(request, context)
+    end
   ]
 ]
 ```
 
-`render_cache_bytes` is a conservative weighted serialized-size estimate, including
-source keys; it is not an exact RSS ceiling. Zero disables derived caching.
-`history_cache_bytes` covers cached display entries and child activity; inactive
-conversations are evicted first and release their derived caches. The selected
-conversation, active runs and queued input stay protected even above that budget.
-Per-conversation and per-agent bounds still apply.
+Merge this entry into your config, then select REVIEW. The callback receives the
+prepared request and execution context. Return `true` / `:approve`, or `false` /
+`{:deny, reason}`. Exceptions, invalid decisions, and timeouts do not approve.
+`approval_timeout` bounds review time. Native callbacks receive tool context;
+Codex callbacks receive `cwd`, `session_id`, and `metadata`.
 
-Search retains at most 1,000 matches and builds excerpts only when displaying
-results. `1000+` means more occurrences exist; refine the query to narrow them.
-Closing search releases its match, projection and highlighting caches. Full session
-logs and saved transcripts are unchanged by these display/cache limits.
+The goal editor saves an objective on the selected task and provides Pause,
+Resume, Complete, and Clear actions. Goals survive restarts and accompany the
+next run's initial message. Goal controls apply to the next run; they do not
+start or automatically continue work.
 
-See the [RSS audit](../../docs/rss-optimization-audit.md) for measurements and
-remaining runtime/native-allocation limitations.
+## Workspaces and tasks
+
+Click a workspace in the sidebar to compose a new task there. Use **+ New
+workspace** or **Ctrl+G, W → Open another folder** to open a folder. Relative
+paths start from the current workspace; `~` addresses your home folder. Tab
+completes paths, Up/Down selects suggestions, and Enter opens an existing
+folder. **Ctrl+N** or **Create folder** creates the typed path, including missing
+parents. **Ctrl+O** opens the folder chooser; **Ctrl+U** clears the field.
+
+Opening or creating a workspace preserves your draft. Existing runs continue in
+their original folders. Closing a workspace hides it without cancelling work or
+deleting files, tasks, or history; reopen the folder to restore its tasks.
+
+**Ctrl+G, W → Create worktree…** creates a linked Git worktree from committed
+files. Choose a starting ref (HEAD by default) and optionally a new branch.
+Alto opens a new task there when creation finishes. Worktrees are stored beside
+the catalog and remembered across restarts; closing their workspace leaves them
+on disk.
+
+The details pane stays beside the conversation on wide terminals, with a
+resizable seam. On narrow terminals it opens as a drawer. Esc closes it and
+restores the previous focus.
+
+## Reading, search, and clipboard
+
+Assistant replies and reasoning render Markdown with styled headings, emphasis,
+and syntax-colored code. Tool output uses a compact preview; search also exposes
+longer retained tool details. Saved messages keep their original content.
+
+Ctrl+F searches messages, code, and tool/edit details literally and without case
+sensitivity. Enter / Shift+Enter, F3 / Shift+F3, or Down / Up selects the next /
+previous match. Click a result excerpt to jump to it. Ctrl+U clears the query;
+Esc closes search. Search retains up to 1,000 matches; `1000+` means the query
+has more occurrences. Searching does not send input to the agent.
+
+Drag to select text within a pane, composer, or form. Hold a drag at the top or
+bottom of a conversation/details pane to scroll. **Ctrl+C** or **Alt+C** copies
+selection; right-click opens a Copy menu. **Alt+drag** includes UI labels and
+controls. Shift+drag uses your terminal's own selection behavior.
+
+Copy uses desktop clipboard helpers when available, otherwise an OSC 52 request
+that your terminal must allow. Paste with the terminal's usual shortcut.
+Bracketed paste inserts multiline text without sending it. Ctrl+V reads the
+local clipboard when a helper is available, otherwise the last TUI selection.
+
+## Providers and backends
+
+`provider_profiles` configures selectable model providers. Each entry is an
+`Alto.Harness.ProviderProfile` with a `{module, options}` provider. `models` is
+`:discover` or a list of atom-keyed model catalog maps. For example:
+
+```elixir
+Alto.default_config()
+|> Keyword.merge(
+  provider_profiles: [
+    %Alto.Harness.ProviderProfile{
+      id: "local",
+      label: "Local models",
+      provider: {Alto.Providers.OpenAICompatible, base_url: "http://localhost:1234/v1"},
+      models: [%{id: "coder", name: "Coder", context_length: 32_000}]
+    }
+  ],
+  tui_backends: [alto: {Alto.TUI.Backends.Native, label: "Alto native"}]
+)
+```
+
+Use the actual model ID from your server. Omitted labels and credential IDs use
+the profile ID; an omitted default model uses the provider's `model` option.
+Provider and model choices are remembered across tasks, workspace switches, and
+restarts. Each backend/provider pair keeps its own model choice. Forms mask API
+keys; Tab or Up/Down selects fields, Enter advances, and Ctrl+S submits.
+
+Reasoning effort choices come from the selected model's capabilities. For an
+explicit catalog, add `efforts: ["low", "high"]` with supported values. Choices
+apply to the next turn and are remembered for this TUI session. Readable thinking
+or reasoning summaries appear before answers and remain available in history.
+OpenAI-compatible and native Anthropic adapters stream reasoning when supplied;
+Codex can provide summaries. Encrypted or redacted data is not displayed.
+
+`tui_backends` is the complete ordered backend list; include each backend you
+want to offer:
+
+```elixir
+[
+  tui_backends: [
+    alto: {Alto.TUI.Backends.Native, label: "Alto native"},
+    codex: {Alto.TUI.Backends.Codex, label: "Codex · ChatGPT", command: "codex"},
+    custom: {MyBackend, []}
+  ]
+]
+```
+
+The supplied coding profile includes native Alto and Codex. Codex requires its
+CLI to be installed and signed in. Saved tasks retain their backend identity;
+configure that backend again to continue them. New tasks select the first entry.
+
+Runner adapters implement `Alto.TUI.Backend.start/4` and `cancel/3`. Interactive
+adapters implement `ui/3` and `cancel/3` to contribute connection setup, models,
+approvals, streaming, and settings. Return `:pass` from UI callbacks to retain
+host behavior. See `Alto.TUI.Backend` and the built-in implementations for the
+callback shapes.
+
+## Subagent inspection
+
+Ctrl+G, U opens the task's child agents. Select one to see its model, parent,
+stage, streamed activity, tool summaries, and result in the details pane. Esc
+returns to task details without stopping the parent. Approvals keep priority.
+
+Reopening a native task rebuilds saved child activity from session logs,
+including failed and cancelled children. An absent completion record is shown
+as **no saved completion**. Transient fragments that were never saved cannot be
+reconstructed. See [subagents](../../docs/subagents.md) for team configuration.
+
+## Logs and memory settings
+
+Logs go to `$ALTO_STATE_HOME/alto/logs/tui.log`, then
+`$XDG_STATE_HOME/alto/logs/tui.log`, or `~/.local/state/alto/logs/tui.log`.
+Use `--log PATH` to override this location. Logs rotate at 5 MB with three
+archives. Console logging is muted during the TUI and restored on exit.
+Set `ALTO_REQUEST_DIAGNOSTICS=1` to enable the coding profile's request diagnostics.
+
+Configure display caches in your `alto.exs`:
+
+```elixir
+[
+  max_event_bytes: 8_000_000,
+  tui: [render_cache_bytes: 16_000_000, history_cache_bytes: 12_000_000]
+]
+```
+
+`render_cache_bytes` is a weighted serialized-size estimate; zero disables
+caching. `history_cache_bytes` covers cached display entries and child activity.
+The selected conversation, active runs, and queued input stay protected even
+above that budget. These settings bound caches rather than total process RSS;
+saved transcripts and session logs have their own retention settings.
+
+For reproducible workloads, see [benchmarks](../../docs/benchmarks.md).

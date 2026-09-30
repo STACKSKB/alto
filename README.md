@@ -1,182 +1,67 @@
-# Alto v0.0.2
+# Alto
 
-Alto is a composable BEAM-native harness for bounded coding-agent workflows.
-It provides a serial model/tool runner, durable sessions and event logs,
-explicit approvals, workspace tools, provider adapters, and a small protocol
-for local front ends. Applications choose the loop, tools, provider, approval
-policy, executor, and resource limits as ordinary Elixir configuration.
+Alto is a lightweight, customizable agent harness written in Elixir. Use it as a
+terminal coding assistant, run a task from the command line, or compose it into
+an application. It handles the model/tool loop, streaming, approvals,
+cancellation, and saved sessions while you choose how the agent works.
 
-## Install and run
+The goal is an **xmonad-like agent harness**: configure it in real code, compose
+small parts, and replace the parts that do not fit your workflow. An `alto.exs`
+is an Elixir program returning your configuration. You can keep several of
+them for different models, projects, or sessions.
 
-This release targets Linux with Elixir 1.18 and OTP 27. Durable storage
-requires the host `flock` utility; sandboxed commands additionally require
-Bubblewrap. Releases contain source only; no prebuilt binaries are published.
+## Goals
+
+- **Lightweight.** Keep the core focused and resource use bounded. The terminal
+  UI, external tools, and application integrations are optional components.
+- **Customizable.** Choose the provider, model, prompt, tools, approval policy,
+  command executor, context policy, and execution limits in Elixir.
+- **Composable.** Reuse the supplied components or implement their contracts.
+  Build a coding agent, a tool-free chat session, a deterministic workflow, or
+  your own execution host from the same pieces.
+- **Flexible across models and sessions.** Use a separate `alto.exs` for each
+  workflow, share a base configuration, or expose several named configurations
+  from a resident service. Configuration is an ordinary value passed to a run.
+- **Explicit about execution.** Tools have defined authority, mutations can
+  require approval, and runs can be cancelled. Saved sessions retain history;
+  interrupted effects retain their uncertainty.
+
+Alto includes streaming OpenAI-compatible and Anthropic providers, file and
+command tools, context reduction, subagents and messaging, and Git workspaces.
+The optional TUI also supports a Codex backend. Each can be selected and composed
+through configuration.
+
+## Get started
+
+The supported baseline is Linux with Elixir 1.18 and OTP 27. Durable storage uses
+the host `flock` utility; sandboxed command execution uses Bubblewrap (`bwrap`).
 
 ```sh
-git clone --branch v0.0.2 https://github.com/STACKSKB/alto.git
+git clone https://github.com/STACKSKB/alto.git
 cd alto
 mix deps.get
-mix alto --help
+mix alto --setup
+mix alto "Explain this repository"
 ```
 
-The default CLI uses OpenRouter through an OpenAI-compatible provider. Set a key
-and model, then run a task:
+The default CLI uses OpenRouter. `--setup` saves a key and default model in the
+private per-user credential store. For environment-based setup:
 
 ```sh
-export ALTO_API_KEY="..."
+export OPENROUTER_API_KEY="..."
 export ALTO_MODEL="provider/model"
 mix alto "Explain this repository"
 ```
 
-`OPENROUTER_API_KEY` is also accepted. `ALTO_MODEL` overrides the saved default.
-`mix alto --setup` stores the OpenRouter key and model in the per-user credentials
-file with mode `0600`; credentials are never written to the workspace or session
-startup metadata. Select other providers, models, transports, prompts, tools and
-limits through `mix alto --config FILE`. A configured provider is used as supplied,
-including its model and transport timeout; `provider_timeout` separately bounds
-the runner call. HTTP providers accept an optional `idle_timeout` for gaps between
-received data; `timeout` remains the hard total HTTP deadline. Without
-`idle_timeout`, both limits retain the `timeout` value. The agentic profile uses
-120 seconds of silence, 600 seconds total, and a 610-second runner deadline;
-the remaining run budget can end a call sooner. Cancellation still applies.
-
-Build a standalone CLI with:
+`ALTO_API_KEY` is also accepted. The default CLI tools list, read, and search
+files. Select the supplied coding profile to add file edits, sandboxed commands,
+Git tools, and agents:
 
 ```sh
-mix escript.build
-./alto "Inspect this project"
+mix alto --config alto.agentic.exs "Run the tests and fix the failure"
 ```
 
-The public source is [github.com/STACKSKB/alto](https://github.com/STACKSKB/alto).
-A library application can depend on the tagged source with:
-
-```elixir
-defp deps do
-  [{:alto, git: "https://github.com/STACKSKB/alto.git", tag: "v0.0.2"}]
-end
-```
-
-## A providerless library run
-
-The rule loop is useful for deterministic workflows and tests. It executes
-trusted, configured tool steps without making a model request:
-
-```elixir
-defmodule EchoTool do
-  @behaviour Alto.Tool
-
-  def name(_opts), do: :echo
-  def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-  def execution_mode(_opts), do: :parallel
-  def approval(_opts), do: :never
-  def run(arguments, _context, _opts), do: {:ok, arguments}
-end
-
-%Alto.Runner.Result{status: :ok} = result =
-  Alto.run(%{"message" => "hello"},
-    loop: Alto.rule_loop(steps: ["echo"]),
-    tools: [EchoTool],
-    provider: nil
-  )
-
-result.output
-# [%{"message" => "hello"}]
-```
-
-For model-driven work, pass a provider module or a keyword list of run options.
-Configuration files are trusted Elixir and return keyword lists directly.
-Components own their defaults and domain checks. Malformed host configuration may raise.
-Duplicate keys follow ordinary keyword-list semantics; there is no
-second registry of run options. Provider, tool, loop, command-executor, and
-search-backend behaviours are extension contracts; webhook admission, middleware,
-and hooks compose functions. `Alto.Capabilities` can describe the effective
-configured tools, providers, and limits without exposing secrets.
-
-## Workspace permissions and limits
-
-Listing, reading, and bounded literal search are available by default. Enable
-writes and commands in a trusted config file, for example `coding.exs`:
-
-```elixir
-[
-  tools: [
-    Alto.Tools.ListFiles,
-    Alto.Tools.ReadFile,
-    Alto.Tools.SearchFiles,
-    Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
-    Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
-    {Alto.Tools.RunShell,
-     executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}},
-    {Alto.Tools.RunCommand,
-     executor: {Alto.Command.Executors.Bubblewrap, protected_paths: [".git"]}}
-  ]
-]
-```
-
-Run it with `mix alto --config coding.exs "Run the focused tests"`. The Bubblewrap
-executor gives commands a writable workspace, a read-only runtime, a fresh
-temporary directory, and no network by default. The configuration above also
-protects `.git` from commands and native file edits. The full
-[`alto.agentic.exs`](./alto.agentic.exs) profile adds approved Git mutations and
-other coding tools.
-
-`run_command` accepts an executable and an argv list. `run_shell` accepts one
-`command` string for scripts and pipelines, running Bash with `-e -o pipefail`
-through the same executor and approval boundary. Bash failure propagation still
-has its usual exceptions in conditions and `&&`/`||` lists; scripts may explicitly
-override the defaults. Inspect the returned exit status and output.
-
-The CLI and TUI enable project instructions by default. On a fresh task, Alto
-loads the first existing root file, `alto.md` then `AGENTS.md`, into the system
-prompt (up to 32,000 bytes). These files are alternatives, not automatically
-combined: use an explicit reference if your Alto-specific file supplements
-`AGENTS.md`. The coding prompt asks agents to read applicable nested instructions
-before editing; nested files are not automatically injected. Resumed tasks keep
-the saved transcript, so changed instruction files must be reread.
-
-Start a trusted `alto.exs` (or any explicitly selected config file) from the
-shipped defaults and override ordinary Elixir values:
-
-```elixir
-Alto.default_config()
-|> Keyword.merge(
-  run_timeout: 2 * 60 * 60 * 1_000,
-  provider_timeout: 30 * 60 * 1_000 + 10_000,
-  tool_timeout: 120_000
-)
-```
-
-`run_timeout` bounds the whole run, including descendants; `provider_timeout`
-bounds each provider call. HTTP providers also expose `timeout` (total request)
-and `idle_timeout` (stream silence) in their provider option list. Set the outer
-provider timeout above the HTTP timeout to let the transport report its own
-failure. `alto.agentic.exs` demonstrates these overrides for long coding tasks.
-Defaults are an ordinary keyword list, not global mutable configuration;
-`Keyword.merge/2` replaces nested values rather than implicitly deep-merging them.
-Changes apply to newly started/resumed runs, not already running deadlines.
-
-Execution settings live in the configuration keyword list: use `tools: []` to disable tools,
-`prompt: nil` to omit the system prompt, `project_instructions: nil` to skip
-workspace instructions, and `max_steps:` to bound model calls. An executor's
-`network: :inherit` enables network access; `Alto.Command.Executors.Unsandboxed`
-selects host execution. The CLI defaults to interactive approval for mutations;
-set `approval: :approve` for an explicitly trusted unattended run.
-Served runs default to socket approvals and honor an explicit configured policy.
-See [extension boundaries](docs/extensions.md) for composition examples.
-
-The runner bounds model calls (`max_steps`), tool results, transcript and event
-bytes, provider and tool time, approvals, queue records, operation history,
-and ingress bodies. Queue and operation logs reject appends that exceed their
-configured `max_log_bytes` limit. Session, credential, catalog, queue, and
-ledger state uses private files and bounded reads. Cross-process storage uses
-host advisory locks with bounded acquisition waits; uncertain external effects
-remain unknown until reconciled.
-
-## Optional terminal UI
-
-The core production build does not require the native ExRatatui dependency.
-The optional package in [`packages/alto_tui`](./packages/alto_tui) contains the
-working terminal client and its shared sources. From this checkout:
+For the terminal UI:
 
 ```sh
 cd packages/alto_tui
@@ -184,107 +69,70 @@ mix deps.get
 mix alto.tui --config ../../alto.agentic.exs
 ```
 
-In the workspace dialog (`Ctrl+G`, then `W`), type a new folder path and
-click **Create folder** or press `Ctrl+N` to create it and open the workspace.
-Missing parent folders are created too. `Enter` continues to open an existing
-folder; creating a workspace preserves the current draft.
+The TUI provides streaming Markdown, provider and model pickers, approvals,
+workspace and task navigation, conversation search, and subagent inspection.
+See the [TUI guide](packages/alto_tui/README.md) for controls and configuration.
 
-Assistant responses render as Markdown while streaming and when reopening a task:
-headings and emphasis are styled, fenced code retains indentation with syntax
-color, and tables use labeled records that retain all cells at every pane width.
-Selection copies the visible formatted text; saved messages retain the
-original Markdown. Layout caches and viewport-only painting keep report formatting
-out of the pointer-motion path. The shared renderer is also used by Zekkyou.
+Build a standalone CLI with `mix escript.build`, then run `./alto --help`.
 
-The TUI example hosts runs locally and uses the same approval, execution,
-cancellation, and session contracts as other hosts. Applications can build
-independently reconnectable clients using the transport contract below.
+## Make it yours
 
-## Local front-end protocol
+Start with the shipped defaults and override ordinary Elixir values:
 
-`Alto.Protocol` defines versioned JSON envelopes for Unix socket NDJSON and
-WebSocket clients. The server streams bounded durable and live events, accepts
-trusted configuration names, exposes approval responses, and supports bounded
-session and queue inspection. Clients cannot send Elixir code or inline loop,
-provider, tool, or policy modules. See [PROTOCOL.md](./PROTOCOL.md) for the
-wire contract. WebSocket upgrades require a generated token by default; open the
-capability URL printed by `--serve`. Native clients send a Bearer token, and hosts
-can replace the listener authentication policy.
+```elixir
+# alto.exs
+Alto.default_config()
+|> Keyword.merge(
+  tools: [Alto.Tools.ListFiles, Alto.Tools.ReadFile, Alto.Tools.SearchFiles],
+  max_steps: 48,
+  run_timeout: 30 * 60 * 1_000
+)
+```
 
-## Examples
+Without a `provider` entry, the CLI resolves your OpenRouter credentials and
+model. `Alto.default_config()` itself supplies no provider or credentials.
 
-The [examples index](./examples/README.md) covers the maintained repository
-maintenance and document intake applications, optional Oban host, and coding
-configuration profile. Each example keeps authentication, persistence, retries, and
-external side effects in the host application while Alto enforces its own
-execution and resource boundaries.
+Choose a config explicitly for each task or session:
 
-The feature guides cover [explicit tool batches](docs/tool-batches.md),
-[context reduction](docs/context-reduction.md), [interactive input](docs/interactive-input.md),
-[conversation revisions](docs/conversations.md), [multimodal tool content](docs/multimodal-content.md),
-[extension boundaries](docs/extensions.md), and the [offline benchmark and provider comparison](docs/benchmarks.md).
+```sh
+mix alto --config profiles/review/alto.exs "Review this change"
+mix alto --config profiles/local/alto.exs "Explain the parser"
+mix alto --resume SESSION_ID --config profiles/review/alto.exs "Check the tests too"
+```
 
-The checked-in [`alto.agentic.exs`](./alto.agentic.exs) profile is an explicit
-coding configuration, not a library default. It uses up to four concurrent
-approval-free read calls, permits eight context reductions, and starts context
-reduction at 85% of the available input window. Settled session history keeps
-complete conversation boundaries for recovery. Set `ALTO_VISION=1` only when
-the selected model supports vision; this enables the bounded image reader and
-passes images to the provider adapter. Library defaults remain conservative,
-with serial tools, no automatic image capability, and compaction disabled unless
-the host opts in. When enabled, compaction permits one reduction by default.
-Team composition is explicit: trusted loops request children, each child
-inherits an exact subset of the parent's tools and authority, and
-`Alto.Subagents.bounded/1` sets depth, child-count, and concurrency ceilings.
-Use a shared budget account when the team also needs bounded effect and model
-request counts; delegation never widens capabilities or the root budget.
+Configuration files can import shared code, read environment variables, and
+construct custom components. Alto evaluates them as trusted Elixir. Workspace
+configs are selected explicitly; a repository's `alto.exs` is never discovered
+and executed automatically. The [configuration guide](docs/configuration.md)
+covers multiple profiles, provider setup, sessions, and defaults.
 
-Alto is distributed under the [MIT License](./LICENSE).
+## Use Alto in an application
 
-Durable hosts can use [approval continuations](docs/checkpoints.md) to persist
-exact prepared operations, release workers while awaiting decisions, and resume
-under preserved budgets with the existing queue and operation ledger.
+Add Alto from source to your application's dependencies:
 
-Trusted loops can request [bounded subagent batches](docs/subagents.md), sharing
-execution budgets and inherited tool authority while running children concurrently.
-Hosts can opt into durable isolated Git workspaces and immutable patch capture.
-`Alto.Workspaces.prepare_apply/3` captures a portable approval manifest, and
-`apply/2` checks the saved resource revision, patch hash, repository and affected
-files before integrating into the source working tree. The index stays unchanged.
-Disjoint patches can be reviewed together and applied independently; overlapping
-edits invalidate the saved approval. Applied patches remain available for review
-until explicitly discarded. Named agent profiles, approval and integration
-selection remain host concerns. User steering and agent messages share bounded
-input channels; `start_agents`, `send_message`, and `wait_agents` support
-interactive teams. See [subagents](docs/subagents.md).
+```elixir
+{:alto, git: "https://github.com/STACKSKB/alto.git"}
+```
 
-Host extension boundaries, input transforms, and provider-aware context
-estimates are described in [docs/extensions.md](docs/extensions.md).
+The same configuration works through the library API:
 
-Preparation is read-only. Application serializes callers sharing the same workspace
-manager; it does not exclude unrelated editors or Git processes. Errors before
-dispatch are known refusals. Failures after Git starts, including incomplete durable
-recording, return `{:unknown, reason}` and retain the resource for review without
-automatic replay. An interrupted application is not an atomic multi-file rollback.
-The Git integration manifest is bounded to 256 affected regular files, 128 MiB of
-existing affected content and 32 KB of serialized metadata; captured patches are
-bounded to 1 MB. Symlink paths and repository filters remain unsupported.
+```elixir
+{:ok, options} = Alto.Config.load("profiles/review/alto.exs")
+%Alto.Runner.Result{status: :ok, output: answer} = Alto.run("Review the parser", options)
+```
 
-### Replaceable execution hosts
+`Alto.start/2`, `Alto.await/2`, and `Alto.cancel/2` support asynchronous runs.
+Use `Alto.resume/3` for follow-ups, `Alto.rule_loop/1` for providerless workflows,
+or `Alto.loop/2` to supply your own control policy. A resident service can expose
+runs and saved sessions to clients over Unix sockets or WebSockets.
 
-The default `Alto.Runner.Serial` composes shared execution components. Select a host with `runner:` in the configuration keyword list or
-run options. Handles are opaque and results use `Alto.Runner.Result`; registry
-and TUI integrations consume completion notifications instead of inspecting
-Tasks. Serial can optionally wait for a one-use admission ticket before each effect.
-See [execution hosts](docs/runners.md) for contracts and examples.
+## Documentation
 
-### Provider retry timing
+- [Guides and API contracts](docs/README.md)
+- [Configuration and multiple `alto.exs` profiles](docs/configuration.md)
+- [Terminal UI](packages/alto_tui/README.md)
+- [Application examples](examples/README.md)
+- [Front-end protocol](PROTOCOL.md)
+- [Changelog](CHANGELOG.md)
 
-`provider_retries` bounds retries before any model output is delivered (the
-agentic profile enables three). For HTTP 429 and 503, the transient policy
-honors valid `Retry-After` and rate-limit reset timing, including reset metadata
-in provider error bodies. Server-directed delays are never shortened by jitter.
-A delay over 60 seconds stops automatic retry rather than waiting through a
-long quota reset. Waiting remains cancellable and subject to the run deadline;
-the TUI displays the planned wait. Once any model output has streamed, Alto
-never retries that attempt automatically.
+Alto is distributed under the [MIT License](LICENSE).

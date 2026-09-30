@@ -46,6 +46,8 @@ defmodule Alto.MixProject do
         "LICENSE",
         "CHANGELOG.md",
         "PROTOCOL.md",
+        "docs/README.md",
+        "docs/configuration.md",
         "docs/delayed-queue.md",
         "docs/checkpoints.md",
         "docs/parent-continuations.md",

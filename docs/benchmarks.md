@@ -1,43 +1,54 @@
-# Offline benchmark and provider comparison
+# Offline benchmarks
 
-The repository includes a deterministic scheduling benchmark at
-[`bench/tool_batches.exs`](../bench/tool_batches.exs). It runs the same eight
-approval-free, read-only fake calls with a 20 ms sleep in two modes: ordered
-serial effects and one explicit parallel batch with a concurrency limit of four.
-The fake tool increments a counter, so every sample checks that all eight calls
-ran and all eight results were returned. No provider, network, model output, or
-quality claim is involved.
+These workloads measure execution, storage, and terminal rendering without paid
+model requests. Compare results from the same checkout, machine, and load;
+latency and RSS depend on the scheduler, filesystem, native allocator, and
+terminal environment.
 
-Run it from the repository root:
+## Core
+
+Run from the repository root:
 
 ```sh
 mix run bench/tool_batches.exs
+mix run scripts/harness_storage_bench.exs
+mix run scripts/rss_bench.exs core
 ```
 
-The output reports the per-sample call counts, elapsed milliseconds, and the
-sample average. Elapsed time depends on the host scheduler and load; compare
-serial and parallel runs from the same checkout and machine. The benchmark is
-useful for checking the execution boundary and scheduling cost. It is not a
-provider performance benchmark.
+The [tool-batch benchmark](../bench/tool_batches.exs) compares eight synthetic
+read calls in serial and an explicit parallel group of four. Every sample checks
+that all calls ran and their results returned. The
+[storage workload](../scripts/harness_storage_bench.exs) measures durable append,
+transcript persistence, and resume reads with disposable data. The
+[RSS workload](../scripts/rss_bench.exs) reports BEAM and Linux process memory.
 
-For an Alto versus Pi comparison, use the same provider model and request set
-in both harnesses. Keep the prompt, tool fixtures, tool permissions, model
-parameters, retry policy, context window, output reservation, and concurrency
-settings identical. Start each case from a fresh session or the same retained
-revision, and repeat each case enough times to report a median and spread.
+## Terminal UI
 
-Record these measurements separately:
+Run from `packages/alto_tui`, where ExRatatui and the TUI modules are available:
 
-- quality: a fixed rubric with success, required corrections, tool-call
-  correctness, and reviewer-blinded task outcomes;
-- latency: wall-clock duration, time to first model event, each provider request,
-  and tool-batch duration from monotonic host timestamps;
-- usage: provider-reported input and output tokens from `Result.usage`, model
-  request count, and any cache fields;
-- cost: token usage multiplied by the price card for the exact model and date,
-  with currency and pricing assumptions recorded beside the result.
+```sh
+mix run ../../scripts/tui_workload_bench.exs
+mix run ../../scripts/tui_selection_bench.exs
+mix run ../../scripts/tui_incremental_bench.exs
+mix run ../../scripts/tui_memory_cycles_bench.exs sample
+mix run ../../scripts/rss_bench.exs tui
+```
 
-Do not infer provider token counts from Alto's conservative context estimator,
-and do not convert elapsed time into quality or cost. Keep model quality,
-provider usage, host scheduling, and tool behavior as separate columns in the
-comparison record.
+These use synthetic conversations to exercise scrolling, selection, incremental
+stream updates, cache turnover, and repeated native rendering. RSS probes use
+Linux `/proc`. Native drawing measurements exclude terminal-emulator latency.
+
+To measure navigation across your saved tasks:
+
+```sh
+mix run ../../scripts/tui_navigation_bench.exs SESSION_ID_A SESSION_ID_B
+```
+
+The [navigation workload](../scripts/tui_navigation_bench.exs) reads existing
+history and may refresh disposable `.cache` projections. It does not change the
+catalog or start model runs. The incremental workload also accepts optional
+saved session IDs for read-only transcript measurements.
+
+Scheduling and rendering measurements do not establish model quality, provider
+latency, token usage, or cost. Record provider-reported usage and request settings
+separately when comparing live model runs.

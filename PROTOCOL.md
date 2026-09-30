@@ -34,36 +34,37 @@ protocol deliberately does not make.
 
 ## Process model
 
-The core Alto process is the listener. There is no separate daemon with its
-own semantics — the same core that runs `alto "task"` one-shot can run as a
-resident process whose listener component is enabled by configuration:
+The same Alto CLI can run a task once or host runs for connected clients:
 
-- **One-shot** (shipped today): the process starts, performs the run, prints,
+- **One-shot**: the process starts, performs the run, prints,
   and exits. No listener.
-- **Resident** (this protocol): the process stays up, owns zero or more runs,
+- **Resident** (`alto --serve`): the process stays up, owns zero or more runs,
   and accepts client connections. Clients are unprivileged: a status line, a
   transcript pane, a diff-preview pane, and an approval prompt are all
-  independent connections; none is privileged over another.
+  independent connections.
 
 The listener is a component selected and parameterized by the user's compiled
-Elixir configuration, like executors and approval policies today. It owns no
+Elixir configuration, like executors and approval policies. It owns no
 policy: it validates framing and forwards; the host still decides
 authorization and execution at its existing boundaries.
 
 ## Transports
 
-- **v1 default transport: Unix domain socket + NDJSON.** Zero new
-  dependencies (OTP `:gen_tcp` with a `{:local, path}` bind). One JSON
-  envelope per line, UTF-8, terminated by `\n`. Served by
+- **Unix domain socket + NDJSON.** Uses OTP `:gen_tcp` with a `{:local, path}`
+  bind. One JSON envelope per line, UTF-8, terminated by `\n`. Served by
   `Alto.Listeners.UnixSocket`.
-- **WebSocket transport (shipped).** One envelope per text frame, same bytes,
+- **WebSocket.** One envelope per text frame, same bytes,
   served by `Alto.Listeners.WebServer`: a localhost HTTP listener whose
   `GET /ws` upgrades to the front-end protocol. Other HTTP paths return 404.
-  Upgrades are accepted only
+  Upgrades require token authentication by default and are accepted only
   from same-origin pages (or non-browser clients with no `Origin` header).
   Bandit, Plug, and WebSock own HTTP and RFC 6455 mechanics; Alto's
   transport-independent `Alto.Listeners.Connection` owns envelopes and
   commands. Nothing above the framing layer may assume either transport.
+
+`--serve` enables both listeners unless a `listeners:` configuration selects
+different transports. See [Web transport authentication](#web-transport-authentication)
+for credentials and custom authentication policies.
 
 Framing rules for NDJSON (both directions):
 
@@ -223,12 +224,11 @@ Codes: `unknown_type`, `invalid`, `unknown_run`, `not_found`, `unsupported`,
 
 ## Messages: client → server
 
-**`auth`** — optional first client message, reserved for token auth. When the
-listener is configured without a token (the v1 single-user default), it MUST
-NOT be sent; when a token is configured, it MUST be the first message, and any
-earlier command yields `error` (`invalid`).
+**`auth`** — reserved; returns `unsupported` in v1. WebSocket authentication
+happens during the HTTP upgrade, before any protocol messages. Unix sockets use
+filesystem permissions. See [Web transport authentication](#web-transport-authentication).
 
-**`attach`** — subscribe. Each client attaches to what it needs, i3-style.
+**`attach`** — subscribe. Each client attaches to the runs and event domains it needs.
 
 ```json
 {"v": 1, "type": "attach", "id": "c-3", "run_id": "run-41",
@@ -582,9 +582,10 @@ command and write-tool invocations on runs it can see.
 - v1 binds a Unix domain socket inside a `0700` directory, with the socket
   file itself `0600`. On a single-user machine this is the authentication
   boundary, and it is enforced by the filesystem, not by protocol code.
-- The optional `auth` token handshake (above) exists for deployments that
-  need protection beyond filesystem permissions;
-  it is unused by the v1 default configuration.
+- WebSocket upgrades require a generated listener token by default, as well as
+  a valid browser origin when one is supplied. Hosts can configure a custom
+  authentication policy at the HTTP boundary; the protocol `auth` message is
+  reserved.
 - `start_run` resolves only server-side trusted compiled configurations by
   name. No message in this protocol carries Elixir code, module names to load,
   or executable strings that the host treats as configuration.
@@ -613,7 +614,7 @@ dispatch, bounded notifications, and approval correlation. WebSocket clients
 use the WebSocket transport directly. Queue, session, and operator commands are
 available only when the host configures the corresponding stores.
 
-`input` and `reload` are reserved message types and return `unsupported` in v1.
+`auth`, `input`, and `reload` are reserved message types and return `unsupported` in v1.
 `start_run` rejects inline overrides and resolves only named, server-side
 compiled configurations. Clients should use `attach` and `from_seq` with the
 retained event window, and treat an `overflow` message as the explicit signal
@@ -621,7 +622,7 @@ that replay history is incomplete.
 
 ## Web transport authentication
 
-The optional loopback WebServer now authenticates upgrades by default, in addition
+The loopback WebServer authenticates upgrades by default, in addition
 to rejecting foreign browser origins. `auth: :token` generates a new 256-bit
 capability per listener lifetime. `Alto.Listeners.WebServer.url/1` returns the
 WebSocket endpoint; the CLI prints the token separately on `--serve`. Treat the
@@ -641,5 +642,4 @@ characters), `{MyVerifier, options}` implementing
 `Alto.Listeners.WebAuth.authorize/2`, or explicit `auth: :none` for a host that
 provides its own trusted transport. Verifiers return `:ok` or `{:error, reason}`;
 invalid results and exceptions deny access. Custom authentication may require a
-custom client. Existing WebSocket clients must now supply a credential or hosts
-must explicitly select a different policy.
+custom client.

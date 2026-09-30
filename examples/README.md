@@ -1,9 +1,14 @@
-# Examples
+# Alto examples
 
-These examples show how to compose Alto around real application boundaries.
-They are intentionally small: the host owns authentication, persistence,
-retry policy, and external side effects, while Alto owns the configured run,
-approval, and resource limits.
+Start with [`alto.agentic.exs`](../alto.agentic.exs) for a terminal coding agent.
+It works with the CLI and optional TUI, and exposes tools, providers, approvals,
+executors, and limits as an ordinary Elixir keyword list. Use the
+[configuration guide](../docs/configuration.md) to derive separate profiles for
+your models and sessions.
+
+The application examples show how to embed Alto in a host that owns admission,
+storage, and external integration. Alto supplies the configured execution loop,
+approvals, cancellation, and resource bounds.
 
 - [Repository maintenance](repository_maintenance/README.md) receives signed
   reports, diagnoses a detached checkout, runs configured verification, and
@@ -13,13 +18,8 @@ approval, and resource limits.
   versioned JSON/CSV artifacts atomically.
 - [Optional Oban host](oban_backend/README.md) shows durable admission and a
   worker that sends unknown external outcomes to explicit reconciliation.
-- [`alto.agentic.exs`](../alto.agentic.exs) is a full local coding profile for
-  the optional terminal UI and one-shot CLI. It keeps command execution,
-  approvals, provider settings, and bounds visible in its keyword config.
 - [Extension boundaries](../docs/extensions.md) shows host-side input
   transforms, provider-aware context estimates, hooks, trusted commands, and
   optional renderers and provider adapters.
 
-The repository maintenance and document intake flows operate on local files and
-include their own host-side integration checks. Provider fixtures exercise
-Alto's contracts; they do not claim a live paid-provider result.
+Each example has its own run instructions and integration checks.

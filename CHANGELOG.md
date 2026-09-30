@@ -18,7 +18,7 @@ should allow these documented variants. Existing saved history remains readable.
 Known limits: queued TUI input is held in memory; provider failure cancels owned
 children; model-generated compaction handoffs can fail validation. Failures remain
 visible and saved work can be resumed. Physical terminal/platform coverage is
-Linux-focused. This release does not include HotLimit or prebuilt executables.
+Linux-focused. Releases contain source; no prebuilt executables are included.
 
 
 - Confine project instruction files to the workspace and bound reads before loading.
