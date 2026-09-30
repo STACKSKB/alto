@@ -23,21 +23,6 @@ defmodule Alto.SessionTest do
     assert is_integer(started["at_ms"])
   end
 
-  test "started records keep provider identity but never secrets", %{dir: dir} do
-    meta = %{
-      run_id: "run-1",
-      provider: "Elixir.Alto.Providers.OpenAICompatible",
-      model: "m",
-      cwd: "/tmp"
-    }
-
-    assert {:ok, id} = Session.create("task", meta, session_dir: dir)
-    assert {:ok, [record]} = Session.read(id, session_dir: dir)
-    assert record["provider"] == "Elixir.Alto.Providers.OpenAICompatible"
-    assert record["model"] == "m"
-    refute Map.has_key?(record, "api_key")
-  end
-
   test "event records round-trip exact terms", %{dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 

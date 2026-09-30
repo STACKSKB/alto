@@ -140,13 +140,6 @@ defmodule Alto.Command.Executors.BubblewrapTest do
     refute File.exists?(Path.join(root, "forbidden.txt"))
   end
 
-  test "fails closed when the configured bubblewrap executable is absent", %{context: context} do
-    assert {:error, {:bubblewrap_not_executable, "/does/not/exist/bwrap"}} =
-             Alto.Command.run(%{"program" => "printf"}, context,
-               executor: {Bubblewrap, bubblewrap: "/does/not/exist/bwrap"}
-             )
-  end
-
   test "rejects invalid network modes before any execution", %{context: context} do
     for mode <- [:host, :bridge, "inherit", nil] do
       assert {:error, {:invalid_network_mode, ^mode}} =

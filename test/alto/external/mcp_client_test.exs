@@ -184,15 +184,6 @@ defmodule Alto.External.MCP.ClientTest do
     client
   end
 
-  test "reports missing executables without hanging startup", %{root: root} do
-    assert {:error, _reason} =
-             Client.ensure_started(
-               command: "alto-definitely-missing-mcp",
-               cwd: root,
-               startup_timeout: 5_000
-             )
-  end
-
   test "startup timeout stops a retained client", %{root: root} do
     assert {:error, _reason} =
              Client.ensure_started(

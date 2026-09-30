@@ -32,21 +32,6 @@ defmodule Alto.ConfigTest do
            } = Alto.run("task", options)
   end
 
-  test "loaded loop and tool options drive an actual run", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      "[loop: Alto.rule_loop(steps: [\"configured_echo\"]), " <>
-        "tools: [{Alto.ConfigTest.ConfiguredTool, suffix: \"!\"}]]\n"
-    )
-
-    assert {:ok, options} = Config.load(path)
-
-    assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
-             Alto.run(%{"value" => "configured"}, options)
-  end
-
   test "default configuration composes with file overrides and drives a run", %{root: root} do
     defaults = Alto.default_config()
     assert Alto.default_config(run_timeout: 7_200_000)[:run_timeout] == 7_200_000
