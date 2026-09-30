@@ -52,14 +52,14 @@ authorization and execution at its existing boundaries.
 
 - **Unix domain socket + NDJSON.** Uses OTP `:gen_tcp` with a `{:local, path}`
   bind. One JSON envelope per line, UTF-8, terminated by `\n`. Served by
-  `Alto.Listeners.UnixSocket`.
+  `Alto.Contrib.Listeners.UnixSocket`.
 - **WebSocket.** One envelope per text frame, same bytes,
-  served by `Alto.Listeners.WebServer`: a localhost HTTP listener whose
+  served by `Alto.Contrib.Listeners.WebServer`: a localhost HTTP listener whose
   `GET /ws` upgrades to the front-end protocol. Other HTTP paths return 404.
   Upgrades require token authentication by default and are accepted only
   from same-origin pages (or non-browser clients with no `Origin` header).
   Bandit, Plug, and WebSock own HTTP and RFC 6455 mechanics; Alto's
-  transport-independent `Alto.Listeners.Connection` owns envelopes and
+  transport-independent `Alto.Contrib.Listeners.Connection` owns envelopes and
   commands. Nothing above the framing layer may assume either transport.
 
 `--serve` enables both listeners unless a `listeners:` configuration selects
@@ -564,7 +564,7 @@ composition story as executors and approval policies, not a fixed host policy.
 A listener configuration names its policy and options, for example:
 
 ```elixir
-listeners: [{Alto.Listeners.UnixSocket,
+listeners: [{Alto.Contrib.Listeners.UnixSocket,
              path: "~/.local/state/alto/alto.sock",
              max_line_bytes: 1_048_576,
              per_client: [max_buffer_bytes: 4_000_000,
@@ -619,8 +619,8 @@ command and write-tool invocations on runs it can see.
 
 ## Current implementation notes
 
-The shipped listeners are `Alto.Listeners.UnixSocket` and
-`Alto.Listeners.WebServer`; both use the same envelope validation, command
+The shipped listeners are `Alto.Contrib.Listeners.UnixSocket` and
+`Alto.Contrib.Listeners.WebServer`; both use the same envelope validation, command
 dispatch, bounded notifications, and approval correlation. WebSocket clients
 use the WebSocket transport directly. Queue, session, and operator commands are
 available only when the host configures the corresponding stores.
@@ -635,7 +635,7 @@ that replay history is incomplete.
 
 The loopback WebServer authenticates upgrades by default, in addition
 to rejecting foreign browser origins. `auth: :token` generates a new 256-bit
-capability per listener lifetime. `Alto.Listeners.WebServer.url/1` returns the
+capability per listener lifetime. `Alto.Contrib.Listeners.WebServer.url/1` returns the
 WebSocket endpoint; the CLI prints the token separately on `--serve`. Treat the
 token as a credential and send it in a WebSocket subprotocol or Authorization
 header.
@@ -650,7 +650,7 @@ approval messages, and Unix-socket behavior are unchanged.
 
 Listener configuration can select `auth: {:token, token}` (at least 32 URL-safe
 characters), `{MyVerifier, options}` implementing
-`Alto.Listeners.WebAuth.authorize/2`, or explicit `auth: :none` for a host that
+`Alto.Contrib.Listeners.WebAuth.authorize/2`, or explicit `auth: :none` for a host that
 provides its own trusted transport. Verifiers return `:ok` or `{:error, reason}`;
 invalid results and exceptions deny access. Custom authentication may require a
 custom client.

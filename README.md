@@ -38,7 +38,7 @@ the host `flock` utility; sandboxed command execution uses Bubblewrap (`bwrap`).
 
 ```sh
 git clone https://github.com/STACKSKB/alto.git
-cd alto
+cd alto/packages/alto_contrib
 mix deps.get
 mix alto --setup
 mix alto "Explain this repository"
@@ -58,7 +58,7 @@ files. Select the supplied coding profile to add file edits, sandboxed commands,
 Git tools, and agents:
 
 ```sh
-mix alto --config alto.agentic.exs "Run the tests and fix the failure"
+mix alto --config ../../alto.agentic.exs "Run the tests and fix the failure"
 ```
 
 Attach local files with repeated `--attach FILE` arguments, including when
@@ -68,7 +68,7 @@ resuming a session. Supported inputs depend on the selected model; see
 For the terminal UI:
 
 ```sh
-cd packages/alto_tui
+cd ../alto_tui
 mix deps.get
 mix alto.tui --config ../../alto.agentic.exs
 ```
@@ -77,7 +77,8 @@ The TUI provides streaming Markdown, provider and model pickers, approvals,
 workspace and task navigation, conversation search, and subagent inspection.
 See the [TUI guide](packages/alto_tui/README.md) for controls and configuration.
 
-Build a standalone CLI with `mix escript.build`, then run `./alto --help`.
+Build a standalone CLI from `packages/alto_contrib` with `mix escript.build`, then
+run `./alto --help`.
 
 ## Make it yours
 

@@ -49,7 +49,7 @@ defmodule AltoObanExampleTest do
     assert nil == options[:provider]
     assert %{"event_flow" => _run_options} = options[:runs]
 
-    assert [{Alto.Listeners.Webhook, listener_opts}] = options[:listeners]
+    assert [{Alto.Contrib.Listeners.Webhook, listener_opts}] = options[:listeners]
     assert %{"/hooks/events" => endpoint} = listener_opts[:endpoints]
     assert is_function(endpoint.on_event, 2)
     body = ~s({"value":42})

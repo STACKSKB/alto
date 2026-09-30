@@ -14,7 +14,7 @@ export WEBHOOK_SECRET=replace-me
 mix deps.get
 mix ecto.create
 mix ecto.migrate
-mix run --no-halt -e 'Alto.CLI.main(["--serve", "--config", "alto.exs"])'
+mix run --no-halt -e 'Alto.Contrib.CLI.main(["--serve", "--config", "alto.exs"])'
 ```
 
 The `mix run` form matters for a host application: it starts the host's Repo

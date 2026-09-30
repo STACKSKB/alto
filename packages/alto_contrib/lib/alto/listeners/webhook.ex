@@ -1,0 +1,269 @@
+defmodule Alto.Contrib.Listeners.Webhook do
+  @moduledoc """
+  Verified, bounded HTTP ingress for external webhooks.
+
+  `alto.exs` chooses whether an accepted delivery starts a shallow Alto run or
+  is handed to a configured durable admission function. Bandit and Plug own HTTP parsing and
+  connection lifecycle; Alto owns verification, delivery identity, admission,
+  and run dispatch.
+  """
+
+  use GenServer
+
+  alias Alto.FrontEnd.Registry
+
+  @default_max_body_bytes 262_144
+  @default_max_delivery_ids 10_000
+  @max_delivery_id_bytes 200
+  @recv_timeout 5_000
+  @request_errors %{
+    too_large: {413, "payload too large"},
+    bad_length: {400, "bad content length"},
+    bad_signature: {401, "signature verification failed"},
+    missing_signature: {401, "signature verification failed"},
+    duplicate_signature: {401, "signature verification failed"},
+    signature_too_large: {401, "signature verification failed"},
+    invalid_verify: {401, "signature verification failed"},
+    missing_delivery_id: {400, "missing delivery id"},
+    delivery_id_too_large: {400, "delivery id too large"},
+    duplicate_delivery_id: {400, "duplicate delivery id"},
+    invalid_identity: {400, "invalid delivery id"},
+    invalid_delivery_id: {400, "invalid delivery id"}
+  }
+  @admission_errors %{
+    duplicate: {200, "duplicate"},
+    key_claimed: {200, "duplicate"},
+    payload_too_large: {413, "payload too large"},
+    invalid_key: {400, "delivery id too large"},
+    queue_full: {503, "inbox full"},
+    full: {503, "inbox full"}
+  }
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+  end
+
+  @doc "The port the listener actually bound (useful with an ephemeral port)."
+  @spec bound_port(GenServer.server()) :: :inet.port_number()
+  def bound_port(server \\ __MODULE__), do: GenServer.call(server, :bound_port)
+
+  @impl true
+  def init(opts) do
+    registry = Keyword.fetch!(opts, :registry)
+    port = Keyword.get(opts, :port, 0)
+
+    with {:ok, endpoints} <- build_endpoints(Keyword.fetch!(opts, :endpoints)),
+         {:ok, bandit} <-
+           Bandit.start_link(
+             plug:
+               {__MODULE__.Router, registry: registry, listener: self(), endpoints: endpoints},
+             ip: {127, 0, 0, 1},
+             port: port,
+             startup_log: false,
+             http_options: [log_protocol_errors: false, log_client_closures: false]
+           ),
+         {:ok, {_address, actual_port}} <- ThousandIsland.listener_info(bandit) do
+      {:ok,
+       %{
+         bandit: bandit,
+         port: actual_port,
+         deliveries: Map.new(endpoints, fn {path, _} -> {path, []} end)
+       }}
+    else
+      {:error, reason} -> {:stop, {:webhook_listener_failed, reason}}
+      :error -> {:stop, {:webhook_listener_failed, :listener_info_unavailable}}
+    end
+  end
+
+  @impl true
+  def handle_call(:bound_port, _from, state), do: {:reply, state.port, state}
+
+  def handle_call({:claim_delivery, path, delivery_id}, _from, state) do
+    ids = Map.fetch!(state.deliveries, path)
+
+    if delivery_id in ids do
+      {:reply, :duplicate, state}
+    else
+      ids = Enum.take([delivery_id | ids], @default_max_delivery_ids)
+      {:reply, :new, put_in(state.deliveries[path], ids)}
+    end
+  end
+
+  def handle_call({:release_delivery, path, delivery_id}, _from, state) do
+    ids = List.delete(Map.fetch!(state.deliveries, path), delivery_id)
+    {:reply, :ok, put_in(state.deliveries[path], ids)}
+  end
+
+  @impl true
+  def terminate(_reason, %{bandit: bandit}) do
+    if Process.alive?(bandit), do: Supervisor.stop(bandit)
+    :ok
+  end
+
+  @doc false
+  def handle_http(conn, opts) do
+    endpoints = Keyword.fetch!(opts, :endpoints)
+
+    case {Map.fetch(endpoints, conn.request_path), conn.method} do
+      {{:ok, endpoint}, "POST"} -> serve_endpoint(conn, endpoint, opts)
+      {{:ok, _}, _} -> respond(conn, 405, "method not allowed")
+      {:error, _} -> respond(conn, 404, "not found")
+    end
+  end
+
+  defp serve_endpoint(conn, endpoint, opts) do
+    with {:ok, body, conn} <- read_body(conn, endpoint.max_body_bytes),
+         :ok <- verify(endpoint, conn, body),
+         {:ok, delivery_id} <- identity(endpoint, conn) do
+      dispatch(conn, endpoint, delivery_id, body, opts)
+    else
+      {:error, reason, conn} -> request_error(conn, reason)
+      {:error, reason} -> request_error(conn, reason)
+    end
+  end
+
+  defp request_error(conn, reason) do
+    {status, body} = Map.get(@request_errors, reason, {500, "webhook validation failed"})
+    respond(conn, status, body)
+  end
+
+  defp dispatch(
+         conn,
+         %{on_event: {:start_run, config}} = endpoint,
+         delivery_id,
+         body,
+         opts
+       ) do
+    listener = Keyword.fetch!(opts, :listener)
+    registry = Keyword.fetch!(opts, :registry)
+
+    case GenServer.call(listener, {:claim_delivery, endpoint.path, delivery_id}) do
+      :duplicate ->
+        respond(conn, 200, "duplicate")
+
+      :new ->
+        case Registry.request(registry, {:start_run, config, body, []}) do
+          {:ok, _run_id} ->
+            respond(conn, 200, "accepted")
+
+          {:error, reason} ->
+            GenServer.call(listener, {:release_delivery, endpoint.path, delivery_id})
+            log_rejected(endpoint, "run failed to start: #{inspect(reason)}")
+            respond(conn, 500, "run failed to start")
+        end
+    end
+  end
+
+  defp dispatch(
+         conn,
+         endpoint,
+         delivery_id,
+         body,
+         _opts
+       ) do
+    key = endpoint.source <> ":" <> delivery_id
+    payload = %{"delivery_id" => delivery_id, "body" => body}
+
+    case endpoint.on_event.(key, payload) do
+      {:ok, _record} -> respond(conn, 200, "accepted")
+      {:error, reason} -> enqueue_error(conn, endpoint, reason)
+    end
+  end
+
+  defp enqueue_error(conn, endpoint, reason) do
+    kind =
+      case reason do
+        {name, _} when name in [:key_claimed, :payload_too_large, :invalid_key] -> name
+        other -> other
+      end
+
+    case Map.fetch(@admission_errors, kind) do
+      {:ok, {status, body}} ->
+        respond(conn, status, body)
+
+      :error ->
+        log_rejected(endpoint, "enqueue failed: #{inspect(reason)}")
+        respond(conn, 500, "enqueue failed")
+    end
+  end
+
+  defp read_body(conn, max) do
+    case Plug.Conn.get_req_header(conn, "content-length") do
+      [value] ->
+        case Integer.parse(value, 10) do
+          {length, ""} when length >= 0 and length <= max -> read_bounded_body(conn, max)
+          {length, ""} when length > max -> {:error, :too_large, conn}
+          _other -> {:error, :bad_length, conn}
+        end
+
+      [] ->
+        read_bounded_body(conn, max)
+
+      _other ->
+        {:error, :bad_length, conn}
+    end
+  end
+
+  defp read_bounded_body(conn, max) do
+    case Plug.Conn.read_body(conn,
+           length: max + 1,
+           read_length: min(max + 1, 64_000),
+           read_timeout: @recv_timeout
+         ) do
+      {:ok, body, conn} when byte_size(body) <= max -> {:ok, body, conn}
+      {status, _body, conn} when status in [:ok, :more] -> {:error, :too_large, conn}
+      {:error, _reason} -> {:error, :bad_length, conn}
+    end
+  end
+
+  defp verify(%{verify: verifier}, conn, body) do
+    normalize_verifier_result(verifier.(body, conn.req_headers))
+  end
+
+  defp identity(%{identity: extractor}, conn),
+    do: normalize_identity_result(extractor.(conn.req_headers))
+
+  defp normalize_verifier_result(:ok), do: :ok
+  defp normalize_verifier_result({:error, reason}), do: {:error, reason}
+  defp normalize_verifier_result(_other), do: {:error, :invalid_verify}
+
+  defp normalize_identity_result({:ok, id})
+       when is_binary(id) and id != "" and byte_size(id) <= @max_delivery_id_bytes,
+       do: {:ok, id}
+
+  defp normalize_identity_result({:error, reason}), do: {:error, reason}
+  defp normalize_identity_result(_other), do: {:error, :invalid_identity}
+
+  defp respond(conn, status, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/plain", "utf-8")
+    |> Plug.Conn.put_resp_header("cache-control", "no-store")
+    |> Plug.Conn.put_resp_header("x-content-type-options", "nosniff")
+    |> Plug.Conn.send_resp(status, body)
+  end
+
+  defp build_endpoints(specs) do
+    with {:ok, entries} <-
+           Alto.Result.traverse(Map.to_list(specs), fn {path, spec} ->
+             endpoint =
+               %{source: path, max_body_bytes: @default_max_body_bytes}
+               |> Map.merge(spec)
+               |> Map.put(:path, path)
+
+             if is_integer(endpoint.max_body_bytes) and endpoint.max_body_bytes >= 0,
+               do: {:ok, {path, endpoint}},
+               else: {:error, :invalid_max_body_bytes}
+           end),
+         do: {:ok, Map.new(entries)}
+  end
+
+  defp log_rejected(%{path: path}, detail) do
+    IO.puts(:stderr, "alto webhook: #{path} rejected — #{detail}")
+  end
+
+  defmodule Router do
+    @moduledoc false
+    def init(opts), do: opts
+    def call(conn, opts), do: Alto.Contrib.Listeners.Webhook.handle_http(conn, opts)
+  end
+end

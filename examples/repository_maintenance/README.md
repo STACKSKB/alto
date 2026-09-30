@@ -21,12 +21,12 @@ JSON body and uses the same `Workflow.admit/2` path as the CLI:
 inbox_options = [queue: queue, source: "github"]
 :ok = RepositoryMaintenance.WebhookInbox.validate_options(inbox_options)
 
-{Alto.Listeners.Webhook,
+{Alto.Contrib.Listeners.Webhook,
  endpoints: %{
    "/hooks/ci" => %{
      source: "github",
-     verify: &Alto.Ingress.HMAC.verify(&1, &2, secret: secret),
-     identity: &Alto.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
+     verify: &Alto.Contrib.Ingress.HMAC.verify(&1, &2, secret: secret),
+     identity: &Alto.Contrib.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
      on_event: &RepositoryMaintenance.WebhookInbox.admit(&1, &2, inbox_options)
    }
  }}

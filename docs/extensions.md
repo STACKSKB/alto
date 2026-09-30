@@ -494,11 +494,11 @@ Webhook endpoints are a map from HTTP paths to trusted callback settings.
 Closures capture their configuration; admission helpers are ordinary functions.
 
 ```elixir
-{Alto.Listeners.Webhook,
+{Alto.Contrib.Listeners.Webhook,
  endpoints: %{
    "/hooks/events" => %{
-     verify: &Alto.Ingress.HMAC.verify(&1, &2, secret: secret),
-     identity: &Alto.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
+     verify: &Alto.Contrib.Ingress.HMAC.verify(&1, &2, secret: secret),
+     identity: &Alto.Contrib.Ingress.IdentityHeader.extract(&1, header: "x-delivery-id"),
      on_event: fn key, payload -> Alto.Queue.request(queue, {:admit, key, payload, []}) end,
      max_body_bytes: 262_144
    }

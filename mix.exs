@@ -9,7 +9,6 @@ defmodule Alto.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      escript: [main_module: Alto.CLI],
       package: package(),
       deps: deps()
     ]
@@ -24,14 +23,9 @@ defmodule Alto.MixProject do
 
   defp deps do
     [
-      {:bandit, "~> 1.12"},
-      {:plug, "~> 1.20"},
-      {:plug_crypto, "~> 2.2"},
       {:req, "~> 0.7.4"},
       {:nimble_options, "~> 1.1"},
-      {:server_sent_events, "~> 1.1"},
-      {:thousand_island, "~> 1.5"},
-      {:websock, "~> 0.5"}
+      {:server_sent_events, "~> 1.1"}
     ]
   end
 

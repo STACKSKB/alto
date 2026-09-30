@@ -2,6 +2,8 @@
   inputs: [
     "{mix,.formatter}.exs",
     "{lib,test}/**/*.{ex,exs}",
+    "packages/alto_contrib/mix.exs",
+    "packages/alto_contrib/{lib,test}/**/*.{ex,exs}",
     "packages/alto_tui/mix.exs",
     "packages/alto_tui/{lib,test}/**/*.{ex,exs}",
     "examples/oban_backend/{config,lib,test}/**/*.{ex,exs}",

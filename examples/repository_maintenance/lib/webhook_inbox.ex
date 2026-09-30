@@ -1,6 +1,6 @@
 defmodule RepositoryMaintenance.WebhookInbox do
   @moduledoc """
-  Host admission helper for `Alto.Listeners.Webhook` callbacks.
+  Host admission helper for `Alto.Contrib.Listeners.Webhook` callbacks.
 
   Webhook verification and delivery identity happen before this callback. The
   callback only decodes the bounded JSON body and sends the same validated
