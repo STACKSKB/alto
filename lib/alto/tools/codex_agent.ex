@@ -280,6 +280,13 @@ defmodule Alto.Tools.CodexAgent do
     end
   end
 
+  defp input_content(entry) do
+    case Alto.Messaging.message_content(entry) do
+      blocks when is_list(blocks) -> Alto.Content.new(blocks)
+      text -> text
+    end
+  end
+
   defp send_input(turn, entry, :steer) do
     Client.request(
       turn.client,
@@ -287,7 +294,7 @@ defmodule Alto.Tools.CodexAgent do
       %{
         "threadId" => turn.thread_id,
         "expectedTurnId" => turn.turn_id,
-        "input" => [%{"type" => "text", "text" => Alto.Messaging.message_text(entry)}]
+        "input" => Backend.user_input(input_content(entry))
       },
       Keyword.get(turn.opts, :request_timeout, 5_000)
     )
@@ -297,7 +304,7 @@ defmodule Alto.Tools.CodexAgent do
     Client.request(
       turn.client,
       "turn/start",
-      Backend.turn_params(turn.thread_id, Alto.Messaging.message_text(entry), turn.opts),
+      Backend.turn_params(turn.thread_id, input_content(entry), turn.opts),
       Keyword.get(turn.opts, :request_timeout, 5_000)
     )
   end

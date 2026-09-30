@@ -71,7 +71,7 @@ defmodule Alto.Codex.Backend do
 
   @doc "Start or resume a Codex thread and begin one turn."
   def start_turn(client, thread_id, prompt, opts)
-      when is_binary(prompt) and is_list(opts) do
+      when (is_binary(prompt) or is_struct(prompt, Alto.Content)) and is_list(opts) do
     cwd = opts |> Keyword.fetch!(:cwd) |> Path.expand()
     model = Keyword.get(opts, :model)
     approval = Keyword.get(opts, :approval, :ask)
@@ -93,7 +93,7 @@ defmodule Alto.Codex.Backend do
 
     %{
       "threadId" => thread_id,
-      "input" => [%{"type" => "text", "text" => prompt}],
+      "input" => user_input(prompt),
       "cwd" => opts |> Keyword.fetch!(:cwd) |> Path.expand(),
       "model" => opts[:model],
       "effort" => opts[:effort],
@@ -102,6 +102,33 @@ defmodule Alto.Codex.Backend do
       "sandboxPolicy" => sandbox_policy(approval)
     }
   end
+
+  @doc "Translate typed input to App Server text, image and audio parts."
+  def user_input(%Alto.Content{blocks: blocks}) do
+    Enum.flat_map(blocks, fn
+      %{"type" => "text", "text" => text} ->
+        [%{"type" => "text", "text" => text}]
+
+      %{"type" => "image", "media_type" => media, "data" => data} ->
+        [%{"type" => "image", "url" => "data:#{media};base64,#{data}"}]
+
+      %{"type" => "file", "media_type" => "audio/" <> _ = media, "data" => data} ->
+        [%{"type" => "audio", "url" => "data:#{media};base64,#{data}"}]
+
+      block ->
+        # App Server has no document input part. Keep a private local copy so
+        # Codex can inspect it with its own file tools within its permissions.
+        case Alto.Attachment.materialize([block]) do
+          {:ok, [file]} ->
+            [%{"type" => "text", "text" => "Attached file: #{file.name}\n#{file.path}"}]
+
+          {:error, reason} ->
+            raise ArgumentError, "Cannot stage Codex attachment: #{inspect(reason)}"
+        end
+    end)
+  end
+
+  def user_input(text) when is_binary(text), do: [%{"type" => "text", "text" => text}]
 
   @doc "Open the managed ChatGPT OAuth URL with an injectable platform opener."
   def open_url(url, opts \\ []) when is_binary(url) do

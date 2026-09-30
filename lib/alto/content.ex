@@ -1,6 +1,6 @@
 defmodule Alto.Content do
   @moduledoc """
-  Typed model-facing content returned by tools.
+  Typed content for user messages, model responses and tool results.
 
   The runner validates typed blocks with `normalize_tool_result/2` before
   adding them to a provider-neutral transcript. Ordinary tool values,
@@ -16,6 +16,7 @@ defmodule Alto.Content do
   @type t :: %__MODULE__{blocks: [block()]}
 
   @max_image_encoded_bytes 8_000_000
+  @max_file_encoded_bytes 8_000_000
   @image_limits %{max_dimension: 16_384, max_pixels: 40_000_000}
 
   @spec new([block()]) :: t()
@@ -33,6 +34,59 @@ defmodule Alto.Content do
       "width" => width,
       "height" => height
     }
+
+  @doc "A named binary file, encoded as base64 (PDF, office document, audio, etc.)."
+  def file(name, media_type, data),
+    do: %{"type" => "file", "name" => name, "media_type" => media_type, "data" => data}
+
+  @doc "A downloadable output; providers see its name and type rather than opaque bytes."
+  def artifact(name, media_type, data),
+    do: Map.put(file(name, media_type, data), "type", "artifact")
+
+  @doc "Validate user or model content with an explicit serialized byte limit."
+  def normalize(%__MODULE__{} = content, limit), do: normalize_tool_result(content, limit)
+
+  @doc "Text projection for titles, terminal display and text-only integrations."
+  def text_value(%__MODULE__{blocks: blocks}), do: text_value(blocks)
+  def text_value(value) when is_binary(value), do: value
+  def text_value(nil), do: ""
+
+  def text_value(blocks) when is_list(blocks) do
+    Enum.map_join(blocks, "\n", fn
+      %{"type" => "text", "text" => text} ->
+        text
+
+      %{"type" => "image", "media_type" => media, "width" => w, "height" => h} ->
+        "[Image · #{media} · #{w} × #{h}]"
+
+      %{"type" => type, "name" => name, "media_type" => media}
+      when type in ["file", "artifact"] ->
+        "[File · #{name} · #{media}]"
+    end)
+  end
+
+  def text_value(value), do: inspect(value)
+
+  @doc "Prepend instructions while preserving attached content."
+  def prepend(%__MODULE__{} = content, text), do: new([text(text) | content.blocks])
+  def prepend(content, text) when is_binary(content), do: text <> content
+
+  @doc "Translate all media blocks with explicit provider capabilities."
+  def map_media(%__MODULE__{blocks: blocks}, capabilities, encode) do
+    Alto.Result.traverse(blocks, fn
+      %{"type" => "image"} = block ->
+        if capabilities.images, do: encode.(block), else: {:error, :model_does_not_support_images}
+
+      %{"type" => "file"} = block ->
+        if capabilities.files, do: encode.(block), else: {:error, :model_does_not_support_files}
+
+      %{"type" => "artifact", "name" => name, "media_type" => media} ->
+        {:ok, text("Generated file: #{name} (#{media})")}
+
+      block ->
+        {:ok, block}
+    end)
+  end
 
   @doc """
   Normalize typed tool content for the provider-neutral transcript.
@@ -117,6 +171,40 @@ defmodule Alto.Content do
        )
        when map_size(block) == 5 do
     with :ok <- validate_image(media_type, data, width, height), do: {:ok, block}
+  end
+
+  defp validate_block(%{"type" => "artifact"} = block) do
+    case validate_block(Map.put(block, "type", "file")) do
+      {:ok, _} -> {:ok, block}
+      error -> error
+    end
+  end
+
+  defp validate_block(
+         %{"type" => "file", "name" => name, "media_type" => media, "data" => data} = block
+       )
+       when map_size(block) == 4 do
+    with true <-
+           (is_binary(name) and byte_size(name) in 1..255 and String.valid?(name) and
+              not String.contains?(name, ["/", "\\", <<0>>]) and
+              not Regex.match?(~r/[\x00-\x1F\x7F]/u, name) and name not in [".", ".."]) or
+             {:error, :invalid_file_name},
+         true <-
+           (is_binary(media) and byte_size(media) <= 255 and
+              Regex.match?(~r/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/, media)) or
+             {:error, :invalid_media_type},
+         true <-
+           (is_binary(data) and byte_size(data) <= @max_file_encoded_bytes) or
+             {:error, {:file_encoded_too_large, @max_file_encoded_bytes}},
+         {:ok, decoded} <- Base.decode64(data),
+         true <-
+           media != "application/pdf" or String.starts_with?(decoded, "%PDF-") or
+             {:error, :invalid_pdf} do
+      {:ok, block}
+    else
+      :error -> {:error, :invalid_file_base64}
+      error -> error
+    end
   end
 
   defp validate_block(_block), do: {:error, :unsupported_block}

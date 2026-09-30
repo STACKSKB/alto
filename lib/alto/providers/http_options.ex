@@ -10,7 +10,8 @@ defmodule Alto.Providers.HTTPOptions do
       idle_timeout: [type: :pos_integer],
       max_event_bytes: [type: :pos_integer, default: 1_000_000],
       max_response_bytes: [type: :pos_integer, default: 2_000_000],
-      supports_images: [type: :boolean, default: false]
+      supports_images: [type: :boolean, default: false],
+      supports_files: [type: :boolean, default: false]
     ]
   end
 

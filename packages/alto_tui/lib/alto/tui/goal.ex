@@ -82,15 +82,22 @@ defmodule Alto.TUI.Goal do
   def summary(_), do: "No goal set"
 
   def with_context(%{"goal" => %{"status" => "active", "objective" => objective}}, prompt),
-    do: "Task objective:\n#{objective}\n\nCurrent message:\n#{prompt}"
+    do: Alto.Content.prepend(prompt, "Task objective:\n#{objective}\n\nCurrent message:\n")
 
   def with_context(%{"goal" => %{"status" => status}}, prompt)
       when status in ["paused", "completed"],
       do:
-        "The persistent task objective is #{status}. Follow the current message rather than continuing the previous objective.\n\nCurrent message:\n#{prompt}"
+        Alto.Content.prepend(
+          prompt,
+          "The persistent task objective is #{status}. Follow the current message rather than continuing the previous objective.\n\nCurrent message:\n"
+        )
 
   def with_context(%{"goal" => nil}, prompt),
-    do: "The persistent task objective has been cleared.\n\nCurrent message:\n#{prompt}"
+    do:
+      Alto.Content.prepend(
+        prompt,
+        "The persistent task objective has been cleared.\n\nCurrent message:\n"
+      )
 
   def with_context(_, prompt), do: prompt
 end

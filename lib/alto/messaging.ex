@@ -25,6 +25,10 @@ defmodule Alto.Messaging do
          do: safe(fn -> Alto.Input.request(input, {:enqueue, message}) end)
   end
 
+  @doc "Provider-neutral user input, retaining peer attribution for agent messages."
+  def message_content(%{sender: %{kind: :user}, content: [_ | _] = content}), do: content
+  def message_content(entry), do: message_text(entry)
+
   @doc "Render attributed input for a model without promoting peer text to user authority."
   def message_text(%{sender: %{kind: :user}, text: text}), do: text
 
@@ -149,7 +153,7 @@ defmodule Alto.Messaging do
 
   defp envelope(opts, sender) when is_list(opts) do
     if Keyword.keyword?(opts) and
-         Keyword.keys(opts) -- [:text, :delivery, :idempotency_key, :in_reply_to] == [] do
+         Keyword.keys(opts) -- [:text, :content, :delivery, :idempotency_key, :in_reply_to] == [] do
       message = %{
         text: opts[:text],
         mode: Keyword.get(opts, :delivery, :steer),
@@ -157,6 +161,8 @@ defmodule Alto.Messaging do
         idempotency_key: opts[:idempotency_key],
         in_reply_to: opts[:in_reply_to]
       }
+
+      message = if opts[:content], do: Map.put(message, :content, opts[:content]), else: message
 
       if valid_message?(message),
         do: {:ok, message},
@@ -171,11 +177,18 @@ defmodule Alto.Messaging do
   @doc false
   def valid_message?(%{text: text, mode: mode} = message) do
     is_binary(text) and String.valid?(text) and byte_size(text) in 1..64_000 and
-      mode in [:steer, :follow_up] and
+      valid_content?(message) and mode in [:steer, :follow_up] and
       Enum.all?([message[:idempotency_key], message[:in_reply_to]], &optional_id?/1)
   end
 
   def valid_message?(_), do: false
+
+  defp valid_content?(%{content: content, sender: %{kind: :user}})
+       when is_list(content) and content != [] do
+    match?({:ok, _}, Alto.Content.normalize(Alto.Content.new(content), 16_000_000))
+  end
+
+  defp valid_content?(message), do: not Map.has_key?(message, :content)
 
   defp optional_id?(nil), do: true
   defp optional_id?(id), do: is_binary(id) and byte_size(id) in 1..256 and String.valid?(id)

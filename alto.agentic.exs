@@ -29,6 +29,7 @@ openrouter_options =
     timeout: 1_800_000,
     idle_timeout: 600_000,
     supports_images: vision_enabled,
+    supports_files: true,
     model_query: [supported_parameters: "tools", sort: "most-popular"]
   ]
   |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
@@ -88,6 +89,7 @@ tools =
     Alto.Tools.ListFiles,
     Alto.Tools.ReadFile,
     Alto.Tools.ProtectPaths.wrap(Alto.Tools.EditFile, [".git"]),
+    Alto.Tools.PublishFile,
     Alto.Tools.ProtectPaths.wrap(Alto.Tools.WriteFile, [".git"]),
     {Alto.Tools.GitInspect, executor: command_executor},
     # Git mutation is a distinct, explicitly approved capability.
@@ -159,7 +161,9 @@ Alto.default_config()
   sessions: true,
   session_history: :settled,
   max_steps: 96,
-  max_tool_result_bytes: if(vision_enabled, do: 1_500_000, else: 64_000),
+  max_tool_result_bytes: 8_100_000,
+  max_transcript_bytes: 16_000_000,
+  max_event_bytes: 16_000_000,
   compaction: [
     strategy: {Alto.Context.Reducers.Handoff, []},
     max_compactions: 8,

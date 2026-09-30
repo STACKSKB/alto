@@ -39,7 +39,7 @@ defmodule Alto.Provider do
 
   @type sink :: (Event.t() -> any())
   @type completion :: %{
-          required(:message) => String.t() | nil,
+          required(:message) => String.t() | [Alto.Content.block()] | nil,
           required(:tool_calls) => [map()],
           optional(:usage) => map() | nil,
           optional(:reasoning) => String.t() | nil,

@@ -216,7 +216,12 @@ defmodule Alto.FrontEnd.Registry do
          :ok <- validate_task(task),
          {:ok, config_opts} <- resolve_config(state.resolver, config_name),
          {:ok, session_opts} <- execution_session_opts(opts, config_opts, state),
-         {:ok, input} <- Alto.Input.open(transport: config_opts[:messaging_transport], id: run_id) do
+         {:ok, input} <-
+           Alto.Input.open(
+             transport: config_opts[:messaging_transport],
+             id: run_id,
+             max_bytes: 16_000_000
+           ) do
       me = self()
 
       {:ok, messaging} =
@@ -247,7 +252,7 @@ defmodule Alto.FrontEnd.Registry do
             input: input,
             messaging: messaging,
             session_id: Keyword.get(session_opts, :session),
-            task_preview: String.slice(task, 0, 120),
+            task_preview: task |> Alto.Content.text_value() |> String.slice(0, 120),
             config_name: config_name,
             started_at_ms: System.system_time(:millisecond),
             start_order: System.unique_integer([:positive, :monotonic])
@@ -853,6 +858,13 @@ defmodule Alto.FrontEnd.Registry do
 
       :error ->
         state
+    end
+  end
+
+  defp validate_task(%Alto.Content{} = task) do
+    case Alto.Content.normalize(task, 16_000_000) do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, :invalid_task}
     end
   end
 

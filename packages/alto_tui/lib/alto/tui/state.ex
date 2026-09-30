@@ -17,6 +17,8 @@ defmodule Alto.TUI.State do
                  narrow_context: [type: {:in, [:adaptive, :drawer, :fullscreen]}],
                  narrow_context_width: [type: {:in, 40..100}],
                  narrow_context_fullscreen_below: [type: {:in, 0..300}],
+                 paste_inline_bytes: [type: :pos_integer],
+                 paste_chunk_bytes: [type: {:in, 4..1_000_000}],
                  approval_auto_open: [type: :boolean],
                  approval_reviewer: [type: {:fun, 2}]
                )
@@ -42,6 +44,9 @@ defmodule Alto.TUI.State do
     :drag_poll,
     :history_load,
     :stream_frame,
+    attachments: [],
+    paste_inline_bytes: 4_096,
+    paste_chunk_bytes: 32_000,
     stream_events: [],
     stream_tails: %{},
     stream_bytes: 0,
@@ -161,6 +166,8 @@ defmodule Alto.TUI.State do
         narrow_context_width: Keyword.get(tui_options, :narrow_context_width, 75),
         narrow_context_fullscreen_below:
           Keyword.get(tui_options, :narrow_context_fullscreen_below, 72),
+        paste_inline_bytes: Keyword.get(tui_options, :paste_inline_bytes, 4_096),
+        paste_chunk_bytes: Keyword.get(tui_options, :paste_chunk_bytes, 32_000),
         approval_auto_open?: Keyword.get(tui_options, :approval_auto_open, true),
         selected_model: profile && profile.default_model,
         selected_backend: selected_backend,
@@ -768,7 +775,11 @@ defmodule Alto.TUI.State do
     # Viewing a saved revision must not require permission to resume tool execution.
     case Session.conversation(session_id, :latest, Keyword.take(opts, [:session_dir])) do
       {:ok, %{"messages" => messages}} ->
-        messages |> Alto.ToolDisplay.transcript() |> bounded_entries()
+        messages
+        |> Alto.ToolDisplay.transcript(
+          attachment_directory: Path.join(Session.dir(opts), "attachments")
+        )
+        |> bounded_entries()
 
       {:error, reason} ->
         [

@@ -4,6 +4,7 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   alias Alto.Event
 
   defstruct content: [],
+            media: [],
             reasoning: [],
             reasoning_fields: %{},
             reasoning_details: %{},
@@ -59,12 +60,24 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   def result(%__MODULE__{error: error}) when not is_nil(error), do: {:error, error}
 
   def result(%__MODULE__{} = state) do
-    with {:ok, tool_calls} <- finalize_calls(state.calls) do
+    with {:ok, tool_calls} <- finalize_calls(state.calls),
+         {:ok, media} <-
+           state.media
+           |> Enum.reverse()
+           |> Enum.uniq()
+           |> Enum.with_index(1)
+           |> Alto.Result.traverse(fn {part, index} ->
+             Alto.Providers.Media.output(part, index)
+           end) do
       content = state.content |> Enum.reverse() |> IO.iodata_to_binary()
 
       {:ok,
        %{
-         message: if(content == "", do: nil, else: content),
+         message:
+           if(media == [],
+             do: if(content == "", do: nil, else: content),
+             else: if(content == "", do: media, else: [Alto.Content.text(content) | media])
+           ),
          tool_calls: tool_calls,
          usage: state.usage,
          reasoning: state.reasoning |> Enum.reverse() |> IO.iodata_to_binary(),
@@ -87,15 +100,12 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
   defp consume_delta(state, delta, sink) do
     state = consume_reasoning(state, delta, sink)
 
-    state =
-      case delta["content"] do
-        text when is_binary(text) and text != "" ->
-          sink.(Event.live(:model_delta, %{text: text}))
-          %{state | content: [text | state.content]}
+    state = consume_content(state, delta["content"], sink)
 
-        _other ->
-          state
-      end
+    state =
+      Enum.reduce(delta["images"] || [], state, fn part, acc ->
+        %{acc | media: [part | acc.media]}
+      end)
 
     calls =
       Enum.reduce(delta["tool_calls"] || [], state.calls, fn fragment, calls ->
@@ -108,6 +118,23 @@ defmodule Alto.Providers.OpenAICompatible.Stream do
 
     %{state | calls: calls}
   end
+
+  defp consume_content(state, text, sink) when is_binary(text) and text != "" do
+    sink.(Event.live(:model_delta, %{text: text}))
+    %{state | content: [text | state.content]}
+  end
+
+  defp consume_content(state, parts, sink) when is_list(parts) do
+    Enum.reduce(parts, state, fn
+      %{"type" => "text", "text" => text}, acc when is_binary(text) ->
+        consume_content(acc, text, sink)
+
+      part, acc ->
+        %{acc | media: [part | acc.media]}
+    end)
+  end
+
+  defp consume_content(state, _, _), do: state
 
   defp consume_reasoning(state, delta, sink) do
     text = Alto.Reasoning.text(delta)

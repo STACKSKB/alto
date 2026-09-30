@@ -213,13 +213,18 @@ defmodule Alto.Runner.Execution.Setup do
   end
 
   defp prepend_task(task, history, max_transcript_bytes) do
-    messages_rev = [%{"role" => "user", "content" => task_text(task)} | Enum.reverse(history)]
-    bytes = Transcript.bytes(messages_rev)
+    with {:ok, content} <- task_content(task, max_transcript_bytes) do
+      messages_rev = [%{"role" => "user", "content" => content} | Enum.reverse(history)]
+      bytes = Transcript.bytes(messages_rev)
 
-    if bytes <= max_transcript_bytes,
-      do: {:ok, messages_rev, bytes},
-      else: {:error, {:transcript_limit, max_transcript_bytes}}
+      if bytes <= max_transcript_bytes,
+        do: {:ok, messages_rev, bytes},
+        else: {:error, {:transcript_limit, max_transcript_bytes}}
+    end
   end
+
+  defp task_content(%Alto.Content{} = task, limit), do: Alto.Content.normalize(task, limit)
+  defp task_content(task, _limit), do: {:ok, task_text(task)}
 
   defp resume_history(%{"messages" => messages, "transcript_bytes" => bytes})
        when is_list(messages) and is_integer(bytes) and bytes >= 0,

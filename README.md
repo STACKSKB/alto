@@ -48,6 +48,12 @@ mix escript.build
 ```
 
 The public source is [github.com/STACKSKB/alto](https://github.com/STACKSKB/alto).
+
+Attach local text, images, PDFs or other files with repeated `--attach FILE`
+arguments. The optional TUI provides **F7** for uploads and editing folded text
+pastes, and **Ctrl+V** for local PNG/JPEG clipboard images. Named image and
+document outputs are saved as private files. Input formats depend on provider
+capabilities; see [multimodal content](docs/multimodal-content.md).
 A library application can depend on the tagged source with:
 
 ```elixir

@@ -44,10 +44,40 @@ defmodule Alto.CLI.Renderer do
     false
   end
 
+  defp render_event(
+         %Event{type: :tool_completed, data: %{value: %Alto.Content{} = content}},
+         _status?
+       ) do
+    case Alto.Attachment.materialize(content) do
+      {:ok, files} -> Enum.each(files, &IO.puts(:stderr, "[output: #{&1.name}] #{&1.path}"))
+      {:error, reason} -> IO.puts(:stderr, "Cannot save output: #{Alto.Display.error(reason)}")
+    end
+
+    false
+  end
+
   defp render_event(_event, _status?), do: false
 
   def finish(output, streamed?) when is_binary(output) and output != "" do
     if not streamed?, do: IO.write(output)
+  end
+
+  def finish(output, streamed?) when is_list(output) do
+    case Alto.Content.decode_transcript(output) do
+      {:ok, content} ->
+        if not streamed?, do: IO.write(Alto.Content.text_value(content))
+
+        case Alto.Attachment.materialize(content) do
+          {:ok, files} ->
+            Enum.each(files, &IO.puts("\nOutput: #{&1.name}\n#{&1.path}"))
+
+          {:error, reason} ->
+            IO.puts(:stderr, "Cannot save output: #{Alto.Display.error(reason)}")
+        end
+
+      _ ->
+        :ok
+    end
   end
 
   def finish(_output, _state), do: :ok

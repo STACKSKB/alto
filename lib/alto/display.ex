@@ -108,6 +108,10 @@ defmodule Alto.Display do
       %{"type" => "image", "media_type" => type, "width" => width, "height" => height} ->
         "Image · #{type} · #{width} × #{height}"
 
+      %{"type" => type, "name" => name, "media_type" => media}
+      when type in ["file", "artifact"] ->
+        "File · #{name} · #{media}"
+
       other ->
         render(other, mode, depth + 1)
     end)

@@ -75,18 +75,69 @@ defmodule Alto.TUI.Clipboard do
   end
 
   @doc "Read the local desktop clipboard when a supported helper is installed."
-  def read, do: command(desktop_command(:read))
+  def read do
+    case image_command() do
+      nil ->
+        command(desktop_command(:read))
+
+      {program, args, media} ->
+        case command({program, args}) do
+          {:ok, bytes} -> {:ok, {:image, bytes, media}}
+          _ -> command(desktop_command(:read))
+        end
+    end
+  end
+
+  defp image_command do
+    cond do
+      System.get_env("WAYLAND_DISPLAY") && System.find_executable("wl-paste") ->
+        program = System.find_executable("wl-paste")
+
+        case command({program, ["--list-types"]}) do
+          {:ok, types} ->
+            media = Enum.find(["image/png", "image/jpeg"], &(&1 in String.split(types, "\n")))
+            if media, do: {program, ["--type", media], media}
+
+          _ ->
+            nil
+        end
+
+      System.get_env("DISPLAY") && System.find_executable("xclip") ->
+        program = System.find_executable("xclip")
+
+        case command({program, ["-selection", "clipboard", "-o", "-t", "TARGETS"]}) do
+          {:ok, types} ->
+            media = Enum.find(["image/png", "image/jpeg"], &(&1 in String.split(types)))
+            if media, do: {program, ["-selection", "clipboard", "-o", "-t", media], media}
+
+          _ ->
+            nil
+        end
+
+      true ->
+        nil
+    end
+  end
 
   defp command(nil), do: {:error, :unavailable}
 
   defp command({program, args}) do
-    case Alto.Runner.Execution.Call.run(
-           fn -> System.cmd(program, args, stderr_to_stdout: true) end,
-           1_000,
-           nil
-         ) do
-      {text, 0} -> {:ok, text}
-      _ -> {:error, :unavailable}
+    invocation = %{
+      executable: program,
+      args: args,
+      cwd: File.cwd!(),
+      timeout_ms: 1_000,
+      max_output_bytes: 6_000_000
+    }
+
+    case Alto.Command.Executors.Unsandboxed.execute(invocation) do
+      {:ok, %{exit_status: 0, truncated: false} = result} ->
+        if result[:encoding] == "base64",
+          do: Base.decode64(result.output_base64),
+          else: {:ok, result.output}
+
+      _ ->
+        {:error, :unavailable}
     end
   end
 

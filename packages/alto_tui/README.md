@@ -207,6 +207,32 @@ paste inserts text without submitting it, including multiline text and form fiel
 Ctrl+V also reads the local clipboard using `wl-paste`, `xclip`, `xsel`, or `pbpaste`
 when available; otherwise it inserts the last selection copied in this TUI.
 
+**F7** or **Ctrl+G, F** opens the file manager. Attach a local file by path;
+uploads are copied into private staging, leaving the original intact. Large
+composer pastes (4,096 bytes or 20 newline characters by default) become compact
+file tokens. Text is split into 32 KB chunks without losing UTF-8 characters,
+line endings, or ordering. Select a text attachment to edit it in the TUI;
+**Ctrl+S** saves to the same file and **Esc** discards the editor changes.
+Removing an attachment or deleting its token excludes it from the next message.
+
+On Wayland and X11, **Ctrl+V** recognizes PNG/JPEG clipboard images and stages
+each paste in one private file. Terminal bracketed paste carries text; remote
+terminals can attach an image by file path. Text, images and PDFs travel as typed
+content to supporting providers; other binary inputs depend on the provider.
+Unsupported media keeps the draft when detected before starting a native run.
+Queued messages freeze attachment contents at submission, so later file edits
+cannot change an accepted message.
+
+Generated images and published files appear with their saved paths in the
+transcript. Saved native conversations can recreate missing output files from
+their stored bytes. Staging lives under the session directory in `attachments/`;
+retention belongs to the host. Files are private (`0600`, directories `0700`).
+Each staged file/paste is bounded to 6 MB; a draft is bounded to 12 MB and 512
+attachments, with transcript, provider, tool-result and mailbox limits also
+applying. Configure folding with `tui: [paste_inline_bytes: 4096,
+paste_chunk_bytes: 32_000]`. See [multimodal content](../../docs/multimodal-content.md)
+for provider and output configuration.
+
 Start a task with **Ctrl+G, N** in the current folder, or click a workspace name
 in the sidebar to compose a new task in that folder. **Ctrl+G, T** also includes a New task action.
 

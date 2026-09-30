@@ -54,6 +54,7 @@ defmodule Alto.CLI do
   defp execute(options, task_words) do
     with {:ok, task} <- task_text(task_words),
          {:ok, config} <- load_config(options),
+         {:ok, task} <- attach_files(task, Keyword.get_values(options, :attach), config),
          {:ok, run_options, renderer} <- run_options(options, config) do
       try do
         result =
@@ -78,6 +79,23 @@ defmodule Alto.CLI do
         Renderer.stop(renderer)
       end
     end
+  end
+
+  defp attach_files(task, [], _config), do: {:ok, task}
+
+  defp attach_files(task, paths, config) do
+    with {:ok, files} <-
+           Alto.Result.traverse(
+             paths,
+             &Alto.Attachment.upload(&1,
+               directory: Path.join(Alto.Session.dir(config), "attachments")
+             )
+           ),
+         {:ok, blocks} <- Alto.Result.traverse(files, &Alto.Attachment.content/1),
+         content = Alto.Content.new([Alto.Content.text(task) | blocks]),
+         {:ok, _} <-
+           Alto.Content.normalize(content, Keyword.get(config, :max_transcript_bytes, 8_000_000)),
+         do: {:ok, content}
   end
 
   defp run_task(options, task, run_options) do
