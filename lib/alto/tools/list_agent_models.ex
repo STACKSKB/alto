@@ -20,5 +20,8 @@ defmodule Alto.Tools.ListAgentModels do
   end
 
   @impl true
+  def run(arguments, %{agent_models: callback}, opts) when is_function(callback, 2),
+    do: callback.(arguments, opts)
+
   def run(_, _, _), do: {:error, :model_discovery_requires_execution_host}
 end

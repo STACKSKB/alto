@@ -9,12 +9,12 @@ defmodule Alto.Runner.Execution.Workspace do
 
     with {:ok, ready} <-
            call(
-             fn -> Alto.Workspaces.create(manager, snapshot, identity) end,
+             fn -> Alto.Resource.create(manager, snapshot, identity) end,
              budget,
              timeout,
              cancel_ref
            ) do
-      Alto.Workspaces.use(manager, ready.id, ready.revision, fn workspace ->
+      Alto.Resource.use(manager, ready.id, ready.revision, fn workspace ->
         execute.(task, Keyword.put(opts, :cwd, workspace["cwd"]))
       end)
     end
@@ -23,7 +23,7 @@ defmodule Alto.Runner.Execution.Workspace do
 
   @doc "Admit an already validated checkpoint before activating its retained workspace."
   def resume_checkpoint(opts, manager, id, revision, admit, execute) do
-    Alto.Workspaces.resume(manager, id, revision, admit, execute)
+    Alto.Resource.resume(manager, id, revision, admit, execute)
     |> finish_work(opts, manager, nil)
   end
 
@@ -52,7 +52,7 @@ defmodule Alto.Runner.Execution.Workspace do
 
   defp finish(outcome, worked, opts, manager) do
     case call(
-           fn -> Alto.Workspaces.freeze(manager, worked.id, worked.revision) end,
+           fn -> Alto.Resource.freeze(manager, worked.id, worked.revision) end,
            Keyword.fetch!(opts, :budget),
            Keyword.get(opts, :tool_timeout, @default_tool_timeout),
            Keyword.get(opts, :cancel_ref)
@@ -62,7 +62,7 @@ defmodule Alto.Runner.Execution.Workspace do
 
       {:error, reason} ->
         info =
-          case Alto.Workspaces.get(manager, worked.id) do
+          case Alto.Resource.get(manager, worked.id) do
             {:ok, current} -> current
             _ -> worked
           end

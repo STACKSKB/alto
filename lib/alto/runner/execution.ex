@@ -719,7 +719,7 @@ defmodule Alto.Runner.Execution do
              "content" =>
                JSON.encode!(%{
                  "type" => "alto_subagent_results",
-                 "results" => Alto.Protocol.encode_term(results)
+                 "results" => Alto.TermProjection.encode_term(results)
                })
            }) do
       {:event, Event.durable(:subagents_completed, data), run}
@@ -856,9 +856,16 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp prepare_agent_tool(%{module: module, opts: opts}, prepared, run)
-       when module in [Alto.Tools.SpawnAgents, Alto.Tools.StartAgents],
-       do: Alto.Subagents.Models.prepare(prepared, run, opts)
+  defp prepare_agent_tool(%{runtime_operation: operation, opts: opts}, prepared, run)
+       when operation in [:spawn_agents, :start_agents] do
+    Call.run(
+      fn ->
+        (run.agent_prepare || (&Alto.Subagents.Models.prepare(&1, run, &2))).(prepared, opts)
+      end,
+      Budget.timeout(run.budget, run.tool_timeout),
+      run.cancel_ref
+    )
+  end
 
   defp prepare_agent_tool(_tool, prepared, _run), do: {:ok, prepared}
 
@@ -1016,7 +1023,7 @@ defmodule Alto.Runner.Execution do
     )
   end
 
-  defp dispatch_tool_job(%{tool: %{module: Alto.Tools.SpawnAgents}} = job, run) do
+  defp dispatch_tool_job(%{tool: %{runtime_operation: :spawn_agents}} = job, run) do
     with {:ok, specs, concurrency} <- Children.validate_batch(job.prepared, run) do
       dispatch_agent_job(job, run, :unknown, fn run ->
         with {:ok, results, journal, next} <- spawn_agents(specs, concurrency, run),
@@ -1028,9 +1035,9 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp dispatch_tool_job(%{tool: %{module: module}} = job, run)
-       when module in [Alto.Tools.StartAgents, Alto.Tools.WaitAgents] do
-    dispatch_agent_job(job, run, :known, &agent_operation(module, job.prepared, &1))
+  defp dispatch_tool_job(%{tool: %{runtime_operation: operation}} = job, run)
+       when operation in [:start_agents, :wait_agents] do
+    dispatch_agent_job(job, run, :known, &agent_operation(operation, job.prepared, &1))
   end
 
   defp dispatch_tool_job(job, run), do: dispatch_tool_jobs([{job, :ready}], run)
@@ -1062,7 +1069,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp agent_operation(Alto.Tools.StartAgents, prepared, run) do
+  defp agent_operation(:start_agents, prepared, run) do
     # Async checkpoints use cooperative effect boundaries. Durable child-approval
     # journals and workspace retention remain a separate continuation protocol.
     with true <-
@@ -1079,7 +1086,7 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp agent_operation(Alto.Tools.WaitAgents, args, run) do
+  defp agent_operation(:wait_agents, args, run) do
     deadline =
       System.monotonic_time(:millisecond) +
         min(args.timeout_ms, Budget.timeout(run.budget, run.tool_timeout))
@@ -1171,7 +1178,10 @@ defmodule Alto.Runner.Execution do
     reason = bound_failure_reason(reason, run.max_tool_result_bytes)
 
     content =
-      encode_tool_result(%{error: Alto.Protocol.encode_term(reason)}, run.max_tool_result_bytes)
+      encode_tool_result(
+        %{error: Alto.TermProjection.encode_term(reason)},
+        run.max_tool_result_bytes
+      )
 
     {content, %{error: reason, outcome: outcome}}
   end
@@ -1374,7 +1384,7 @@ defmodule Alto.Runner.Execution do
     # Normalize unsupported terms without replacing the surrounding result shape.
     _error ->
       value
-      |> Alto.Protocol.encode_term()
+      |> Alto.TermProjection.encode_term()
       |> JSON.encode!()
       |> bound_tool_result(limit)
   end

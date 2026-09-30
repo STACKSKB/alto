@@ -114,9 +114,6 @@ defmodule Alto.Runner.Execution.Tool do
   end
 
   @doc "Invoke directly inside an already supervised, bounded worker."
-  def invoke_tool(%{module: Alto.Tools.ListAgentModels, opts: opts}, prepared, caps),
-    do: Alto.Subagents.Models.list(prepared, caps, opts)
-
   def invoke_tool(%{module: module, opts: opts}, arguments, caps),
     do: module.run(arguments, Alto.Tool.context(caps), opts)
 

@@ -2,6 +2,7 @@ defmodule Alto.Tools.SpawnAgents do
   @moduledoc "Create agents with a selected backend and model; the host owns the child batch."
   use Alto.Tool,
     name: :spawn_agents,
+    runtime_operation: :spawn_agents,
     execution_mode: :exclusive,
     approval: :required,
     arguments: true

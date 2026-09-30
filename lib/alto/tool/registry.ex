@@ -9,7 +9,8 @@ defmodule Alto.Tool.Registry do
       transforms = tool_opts[:alto_transform] || []
       tool_opts = Alto.Tool.configure(module, tool_opts)
       string_name = module.name(tool_opts) |> Atom.to_string()
-      schema = module.schema(schema_opts(module, tool_opts, child_limits))
+      operation = Alto.Tool.runtime_operation(module, tool_opts)
+      schema = module.schema(schema_opts(operation, tool_opts, child_limits))
       true = is_map(schema)
       mode = module.execution_mode(tool_opts)
       true = mode in [:parallel, :exclusive]
@@ -33,6 +34,7 @@ defmodule Alto.Tool.Registry do
           transforms: transforms,
           execution_mode: mode,
           approval: approval,
+          runtime_operation: operation,
           definition: definition
         }
 
@@ -41,8 +43,8 @@ defmodule Alto.Tool.Registry do
     end)
   end
 
-  defp schema_opts(module, opts, %{max_children: max_children})
-       when module in [Alto.Tools.SpawnAgents, Alto.Tools.StartAgents],
+  defp schema_opts(operation, opts, %{max_children: max_children})
+       when operation in [:spawn_agents, :start_agents],
        do: Keyword.put(opts, :max_children, max_children)
 
   defp schema_opts(_module, opts, _child_limits), do: opts

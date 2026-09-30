@@ -228,7 +228,7 @@ defmodule Alto.Tools.CodexAgent do
           result = %{
             success: success,
             contentItems: [
-              %{type: "inputText", text: JSON.encode!(Alto.Protocol.encode_term(value))}
+              %{type: "inputText", text: JSON.encode!(Alto.TermProjection.encode_term(value))}
             ]
           }
 

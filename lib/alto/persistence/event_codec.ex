@@ -84,7 +84,11 @@ defmodule Alto.Persistence.EventCodec do
   defp encode_value(term), do: opaque(term)
 
   defp opaque(term),
-    do: ["opaque", Base.encode64(:erlang.term_to_binary(term)), Alto.Protocol.encode_term(term)]
+    do: [
+      "opaque",
+      Base.encode64(:erlang.term_to_binary(term)),
+      Alto.TermProjection.encode_term(term)
+    ]
 
   defp pairs(map),
     do: Enum.map(map, fn {key, value} -> [encode_key(key), encode_value(value)] end)
@@ -93,7 +97,7 @@ defmodule Alto.Persistence.EventCodec do
     do: encode_value(key)
 
   defp encode_key(key) do
-    wire_key = Alto.Protocol.encode_key(key)
+    wire_key = Alto.TermProjection.encode_key(key)
     ["key", encode_value(key), wire_key]
   end
 

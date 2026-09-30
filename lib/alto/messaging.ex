@@ -47,7 +47,9 @@ defmodule Alto.Messaging do
     authority <>
       "\n" <>
       JSON.encode!(
-        Alto.Protocol.encode_term(Map.take(entry, [:sender, :text, :message_id, :in_reply_to]))
+        Alto.TermProjection.encode_term(
+          Map.take(entry, [:sender, :text, :message_id, :in_reply_to])
+        )
       )
   end
 
@@ -75,18 +77,13 @@ defmodule Alto.Messaging do
 
   @doc false
   def allowed_tools(run) do
-    Enum.flat_map(
-      [{"send_message", Alto.Tools.SendMessage}, {"list_agents", Alto.Tools.ListAgents}],
-      fn {name, module} ->
-        case run.tools[name] do
-          %{module: ^module, approval: :never} ->
-            if MapSet.member?(run.model_tools, name), do: [name], else: []
+    tools =
+      for {name, %{runtime_operation: operation, approval: :never}} <- run.tools,
+          operation in [:send_message, :list_agents],
+          MapSet.member?(run.model_tools, name),
+          do: name
 
-          _ ->
-            []
-        end
-      end
-    )
+    Enum.sort(tools)
   end
 
   def list(sender), do: call(sender, :list)

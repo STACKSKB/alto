@@ -1,6 +1,12 @@
 defmodule Alto.Tools.WaitAgents do
   @moduledoc "Join owned children or yield until steering arrives, without occupying a child slot."
-  use Alto.Tool, name: :wait_agents, execution_mode: :exclusive, approval: :never, arguments: true
+  use Alto.Tool,
+    name: :wait_agents,
+    runtime_operation: :wait_agents,
+    execution_mode: :exclusive,
+    approval: :never,
+    arguments: true
+
   alias Alto.Tool.Arguments
   @impl true
   def arguments(_opts) do

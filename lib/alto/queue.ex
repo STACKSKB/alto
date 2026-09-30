@@ -432,7 +432,7 @@ defmodule Alto.Queue do
   defp fitting_prefix([], _remaining, kept), do: {:ok, Enum.reverse(kept)}
 
   defp fitting_prefix([record | rest], remaining, kept) do
-    size = record |> Alto.Protocol.encode_term() |> JSON.encode!() |> byte_size()
+    size = record |> Alto.TermProjection.encode_term() |> JSON.encode!() |> byte_size()
 
     cond do
       size <= remaining ->

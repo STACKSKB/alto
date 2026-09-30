@@ -331,7 +331,7 @@ defmodule Alto.Session do
     do: Alto.Persistence.EventCodec.project(data, max_bytes: @max_log_bytes)
 
   def event_data(%{"data" => data}) do
-    with {:ok, term} <- decode_term(data), do: {:ok, Alto.Protocol.encode_term(term)}
+    with {:ok, term} <- decode_term(data), do: {:ok, Alto.TermProjection.encode_term(term)}
   end
 
   def event_data(_), do: {:error, :invalid_event_data}
@@ -346,7 +346,7 @@ defmodule Alto.Session do
       "run_id" => run_id,
       "event" => Atom.to_string(event),
       "at_ms" => System.system_time(:millisecond),
-      "data" => Alto.Protocol.encode_term(data)
+      "data" => Alto.TermProjection.encode_term(data)
     }
   end
 
@@ -360,7 +360,7 @@ defmodule Alto.Session do
       "run_id" => Map.get(fields, :run_id),
       "parent_run_id" => Map.get(fields, :parent_run_id),
       "parent_session_id" => Map.get(fields, :parent_session_id),
-      "agent_identity" => Alto.Protocol.encode_term(Map.get(fields, :agent_identity)),
+      "agent_identity" => Alto.TermProjection.encode_term(Map.get(fields, :agent_identity)),
       "agent_id" => Map.get(fields, :agent_id),
       "subagent" => Map.get(fields, :subagent, false),
       "session_owner" => Map.get(fields, :session_owner, not Map.get(fields, :subagent, false)),

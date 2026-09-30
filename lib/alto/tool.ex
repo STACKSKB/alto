@@ -10,6 +10,7 @@ defmodule Alto.Tool do
     :input,
     :input_reader,
     :messaging_tools,
+    :agent_models,
     :budget
   ]
   @type context :: %{
@@ -27,6 +28,11 @@ defmodule Alto.Tool do
   @type options :: keyword() | map()
   @type spec :: module() | {module(), options()}
   @type result :: {:ok, term()} | {:error, term()} | {:unknown, term()}
+
+  @type runtime_operation ::
+          :spawn_agents | :start_agents | :wait_agents | :send_message | :list_agents
+  @doc "Bind a trusted tool to an owned runtime operation, independently of its module name."
+  @callback runtime_operation(options()) :: runtime_operation() | nil
 
   @doc "Trusted defaults for tools receiving canonical map options. Host overrides are merged before registration or standalone execution."
   @callback options() :: map()
@@ -62,7 +68,7 @@ defmodule Alto.Tool do
 
   @doc "Optional built-in argument contract. Tools opting in validate at `Alto.Tool.prepare/4`; their prepare/run functions are callbacks receiving validated or frozen input."
   @callback arguments(options()) :: {String.t(), keyword()}
-  @optional_callbacks approval: 1, prepare: 3, arguments: 1, options: 0
+  @optional_callbacks approval: 1, prepare: 3, arguments: 1, options: 0, runtime_operation: 1
 
   @doc """
   Declare constant metadata while implementing schema and execution normally.
@@ -73,7 +79,8 @@ defmodule Alto.Tool do
   implement the behaviour callbacks directly instead.
   """
   defmacro __using__(opts) do
-    opts = Keyword.validate!(opts, [:name, :execution_mode, :approval, :arguments])
+    opts =
+      Keyword.validate!(opts, [:name, :execution_mode, :approval, :arguments, :runtime_operation])
 
     schema =
       if Keyword.get(opts, :arguments, false) do
@@ -93,6 +100,8 @@ defmodule Alto.Tool do
       def execution_mode(_opts \\ []), do: unquote(Keyword.fetch!(opts, :execution_mode))
       @impl true
       def approval(_opts \\ []), do: unquote(Keyword.fetch!(opts, :approval))
+      @impl true
+      def runtime_operation(_opts \\ []), do: unquote(Keyword.get(opts, :runtime_operation))
     end
   end
 
@@ -125,6 +134,16 @@ defmodule Alto.Tool do
 
   def requirement(module, opts) do
     if function_exported?(module, :approval, 1), do: module.approval(opts), else: :required
+  end
+
+  def runtime_operation(module, opts) do
+    operation =
+      if function_exported?(module, :runtime_operation, 1), do: module.runtime_operation(opts)
+
+    true =
+      operation in [nil, :spawn_agents, :start_agents, :wait_agents, :send_message, :list_agents]
+
+    operation
   end
 
   @doc "Prepare a tool input and validate its return contract without executing it."

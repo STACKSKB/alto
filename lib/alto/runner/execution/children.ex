@@ -26,7 +26,7 @@ defmodule Alto.Runner.Execution.Children do
                   ]
                 )
 
-  @inherited_options ~w(provider_profiles credentials_path provider_retries retry_policy tool_presenter checkpoint_version
+  @inherited_options ~w(provider_profiles credentials_path agent_prepare agent_models child_provider_resolver provider_retries retry_policy tool_presenter checkpoint_version
                         parent_expires_at_ms approval continuation_store
                         session_dir conversation_retained_turns max_conversation_bytes)a ++
                        (Alto.Config.authority_fields() --
@@ -146,7 +146,7 @@ defmodule Alto.Runner.Execution.Children do
     metadata = %{
       "parent_run_id" => run.session_id,
       "parent_session_id" => run.session,
-      "agent_identity" => Alto.Protocol.encode_term(run.agent_identity)
+      "agent_identity" => Alto.TermProjection.encode_term(run.agent_identity)
     }
 
     with {:ok, journal} <-
@@ -254,7 +254,7 @@ defmodule Alto.Runner.Execution.Children do
   def prepare_resources(specs, run) do
     with {:ok, snapshot} <-
            Alto.Runner.Execution.Workspace.call(
-             fn -> Alto.Workspaces.prepare(run.workspaces, run.cwd) end,
+             fn -> Alto.Resource.prepare(run.workspaces, run.cwd) end,
              run.budget,
              run.tool_timeout,
              run.cancel_ref
@@ -390,7 +390,13 @@ defmodule Alto.Runner.Execution.Children do
 
   defp resolve_child_provider(%{profile_key: key, model: model}, run)
        when is_binary(key) and is_binary(model) do
-    resolve_provider(fn -> Alto.Subagents.Models.provider(key, model, run) end, run)
+    resolve_provider(
+      fn ->
+        resolver = run.child_provider_resolver || (&Alto.Subagents.Models.provider(&1, &2, run))
+        resolver.(key, model)
+      end,
+      run
+    )
   end
 
   defp resolve_child_provider(%{profile_key: nil}, run), do: {:ok, run.provider}

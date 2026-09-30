@@ -1,6 +1,10 @@
 defmodule Alto.Tools.StartAgents do
   @moduledoc "Start owned children and return addresses before they finish."
-  use Alto.Tool, name: :start_agents, execution_mode: :exclusive, approval: :required
+  use Alto.Tool,
+    name: :start_agents,
+    runtime_operation: :start_agents,
+    execution_mode: :exclusive,
+    approval: :required
 
   @impl true
   def schema(opts) do

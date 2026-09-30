@@ -104,7 +104,7 @@ defmodule Alto.Runner.Execution.Parent do
           with true <- snapshot.ids == ids,
                true <-
                  snapshot.metadata["agent_identity"] ==
-                   Alto.Protocol.encode_term(restored.agent_identity),
+                   Alto.TermProjection.encode_term(restored.agent_identity),
                :ok <- Children.resume_decided(cell, restored) do
             join(cell, restored, frame.remaining, frame.terminal, complete)
           else

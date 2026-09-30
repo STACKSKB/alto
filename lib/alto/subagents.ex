@@ -8,7 +8,7 @@ defmodule Alto.Subagents do
         max_depth: [type: :non_neg_integer, default: 0],
         max_children: [type: {:in, 1..64}, default: 16],
         max_concurrency: [type: :pos_integer, default: 1],
-        workspaces: [type: {:or, [nil, {:struct, Alto.Workspaces}]}, default: nil],
+        workspaces: [type: {:custom, Alto.Resource, :validate, []}, default: nil],
         sessions: [type: {:in, [:shared, :separate]}, default: :shared]
       )
 

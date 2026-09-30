@@ -115,7 +115,7 @@ defmodule Alto.Runner.Checkpoint do
            "session_id" => run.session,
            "messaging_id" => messaging_id(run),
            "transcript_revision" => revision,
-           "request" => request && Alto.Protocol.encode_term(request)
+           "request" => request && Alto.TermProjection.encode_term(request)
          },
          true <- Codec.valid?(packet, max_bytes: 2 * @limit) do
       {:ok, packet}
@@ -548,8 +548,14 @@ defmodule Alto.Runner.Checkpoint do
     ]
   end
 
-  defp fingerprint_data(%Alto.Workspaces{} = manager),
-    do: manager |> stable_resource() |> fingerprint_data()
+  defp fingerprint_data(%_{} = resource) do
+    if Alto.Resource.implementation?(resource),
+      do: resource |> stable_resource() |> fingerprint_data(),
+      else:
+        resource
+        |> Map.to_list()
+        |> Map.new(fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
+  end
 
   defp fingerprint_data(%{admit: admit, workspaces: manager} = policy) when is_function(admit, 2),
     do:
@@ -583,15 +589,12 @@ defmodule Alto.Runner.Checkpoint do
 
   defp stable_resource(nil), do: nil
 
-  defp stable_resource(%Alto.Workspaces{} = manager) do
-    %{
-      "kind" => "alto_workspaces",
-      "root" => manager.root,
-      "backend" => manager.backend,
-      "backend_md5" => module_md5(manager.backend),
-      "backend_options" => manager.backend_options,
-      "ledger" => stable_resource(manager.ledger)
-    }
+  defp stable_resource(%_{} = resource) do
+    case Alto.Resource.identity(resource) do
+      {:ok, identity} -> identity
+      {:error, reason} -> throw({__MODULE__, :durable_identity_unavailable, reason})
+      other -> throw({__MODULE__, :durable_identity_unavailable, other})
+    end
   end
 
   defp stable_resource(value) when is_pid(value) or is_atom(value) or is_tuple(value) do

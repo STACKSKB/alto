@@ -9,9 +9,27 @@ defmodule Alto.Workspaces do
   """
   alias Alto.{BoundedFile, DurableLog, OperationLog, Storage}
   alias Alto.Workspaces.Snapshot
+  @behaviour Alto.Resource
 
   @enforce_keys [:root, :ledger, :backend, :backend_options]
   defstruct [:root, :ledger, :backend, :backend_options]
+
+  @impl Alto.Resource
+  def resource_identity(manager) do
+    with {:ok, ledger} <- OperationLog.request(manager.ledger, :identity, 100) do
+      {:ok,
+       %{
+         "kind" => "alto_workspaces",
+         "root" => manager.root,
+         "backend" => manager.backend,
+         "backend_md5" => manager.backend.module_info(:md5),
+         "backend_options" => manager.backend_options,
+         "ledger" => ledger
+       }}
+    end
+  catch
+    :exit, reason -> {:error, reason}
+  end
 
   @type t :: %__MODULE__{
           root: binary(),
@@ -37,6 +55,7 @@ defmodule Alto.Workspaces do
   @doc "Capture one immutable source for every workspace in a delegation batch."
   @spec prepare(t(), Path.t()) :: {:ok, Snapshot.t()} | {:error, term()}
   @spec prepare(t(), Path.t(), keyword()) :: {:ok, Snapshot.t()} | {:error, term()}
+  @impl Alto.Resource
   def prepare(%__MODULE__{} = manager, source, snapshot_options \\ []) when is_binary(source) do
     source = Path.expand(source)
 
@@ -52,6 +71,7 @@ defmodule Alto.Workspaces do
   end
 
   @doc "Create once for an execution-tree identity. Retain incomplete attempts for review."
+  @impl Alto.Resource
   def create(%__MODULE__{} = manager, %Snapshot{source: source, metadata: metadata}, identity)
       when is_binary(source) and is_map(metadata) do
     source = Path.expand(source)
@@ -63,7 +83,7 @@ defmodule Alto.Workspaces do
 
       workspace = %{
         "id" => id,
-        "owner" => Alto.Protocol.encode_term(identity),
+        "owner" => Alto.TermProjection.encode_term(identity),
         "source" => source,
         "snapshot" => metadata,
         "cwd" => Path.join([manager.root, id, "checkout"]),
@@ -96,6 +116,7 @@ defmodule Alto.Workspaces do
   def create(%__MODULE__{}, _snapshot, _identity), do: {:error, :invalid_workspace_snapshot}
 
   @doc "Read one consistent ledger status/revision without changing resource state."
+  @impl Alto.Resource
   def get(%__MODULE__{} = manager, id) do
     with :ok <- valid_id(id),
          {:ok,
@@ -122,6 +143,7 @@ defmodule Alto.Workspaces do
   end
 
   @doc "Hold the workspace lock throughout worker use; a crashed use remains dispatched."
+  @impl Alto.Resource
   def use(%__MODULE__{} = manager, id, revision, fun) when is_function(fun, 1),
     do: use_at(manager, id, revision, fn _ -> {:ok, nil} end, fn ws, _ -> fun.(ws) end, "ready")
 
@@ -138,6 +160,7 @@ defmodule Alto.Workspaces do
   Admission may grant another durable resource. Failure after admission must
   therefore be reconciled, never treated as permission to repeat execution.
   """
+  @impl Alto.Resource
   def resume(%__MODULE__{} = manager, id, revision, admit, execute)
       when is_function(admit, 1) and is_function(execute, 2),
       do: use_at(manager, id, revision, admit, execute, "worked")
@@ -169,6 +192,7 @@ defmodule Alto.Workspaces do
   end
 
   @doc "Freeze one bounded patch after worker use. The patch is outside the worker cwd."
+  @impl Alto.Resource
   def freeze(%__MODULE__{} = manager, id, revision) do
     locked(manager, id, fn ->
       with {:ok, info} <- expect(manager, id, revision),

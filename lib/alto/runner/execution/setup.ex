@@ -7,7 +7,7 @@ defmodule Alto.Runner.Execution.Setup do
   @limits_options Alto.Config.execution_limits()
   @limits_schema NimbleOptions.new!(@limits_options)
 
-  @option_fields ~w(provider_profiles credentials_path input messaging async_agents
+  @option_fields ~w(provider_profiles credentials_path agent_prepare child_provider_resolver input messaging async_agents
                     agent_scheduler execution_owner checkpoint_version subagent_ticket child_profile
                     child_resume parent_expires_at_ms continuation_store cancel_ref session
                     session_dir retry_policy tool_presenter)a
@@ -128,8 +128,17 @@ defmodule Alto.Runner.Execution.Setup do
       prompt_config: Keyword.take(opts, [:prompt, :project_instructions])
     }
 
+    run = options |> Map.merge(initial) |> Map.merge(settings)
+
+    run =
+      Map.put(
+        run,
+        :agent_models,
+        opts[:agent_models] || (&Alto.Subagents.Models.list(&1, run, &2))
+      )
+
     if Alto.AgentIdentity.valid?(agent_identity),
-      do: {:ok, options |> Map.merge(initial) |> Map.merge(settings)},
+      do: {:ok, run},
       else: {:error, {:invalid_option, :agent_identity, agent_identity}}
   end
 

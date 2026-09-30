@@ -2,6 +2,7 @@ defmodule Alto.Tools.SendMessage do
   @moduledoc "Send attributed input through the same channel used for user steering."
   use Alto.Tool,
     name: :send_message,
+    runtime_operation: :send_message,
     execution_mode: :exclusive,
     approval: :never,
     arguments: true
