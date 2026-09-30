@@ -14,7 +14,7 @@ defmodule Alto.Runner.Execution.Children do
   @spawn_schema NimbleOptions.new!(
                   id: [type: Arguments.text(1, :infinity), required: true],
                   task: [type: {:custom, __MODULE__, :task, []}, required: true],
-                  max_steps: [type: {:or, [nil, :pos_integer]}, default: nil],
+                  max_steps: [type: {:or, [nil, :pos_integer, {:in, [:infinity]}]}, default: nil],
                   tools: [type: {:or, [{:in, [:inherit]}, {:list, :any}]}, default: :inherit],
                   loop: [type: {:or, [nil, :map]}, default: nil],
                   model: [type: {:or, [nil, Arguments.text(1, 256)]}, default: nil],
@@ -28,7 +28,7 @@ defmodule Alto.Runner.Execution.Children do
 
   @inherited_options ~w(provider_profiles credentials_path provider_retries retry_policy tool_presenter checkpoint_version
                         parent_expires_at_ms approval continuation_store
-                        session_dir)a ++
+                        session_dir conversation_retained_turns max_conversation_bytes)a ++
                        (Alto.Config.authority_fields() --
                           [
                             :max_steps,

@@ -10,7 +10,7 @@ subagent policy controls child count, concurrency, and authority. The parent loo
 `dump_checkpoint/2` and `load_checkpoint/2` for both its waiting-for-children
 state and the state reached after receiving `subagents_completed`. All stores
 must be supervised and private. The continuation ledger needs sufficient
-`max_recovery_bytes` and `max_record_bytes` for the encoded frame; parent cell
+`max_checkpoint_bytes` and `max_record_bytes` for the encoded frame; parent cell
 packets are limited to 2 MB, with 64 KB metadata. Store limits can be lower.
 
 The resident Registry accepts a per-task `budget_account` and a `continuation`

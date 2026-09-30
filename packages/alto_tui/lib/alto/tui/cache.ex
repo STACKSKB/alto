@@ -16,6 +16,16 @@ defmodule Alto.TUI.Cache do
   def stats, do: Process.get(@key, %{items: %{}, order: [], bytes: 0})
   def clear, do: Process.delete(@key)
 
+  @doc "Peek at the most recently used item in a namespace within the shared byte budget."
+  def latest(namespace) do
+    cache = stats()
+
+    Enum.find_value(cache.order, fn
+      {^namespace, id} = key -> {id, cache.items[key].value}
+      _ -> nil
+    end)
+  end
+
   def fetch(namespace, id, count_limit, build) do
     key = {namespace, id}
     cache = stats()

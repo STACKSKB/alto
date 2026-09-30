@@ -23,6 +23,11 @@ defmodule Alto.Session.Writer do
   catch
     :exit, {reason, {GenServer, :call, _}} when retry? and reason in [:normal, :noproc] ->
       request(key, line, false)
+
+    :exit, {:noproc, {GenServer, :call, _}} ->
+      # Registry cleanup can lag behind process death through both lookups.
+      # No process received this call, so a direct locked append is safe.
+      :unavailable
   end
 
   defp writer(key) do

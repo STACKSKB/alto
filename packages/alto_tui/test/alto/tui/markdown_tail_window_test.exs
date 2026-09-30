@@ -3,6 +3,23 @@ defmodule Alto.TUI.MarkdownTailWindowTest do
 
   alias Alto.TUI.Markdown
 
+  test "scroll windows cross cached page boundaries without losing native styles or rows" do
+    sources = [
+      "```elixir\n" <>
+        Enum.map_join(1..260, "\n", &"  IO.puts(\"line #{&1} 猫 with evidence\")") <> "\n```",
+      String.duplicate("A **bold** finding and `code` 猫. ", 350)
+    ]
+
+    for source <- sources, width <- [17, 84] do
+      full = Markdown.render(source, width).lines
+      plan = Markdown.layout(source, width)
+
+      for offset <- [0, 1, 61, 63, 64, 65, 126, plan.rows - 5, 64, 0], height <- [1, 9, 130] do
+        assert Markdown.window(plan, offset, height) == Enum.slice(full, offset, height)
+      end
+    end
+  end
+
   test "long prose, code, headings, and table records keep exact styled tail rows" do
     sources = [
       "A **bold** `token` and 猫. " <> String.duplicate("wrapped words 猫 ", 600),

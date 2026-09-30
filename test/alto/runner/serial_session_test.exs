@@ -61,7 +61,15 @@ defmodule Alto.Runner.SerialSessionTest do
     assert result.output == "done"
 
     assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
-    assert Enum.map(records, & &1["type"]) == ["started", "event", "event", "completed"]
+
+    assert Enum.map(records, & &1["type"]) == [
+             "started",
+             "diagnostic",
+             "diagnostic",
+             "event",
+             "event",
+             "completed"
+           ]
 
     [started | _] = records
     assert started["run_id"] == result.run_id

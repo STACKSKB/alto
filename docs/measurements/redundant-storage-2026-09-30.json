@@ -1,0 +1,85 @@
+{
+  "date": "2026-09-30",
+  "original_sessions_modified": false,
+  "conversation_conversion": [
+    {
+      "session_id": "sess-2ofphnshf6tpkxa",
+      "revisions": 165,
+      "before_bytes": 79044719,
+      "after_bytes": 1423362,
+      "conversion_ms": 9661,
+      "reduction_percent": 98.2,
+      "all_revisions_verified": true,
+      "dispatch_preserved": true
+    },
+    {
+      "session_id": "sess-itpsspcqj2pcdvq",
+      "revisions": 161,
+      "before_bytes": 126949785,
+      "after_bytes": 2009852,
+      "conversion_ms": 10953,
+      "reduction_percent": 98.42,
+      "all_revisions_verified": true,
+      "dispatch_preserved": true
+    }
+  ],
+  "event_encodings": [
+    {
+      "session_id": "sess-2ofphnshf6tpkxa",
+      "events": 516,
+      "data_bytes": 985100,
+      "wire_data_bytes": 745988,
+      "jsonl_bytes": 1808784
+    },
+    {
+      "session_id": "sess-itpsspcqj2pcdvq",
+      "events": 487,
+      "data_bytes": 1805720,
+      "wire_data_bytes": 1376714,
+      "jsonl_bytes": 3259431
+    }
+  ],
+  "synthetic_continuation": {
+    "children": 8,
+    "unique_checkpoint_bytes": 262200,
+    "serialized_checkpoint_occurrences": 36,
+    "update_records": 16,
+    "log_bytes": 1590683
+  },
+  "synthetic_viewport": {
+    "entries": 200,
+    "total_rows": 20790,
+    "visible_rows": 40,
+    "padded_serialized_bytes": 3520400,
+    "visible_serialized_bytes": 13650
+  },
+  "audit_fixes": {
+    "event": {
+      "legacy_bytes": 76688,
+      "current_bytes": 32987
+    },
+    "continuation": {
+      "children": 8,
+      "unique_checkpoint_bytes": 262200,
+      "serialized_checkpoint_occurrences": 8,
+      "update_records": 16,
+      "log_bytes": 357607
+    },
+    "checkpoint": {
+      "context_bytes": 2100028,
+      "referenced_packet_bytes": 2345,
+      "legacy_inline_state_bytes": 2101480,
+      "exact_restore": true
+    },
+    "viewport": {
+      "entries": 200,
+      "total_rows": 20790,
+      "visible_rows": 40,
+      "viewport_serialized_bytes": 13559,
+      "visible_serialized_bytes": 13650
+    },
+    "core_tests": 1190,
+    "tui_tests": 225,
+    "original_sessions_modified": false
+  }
+}

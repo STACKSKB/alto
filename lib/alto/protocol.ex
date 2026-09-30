@@ -140,10 +140,11 @@ defmodule Alto.Protocol do
   defp encode_list([]), do: []
   defp encode_list(other), do: [encode_term(other)]
 
-  defp encode_key(key) when is_atom(key), do: Atom.to_string(key)
-  defp encode_key(key) when is_binary(key), do: key
-  defp encode_key(key) when is_integer(key), do: Integer.to_string(key)
-  defp encode_key(key), do: bounded_inspect(key)
+  @doc false
+  def encode_key(key) when is_atom(key), do: Atom.to_string(key)
+  def encode_key(key) when is_binary(key), do: key
+  def encode_key(key) when is_integer(key), do: Integer.to_string(key)
+  def encode_key(key), do: bounded_inspect(key)
 
   defp bounded_inspect(term) do
     inspect(term, pretty: false, limit: 50, printable_limit: @max_inspect_bytes)

@@ -7,7 +7,10 @@ defmodule Alto.TUI.MarkdownTest do
   alias ExRatatui.Widgets.Paragraph
 
   defp plain(%Text{lines: lines}),
-    do: Enum.map_join(lines, "\n", fn line -> Enum.map_join(line.spans, & &1.content) end)
+    do:
+      Enum.map_join(lines, "\n", fn line ->
+        Enum.map_join(line.spans, & &1.content) |> String.trim_trailing()
+      end)
 
   test "assistant and reasoning transcript entries render Markdown syntax" do
     for kind <- [:assistant, :codex_assistant, :reasoning] do
@@ -80,6 +83,33 @@ defmodule Alto.TUI.MarkdownTest do
       assert plain(rich) =~ "    IO.puts(\"猫\")"
       refute plain(rich) =~ "```"
       assert plain(rich) =~ "  end"
+    end
+  end
+
+  test "code backgrounds fill the rectangle, including labels, blank rows and empty fences" do
+    for source <- ["```elixir\n  :ok\n\n  :done\n```", "```\n```"], width <- [11, 40] do
+      code = Markdown.render(source, width)
+      full = Markdown.render(source <> "\n\nAfter", width)
+      plan = Markdown.layout(source <> "\n\nAfter", width)
+
+      for lines <- [full.lines, Markdown.window(plan, 0, plan.rows)] do
+        session = CellSession.new(width, length(lines))
+
+        try do
+          :ok =
+            CellSession.draw(session, [
+              {%Paragraph{text: Text.new(lines)}, %Rect{width: width, height: length(lines)}}
+            ])
+
+          rows = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
+          code_rows = Enum.take(rows, length(code.lines))
+          assert Enum.all?(List.flatten(code_rows), &(&1.bg == {:rgb, 43, 48, 59}))
+          assert Enum.all?(List.last(rows), &(&1.bg != {:rgb, 43, 48, 59}))
+          assert plain(Text.new(lines)) == plain(full)
+        after
+          CellSession.close(session)
+        end
+      end
     end
   end
 

@@ -187,18 +187,29 @@ a custom loop. Context reduction is opt-in and configured separately through
 | Setting | Scope |
 | --- | --- |
 | `run_timeout` | Whole execution tree, including descendants |
-| `max_steps` | Model steps in a run |
+| `max_steps` | Model steps in a run; positive integer or `:infinity` |
+| `max_model_requests` | Shared model-request budget; positive integer or `:infinity` |
+| `max_effects` | Shared effect budget across the execution tree |
 | `provider_timeout` | Each supervised provider call |
 | `tool_timeout` | Each supervised tool call |
 | `approval_timeout` | Waiting for an approval decision |
 | `max_tool_result_bytes` | Retained tool result size |
 | `max_transcript_bytes` | Model transcript size |
 | `max_events`, `max_event_bytes` | In-memory event retention |
+| `conversation_retained_turns` | Rewind/fork history; all turns by default, or the latest N turns |
+| `max_conversation_bytes` | Distinct stored conversation objects and manifests, or `:infinity` |
 
 Timeouts are milliseconds. HTTP providers also accept `timeout` for a total
 request deadline and `idle_timeout` for stream silence. Set `provider_timeout`
 above the HTTP deadline if the transport should report its own timeout first.
 Config changes apply when a run starts or resumes.
+
+The library defaults to 32 model steps, 256 shared model requests, and a 128 MB
+conversation storage budget. The supplied coding profile selects `:infinity` for
+those three limits to support long tasks. All turns are retained incrementally by
+default; `conversation_retained_turns: N` limits rewind/fork history while keeping
+the entire current context. Run deadlines, effect budgets and cancellation still
+apply. See [conversation revisions](conversations.md) for storage and migration.
 
 `provider_retries` bounds retries before any model output is delivered; it is
 zero by default. The transient policy honors provider retry hints, keeps waiting

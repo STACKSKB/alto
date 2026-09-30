@@ -74,6 +74,21 @@ defmodule Alto.TUI.SearchTest do
     assert resized.transcript_scroll > 45
   end
 
+  test "a scrolled search window paints matches using absolute row coordinates", %{state: state} do
+    entries = [%{kind: :assistant, text: Enum.map_join(1..100, "\n", &"row #{&1}: needle")}]
+    state = state |> State.put_entries(nil, entries) |> Search.open() |> Search.paste("needle")
+    window = Search.highlighted(state, 40, 50, 8)
+    assert window.offset == 50
+    assert length(window.lines) == 8
+
+    assert Enum.any?(window.lines, fn line ->
+             Enum.any?(line.spans, &(&1.style && &1.style.bg in [:light_cyan, :yellow]))
+           end)
+
+    full = Search.highlighted(state, 40)
+    assert window.lines == Enum.slice(full.lines, 50, 8)
+  end
+
   test "hard newlines cannot steal the position of a later exact substring", %{state: state} do
     state =
       state

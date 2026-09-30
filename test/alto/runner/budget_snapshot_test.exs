@@ -3,6 +3,21 @@ defmodule Alto.Runner.BudgetSnapshotTest do
 
   alias Alto.Runner.Budget
 
+  test "unlimited model counts remain portable and cannot widen a saved finite budget" do
+    opts = [max_model_requests: :infinity, run_timeout: 10_000]
+    assert {:ok, budget} = Budget.new(opts)
+    for _ <- 1..300, do: assert(:ok = Budget.take_model(budget))
+    snapshot = Budget.snapshot(budget)
+    assert is_integer(snapshot["max_model_requests"])
+    assert {:ok, restored} = Budget.restore(opts, snapshot)
+    assert Budget.snapshot(restored)["model_requests_used"] == 300
+    assert :ok = Budget.take_model(restored)
+    {:ok, finite} = Budget.new(max_model_requests: 1)
+    :ok = Budget.take_model(finite)
+    assert {:ok, limited} = Budget.restore(opts, Budget.snapshot(finite))
+    assert {:error, {:model_request_limit, 1}} = Budget.take_model(limited)
+  end
+
   test "snapshot and restore preserve shared counters" do
     {:ok, budget} = Budget.new(max_effects: 5, max_model_requests: 3, run_timeout: 10_000)
     assert :ok = Budget.take(budget)

@@ -23,6 +23,17 @@ defmodule Alto.TUI.Transcript do
   @doc "Native row-count index; off-screen styled cells are never materialized."
   def index(entries, width, opts \\ []) do
     cached(:indexes, {entries, width, opts}, 4, fn ->
+      # Worker-local caches disappear when indexing tasks exit. Reuse plans
+      # from the previous budgeted index before dispatching any changed entries.
+      previous =
+        case Alto.TUI.Cache.latest({__MODULE__, :indexes}) do
+          {{_, ^width, ^opts}, index} ->
+            Map.new(index.parts, fn {entry, plan, _, _} -> {entry, plan} end)
+
+          _ ->
+            %{}
+        end
+
       build = fn entry ->
         plan =
           cond do
@@ -42,11 +53,13 @@ defmodule Alto.TUI.Transcript do
         {entry, plan}
       end
 
-      plans =
-        if length(entries) < 32 do
-          Enum.map(entries, build)
+      missing = entries |> Enum.reject(&Map.has_key?(previous, &1)) |> Enum.uniq()
+
+      built =
+        if length(missing) < 32 do
+          Enum.map(missing, build)
         else
-          entries
+          missing
           |> Enum.chunk_every(16)
           |> Task.async_stream(&Enum.map(&1, build),
             max_concurrency: 4,
@@ -56,8 +69,12 @@ defmodule Alto.TUI.Transcript do
           |> Enum.flat_map(fn {:ok, plans} -> plans end)
         end
 
+      plans = Map.merge(previous, Map.new(built))
+
       {parts, rows} =
-        Enum.map_reduce(plans, 0, fn {entry, plan}, offset ->
+        Enum.map_reduce(entries, 0, fn entry, offset ->
+          plan = Map.fetch!(plans, entry)
+
           count =
             case plan do
               {:markdown, layout} -> layout.rows + 1
@@ -137,18 +154,13 @@ defmodule Alto.TUI.Transcript do
     end
   end
 
-  # Empty rows retain stable absolute coordinates for selection and scrollbars.
-  # Only the viewport carries styled content; selection requests fresh windows.
+  # Preserve absolute coordinates without allocating hidden placeholder rows.
   def viewport(entries, width, offset, height, opts \\ []) do
     index = index(entries, width, opts)
     offset = min(offset, max(index.rows - height, 0))
     lines = window(index, offset, height)
 
-    Text.new(
-      List.duplicate(Line.new([]), offset) ++
-        lines ++
-        List.duplicate(Line.new([]), max(index.rows - offset - length(lines), 0))
-    )
+    %Alto.TUI.Window{lines: lines, offset: offset, rows: index.rows}
   end
 
   @doc "Render only enough final entries to fill the followed viewport."

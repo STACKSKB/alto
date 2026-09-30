@@ -30,6 +30,25 @@ defmodule Alto.Runner.BudgetAccountTest do
     assert OperationLog.request(ledger, {:attempts, "atomic-open"}) == 1
   end
 
+  test "unlimited model policy opens a portable account but cannot widen an existing cap", %{
+    ledger: ledger
+  } do
+    assert {:ok, account} =
+             Account.open(ledger, "unlimited", max_effects: 10, max_model_requests: :infinity)
+
+    assert {:ok, %{packet: packet}} = Account.read(account)
+    assert is_integer(packet["max_model_requests"])
+    assert {:ok, _} = Account.tighten(account, 10, 1)
+
+    assert {:ok, reopened} =
+             Account.open(ledger, "unlimited", max_effects: 10, max_model_requests: :infinity)
+
+    assert :ok = Account.take(reopened, :model, packet["max_model_requests"])
+
+    assert {:error, {:model_request_limit, 1}} =
+             Account.take(reopened, :model, packet["max_model_requests"])
+  end
+
   test "concurrent reservations stop exactly at each cap and read counts consistently", %{
     ledger: ledger
   } do

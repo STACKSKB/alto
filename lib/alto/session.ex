@@ -194,6 +194,7 @@ defmodule Alto.Session do
              expected_revision: :any,
              summary: nil,
              session_id: nil,
+             conversation_retained_turns: :infinity,
              max_conversation_bytes: 128_000_000
            ),
          {:ok, source} <-
@@ -209,7 +210,8 @@ defmodule Alto.Session do
          :ok <-
            Conversation.validate_fork_options(
              summary,
-             Keyword.fetch!(opts, :max_conversation_bytes)
+             Keyword.fetch!(opts, :max_conversation_bytes),
+             Keyword.fetch!(opts, :conversation_retained_turns)
            ),
          true <- source["settled"],
          :ok <-
@@ -235,6 +237,7 @@ defmodule Alto.Session do
              expected_revision: 0,
              parent: %{"session_id" => id, "revision" => source["revision"]},
              summary: summary,
+             conversation_retained_turns: Keyword.fetch!(opts, :conversation_retained_turns),
              max_conversation_bytes: Keyword.fetch!(opts, :max_conversation_bytes)
            ) do
       {:ok,
@@ -307,9 +310,45 @@ defmodule Alto.Session do
     end
   end
 
+  def decode_term(%{"$event_term" => 1} = data) do
+    with {:ok, term} <-
+           Alto.Persistence.EventCodec.decode(data,
+             max_bytes: @max_log_bytes,
+             validate: &safe_term?/1
+           ) do
+      {:ok, term}
+    else
+      _ -> {:error, :invalid_term_payload}
+    end
+  end
+
   def decode_term(other), do: {:error, {:invalid_term_payload, other}}
 
+  @doc "Project either generation of saved event data without creating atoms."
+  def event_data(%{"wire_data" => data}), do: {:ok, data}
+
+  def event_data(%{"data" => %{"$event_term" => 1} = data}),
+    do: Alto.Persistence.EventCodec.project(data, max_bytes: @max_log_bytes)
+
+  def event_data(%{"data" => data}) do
+    with {:ok, term} <- decode_term(data), do: {:ok, Alto.Protocol.encode_term(term)}
+  end
+
+  def event_data(_), do: {:error, :invalid_event_data}
+
   ## Records built by the execution host
+
+  @doc false
+  def diagnostic_record(run_id, event, data) do
+    %{
+      "v" => @version,
+      "type" => "diagnostic",
+      "run_id" => run_id,
+      "event" => Atom.to_string(event),
+      "at_ms" => System.system_time(:millisecond),
+      "data" => Alto.Protocol.encode_term(data)
+    }
+  end
 
   @doc false
   @spec started_record(map()) :: record()
@@ -342,20 +381,8 @@ defmodule Alto.Session do
       "domain" => Atom.to_string(event.domain),
       "event" => Atom.to_string(event.type),
       "at_ms" => event.at_ms,
-      "data" => encode_term(event.data)
+      "data" => Alto.Persistence.EventCodec.encode(event.data)
     }
-    |> with_wire_data(event.data)
-  end
-
-  # Keep an additive, self-contained projection for replay in a fresh VM.
-  # Exact terms can contain atoms from application modules not loaded there;
-  # replay must never loosen binary_to_term's safe decoding to recreate them.
-  defp with_wire_data(record, data) do
-    projection = Alto.Protocol.encode_term(data)
-    _encoded = JSON.encode!(projection)
-    Map.put(record, "wire_data", projection)
-  rescue
-    _error -> record
   end
 
   @doc false

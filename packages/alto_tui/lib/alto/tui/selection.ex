@@ -219,13 +219,16 @@ defmodule Alto.TUI.Selection do
     |> Enum.reverse()
     |> Enum.find_value(fn
       {{%Paragraph{text: text, scroll: {offset, _}} = widget, rect}, index}
-      when is_binary(text) or is_struct(text, ExRatatui.Text) ->
+      when is_binary(text) or is_struct(text, ExRatatui.Text) or is_struct(text, Alto.TUI.Window) ->
         inner = SelectionRegions.content_rect(widget, rect)
 
         if inner == selection.region do
           limit =
             Keyword.get(opts, :scroll_limit, fn _point ->
               cond do
+                is_struct(text, Alto.TUI.Window) ->
+                  Alto.TUI.Viewport.bottom(text, inner.width, inner.height)
+
                 is_struct(text, ExRatatui.Text) ->
                   max(length(text.lines) - inner.height, 0)
 

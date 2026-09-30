@@ -361,7 +361,7 @@ Results use the existing exact checkpoint codec, capped at 64,000 bytes per
 native result. Nonportable values fail closed. Decoding loads Alto's fixed runner/usage vocabulary and does not create atoms;
 trusted code defining additional result atoms must already be loaded in the
 restoring VM. Stored data never selects modules to load. The whole batch must also fit the ledger's checkpoint/record/log limits,
-so applications may need a larger `max_recovery_bytes`/`max_record_bytes` for
+so applications may need a larger `max_checkpoint_bytes`/`max_record_bytes` for
 multiple large results. Exhaustion can prevent saving a result after execution;
 the dispatch then remains uncertain. Private storage is required because exact
 outputs can contain sensitive data. Prefer a stable registered ledger name in

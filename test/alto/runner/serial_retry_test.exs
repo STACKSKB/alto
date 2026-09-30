@@ -97,6 +97,54 @@ defmodule Alto.Runner.SerialRetryTest do
     assert retry_events() == [{1, 4, :transport}, {2, 4, :transport}]
   end
 
+  test "session diagnostics distinguish silent attempts, retries and success without request content",
+       %{agent: agent} do
+    dir =
+      Path.join(System.tmp_dir!(), "alto-retry-diagnostics-#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf!(dir) end)
+    parent = self()
+
+    script = fn
+      0 -> {:error, {:transport_error, :timeout}}
+      _ -> {:ok, %{message: "done", tool_calls: []}}
+    end
+
+    result =
+      Alto.run("PRIVATE REQUEST",
+        session: :new,
+        session_dir: dir,
+        provider: {ScriptedProvider, test_pid: parent, agent: agent, script: script},
+        provider_retries: 1,
+        retry_policy: fn _, _ -> {:retry, 0, :transport} end,
+        event_sink: fn event -> send(parent, {:evt, event}) end
+      )
+
+    assert result.status == :ok
+    assert_receive {:evt, %Event{type: :model_started, data: %{step: 1, attempt: 2}}}
+    assert {:ok, records} = Alto.Session.read(result.session_id, session_dir: dir)
+    diagnostics = Enum.filter(records, &(&1["type"] == "diagnostic"))
+
+    assert Enum.map(diagnostics, & &1["event"]) == [
+             "provider_attempt_started",
+             "provider_attempt_finished",
+             "provider_retry",
+             "provider_attempt_started",
+             "provider_attempt_finished"
+           ]
+
+    assert Enum.at(diagnostics, 1)["data"]["outcome"] == %{
+             "kind" => "transport_error",
+             "reason" => "timeout"
+           }
+
+    assert Enum.at(diagnostics, 1)["data"]["output_delivered"] == false
+    assert List.last(diagnostics)["data"]["outcome"] == "ok"
+    assert List.last(diagnostics)["data"]["duration_ms"] >= 0
+    refute JSON.encode!(diagnostics) =~ "PRIVATE REQUEST"
+    assert Enum.all?(diagnostics, &is_integer(&1["at_ms"]))
+  end
+
   test "rate limits and server errors retry; client errors do not", %{agent: agent} do
     for {status, retried?} <- [{429, true}, {500, true}, {503, true}, {400, false}, {401, false}] do
       Agent.update(agent, fn _ -> 0 end)

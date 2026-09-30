@@ -239,6 +239,23 @@ defmodule Alto.Runner.ParentCheckpointTest do
              Checkpoint.restore_parent(%{run | max_transcript_bytes: 1}, packet, opts)
   end
 
+  test "unlimited step policy survives checkpoints and respects finite authority", %{
+    run: run,
+    pending: pending,
+    opts: opts
+  } do
+    unlimited = %{run | max_steps: :infinity}
+    assert {:ok, packet} = Checkpoint.capture_parent(unlimited, pending, [], :continue)
+    assert {:ok, restored, _} = Checkpoint.restore_parent(unlimited, packet, opts)
+    assert restored.max_steps == :infinity
+    assert {:ok, narrowed, _} = Checkpoint.restore_parent(run, packet, opts)
+    assert narrowed.max_steps == run.max_steps
+
+    assert {:ok, finite} = Checkpoint.capture_parent(run, pending, [], :continue)
+    assert {:ok, restored, _} = Checkpoint.restore_parent(unlimited, finite, opts)
+    assert restored.max_steps == run.max_steps
+  end
+
   test "mismatched envelope and malformed pending state fail before restoration", context do
     %{run: run, pending: pending, opts: opts} = context
     {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
@@ -282,11 +299,16 @@ defmodule Alto.Runner.ParentCheckpointTest do
     {:ok, session} = Alto.Session.create("task", %{}, session_dir: run.session_dir)
     run = %{run | session: session}
 
-    for intent <- [pending, %{kind: :frame}] do
+    for {intent, index} <- Enum.with_index([pending, %{kind: :frame}]) do
       assert {:ok, packet} = Checkpoint.capture_parent(run, intent, [], :continue)
 
+      messages = run.messages_rev ++ [%{"role" => "user", "content" => "changed #{index}"}]
+
       assert {:ok, _snapshot} =
-               Alto.Session.persist_settled(run.session, run.messages_rev, run.transcript_bytes,
+               Alto.Session.persist_settled(
+                 run.session,
+                 messages,
+                 Alto.Context.Transcript.bytes(messages),
                  session_dir: run.session_dir,
                  allow_pending: true
                )
@@ -295,9 +317,94 @@ defmodule Alto.Runner.ParentCheckpointTest do
     end
   end
 
+  test "checkpoint identity binds a finite conversation retention policy", %{
+    run: run,
+    pending: pending,
+    opts: opts
+  } do
+    finite = Map.put(run, :conversation_retained_turns, 3)
+    {:ok, packet} = Checkpoint.capture_parent(finite, pending, [], :continue)
+    assert {:ok, _, _} = Checkpoint.restore_parent(finite, packet, opts)
+
+    assert {:error, :checkpoint_mismatch} =
+             Checkpoint.restore_parent(
+               Map.put(finite, :conversation_retained_turns, 4),
+               packet,
+               opts
+             )
+
+    assert {:error, :checkpoint_mismatch} = Checkpoint.restore_parent(run, packet, opts)
+  end
+
   defp replace_expiry(packet, expiry) do
     {:ok, saved} = Checkpoint.decode(packet["state"])
     {:ok, state} = Checkpoint.encode(put_in(saved, [:binding, :expires_at_ms], expiry))
     Map.put(packet, "state", state)
+  end
+
+  test "a large durable transcript is referenced and restores below the packet limit", %{
+    run: run,
+    pending: pending,
+    opts: opts
+  } do
+    messages = [%{"role" => "user", "content" => String.duplicate("context", 300_000)}]
+    {:ok, session} = Alto.Session.create("large context", %{}, session_dir: run.session_dir)
+    bytes = Alto.Context.Transcript.bytes(messages)
+
+    {:ok, _} =
+      Alto.Session.persist_settled(session, messages, bytes,
+        session_dir: run.session_dir,
+        conversation_retained_turns: 1
+      )
+
+    run = %{
+      run
+      | session: session,
+        messages_rev: messages,
+        transcript_bytes: bytes,
+        max_transcript_bytes: 3_000_000
+    }
+
+    assert {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
+    assert byte_size(packet["state"]) < 20_000
+    {:ok, saved} = Checkpoint.decode(packet["state"])
+    assert saved.run.messages_rev["$conversation"] == 1
+    assert {:ok, restored, _} = Checkpoint.restore_parent(run, packet, opts)
+    assert restored.messages_rev == messages
+
+    {:ok, forged} = Checkpoint.encode(put_in(saved, [:run, :messages_rev, "message_count"], 2))
+
+    assert {:error, :checkpoint_mismatch} =
+             Checkpoint.restore_parent(run, %{packet | "state" => forged}, opts)
+
+    changed = [%{"role" => "user", "content" => "next turn"}]
+
+    {:ok, _} =
+      Alto.Session.persist_settled(session, changed, Alto.Context.Transcript.bytes(changed),
+        session_dir: run.session_dir,
+        conversation_retained_turns: 1
+      )
+
+    assert {:error, :checkpoint_mismatch} = Checkpoint.restore_parent(run, packet, opts)
+  end
+
+  test "legacy inline transcripts still restore with a saved session", %{
+    run: run,
+    pending: pending,
+    opts: opts
+  } do
+    {:ok, session} = Alto.Session.create("legacy", %{}, session_dir: run.session_dir)
+
+    {:ok, _} =
+      Alto.Session.persist_settled(session, run.messages_rev, run.transcript_bytes,
+        session_dir: run.session_dir
+      )
+
+    run = %{run | session: session}
+    {:ok, packet} = Checkpoint.capture_parent(run, pending, [], :continue)
+    {:ok, saved} = Checkpoint.decode(packet["state"])
+    {:ok, state} = Checkpoint.encode(put_in(saved, [:run, :messages_rev], run.messages_rev))
+    assert {:ok, restored, _} = Checkpoint.restore_parent(run, %{packet | "state" => state}, opts)
+    assert restored.messages_rev == run.messages_rev
   end
 end

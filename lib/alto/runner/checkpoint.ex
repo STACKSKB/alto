@@ -94,6 +94,7 @@ defmodule Alto.Runner.Checkpoint do
            ),
          true <- valid_saved?(saved, Map.take(run, @authority_fields)),
          {:ok, fingerprint} <- fingerprint(run),
+         {:ok, saved} <- reference_transcript(run, saved),
          {:ok, state} <-
            encode(%{
              run: saved,
@@ -149,6 +150,8 @@ defmodule Alto.Runner.Checkpoint do
              data.messaging_id == messaging_id(run),
          :ok <- validate_binding(kind, run, data),
          authority <- checkpoint_authority(run, data.binding),
+         {:ok, saved} <- materialize_transcript(run, data.run),
+         data <- Map.put(data, :run, saved),
          true <- valid_saved?(data.run, authority),
          true <- not is_nil(data.messaging_id) or is_nil(data.run.communication),
          true <- data.run.transcript_revision == packet["transcript_revision"],
@@ -172,6 +175,37 @@ defmodule Alto.Runner.Checkpoint do
       _ -> {:error, :checkpoint_mismatch}
     end
   end
+
+  defp reference_transcript(%{session: nil}, saved), do: {:ok, saved}
+
+  defp reference_transcript(run, saved) do
+    with {:ok, reference} <-
+           Alto.Session.Conversation.checkpoint_reference(
+             run.session,
+             saved.transcript_revision,
+             saved.messages_rev,
+             session_dir: run.session_dir
+           ) do
+      if reference == :inline, do: {:ok, saved}, else: {:ok, %{saved | messages_rev: reference}}
+    end
+  end
+
+  defp materialize_transcript(
+         run,
+         %{messages_rev: %{"$conversation" => 1, "session_id" => id} = reference} = saved
+       ) do
+    with true <- id == run.session,
+         {:ok, messages} <-
+           Alto.Session.Conversation.checkpoint_messages(id, reference,
+             session_dir: run.session_dir
+           ) do
+      {:ok, %{saved | messages_rev: messages}}
+    else
+      _ -> {:error, :checkpoint_mismatch}
+    end
+  end
+
+  defp materialize_transcript(_run, saved), do: {:ok, saved}
 
   defp capture_binding(nil, %{agent_depth: 0}), do: {:ok, nil}
 
@@ -366,7 +400,9 @@ defmodule Alto.Runner.Checkpoint do
   defp valid_authority?(authority) when is_map(authority) do
     Enum.sort(Map.keys(authority)) == Enum.sort(@authority_fields) and
       Enum.all?(authority, fn {key, value} ->
-        is_integer(value) and value >= if(key in [:max_agent_depth, :max_events], do: 0, else: 1)
+        (key == :max_steps and value == :infinity) or
+          (is_integer(value) and
+             value >= if(key in [:max_agent_depth, :max_events], do: 0, else: 1))
       end)
   end
 
@@ -485,6 +521,12 @@ defmodule Alto.Runner.Checkpoint do
        {run.spec.subagents, Map.get(run, :child_limits)}, tools, run.model_tools, run.cwd,
        Map.get(run, :session_history, :completed),
        Map.get(run, :max_conversation_bytes, 128_000_000)}
+
+    data =
+      case Map.get(run, :conversation_retained_turns, :infinity) do
+        :infinity -> data
+        limit -> {data, {:conversation_retained_turns, limit}}
+      end
 
     {:ok, fingerprint_data(data)}
   catch

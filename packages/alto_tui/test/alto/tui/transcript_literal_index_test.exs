@@ -56,5 +56,39 @@ defmodule Alto.TUI.TranscriptLiteralIndexTest do
              Enum.slice(Transcript.render(entries, 4).lines, -3, 3)
   end
 
-  defp line_text(line), do: Enum.map_join(line.spans, & &1.content)
+  test "streaming reuses unchanged plans after parallel indexing and preserves absolute rows" do
+    entries =
+      for n <- 1..40 do
+        %{kind: :assistant, text: "## Message #{n}\n\n**Answer** 猫\n\n```elixir\n  :ok\n```"}
+      end
+
+    initial = Transcript.index(entries, 30)
+    # The initial worker caches have exited. Reuse must come from the budgeted
+    # transcript index, even without any Markdown cache in this process.
+    Cache.drop_namespace(Alto.TUI.Markdown)
+
+    for text <- ["streamed **reply", "streamed **reply**\n\n```elixir\n:ok"] do
+      updated = entries ++ [%{kind: :assistant, text: text}]
+      index = Transcript.index(updated, 30)
+
+      for {{_, before, _, _}, {_, after_plan, _, _}} <- Enum.zip(initial.parts, index.parts) do
+        assert :erts_debug.same(before, after_plan)
+      end
+
+      full = Transcript.render(updated, 30).lines
+      assert index.rows == length(full)
+      assert Transcript.window(index, index.rows - 8, 8) == Enum.take(full, -8)
+    end
+
+    resized = Transcript.index(entries, 12)
+
+    assert Transcript.window(resized, 0, 15) ==
+             Enum.take(Transcript.render(entries, 12).lines, 15)
+
+    Cache.configure(0)
+    assert Transcript.index(entries, 30) == initial
+    assert Cache.stats().bytes == 0
+  end
+
+  defp line_text(line), do: Enum.map_join(line.spans, & &1.content) |> String.trim_trailing()
 end

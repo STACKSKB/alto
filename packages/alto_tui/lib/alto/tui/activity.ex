@@ -39,6 +39,10 @@ defmodule Alto.TUI.Activity do
 
   def phase(event, fallback \\ "working")
 
+  def phase(%{type: type, data: %{attempt: attempt}}, _fallback)
+      when type in [:model_started, "model_started"] and is_integer(attempt) and attempt > 1,
+      do: "waiting for model · attempt #{attempt}"
+
   def phase(%{type: type, data: %{delay_ms: delay}}, _fallback)
       when type in [:model_retry, "model_retry"] and is_integer(delay) and delay >= 0,
       do: "waiting #{div(delay + 999, 1000)}s before provider retry"

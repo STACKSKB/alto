@@ -9,6 +9,7 @@ defmodule Alto.OperationLog do
   use GenServer
 
   alias Alto.Persistence.Codec
+  alias Alto.Persistence.Delta
   alias Alto.DurableLog
 
   @max_key_bytes 256
@@ -17,6 +18,7 @@ defmodule Alto.OperationLog do
     max_identifier_bytes: [type: :pos_integer, default: 256],
     max_evidence_bytes: [type: :pos_integer, default: 64_000],
     max_recovery_bytes: [type: :pos_integer, default: 64_000],
+    max_checkpoint_bytes: [type: :pos_integer, default: 8_000_000],
     max_record_bytes: [type: :pos_integer, default: 128_000],
     max_log_bytes: [type: :pos_integer, default: 64_000_000],
     max_attempts: [type: :pos_integer, default: 32]
@@ -45,6 +47,12 @@ defmodule Alto.OperationLog do
   ## Client API
 
   def start_link(opts) do
+    opts =
+      if Keyword.has_key?(opts, :max_recovery_bytes) and
+           not Keyword.has_key?(opts, :max_checkpoint_bytes),
+         do: Keyword.put(opts, :max_checkpoint_bytes, opts[:max_recovery_bytes]),
+         else: opts
+
     id = Keyword.fetch!(opts, :id)
     :ok = validate_id!(id)
 
@@ -81,9 +89,10 @@ defmodule Alto.OperationLog do
           | {:reconcile, op_key(), revision(), atom(), map()}
 
   @doc """
-  Execute a native ledger request. Mutation tuples are the same commands written
-  to the durable log; validation, evidence scrubbing, revision checks, and durable
-  publication happen in the ledger process. Supply all tuple fields explicitly,
+  Execute a native ledger request. Validation, evidence scrubbing, revision
+  checks, and durable publication happen in the ledger process. Checkpoint
+  updates may be stored as smaller exact deltas; replay expands them into the
+  ordinary mutation command before validating and applying it. Supply all tuple fields explicitly,
   including absent recovery (`nil`) and empty evidence (`%{}`). Revision fences
   may pair the revision with a recovery generation to prevent writes after key reuse.
 
@@ -343,7 +352,12 @@ defmodule Alto.OperationLog do
 
   defp validate(field, value, state)
        when field in [:evidence, :recovery, :checkpoint] and is_map(value) do
-    limit = if field == :evidence, do: state.max_evidence_bytes, else: state.max_recovery_bytes
+    limit =
+      case field do
+        :evidence -> state.max_evidence_bytes
+        :checkpoint -> state.max_checkpoint_bytes
+        :recovery -> state.max_recovery_bytes
+      end
 
     if :erlang.external_size(value) <= limit,
       do: :ok,
@@ -390,7 +404,8 @@ defmodule Alto.OperationLog do
   defp apply_logged(state, line, number) do
     with :ok <- validate_record_bytes(line, state),
          {:ok, encoded} when is_binary(encoded) <- JSON.decode(line),
-         {:ok, command} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
+         {:ok, stored} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),
+         {:ok, command} <- logged_command(stored, state),
          true <- command?(command) do
       case transition(state, command) do
         {:ok, state, _reply} ->
@@ -607,7 +622,9 @@ defmodule Alto.OperationLog do
     do: Alto.Result.reduce(commands, record, &log_apply(&2, &1, state))
 
   defp append(state, command) do
-    with {:ok, payload} <- Codec.encode(command, max_bytes: :erlang.external_size(command)),
+    stored = incremental_command(command, state)
+
+    with {:ok, payload} <- Codec.encode(stored, max_bytes: :erlang.external_size(stored)),
          encoded <- JSON.encode!(payload),
          :ok <- validate_record_bytes(encoded, state),
          :ok <- ensure_log_room(state, byte_size(encoded) + 1) do
@@ -622,6 +639,30 @@ defmodule Alto.OperationLog do
   rescue
     error -> {:error, {:ledger_unencodable, Exception.message(error)}}
   end
+
+  defp incremental_command({:checkpoint_update, op, revision, value} = command, state) do
+    old = Map.fetch!(state.ops, op).checkpoint
+    delta = {:checkpoint_delta, op, revision, Delta.hash(old), Delta.between(old, value)}
+
+    if Delta.supported?(elem(delta, 4)) and
+         :erlang.external_size(delta) < :erlang.external_size(command),
+       do: delta,
+       else: command
+  end
+
+  defp incremental_command(command, _state), do: command
+
+  defp logged_command({:checkpoint_delta, op, revision, hash, operations}, state) do
+    with %{checkpoint: old} <- Map.get(state.ops, op),
+         true <- Delta.hash(old) == hash,
+         {:ok, packet} <- Delta.apply(old, operations) do
+      {:ok, {:checkpoint_update, op, revision, packet}}
+    else
+      _ -> {:error, :invalid_checkpoint_delta}
+    end
+  end
+
+  defp logged_command(command, _state), do: {:ok, command}
 
   defp rejection_attempt(op_key) do
     digest = :crypto.hash(:sha256, op_key) |> Base.url_encode64(padding: false)

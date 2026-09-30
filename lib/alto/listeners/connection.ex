@@ -126,12 +126,7 @@ defmodule Alto.Listeners.Connection do
     end)
   end
 
-  defp session_event_data(%{"wire_data" => data}), do: {:ok, data}
-
-  defp session_event_data(record) do
-    with {:ok, data} <- Alto.Session.decode_term(record["data"]),
-         do: {:ok, Protocol.encode_term(data)}
-  end
+  defp session_event_data(record), do: Alto.Session.event_data(record)
 
   # Leases must not survive an encoded reply that cannot fit the wire.
   defp queue_claim(registry, id, count, by, max_line_bytes) do

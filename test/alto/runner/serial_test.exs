@@ -66,6 +66,27 @@ defmodule Alto.Runner.SerialTest do
     end
   end
 
+  defmodule LongTaskProvider do
+    @behaviour Alto.Provider
+    def describe(_), do: %{}
+
+    def stream(request, _sink, _opts) do
+      count = Enum.count(request.messages, &(&1["role"] == "tool"))
+
+      if count >= 260 do
+        {:ok, %{message: "finished long task", tool_calls: []}}
+      else
+        {:ok,
+         %{
+           message: nil,
+           tool_calls: [
+             %{id: "call-#{count}", name: "echo", arguments_json: ~s({"value":"tick"})}
+           ]
+         }}
+      end
+    end
+  end
+
   defmodule AnswerProvider do
     @behaviour Alto.Provider
 
@@ -302,6 +323,20 @@ defmodule Alto.Runner.SerialTest do
              )
 
     assert result.model_requests == 1
+  end
+
+  test "opted-in long runs pass both the step and shared model-count defaults" do
+    result =
+      Alto.run("long task",
+        provider: LongTaskProvider,
+        tools: [EchoTool],
+        max_steps: :infinity,
+        max_model_requests: :infinity
+      )
+
+    assert result.status == :ok
+    assert result.model_requests == 261
+    assert result.output == "finished long task"
   end
 
   test "shared preflight denial counts a model cycle without another provider call" do

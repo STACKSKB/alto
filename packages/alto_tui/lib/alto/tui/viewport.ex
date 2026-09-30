@@ -6,6 +6,11 @@ defmodule Alto.TUI.Viewport do
 
   def widgets(widgets) do
     Enum.map(widgets, fn
+      {%Paragraph{text: %Alto.TUI.Window{} = window, scroll: {offset, horizontal}} = widget, rect} ->
+        inner = SelectionRegions.content_rect(widget, rect)
+        lines = Enum.slice(window.lines, max(offset - window.offset, 0), max(inner.height, 0))
+        {%{widget | text: ExRatatui.Text.new(lines), wrap: false, scroll: {0, horizontal}}, rect}
+
       {%Paragraph{text: %ExRatatui.Text{lines: lines} = text, wrap: false, scroll: {offset, 0}} =
            widget, rect} ->
         inner = SelectionRegions.content_rect(widget, rect)
@@ -36,6 +41,9 @@ defmodule Alto.TUI.Viewport do
 
   def bottom(%ExRatatui.Text{lines: lines}, _width, height),
     do: max(length(lines) - max(height, 1), 0)
+
+  def bottom(%Alto.TUI.Window{rows: rows}, _width, height),
+    do: max(rows - max(height, 1), 0)
 
   def bottom(text, width, height),
     do:

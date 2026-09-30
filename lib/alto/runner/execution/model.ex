@@ -15,7 +15,7 @@ defmodule Alto.Runner.Execution.Model do
     do: {{:error, :provider_required}, run}
 
   def request(_request, %{model_requests: count, max_steps: limit} = run, _sink)
-      when count >= limit,
+      when is_integer(limit) and count >= limit,
       do: {{:error, {:model_step_limit, limit}}, run}
 
   def request(request, run, sink) do
@@ -127,6 +127,16 @@ defmodule Alto.Runner.Execution.Model do
         # and any delivery prevents a retry even if the attempt later fails.
         delivered = :atomics.new(1, [])
 
+        if attempt > 1 do
+          Alto.Events.notify(
+            caps.event_sink,
+            Event.live(:model_started, %{step: step, attempt: attempt})
+          )
+        end
+
+        diagnostic(caps, :provider_attempt_started, %{step: step, attempt: attempt})
+        started = System.monotonic_time(:millisecond)
+
         attempt_sink = fn event ->
           :atomics.put(delivered, 1, 1)
           sink.(event)
@@ -138,6 +148,14 @@ defmodule Alto.Runner.Execution.Model do
             Budget.timeout(caps.budget, caps.provider_timeout),
             caps.cancel_ref
           )
+
+        diagnostic(caps, :provider_attempt_finished, %{
+          step: step,
+          attempt: attempt,
+          duration_ms: System.monotonic_time(:millisecond) - started,
+          output_delivered: :atomics.get(delivered, 1) != 0,
+          outcome: outcome_kind(outcome)
+        })
 
         decision =
           case outcome do
@@ -155,6 +173,13 @@ defmodule Alto.Runner.Execution.Model do
 
         case decision do
           {:retry, delay, kind} ->
+            diagnostic(caps, :provider_retry, %{
+              step: step,
+              attempt: attempt,
+              delay_ms: delay,
+              kind: kind
+            })
+
             Alto.Events.notify(
               caps.event_sink,
               Event.live(:model_retry, %{
@@ -177,6 +202,32 @@ defmodule Alto.Runner.Execution.Model do
         end
     end
   end
+
+  # Persist small lifecycle facts separately from replayable loop events. Never
+  # retain request bodies, headers, provider error bodies, or streamed content.
+  defp diagnostic(caps, event, data) do
+    if Map.get(caps, :session) do
+      Alto.Runner.Execution.Session.append(caps, "provider diagnostic not persisted", fn ->
+        Alto.Session.diagnostic_record(caps.session_id, event, data)
+      end)
+    end
+  end
+
+  defp outcome_kind({:ok, _}), do: :ok
+  defp outcome_kind({:error, {:http_error, status, _}}), do: %{kind: :http_error, status: status}
+
+  defp outcome_kind({:error, {:http_error, status, _, _}}),
+    do: %{kind: :http_error, status: status}
+
+  defp outcome_kind({:error, {:transport_error, %{reason: reason}}}) when is_atom(reason),
+    do: %{kind: :transport_error, reason: reason}
+
+  defp outcome_kind({:error, {kind, reason}}) when is_atom(kind) and is_atom(reason),
+    do: %{kind: kind, reason: reason}
+
+  defp outcome_kind({:error, {kind, _}}) when is_atom(kind), do: kind
+  defp outcome_kind({:error, kind}) when is_atom(kind), do: kind
+  defp outcome_kind(_), do: :error
 
   defp retry_decision(caps, reason, attempt) do
     policy = caps.retry_policy || (&Alto.Retry.Transient.decide/2)

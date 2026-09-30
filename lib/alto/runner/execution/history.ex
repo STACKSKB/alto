@@ -9,6 +9,16 @@ defmodule Alto.Runner.Execution.History do
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
 
+  @doc false
+  def turn_id(run) do
+    # The saved root identity survives approval/checkpoint restoration; the
+    # execution host's run ID can change without a new user message.
+    case Map.get(run, :agent_identity) do
+      %{root_run_id: id} when is_binary(id) -> id
+      _ -> run.session_id
+    end
+  end
+
   def initialize({:ok, run}, opts) do
     if Keyword.get(opts, :checkpoint) || Keyword.get(opts, :continuation) do
       {:ok, run}
@@ -38,6 +48,8 @@ defmodule Alto.Runner.Execution.History do
       options = [
         session_dir: run.session_dir,
         max_conversation_bytes: run.max_conversation_bytes,
+        conversation_retained_turns: Map.get(run, :conversation_retained_turns, :infinity),
+        conversation_turn_id: turn_id(run),
         expected_revision: run.transcript_revision,
         resolved_operations: run.resolved_operations,
         context_observation:

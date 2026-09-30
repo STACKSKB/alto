@@ -11,7 +11,7 @@ checkpoint callbacks, the shared execution hosts return:
 ```
 
 The prepared tool has not executed. The packet contains the exact pending
-prepared value, remaining ordered effects, declared loop state, transcript,
+prepared value, remaining ordered effects, declared loop state, exact transcript,
 operation identity, accounting, and remaining execution budget. Completed
 operations are not replayed and tool preparation is not repeated. Root runs can
 suspend for approval; durable child approval and parent joins use the same
@@ -65,7 +65,14 @@ version is another application-controlled compatibility fence.
 Packets exclude provider configuration and live process capabilities. Exact
 messages and prepared tool values may contain sensitive data and require
 private storage. Pids, references, ports and functions in continuation data are
-rejected. The exact state is at most 1 MB with depth at most 64; the envelope has
+rejected. When a saved conversation head exactly matches the run's messages,
+the packet stores a verified session/revision/root/count reference instead of another copy
+of the transcript. Restore reads those exact messages from the current head;
+changing the revision invalidates the checkpoint. Finite turn retention cannot
+prune a valid reference because it never removes current context. Unsaved or
+unpersisted history remains inline, and existing inline packets remain readable.
+
+The encoded state is at most 1 MB with depth at most 64; the envelope has
 a separate 2 MB bound to accommodate Base64 expansion. Decoding never creates
 atoms or loads client-selected modules. Fresh-VM restoration requires any atoms in custom data to already be
 provided by trusted loaded code. Unknown shapes fail closed.
@@ -77,10 +84,15 @@ excluded from the remaining active execution time. Prepared tools retain their
 own validation: a file changed during suspension may invalidate an approved
 write. A rejected checkpoint restore does not replace a saved transcript.
 
-The ledger applies `max_recovery_bytes`, `max_record_bytes` and `max_log_bytes`
-to exact checkpoint packets; these bounds may need to exceed the small defaults
-used by short queue examples. Checkpoints do not make an uncertain external
-effect automatically retryable. Interruptions after resumed dispatch still
+The ledger independently bounds checkpoint aggregates with `max_checkpoint_bytes`
+(default 8,000,000 B); `max_recovery_bytes` bounds recovery metadata (64,000 B).
+For compatibility, an explicit `max_recovery_bytes` also sets the checkpoint cap
+unless `max_checkpoint_bytes` is supplied. `max_record_bytes` (128,000 B) and
+`max_log_bytes` (64,000,000 B) still bound individual writes and the whole log.
+Checkpoint updates store verified map/tuple deltas when smaller, so changing one
+child does not serialize unchanged sibling bodies again. Full commands remain
+readable. Large new bodies or long logs may still require higher trusted bounds.
+Checkpoints do not make an uncertain external effect automatically retryable. Interruptions after resumed dispatch still
 require authoritative reconciliation or explicit operator review.
 
 Checkpoint packets use one versioned continuation format for approval, parent,
@@ -94,6 +106,9 @@ Journal and workspace bindings use the durable
 store identity, not the current server PID; restarting the same store preserves
 the binding. Unavailable or different stores fail closed. Tool/loop code and
 explicit checkpoint version checks still apply.
+
+Restart with the updated binary before using transcript references or ledger
+deltas; older binaries cannot interpret those new representations.
 
 Packets captured before the runner refactor are deliberately rejected rather
 than guessed into the new format. Reconcile any suspended operations before

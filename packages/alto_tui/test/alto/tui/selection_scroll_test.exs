@@ -1,7 +1,7 @@
 defmodule Alto.TUI.SelectionScrollTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.Selection
+  alias Alto.TUI.{Selection, Transcript, Window}
   alias ExRatatui.Event.{Key, Mouse, Resize}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Widgets.{Block, Paragraph}
@@ -67,6 +67,38 @@ defmodule Alto.TUI.SelectionScrollTest do
     refute text =~ "UI"
     assert text =~ "line 2 猫"
     assert text =~ "line 15 猫"
+  end
+
+  test "visible-only windows keep absolute copy coordinates across autoscroll" do
+    entries = [%{kind: :user, text: Enum.map_join(0..100, "\n", &"line #{&1} 猫")}]
+
+    widgets = fn ->
+      [
+        {%Paragraph{
+           text: Transcript.viewport(entries, 28, 0, 6),
+           wrap: false,
+           block: %Block{borders: [:all]}
+         }, %Rect{x: 12, width: 30, height: 8}}
+      ]
+    end
+
+    opts = [
+      materialize: fn _point, offset, height ->
+        Transcript.viewport(entries, 28, offset, height)
+      end
+    ]
+
+    {:handled, selection} =
+      Selection.event(Selection.new(), mouse("down", 13, 3), {50, 10}, widgets, opts)
+
+    selection = drag(selection, 41, 6)
+    selection = Enum.reduce(1..10, selection, fn _, s -> tick(s) end)
+    assert Selection.scroll_position(selection) == {{13, 3}, 10}
+    assert Selection.text(selection) == Enum.map_join(2..15, "\n", &"line #{&1} 猫")
+    [{%Paragraph{text: window}, _}] = selection.snapshot.source_widgets
+    assert %Window{offset: 10, rows: 101} = window
+    assert length(window.lines) == 6
+    release(selection)
   end
 
   test "reversing past the anchor selects earlier rows; bounds stop the timer" do

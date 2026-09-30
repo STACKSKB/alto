@@ -103,12 +103,12 @@ defmodule Alto.TUI.SavedSession do
 
   defp fold(
          state,
-         %{"type" => "event", "event" => "model_completed", "data" => encoded} = record,
+         %{"type" => "event", "event" => "model_completed"} = record,
          id
        ) do
     state =
-      case Session.decode_term(encoded) do
-        {:ok, %{usage: usage}} when is_map(usage) ->
+      case Session.event_data(record) do
+        {:ok, %{"usage" => usage}} when is_map(usage) ->
           %{
             state
             | "usage" =>

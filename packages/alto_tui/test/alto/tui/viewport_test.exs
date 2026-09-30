@@ -80,4 +80,39 @@ defmodule Alto.TUI.ViewportTest do
     assert Viewport.bottom("one two three four", 30, 2) == 0
     assert Viewport.bottom("start" <> String.duplicate("\n", 300) <> "end", 20, 2) == 299
   end
+
+  test "visible windows preserve native cells and absolute history size without blank padding" do
+    alias Alto.TUI.Transcript
+
+    entries =
+      [%{kind: :user, text: "start"}] ++
+        for n <- 1..30 do
+          %{kind: :assistant, text: "## #{n} 猫\n\n```elixir\nvalue = #{n}\n\n:ok\n```"}
+        end
+
+    full = Transcript.render(entries, 38)
+    index = Transcript.index(entries, 38)
+    rect = %Rect{width: 40, height: 22}
+
+    for offset <- [0, 37, index.rows - 20] do
+      window = Transcript.viewport(entries, 38, offset, 20)
+      assert length(window.lines) == 20
+      assert window.offset == offset
+      assert window.rows == index.rows
+      assert Viewport.bottom(window, 38, 20) == Viewport.bottom(full, 38, 20)
+      block = %ExRatatui.Widgets.Block{title: "History", borders: [:all]}
+      original = [{%Paragraph{text: full, wrap: false, scroll: {offset, 0}, block: block}, rect}]
+      visible = [{%Paragraph{text: window, wrap: false, scroll: {offset, 0}, block: block}, rect}]
+      native = ExRatatui.CellSession.new(40, 22)
+      candidate = ExRatatui.CellSession.new(40, 22)
+      :ok = ExRatatui.CellSession.draw(native, original)
+      :ok = ExRatatui.CellSession.draw(candidate, Viewport.widgets(visible))
+
+      assert ExRatatui.CellSession.take_cells(candidate).cells ==
+               ExRatatui.CellSession.take_cells(native).cells
+
+      ExRatatui.CellSession.close(native)
+      ExRatatui.CellSession.close(candidate)
+    end
+  end
 end

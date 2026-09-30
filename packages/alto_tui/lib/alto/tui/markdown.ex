@@ -7,7 +7,10 @@ defmodule Alto.TUI.Markdown do
   alias ExRatatui.Widgets.{CodeBlock, Markdown}
 
   @muted {:rgb, 150, 160, 175}
+  # The background of CodeBlock's default base16-ocean.dark syntax theme.
+  @code_bg {:rgb, 43, 48, 59}
   @windowed_block_bytes 8_192
+  @window_rows 64
 
   def render(source, width) do
     width = max(width, 1)
@@ -101,7 +104,7 @@ defmodule Alto.TUI.Markdown do
           stop = min(last, first + count)
 
           if stop > start do
-            block_window(block, plan.width, start - first, stop - start)
+            cached_window(block, plan.width, start - first, stop - start)
             |> Enum.with_index(start)
             |> Enum.reduce(acc, fn {row, n}, acc -> Map.put(acc, n, row) end)
           else
@@ -110,6 +113,28 @@ defmodule Alto.TUI.Markdown do
         end)
 
       Enum.map(offset..(last - 1), &Map.get(rows, &1, Line.new([])))
+    end
+  end
+
+  defp cached_window(block, width, offset, height) do
+    if block_bytes(block) < @windowed_block_bytes do
+      Enum.slice(cached_block(block, width), offset, height)
+    else
+      # Wheel events overlap almost entirely. Cache aligned, bounded pages so
+      # each event does not reparse/highlight the whole source in the NIF.
+      first = div(offset, @window_rows)
+      last = div(offset + height - 1, @window_rows)
+
+      Enum.flat_map(first..last, fn page ->
+        rows =
+          Alto.TUI.Cache.fetch({__MODULE__, :windows}, {block, width, page}, 128, fn ->
+            block_window(block, width, page * @window_rows, @window_rows)
+          end)
+
+        start = max(offset - page * @window_rows, 0)
+        stop = min(offset + height - page * @window_rows, @window_rows)
+        Enum.slice(rows, start, stop - start)
+      end)
     end
   end
 
@@ -189,16 +214,11 @@ defmodule Alto.TUI.Markdown do
   end
 
   defp block_window({:code, language, _} = block, width, offset, height) do
-    label =
-      Line.new([
-        Span.new("  " <> if(language == "", do: "code", else: language),
-          style: %Style{fg: @muted}
-        )
-      ])
-
     if offset == 0,
-      do: [label | native_window(block, width, 0, height - 1)],
-      else: native_window(block, width, offset - 1, height)
+      do: [
+        code_label(language, width) | code_rows(native_window(block, width, 0, height - 1), width)
+      ],
+      else: code_rows(native_window(block, width, offset - 1, height), width)
   end
 
   defp block_window({:heading, text}, width, offset, height) do
@@ -222,6 +242,38 @@ defmodule Alto.TUI.Markdown do
 
   defp block_window(block, width, offset, height), do: native_window(block, width, offset, height)
 
+  defp code_label(language, width) do
+    [label] =
+      code_rows(
+        [
+          Line.new([
+            Span.new("  " <> if(language == "", do: "code", else: language),
+              style: %Style{fg: @muted}
+            )
+          ])
+        ],
+        width
+      )
+
+    label
+  end
+
+  # Native Paragraph only paints a line's occupied cells, even with a line
+  # background. Explicit padding covers short and empty rows; use terminal
+  # cell widths so Unicode does not leave a gap or run past the code rectangle.
+  defp code_rows(rows, width) do
+    glyphs =
+      Enum.map(rows, fn line -> Enum.flat_map(line.spans, &String.graphemes(&1.content)) end)
+
+    widths = Alto.TUI.Selection.glyph_widths(List.flatten(glyphs))
+
+    Enum.zip_with(rows, glyphs, fn line, glyphs ->
+      used = Enum.reduce(glyphs, 0, &(Map.get(widths, &1, 1) + &2))
+      padding = Span.new(String.duplicate(" ", max(width - used, 0)), style: %Style{bg: @code_bg})
+      %{line | spans: line.spans ++ [padding], style: %Style{bg: @code_bg}}
+    end)
+  end
+
   defp native_window(_, _, _, height) when height <= 0, do: []
 
   defp native_window(block, width, offset, height) do
@@ -242,7 +294,9 @@ defmodule Alto.TUI.Markdown do
 
   def plain(source, width) do
     render(source, width).lines
-    |> Enum.map_join("\n", fn line -> Enum.map_join(line.spans, & &1.content) end)
+    |> Enum.map_join("\n", fn line ->
+      Enum.map_join(line.spans, & &1.content) |> String.trim_trailing()
+    end)
   end
 
   defp blocks([], acc), do: Enum.reverse(acc)
@@ -381,12 +435,7 @@ defmodule Alto.TUI.Markdown do
   defp render_block({:markdown, source}, width), do: materialize({:markdown, source}, width)
 
   defp render_block({:code, language, code}, width) do
-    label = if language == "", do: "code", else: language
-
-    [
-      Line.new([Span.new("  " <> label, style: %Style{fg: @muted})])
-      | materialize({:code, language, code}, width)
-    ]
+    [code_label(language, width) | code_rows(materialize({:code, language, code}, width), width)]
   end
 
   defp render_block({:table, headers, records}, width) do

@@ -17,7 +17,15 @@ defmodule Alto.Runner.Budget do
 
   def new(opts) do
     max_effects = Keyword.get(opts, :max_effects, @defaults[:max_effects])
-    models = Keyword.get(opts, :max_model_requests, @defaults[:max_model_requests])
+
+    models =
+      case Keyword.get(opts, :max_model_requests, @defaults[:max_model_requests]) do
+        # Keep portable snapshots and durable accounts integer-only. The
+        # counter's representable ceiling is effectively unbounded by policy.
+        :infinity -> @max_uint64
+        limit -> limit
+      end
+
     timeout = Keyword.get(opts, :run_timeout, @defaults[:run_timeout])
 
     cond do

@@ -136,6 +136,15 @@ defmodule Alto.Runner.Budget.Account do
   defp valid_packet(_, _), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
+    opts =
+      if Keyword.keyword?(opts),
+        do:
+          Keyword.update(opts, :max_model_requests, nil, fn
+            :infinity -> @max
+            limit -> limit
+          end),
+        else: opts
+
     keys = if Keyword.keyword?(opts), do: Keyword.keys(opts), else: []
 
     if Keyword.keyword?(opts) and

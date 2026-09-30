@@ -27,7 +27,7 @@ openrouter_options =
     model: openrouter_model,
     # Reasoning may stream for minutes; silence is still bounded independently.
     timeout: 1_800_000,
-    idle_timeout: 600_000,
+    idle_timeout: 120_000,
     supports_images: vision_enabled,
     model_query: [supported_parameters: "tools", sort: "most-popular"]
   ]
@@ -158,7 +158,12 @@ Alto.default_config()
   project_instructions: :auto,
   sessions: true,
   session_history: :settled,
-  max_steps: 96,
+  # Long coding runs are bounded by time/effect budgets, not an arbitrary
+  # number of model turns or accumulated immutable conversation snapshots.
+  max_steps: :infinity,
+  max_model_requests: :infinity,
+  max_conversation_bytes: :infinity,
+  conversation_retained_turns: :infinity,
   max_tool_result_bytes: if(vision_enabled, do: 1_500_000, else: 64_000),
   compaction: [
     strategy: {Alto.Context.Reducers.Handoff, []},

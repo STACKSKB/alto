@@ -31,6 +31,34 @@ defmodule Alto.SessionConversationTest do
 
   defp bytes(messages), do: Transcript.bytes(messages)
 
+  test "an explicit unlimited storage policy can advance a capped session without losing revisions",
+       %{dir: dir} do
+    opts = [session_dir: dir]
+    {:ok, id} = Session.create("task", %{}, opts)
+    first = [user("initial")]
+    second = first ++ [user("continue")]
+    {:ok, one} = Session.persist_settled(id, first, bytes(first), opts)
+
+    assert {:error, {:conversation_storage_limit, _}} =
+             Session.persist_settled(
+               id,
+               second,
+               bytes(second),
+               Keyword.put(opts, :max_conversation_bytes, one["conversation_bytes"])
+             )
+
+    assert {:ok, %{"revision" => 2}} =
+             Session.persist_settled(
+               id,
+               second,
+               bytes(second),
+               Keyword.put(opts, :max_conversation_bytes, :infinity)
+             )
+
+    assert {:ok, %{"messages" => ^first}} = Session.conversation(id, 1, opts)
+    assert {:ok, %{"messages" => ^second}} = Session.transcript(id, opts)
+  end
+
   test "viewing an atomic head does not wait for the writer lock", %{dir: dir} do
     opts = [session_dir: dir]
     {:ok, id} = Session.create("view", %{}, opts)
@@ -97,22 +125,24 @@ defmodule Alto.SessionConversationTest do
     refute Enum.any?(records, &(&1["type"] == "completed"))
   end
 
-  test "public revisions use the persisted record and derive byte accounting", %{dir: dir} do
+  test "public revisions materialize shared objects and unchanged saves do not advance", %{
+    dir: dir
+  } do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     messages = [user("one")]
     assert {:ok, one} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
     path = Path.join(dir, id <> ".transcript.json")
     encoded = File.read!(path)
-    assert Map.delete(one, "conversation_bytes") == JSON.decode!(encoded)
-    assert one["conversation_bytes"] == byte_size(String.trim_trailing(encoded, "\n"))
+    assert Map.drop(one, ["conversation_bytes", "messages"]) == JSON.decode!(encoded)
+    objects = Path.wildcard(Path.join([dir, "conversations", id, "objects", "*.json"]))
+    object_bytes = Enum.reduce(objects, 0, fn path, n -> n + File.stat!(path).size end)
 
-    assert {:ok, two} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
-    assert {:ok, retained} = Session.conversation(id, 1, session_dir: dir)
-    assert retained == one
+    assert one["conversation_bytes"] ==
+             object_bytes + byte_size(String.trim_trailing(encoded, "\n"))
 
-    assert two["conversation_bytes"] ==
-             one["conversation_bytes"] +
-               byte_size(String.trim_trailing(File.read!(path), "\n"))
+    assert {:ok, ^one} = Session.persist_settled(id, messages, bytes(messages), session_dir: dir)
+    assert File.read!(path) == encoded
+    assert {:ok, ^one} = Session.conversation(id, 1, session_dir: dir)
   end
 
   test "a dispatch fence blocks an older snapshot and a recovery snapshot closes unknown calls",
@@ -365,7 +395,11 @@ defmodule Alto.SessionConversationTest do
           Map.put(head, "dispatch", %{"revision" => 2, "tool_call_ids" => ["op-1"]}),
           Map.delete(head, "retained_bytes_before"),
           Map.delete(head, "dispatch"),
-          %{"v" => 1, "revision" => 1}
+          %{"v" => 1, "revision" => 1},
+          [],
+          nil,
+          42,
+          "not a manifest"
         ] do
       File.write!(path, JSON.encode!(invalid))
 

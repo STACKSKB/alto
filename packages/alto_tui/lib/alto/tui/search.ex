@@ -1,7 +1,7 @@
 defmodule Alto.TUI.Search do
   @moduledoc "Transient literal conversation search, independent of sessions and agent input."
   alias Alto.TUI.{State, Transcript}
-  alias ExRatatui.{Style, Text}
+  alias ExRatatui.Style
   alias ExRatatui.Text.{Line, Span}
   @max_matches 1000
 
@@ -299,10 +299,11 @@ defmodule Alto.TUI.Search do
         end)
         |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-      %Text{
+      %{
         text
         | lines:
-            Enum.with_index(text.lines, fn line, row ->
+            Enum.with_index(text.lines, text.offset)
+            |> Enum.map(fn {line, row} ->
               highlight_line(line, Map.get(ranges, row, []))
             end)
       }

@@ -17,11 +17,17 @@ defmodule Alto.Session.Recovery do
           record["run_id"] == run_id and record["event"] == "model_completed"
         end)
 
+      last_tools =
+        case last_model && Session.event_data(last_model) do
+          {:ok, data} when is_map(data) -> data["tool_calls"]
+          _ -> nil
+        end
+
       evidence = %{
         type: "alto_cancelled_run_recovery",
         run_id: run_id,
         unknown_operation_ids: operations,
-        last_requested_tools: last_model && get_in(last_model, ["wire_data", "tool_calls"]),
+        last_requested_tools: last_tools,
         outcome: "unknown",
         instruction:
           "The previous run was cancelled and its final transcript could not be saved. Work after the last saved boundary may be missing from this conversation. Inspect the workspace and reconcile these operations before requesting them again. Do not assume they failed or repeat them automatically."
@@ -35,9 +41,15 @@ defmodule Alto.Session.Recovery do
           id,
           messages,
           bytes,
-          Keyword.merge(Keyword.take(opts, [:session_dir, :max_conversation_bytes]),
+          Keyword.merge(
+            Keyword.take(opts, [
+              :session_dir,
+              :max_conversation_bytes,
+              :conversation_retained_turns
+            ]),
             expected_revision: snapshot["revision"],
-            resolved_operations: operations
+            resolved_operations: operations,
+            conversation_turn_id: snapshot["turn_id"]
           )
         )
       else

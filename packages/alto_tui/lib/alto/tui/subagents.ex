@@ -75,7 +75,11 @@ defmodule Alto.TUI.Subagents do
   end
 
   def saved_activity(%{"type" => "event", "event" => event} = record) do
-    data = if is_map(record["wire_data"]), do: record["wire_data"], else: %{}
+    data =
+      case Alto.Session.event_data(record) do
+        {:ok, data} when is_map(data) -> data
+        _ -> %{}
+      end
 
     value = if is_map(data["value"]), do: data["value"], else: %{}
     output = text_value(value["output"]) |> String.slice(-4_000, 4_000)

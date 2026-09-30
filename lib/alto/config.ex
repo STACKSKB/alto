@@ -8,7 +8,7 @@ defmodule Alto.Config do
   """
 
   @authority_limits [
-    max_steps: [type: :pos_integer, default: 32],
+    max_steps: [type: {:or, [:pos_integer, {:in, [:infinity]}]}, default: 32],
     provider_timeout: [type: :pos_integer, default: 125_000],
     tool_timeout: [type: :pos_integer, default: 125_000],
     approval_timeout: [type: :pos_integer, default: 300_000],
@@ -27,7 +27,14 @@ defmodule Alto.Config do
                           type: {:in, [:completed, :settled]},
                           default: :completed
                         ],
-                        max_conversation_bytes: [type: :pos_integer, default: 128_000_000]
+                        conversation_retained_turns: [
+                          type: {:or, [:pos_integer, {:in, [:infinity]}]},
+                          default: :infinity
+                        ],
+                        max_conversation_bytes: [
+                          type: {:or, [:pos_integer, {:in, [:infinity]}]},
+                          default: 128_000_000
+                        ]
                       ]
 
   @budget_defaults [max_effects: 10_000, max_model_requests: 256, run_timeout: 900_000]

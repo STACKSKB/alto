@@ -2,6 +2,18 @@ defmodule Alto.TUI.CacheTest do
   use ExUnit.Case, async: true
   alias Alto.TUI.Cache
 
+  test "latest follows access order and cannot retain evicted items" do
+    namespace = {__MODULE__, :latest}
+    assert Cache.latest(namespace) == nil
+    Cache.fetch(namespace, :a, 2, fn -> "a" end)
+    Cache.fetch(namespace, :b, 2, fn -> "b" end)
+    assert Cache.latest(namespace) == {:b, "b"}
+    Cache.fetch(namespace, :a, 2, fn -> flunk("cache miss") end)
+    assert Cache.latest(namespace) == {:a, "a"}
+    Cache.configure(0)
+    assert Cache.latest(namespace) == nil
+  end
+
   test "aggregate weighted bytes stay bounded across namespaces and owners can be released" do
     Cache.owner("a")
 

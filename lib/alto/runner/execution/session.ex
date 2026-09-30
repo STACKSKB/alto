@@ -71,7 +71,9 @@ defmodule Alto.Runner.Execution.Session do
            resolved_operations: result.resolved_operations,
            context_observation: result.context_observation,
            allow_pending: true,
-           max_conversation_bytes: state.max_conversation_bytes
+           max_conversation_bytes: state.max_conversation_bytes,
+           conversation_retained_turns: Map.get(state, :conversation_retained_turns, :infinity),
+           conversation_turn_id: Alto.Runner.Execution.History.turn_id(state)
          ) do
       {:ok, snapshot} ->
         {%{
