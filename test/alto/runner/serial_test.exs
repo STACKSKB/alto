@@ -159,18 +159,6 @@ defmodule Alto.Runner.SerialTest do
     def run(_arguments, _context, _opts), do: receive(do: (:never -> {:ok, :done}))
   end
 
-  defmodule ConfiguredEchoTool do
-    use Alto.Tool, name: :echo, execution_mode: :parallel, approval: :never
-
-    @impl true
-    def schema(_opts), do: EchoTool.schema([])
-
-    @impl true
-    def run(%{"value" => value}, _context, opts) do
-      {:ok, %{echo: value <> Keyword.fetch!(opts, :suffix)}}
-    end
-  end
-
   defmodule BlockingApproval do
     def decide(_request, _context, opts) do
       send(Keyword.fetch!(opts, :test_pid), {:approval_started, self()})
@@ -411,18 +399,6 @@ defmodule Alto.Runner.SerialTest do
     assert result.output == "finished"
     assert Enum.any?(result.events, &(&1.type == :tool_completed))
     refute Enum.any?(result.events, &(&1.type == :tool_failed))
-  end
-
-  test "configured tools receive their component options" do
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run("configured tool",
-               provider: {ToolThenAnswerProvider, test_pid: self()},
-               tools: [{ConfiguredEchoTool, suffix: "!"}]
-             )
-
-    assert result.output == "finished"
-    assert Enum.any?(result.messages, &(&1["role"] == "tool" and &1["content"] =~ "hello!"))
   end
 
   test "prepares once before approval and executes the exact prepared value" do

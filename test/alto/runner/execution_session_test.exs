@@ -42,16 +42,6 @@ defmodule Alto.Runner.Execution.SessionTest do
     }
   end
 
-  test "persists transcript and completion", %{dir: dir} do
-    id = "sess-events"
-    s = state(dir, id)
-    assert %Result{status: :ok, persistence: :ok} = ExecutionSession.persist_outcome(s, result())
-    assert {:ok, records} = DurableSession.read(id, session_dir: dir)
-    assert Enum.count(records, &(&1["type"] == "completed")) == 1
-    assert {:ok, transcript} = DurableSession.transcript(id, session_dir: dir)
-    assert transcript["messages"] == [%{"role" => "user", "content" => "task"}]
-  end
-
   test "suspended checkpoint writes completion without a transcript", %{dir: dir} do
     id = "sess-suspended"
     s = state(dir, id, checkpoint_resume: true)

@@ -122,6 +122,8 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     assert is_binary(failed.data.operation_id)
     refute Map.has_key?(failed.data, :value)
     refute inspect(failed.data) =~ String.duplicate("x", 1_000)
+    assert {:ok, line} = Protocol.notification("s-1", {:event, "run-1", 1, failed}, 1_048_576)
+    assert IO.iodata_length(line) < 5_000
   end
 
   test "nested terms are measured, not just top-level bytes" do
@@ -153,28 +155,17 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
     refute inspect(failed.data) =~ String.duplicate("m", 1_000)
   end
 
-  test "small non-JSON values remain available as native results" do
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run("go",
-               loop: Alto.loop(SingleToolLoop, call_id: "t-1", tool: "tup"),
-               tools: [TupleTool]
-             )
-
-    assert {:completed, %{value: {:tuple_ok, 1, 2}}} = result.output
-  end
-
   test "providerless tools return bounded binary data without model serialization" do
-    value = %{bytes: <<255, 0, 128>>}
+    for value <- [{:tuple_ok, 1, 2}, %{bytes: <<255, 0, 128>>}] do
+      assert %Alto.Runner.Result{status: :ok} =
+               result =
+               Alto.run("go",
+                 loop: Alto.loop(SingleToolLoop, call_id: "binary", tool: "tup"),
+                 tools: [{TupleTool, value: value}]
+               )
 
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run("go",
-               loop: Alto.loop(SingleToolLoop, call_id: "binary", tool: "tup"),
-               tools: [{TupleTool, value: value}]
-             )
-
-    assert {:completed, %{value: ^value}} = result.output
+      assert {:completed, %{value: ^value}} = result.output
+    end
   end
 
   test "hybrid loop: oversize provider tool becomes bounded failure in transcript" do
@@ -232,20 +223,6 @@ defmodule Alto.Runner.SerialNativeBoundsTest do
         refute Map.has_key?(data, :value)
       end
     end
-  end
-
-  test "frontend encoding of the failure stays within the line bound" do
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run("go",
-               loop: Alto.loop(SingleToolLoop, call_id: "big-1", tool: "big"),
-               tools: [BigTool],
-               max_tool_result_bytes: 100
-             )
-
-    failed = Enum.find(result.events, &(&1.type == :tool_failed))
-    assert {:ok, line} = Protocol.notification("s-1", {:event, "run-1", 1, failed}, 1_048_576)
-    assert IO.iodata_length(line) < 5_000
   end
 
   test "native failure reasons are bounded before event retention" do
