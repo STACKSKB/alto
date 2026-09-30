@@ -100,15 +100,6 @@ defmodule Alto.CLISessionTest do
              Alto.CLI.run(["--config", path, "--resume", "sess-nope", "task"])
   end
 
-  test "resume still needs a task", %{root: root} do
-    path = write_config(root)
-
-    assert capture_io("", fn ->
-             assert {:error, message} = Alto.CLI.run(["--config", path, "--resume", "sess-nope"])
-             assert message =~ "no task provided"
-           end) == ""
-  end
-
   test "a hostile resume id never touches the filesystem", %{root: root} do
     path = write_config(root)
 

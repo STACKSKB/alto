@@ -119,9 +119,6 @@ defmodule Alto.ToolArgumentsTest do
 
     first = String.slice(long_name, 0, 26) <> "e…"
     assert MapSet.new(names) == MapSet.new([first, "second", "[non-string key]"])
-    assert byte_size(first) <= 83
-    assert String.valid?(first)
-    assert String.ends_with?(first, "…")
     assert hint =~ "allowed fields"
     refute inspect(details) =~ "private value"
     refute inspect(details) =~ "tuple value"

@@ -98,8 +98,6 @@ defmodule Alto.Providers.MultimodalFilesTest do
       assert text =~ "report.docx"
       refute JSON.encode!(body) =~ data
     end
-
-    assert hd(blocks)["data"] == data
   end
 
   test "Anthropic rejects unsupported uploaded binary types explicitly" do

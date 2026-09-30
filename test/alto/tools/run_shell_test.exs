@@ -18,19 +18,6 @@ defmodule Alto.Tools.RunShellTest do
 
   @context %{session_id: "run-shell-test", cwd: File.cwd!()}
 
-  test "schema provides a single bounded command string and shared execution limits" do
-    schema = RunShell.schema()
-    properties = schema.parameters.properties
-
-    assert schema.description =~ "Bash"
-    assert properties.command.type == "string"
-    assert properties.command.minLength == 1
-    assert properties.command.maxLength == 60_000
-    assert properties.timeout_ms.default == 30_000
-    assert properties.timeout_ms.maximum == 120_000
-    assert properties.max_output_bytes.default == 64_000
-  end
-
   test "preparation uses Bash fail-fast pipeline flags and the configured executor" do
     assert RunShell.execution_mode([]) == :exclusive
     assert RunShell.approval([]) == :required

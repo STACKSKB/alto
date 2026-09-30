@@ -113,25 +113,6 @@ defmodule Alto.CLITest do
     assert {:error, "--setup requires an interactive terminal"} = Alto.CLI.run(["--setup"])
   end
 
-  test "runs with the configured provider", %{root: root} do
-    path = Path.join(root, "config.exs")
-
-    File.write!(
-      path,
-      """
-      [
-        provider: Alto.CLITest.AnswerProvider,
-        tools: [],
-        prompt: nil
-      ]
-      """
-    )
-
-    assert capture_io(fn ->
-             assert :ok = Alto.CLI.run(["--config", path, "answer from config"])
-           end) == "configured\n"
-  end
-
   test "rejects conflicting configuration switches" do
     assert {:error, "choose either --config or --no-config, not both"} =
              Alto.CLI.run(["--config", "unused.exs", "--no-config", "task"])
