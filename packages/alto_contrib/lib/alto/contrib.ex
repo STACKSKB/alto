@@ -15,29 +15,23 @@ defmodule Alto.Contrib do
   @doc "Compose application defaults without starting a run or discovering models."
   def configure(opts) do
     catalog = %{
-      provider: opts[:provider],
       provider_profiles: opts[:provider_profiles],
-      credentials_path: opts[:credentials_path],
-      tools: tool_catalog(Keyword.get(opts, :tools, []))
+      credentials_path: opts[:credentials_path]
     }
 
     opts
     |> Keyword.put_new(:retry_policy, &Alto.Contrib.Retry.Transient.decide/2)
-    |> Keyword.put_new(:agent_prepare, &Models.prepare(&1, catalog, &2))
+    |> Keyword.put_new(:agent_prepare, fn prepared, context, options ->
+      Models.prepare(prepared, Map.merge(catalog, context), options)
+    end)
     |> Keyword.put_new(:agent_models, fn arguments, context, options ->
       Models.list(arguments, Map.merge(catalog, context), options)
     end)
-    |> Keyword.put_new(:child_provider_resolver, &Models.provider(&1, &2, catalog))
+    |> Keyword.put_new(:child_provider_resolver, fn key, model, context ->
+      Models.provider(key, model, Map.merge(catalog, context))
+    end)
     |> project_instructions()
     |> compaction()
-  end
-
-  defp tool_catalog(specs) do
-    Map.new(specs, fn spec ->
-      {module, opts} = Alto.Capabilities.normalize(spec)
-      opts = Alto.Tool.configure(module, opts)
-      {to_string(module.name(opts)), %{module: module, opts: opts}}
-    end)
   end
 
   defp project_instructions(opts) do

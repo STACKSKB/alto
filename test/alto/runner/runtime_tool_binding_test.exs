@@ -60,7 +60,7 @@ defmodule Alto.Runner.RuntimeToolBindingTest do
     options = [
       loop: Alto.rule_loop(steps: ["relay"], subagents: Alto.Subagents.bounded(max_depth: 1)),
       tools: [Relay, EchoTool],
-      agent_prepare: fn prepared, _ -> {:ok, prepared} end,
+      agent_prepare: fn prepared, _, _ -> {:ok, prepared} end,
       approval: :approve
     ]
 
@@ -85,7 +85,7 @@ defmodule Alto.Runner.RuntimeToolBindingTest do
             subagents: Alto.Subagents.bounded(max_depth: 1, workspaces: resource)
           ),
         tools: [Relay, EchoTool],
-        agent_prepare: fn prepared, _ -> {:ok, prepared} end,
+        agent_prepare: fn prepared, _, _ -> {:ok, prepared} end,
         approval: :approve
       )
 

@@ -15,10 +15,15 @@ core build and compiled-module boundary tests enforce this direction.
 Trusted tools declare `runtime_operation/1` to bind owned delegation or messaging
 semantics independently of their module or model-visible name. The runtime still
 owns admission, approval, cancellation, inherited authority and accounting.
-Hosts provide `agent_prepare` (`fn(prepared, tool_options)`), `agent_models`
-(`fn(arguments, tool_context, tool_options)`) and `child_provider_resolver`
-(`fn(profile_key, model)`) callbacks when those policies are needed. Contrib
-composes its provider catalog implementation through these callbacks.
+Hosts provide `agent_prepare` (`fn(prepared, policy_context, tool_options)`),
+`agent_models` (`fn(arguments, policy_context, tool_options)`) and
+`child_provider_resolver` (`fn(profile_key, model, policy_context)`) callbacks
+when those policies are needed. The trusted policy context includes the current
+run's provider and registered tools; model discovery also receives its ordinary
+tool context. These fields follow child provider selection and narrowed tool
+scopes. Ordinary tools receive a bound discovery callback, without provider
+configuration in their context map. Contrib composes its provider catalog
+implementation through these callbacks.
 
 `Alto.Resource` defines retained child-resource acquisition, use, freezing,
 recovery and stable identity. `Alto.Contrib.Workspaces` implements it for Git

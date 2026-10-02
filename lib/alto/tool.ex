@@ -20,7 +20,21 @@ defmodule Alto.Tool do
         }
 
   @doc "Project runtime-issued tool fields; provider configuration never enters the context."
-  def context(run), do: Map.new(@context_fields, &{&1, Map.get(run, &1)})
+  def context(run) do
+    context = Map.new(@context_fields, &{&1, Map.get(run, &1)})
+
+    case context.agent_models do
+      callback when is_function(callback, 3) ->
+        policy = Map.take(run, [:provider, :tools])
+
+        Map.put(context, :agent_models, fn arguments, tool_context, opts ->
+          callback.(arguments, Map.merge(tool_context, policy), opts)
+        end)
+
+      _ ->
+        context
+    end
+  end
 
   @type execution_mode :: :parallel | :exclusive
   @type approval_requirement :: :never | :required

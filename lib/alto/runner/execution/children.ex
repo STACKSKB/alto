@@ -396,7 +396,7 @@ defmodule Alto.Runner.Execution.Children do
     resolve_provider(
       fn ->
         if run.child_provider_resolver,
-          do: run.child_provider_resolver.(key, model),
+          do: run.child_provider_resolver.(key, model, Map.take(run, [:provider, :tools])),
           else: {:error, :child_provider_resolver_required}
       end,
       run

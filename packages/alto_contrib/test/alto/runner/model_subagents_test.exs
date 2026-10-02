@@ -51,6 +51,20 @@ defmodule Alto.Runner.ModelSubagentsTest do
     end
   end
 
+  defmodule NamedChildLoop do
+    @behaviour Alto.Loop
+
+    def init(task, _spec), do: {:continue, nil, [{:spawn_agents, %{agents: [task]}}]}
+
+    def handle_event(%Alto.Event{type: :subagents_completed, data: data}, state, _spec),
+      do: {{:stop, data}, state, []}
+
+    def handle_event(_, state, _spec), do: {:continue, state, []}
+
+    def resolve_child_provider("selected", spec),
+      do: {:ok, spec.driver_options[:child_provider]}
+  end
+
   defmodule Block do
     @behaviour Alto.Provider
     def describe(_), do: %{}
@@ -328,6 +342,46 @@ defmodule Alto.Runner.ModelSubagentsTest do
     assert %Alto.Runner.Result{status: :ok} = result = Alto.Contrib.run("delegate", opts)
     assert result.output == "done"
     assert_receive {:selected_model, "child-model"}
+  end
+
+  test "nested discovery and delegation follow the current child provider and narrowed tools" do
+    tools = Alto.Contrib.Tools.agents(only: [:list_agent_models, :spawn_agents])
+    nested = task("grandchild", "current_provider") |> Map.put("model", "child-model")
+
+    calls = [
+      call("list", "list_agent_models", %{}),
+      call("spawn", "spawn_agents", %{"agents" => [nested]})
+    ]
+
+    policy = Alto.Subagents.bounded(max_depth: 2, max_children: 4)
+
+    child = %{
+      id: "selected",
+      task: "delegate again",
+      profile_key: "selected",
+      tools: tools,
+      loop: Alto.default_loop(subagents: policy)
+    }
+
+    result =
+      Alto.Contrib.run(child,
+        provider: {Provider, owner: self(), calls: []},
+        tools: tools ++ [Alto.Contrib.Tools.CodexAgent],
+        approval: :approve,
+        loop:
+          Alto.loop(NamedChildLoop,
+            subagents: policy,
+            child_provider: {CurrentProvider, owner: self(), calls: calls, model: "parent-model"}
+          )
+      )
+
+    assert result.status == :ok
+    assert_receive {:selected_model, "child-model"}
+    assert_receive {:request, _first}
+    assert_receive {:request, completed}
+    list = Enum.find(completed.messages, &(&1["tool_call_id"] == "list"))
+    assert JSON.decode!(list["content"])["backends"] == ["current_provider"]
+    assert [%{status: :ok, output: "done"}] = result.output.results
   end
 
   test "a selected provider resolves credentials from the host store without exposing them" do

@@ -875,7 +875,9 @@ defmodule Alto.Runner.Execution do
        when operation in [:spawn_agents, :start_agents] do
     Call.run(
       fn ->
-        if run.agent_prepare, do: run.agent_prepare.(prepared, opts), else: {:ok, prepared}
+        if run.agent_prepare,
+          do: run.agent_prepare.(prepared, Map.take(run, [:provider, :tools]), opts),
+          else: {:ok, prepared}
       end,
       Budget.timeout(run.budget, run.tool_timeout),
       run.cancel_ref
