@@ -13,7 +13,7 @@ defmodule Alto.Runner.Execution.SessionTest do
     %{dir: dir}
   end
 
-  defp state(dir, id, opts \\ []) do
+  defp state(dir, id, opts) do
     %{
       session: id,
       session_id: "run-1",
