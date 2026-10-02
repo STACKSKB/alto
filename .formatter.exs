@@ -1,6 +1,7 @@
 [
   inputs: [
     "{mix,.formatter}.exs",
+    "alto.example.*.exs",
     "{lib,test}/**/*.{ex,exs}",
     "packages/alto_contrib/mix.exs",
     "packages/alto_contrib/{lib,test}/**/*.{ex,exs}",
