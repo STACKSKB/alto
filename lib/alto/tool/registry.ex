@@ -45,7 +45,7 @@ defmodule Alto.Tool.Registry do
 
   defp schema_opts(operation, opts, %{max_children: max_children})
        when operation in [:spawn_agents, :start_agents],
-       do: Keyword.put(opts, :max_children, max_children)
+       do: put_in(opts[:max_children], max_children)
 
   defp schema_opts(_module, opts, _child_limits), do: opts
 

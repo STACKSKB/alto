@@ -9,7 +9,8 @@ defmodule Alto.Runner.RuntimeToolBindingTest do
       execution_mode: :exclusive,
       approval: :required
 
-    def schema(_), do: EchoTool.schema([])
+    def options, do: %{}
+    def schema(%{max_children: limit}) when limit > 0, do: EchoTool.schema([])
 
     def prepare(arguments, _, _) do
       {:ok, %{agents: [%{id: "child", task: arguments, loop: Alto.rule_loop(steps: ["echo"])}]},
@@ -40,6 +41,19 @@ defmodule Alto.Runner.RuntimeToolBindingTest do
 
     def get(_, id), do: {:ok, %{id: id, revision: 1, status: "worked"}}
     def resource_identity(resource), do: {:ok, %{"directory" => resource.path}}
+  end
+
+  defmodule ReplacementDirectory do
+    @behaviour Alto.Resource
+    defstruct [:path, :observer]
+
+    defdelegate prepare(resource, cwd), to: RetainedDirectory
+    defdelegate create(resource, snapshot, identity), to: RetainedDirectory
+    defdelegate use(resource, id, revision, execute), to: RetainedDirectory
+    defdelegate resume(resource, id, revision, admit, execute), to: RetainedDirectory
+    defdelegate freeze(resource, id, revision), to: RetainedDirectory
+    defdelegate get(resource, id), to: RetainedDirectory
+    defdelegate resource_identity(resource), to: RetainedDirectory
   end
 
   test "a separately named tool delegates under the same approval and inherited authority" do
@@ -82,5 +96,40 @@ defmodule Alto.Runner.RuntimeToolBindingTest do
 
     assert_received {:resource_used, "owned"}
     assert_received {:resource_frozen, "owned"}
+  end
+
+  test "approval checkpoints bind the retained resource implementation as well as its identity" do
+    resource = %RetainedDirectory{path: File.cwd!(), observer: self()}
+    replacement = %ReplacementDirectory{path: resource.path, observer: self()}
+
+    options = fn resource ->
+      [
+        loop:
+          Alto.rule_loop(
+            steps: ["relay"],
+            subagents: Alto.Subagents.bounded(max_depth: 1, workspaces: resource)
+          ),
+        tools: [Relay, EchoTool],
+        approval: :suspend,
+        checkpoint_version: "resource-v1"
+      ]
+    end
+
+    assert %Alto.Runner.Result{status: :suspended} =
+             suspended = Alto.run(%{"value" => "retained"}, options.(resource))
+
+    resume = fn resource ->
+      Alto.run(
+        %{"value" => "retained"},
+        Keyword.put(options.(resource), :checkpoint, {suspended.checkpoint, :approve})
+      )
+    end
+
+    assert %Alto.Runner.Result{status: :error, reason: :checkpoint_mismatch} =
+             resume.(replacement)
+
+    refute_received {:resource_used, _}
+    assert %Alto.Runner.Result{status: :ok} = resume.(resource)
+    assert_received {:resource_used, "owned"}
   end
 end

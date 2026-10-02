@@ -590,9 +590,9 @@ defmodule Alto.Runner.Checkpoint do
 
   defp stable_resource(nil), do: nil
 
-  defp stable_resource(%_{} = resource) do
+  defp stable_resource(%module{} = resource) do
     case Alto.Resource.identity(resource) do
-      {:ok, identity} -> identity
+      {:ok, identity} -> {module, module_md5(module), identity}
       {:error, reason} -> throw({__MODULE__, :durable_identity_unavailable, reason})
       other -> throw({__MODULE__, :durable_identity_unavailable, other})
     end

@@ -16,7 +16,12 @@ defmodule Alto.ProviderFieldsTest do
            "opaque_extension" => %{"value" => "preserved"},
            "content" => "overwritten",
            "tool_calls" => [%{"id" => "injected"}],
-           "role" => "system"
+           "role" => "system",
+           :content => "overwritten by atom key",
+           :tool_calls => [%{"id" => "injected"}],
+           :role => "system",
+           :tool_call_id => "injected",
+           :name => "injected"
          }
        }}
     end
@@ -37,5 +42,7 @@ defmodule Alto.ProviderFieldsTest do
     assert assistant["content"] == "answer"
     assert assistant["opaque_extension"] == %{"value" => "preserved"}
     refute Map.has_key?(assistant, "tool_calls")
+    refute Map.has_key?(assistant, "tool_call_id")
+    refute Map.has_key?(assistant, "name")
   end
 end
