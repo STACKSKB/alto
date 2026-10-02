@@ -210,6 +210,42 @@ defmodule Alto.TUI.AttachmentsTest do
     assert [%{kind: :tool}] = State.current_entries(next)
   end
 
+  test "a codec-rejected audio attachment stays in the draft instead of entering the running queue",
+       %{state: state} do
+    provider =
+      {Alto.Contrib.Providers.OpenAICompatible, input_modalities: ["text", "audio"]}
+
+    {:ok, attachment} =
+      Attachment.stage(
+        "OggS audio bytes",
+        "recording.ogg",
+        Keyword.put(Attachments.options(state), :media_type, "audio/ogg")
+      )
+
+    state = %{
+      state
+      | selected_task_id: "task",
+        runs: %{"run" => %{task_id: "task", input_provider: provider}},
+        attachments: [attachment]
+    }
+
+    draft = "Transcribe " <> Attachment.token(attachment)
+    ExRatatui.textarea_set_value(state.textarea, draft)
+    assert {:ok, content} = Attachments.prepare(state, draft)
+
+    assert {:error, {:unsupported_audio_format, "audio/ogg"}} =
+             Attachments.validate_provider(content, provider)
+
+    {:noreply, denied} = App.handle_event(%Key{code: "enter"}, state)
+    assert denied.notice =~ "draft kept"
+    assert denied.attachments == [attachment]
+    assert ExRatatui.textarea_get_value(denied.textarea) == draft
+    refute Map.has_key?(denied.inputs, "task")
+
+    supported = Content.new([Content.file("recording.wav", "audio/wav", Base.encode64("RIFF"))])
+    assert :ok = Attachments.validate_provider(supported, provider)
+  end
+
   test "unsupported media preserves the draft for new runs and checks the running model for queues",
        %{state: state} do
     profile = %Alto.Contrib.ProviderProfile{

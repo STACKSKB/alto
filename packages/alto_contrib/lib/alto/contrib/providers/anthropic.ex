@@ -39,6 +39,17 @@ defmodule Alto.Contrib.Providers.Anthropic do
       files: "file" in Alto.InputModalities.configured(opts)
     }
 
+  @doc "Check typed input using the wire codec without resolving credentials or sending a request."
+  def check_input(%Content{} = content, opts) do
+    case anthropic_content(
+           content.blocks,
+           input_capabilities(Alto.InputModalities.configured(opts))
+         ) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
   @impl true
   def stream(request, sink, opts) when is_map(request) and is_function(sink, 1) do
     with {:ok, config} <- config(opts),
@@ -87,10 +98,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
          {:ok, messages} <-
            Alto.Result.traverse(
              messages,
-             &message(&1, %{
-               images: "image" in config.input_modalities,
-               files: "file" in config.input_modalities
-             })
+             &message(&1, input_capabilities(config.input_modalities))
            ) do
       body =
         Map.merge(options, %{
@@ -187,6 +195,9 @@ defmodule Alto.Contrib.Providers.Anthropic do
 
   defp message(message, _capabilities),
     do: {:error, {:invalid_anthropic_message, message}}
+
+  defp input_capabilities(modalities),
+    do: %{images: "image" in modalities, files: "file" in modalities}
 
   defp anthropic_content(value, capabilities) do
     case Content.decode_transcript(value) do

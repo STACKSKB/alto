@@ -34,6 +34,17 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     }
   end
 
+  @doc "Check typed input using the wire codec without resolving credentials or sending a request."
+  def check_input(%Content{} = content, opts) do
+    case provider_message(
+           %{"role" => "user", "content" => content.blocks},
+           input_capabilities(Alto.InputModalities.configured(opts))
+         ) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
@@ -61,12 +72,10 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
 
   defp request(config, request, sink) do
     with {:ok, messages} <-
-           provider_messages(Map.fetch!(request, :messages), %{
-             images: "image" in config.input_modalities,
-             audio: "audio" in config.input_modalities,
-             video: "video" in config.input_modalities,
-             files: "file" in config.input_modalities
-           }) do
+           provider_messages(
+             Map.fetch!(request, :messages),
+             input_capabilities(config.input_modalities)
+           ) do
       body =
         request
         |> Map.get(:options, %{})
@@ -85,6 +94,14 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
       StreamEnvelope.post(config, body, config.headers, Stream, sink)
     end
   end
+
+  defp input_capabilities(modalities),
+    do: %{
+      images: "image" in modalities,
+      audio: "audio" in modalities,
+      video: "video" in modalities,
+      files: "file" in modalities
+    }
 
   defp provider_messages(messages, capabilities) do
     messages

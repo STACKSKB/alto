@@ -130,28 +130,8 @@ defmodule Alto.TUI.Attachments do
     do: Alto.Contrib.Codex.Backend.check_input(content, opts)
 
   def validate_provider(%Content{} = content, {module, opts})
-      when module in [Alto.Contrib.Providers.OpenAICompatible, Alto.Contrib.Providers.Anthropic] do
-    modalities = Alto.InputModalities.configured(opts)
-
-    capabilities = %{
-      images: "image" in modalities,
-      files: "file" in modalities,
-      audio: module == Alto.Contrib.Providers.OpenAICompatible and "audio" in modalities,
-      video: false
-    }
-
-    case Content.map_media(content, capabilities, fn
-           %{"type" => "file", "media_type" => media}
-           when module == Alto.Contrib.Providers.Anthropic and media != "application/pdf" ->
-             {:error, {:unsupported_anthropic_file_type, media}}
-
-           block ->
-             {:ok, block}
-         end) do
-      {:ok, _} -> :ok
-      error -> error
-    end
-  end
+      when module in [Alto.Contrib.Providers.OpenAICompatible, Alto.Contrib.Providers.Anthropic],
+      do: module.check_input(content, opts)
 
   def validate_provider(%Content{} = content, {module, opts}),
     do:
