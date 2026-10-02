@@ -65,7 +65,9 @@ mix alto "Explain this repository"
 ```
 
 `ALTO_API_KEY` is also accepted. The default CLI tools list, read, and search
-files. Select the supplied coding profile to add file edits, sandboxed commands,
+files. See the [example agent configurations](examples/README.md#agent-configurations)
+for minimal coding, read-only review, sandboxed workspaces, bounded teams and a
+document assistant. Select the larger coding profile to add file edits, sandboxed commands,
 Git tools, and agents:
 
 ```sh
