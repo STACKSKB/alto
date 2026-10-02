@@ -35,8 +35,12 @@ defmodule Alto.Runner.SerialChildSessionsTest do
     @behaviour Alto.Provider
     def describe(_), do: %{}
 
-    def stream(_request, _sink, opts),
-      do: {:ok, %{message: Keyword.fetch!(opts, :answer), tool_calls: []}}
+    def stream(request, _sink, opts) do
+      if opts[:observer],
+        do: send(opts[:observer], {:provider_identity, request.run_id, request.session_id})
+
+      {:ok, %{message: Keyword.fetch!(opts, :answer), tool_calls: []}}
+    end
   end
 
   setup do
@@ -127,6 +131,26 @@ defmodule Alto.Runner.SerialChildSessionsTest do
              parent_transcript["messages"],
              &(&1["role"] == "assistant" and &1["content"] in ["child-one", "child-two"])
            )
+  end
+
+  test "provider requests distinguish execution from a shared conversation", %{dir: dir} do
+    owner = self()
+
+    result =
+      Alto.run(%{agents: [%{id: "one", task: "first"}, %{id: "two", task: "second"}]},
+        loop: loop(:shared),
+        session: :new,
+        session_dir: dir,
+        provider: {ChildProvider, answer: "child", observer: owner}
+      )
+
+    assert result.status == :ok
+    assert_receive {:provider_identity, first, session}
+    assert_receive {:provider_identity, second, ^session}
+    assert session == result.session_id
+    refute first == second
+    refute first == result.run_id
+    refute second == result.run_id
   end
 
   test "shared remains the default and marks children non-owners", %{dir: dir} do

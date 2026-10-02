@@ -677,6 +677,7 @@ defmodule Alto.Runner.Execution do
         {:ok,
          %{
            messages: Enum.reverse(run.messages_rev),
+           run_id: run.session_id,
            session_id: run.session || run.session_id,
            context_observation: Map.get(run, :context_observation),
            resume_context_observation: Map.get(run, :resume_context_observation),
