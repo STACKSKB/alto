@@ -19,7 +19,9 @@ defmodule Alto.Contrib.Command.Executors.Bubblewrap do
 
   @impl true
   def prepare(invocation, opts) do
-    with {:ok, bubblewrap} <- resolve_bubblewrap(opts),
+    with {:ok, invocation, retention_details} <-
+           Alto.Contrib.Command.OutputRetention.prepare(invocation, opts),
+         {:ok, bubblewrap} <- resolve_bubblewrap(opts),
          {:ok, network} <- validate_network(Keyword.get(opts, :network, :disabled)),
          {:ok, workspace_mode} <-
            validate_workspace_mode(Keyword.get(opts, :workspace, :read_write)),
@@ -58,6 +60,8 @@ defmodule Alto.Contrib.Command.Executors.Bubblewrap do
         protected_paths: protected_paths,
         environment_variables: environment |> Map.keys() |> Enum.sort()
       }
+
+      approval_details = Map.merge(approval_details, retention_details)
 
       sandbox = Map.take(approval_details, [:backend, :network, :workspace])
       {:ok, %{invocation: wrapped, sandbox: sandbox}, approval_details}
