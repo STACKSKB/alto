@@ -24,6 +24,60 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
     end
   end
 
+  test "text context estimates count the artifact references actually sent on the wire" do
+    configure_adapter(self(), 200, "application/json", [
+      JSON.encode!(%{"choices" => [%{"message" => %{"content" => "published"}}]})
+    ])
+
+    for size <- [1, 256_000] do
+      input = %{
+        messages: [
+          %{"role" => "user", "content" => "Publish the report"},
+          %{
+            "role" => "tool",
+            "tool_call_id" => "publish",
+            "content" => [
+              Alto.Content.text("Report ready"),
+              Alto.Content.artifact(
+                "report.txt",
+                "text/plain",
+                Base.encode64(:binary.copy("x", size))
+              )
+            ]
+          }
+        ],
+        tools: [%{"type" => "function", "function" => %{"name" => "publish_file"}}]
+      }
+
+      assert {:ok, _} =
+               OpenAICompatible.stream(input, fn _ -> :ok end,
+                 model: "text-model",
+                 req_options: [adapter: Adapter]
+               )
+
+      assert_receive {:http_request, wire}
+      body = JSON.decode!(wire.body)
+      projection = %{messages: body["messages"], tools: body["tools"]}
+      expected = byte_size(JSON.encode!(projection)) + 16 * length(body["messages"]) + 16
+      assert OpenAICompatible.estimate_text_context(input) == expected
+      assert expected < 1_000
+
+      assert get_in(body, ["messages", Access.at(1), "content"]) ==
+               "Report ready\nGenerated file: report.txt (text/plain)"
+    end
+  end
+
+  test "text context estimates keep ordinary large text and unsupported media bounded" do
+    for content <- [
+          :binary.copy("x", 40_000),
+          [Alto.Content.image("image/png", Base.encode64(png(10, 8)), 10, 8)]
+        ] do
+      input = %{messages: [%{"role" => "user", "content" => content}], tools: []}
+      expected = byte_size(JSON.encode!(input)) + 32
+      assert OpenAICompatible.estimate_text_context(input) == expected
+    end
+  end
+
   test "OpenRouter keeps a stable session and enables Claude caching without altering messages" do
     configure_adapter(self(), 200, "application/json", [
       JSON.encode!(%{"choices" => [%{"message" => %{"content" => "ok"}}]})

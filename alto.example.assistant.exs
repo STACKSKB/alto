@@ -53,7 +53,8 @@ Alto.default_config()
           max_tokens: 32_768,
           compact_at: 0.8,
           reserve_output: 4_096,
-          usage_estimation: true
+          # Published bytes stay in history; only file references reach this provider.
+          estimator: &Alto.Contrib.Providers.OpenAICompatible.estimate_text_context/1
         )
     ),
   tools: [

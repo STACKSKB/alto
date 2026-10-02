@@ -34,6 +34,26 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     }
   end
 
+  @doc """
+  Conservative byte-based context estimate for text-only Chat Completions runs.
+
+  Uses the request codec so downloadable artifacts count as the text references
+  sent to the model, while their full bytes remain in the saved transcript.
+  Pass `&__MODULE__.estimate_text_context/1` to `Alto.Context.Window.new/1` as
+  `:estimator`. This is not a tokenizer for image, audio or other media inputs;
+  unsupported or invalid content retains its original size estimate and still
+  undergoes normal validation before dispatch.
+  """
+  def estimate_text_context(%{messages: messages, tools: tools}) do
+    projected =
+      case provider_messages(messages, input_capabilities(["text"])) do
+        {:ok, projected} -> projected
+        {:error, _reason} -> messages
+      end
+
+    byte_size(JSON.encode!(%{messages: projected, tools: tools})) + 16 * length(projected) + 16
+  end
+
   @doc "Check typed input using the wire codec without resolving credentials or sending a request."
   def check_input(%Content{} = content, opts) do
     case provider_message(

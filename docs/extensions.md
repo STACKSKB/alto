@@ -272,6 +272,13 @@ Neither the default byte tokenizer nor a custom tokenizer is an exact provider
 count unless the host calibrates it against the selected model and request
 shape. Provider usage remains authoritative after a request completes.
 
+For text-only Chat Completions runs, contrib's
+`Alto.Contrib.Providers.OpenAICompatible.estimate_text_context/1` can be used as
+the estimator. It reuses the provider codec so published artifacts count as
+file references rather than base64 payloads. The full artifact still counts
+toward runtime result and transcript byte limits. Media input needs a
+model-appropriate estimator; this helper does not tokenize images or audio.
+
 ## Hooks, commands, and clients
 
 Middleware is an ordered list of three-argument functions `(event, context, next)`.
