@@ -95,3 +95,8 @@ build because of its native dependency compiler workaround.
 
 See the [repository guides](../../docs/README.md) and
 [composition examples](../../examples/README.md).
+
+For explicit reuse of pinned upstream `SKILL.md` directories and their supporting
+files, see the [upstream skills example](../../examples/upstream_skills/README.md).
+It composes the existing prompt and workspace tools without maintaining a skill
+catalogue.
