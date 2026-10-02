@@ -157,6 +157,7 @@ defmodule Alto.Runner.SerialOutcomeTest do
                )
 
       assert_received :committed
+      refute_received :committed
       assert {:failed, %{outcome: :unknown}} = result.output
       assert result.verdict == :unknown
     end

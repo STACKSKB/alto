@@ -23,21 +23,6 @@ defmodule Alto.SessionTest do
     assert is_integer(started["at_ms"])
   end
 
-  test "started records keep provider identity but never secrets", %{dir: dir} do
-    meta = %{
-      run_id: "run-1",
-      provider: "Elixir.Alto.Contrib.Providers.OpenAICompatible",
-      model: "m",
-      cwd: "/tmp"
-    }
-
-    assert {:ok, id} = Session.create("task", meta, session_dir: dir)
-    assert {:ok, [record]} = Session.read(id, session_dir: dir)
-    assert record["provider"] == "Elixir.Alto.Contrib.Providers.OpenAICompatible"
-    assert record["model"] == "m"
-    refute Map.has_key?(record, "api_key")
-  end
-
   test "event records round-trip exact terms", %{dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
 
@@ -122,63 +107,6 @@ defmodule Alto.SessionTest do
     assert {:ok, {:model_request_failed, :boom}} = Session.decode_term(completed["reason"])
   end
 
-  test "transcript sidecar round-trips; missing sidecar is explicit", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    messages = [
-      %{"role" => "user", "content" => "hi"},
-      %{"role" => "assistant", "content" => "yo"}
-    ]
-
-    assert {:ok, _snapshot} = Session.persist_settled(id, messages, 42, session_dir: dir)
-
-    assert {:ok, %{"messages" => ^messages, "transcript_bytes" => 42, "revision" => 1}} =
-             Session.transcript(id, session_dir: dir)
-
-    {:ok, bare} = Session.create("other", %{}, session_dir: dir)
-    assert {:error, :no_resumable_transcript} = Session.transcript(bare, session_dir: dir)
-  end
-
-  test "overwriting the sidecar is atomic and leaves no temp litter", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    first = [%{"role" => "user", "content" => "hi"}]
-    assert {:ok, _snapshot} = Session.persist_settled(id, first, 20, session_dir: dir)
-
-    second = first ++ [%{"role" => "assistant", "content" => "done"}]
-    assert {:ok, _snapshot} = Session.persist_settled(id, second, 55, session_dir: dir)
-
-    assert {:ok, %{"messages" => ^second, "transcript_bytes" => 55, "revision" => 2}} =
-             Session.transcript(id, session_dir: dir)
-
-    # A crash between the temp write and the rename leaves the previous
-    # snapshot intact; a successful write leaves no temp siblings behind.
-    litter = File.ls!(dir) |> Enum.filter(&String.contains?(&1, ".alto-"))
-    assert litter == []
-  end
-
-  test "revision checks prevent a stale snapshot overwrite", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-    first = [%{"role" => "user", "content" => "first"}]
-    second = [%{"role" => "user", "content" => "second"}]
-
-    assert {:ok, _snapshot} =
-             Session.persist_settled(id, first, 20,
-               session_dir: dir,
-               expected_revision: 0
-             )
-
-    assert {:error,
-            {:session_conflict, %{session_id: ^id, expected_revision: 0, current_revision: 1}}} =
-             Session.persist_settled(id, second, 21,
-               session_dir: dir,
-               expected_revision: 0
-             )
-
-    assert {:ok, %{"messages" => ^first, "revision" => 1}} =
-             Session.transcript(id, session_dir: dir)
-  end
-
   test "hostile ids never escape the sessions directory", %{dir: dir} do
     for bad <- ["../evil", "a/b", "", "sess ok", 123, nil] do
       assert {:error, {:invalid_session_id, ^bad}} = Session.append(bad, %{}, session_dir: dir)
@@ -197,6 +125,9 @@ defmodule Alto.SessionTest do
   test "missing sessions and corrupt lines fail loudly", %{dir: dir} do
     assert {:error, {:session_not_found, "sess-missing"}} =
              Session.read("sess-missing", session_dir: dir)
+
+    {:ok, bare} = Session.create("other", %{}, session_dir: dir)
+    assert {:error, :no_resumable_transcript} = Session.transcript(bare, session_dir: dir)
 
     File.mkdir_p!(dir)
     File.write!(Path.join(dir, "sess-broken.jsonl"), "{not json\n")

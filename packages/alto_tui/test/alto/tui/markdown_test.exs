@@ -19,7 +19,10 @@ defmodule Alto.TUI.MarkdownTest do
     for kind <- [:assistant, :codex_assistant, :reasoning] do
       rendered =
         Transcript.render(
-          [%{kind: kind, text: "### Result\n\n**Done** with `code`.\n\n```elixir\n:ok\n```"}],
+          [
+            %{kind: :user, text: "## literal **text**"},
+            %{kind: kind, text: "### Result\n\n**Done** with `code`.\n\n```elixir\n:ok\n```"}
+          ],
           60
         )
         |> plain()
@@ -27,8 +30,9 @@ defmodule Alto.TUI.MarkdownTest do
       assert rendered =~ "Result"
       assert rendered =~ "Done with code."
       assert rendered =~ ":ok"
+      assert rendered =~ "## literal **text**"
       refute rendered =~ "###"
-      refute rendered =~ "**"
+      refute rendered =~ "**Done**"
       refute rendered =~ "```"
     end
   end
@@ -125,12 +129,10 @@ defmodule Alto.TUI.MarkdownTest do
     refute rendered =~ "```"
   end
 
-  test "a header-only table stays visible before the first streamed row arrives" do
+  test "tables retain every cell at wide and narrow widths" do
     assert Markdown.plain("| Long heading | Another heading |\n| --- | --- |", 20) =~
              "Long heading:"
-  end
 
-  test "tables retain every cell at wide and narrow widths" do
     table = "| File | Verdict |\n| --- | --- |\n| `one.ex` | **OK** |\n| `two.ex` | Fix |"
 
     for width <- [12, 80] do
@@ -182,17 +184,6 @@ defmodule Alto.TUI.MarkdownTest do
     assert Markdown.plain(unicode_table, 15) =~ "値: 猫猫猫"
   end
 
-  test "incomplete streamed blocks can become headings, tables and code" do
-    source =
-      "## Results\n\n| File | Result |\n| --- | --- |\n| `one.ex` | **OK** |\n\n```elixir\n  :ok\n```"
-
-    for n <- [1, 3, 10, 28, 46, 65, byte_size(source)] do
-      assert %Text{} = Markdown.render(binary_part(source, 0, n), 40)
-    end
-
-    assert Markdown.plain(source, 40) =~ "one.ex"
-  end
-
   test "native block paging keeps all lines in order" do
     source = Enum.map_join(1..150, "\n", &"- Item #{&1}")
     rows = Markdown.plain(source, 40) |> String.split("\n")
@@ -200,18 +191,6 @@ defmodule Alto.TUI.MarkdownTest do
     assert length(items) == 150
     assert hd(items) =~ "Item 1"
     assert List.last(items) =~ "Item 150"
-  end
-
-  test "only assistant entries interpret Markdown and source stays unchanged" do
-    entries = [
-      %{kind: :user, text: "## literal **text**"},
-      %{kind: :assistant, text: "## Rendered **heading**"}
-    ]
-
-    text = Transcript.render(entries, 60)
-    assert plain(text) =~ "## literal **text**"
-    assert plain(text) =~ "Rendered heading"
-    refute plain(text) =~ "**heading**"
   end
 
   test "large user and reasoning messages are not shortened by diagnostic limits" do

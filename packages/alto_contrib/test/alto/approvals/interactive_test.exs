@@ -61,12 +61,8 @@ defmodule Alto.Approval.InteractiveTest do
       end
     end
 
-    test "empty input denies" do
-      assert {:deny, :user_denied} = decide("\n", plain_request())
-    end
-
     test "negative input denies" do
-      for answer <- ["n", "no", "N", "cancel", " never "] do
+      for answer <- ["", "n", "no", "N", "cancel", " never "] do
         assert {:deny, :user_denied} = decide(answer <> "\n", plain_request())
       end
     end
@@ -85,6 +81,7 @@ defmodule Alto.Approval.InteractiveTest do
       assert body =~ ~s("path" => "a.txt")
       assert body =~ ~s("offset" => 0)
       assert body =~ ~s("limit" => 100)
+      refute body =~ "prepared:"
     end
 
     test "shows the canonical executable, argv, limits, and executor profile" do
@@ -123,11 +120,6 @@ defmodule Alto.Approval.InteractiveTest do
 
       assert body =~ "ALTO_TOKEN_NAME"
       assert body =~ ~s(environment_variables: ["ALTO_TOKEN_NAME", "HOME", "PATH"])
-    end
-
-    test "omits the prepared label when there are no prepared details" do
-      {_decision, body} = attempt("y\n", plain_request())
-      refute body =~ "prepared:"
     end
 
     test "real unsandboxed preparation surfaces the canonical executable and limits" do

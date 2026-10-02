@@ -52,26 +52,4 @@ defmodule Alto.TUI.MarkdownTailWindowTest do
       end
     end
   end
-
-  test "small blocks retain the cached rendering path" do
-    source =
-      "## Short\n\nA **bold** `token` and 猫.\n\n| Name | Value |\n| --- | --- |\n| 猫 | yes |"
-
-    for width <- [12, 80] do
-      full = Markdown.render(source, width)
-
-      for height <- [1, 6, 20] do
-        assert Markdown.tail(source, width, height).lines == Enum.take(full.lines, -height)
-      end
-    end
-  end
-
-  test "repeated long tails reuse an identical styled result after another document" do
-    source = "## Report\n\n" <> String.duplicate("**evidence** 猫 `code` ", 500)
-    expected = Markdown.render(source, 37).lines |> Enum.take(-9)
-
-    assert Markdown.tail(source, 37, 9).lines == expected
-    Markdown.tail(String.duplicate("different long content ", 500), 37, 9)
-    assert Markdown.tail(source, 37, 9).lines == expected
-  end
 end

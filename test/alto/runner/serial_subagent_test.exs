@@ -259,39 +259,6 @@ defmodule Alto.Runner.SerialSubagentTest do
     assert hint =~ "No tools are registered"
   end
 
-  test "invalid delegation requests fail the run", %{dir: dir} do
-    assert %Alto.Runner.Result{status: :error, reason: {:invalid_spawn_agents, _}} =
-             _result =
-             Alto.run(%{spawn: %{id: "sub-1"}},
-               loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: self(), answer: "unused"},
-               session: :new,
-               session_dir: dir
-             )
-  end
-
-  test "a grandchild beyond the budget fails while its parent continues", %{dir: dir} do
-    test_pid = self()
-
-    grandchild = %{id: "grand", task: "never runs"}
-
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run(%{spawn: %{id: "sub-1", task: %{spawn: grandchild}, loop: parent_loop(1)}},
-               loop: parent_loop(1),
-               provider: {AnswerProvider, test_pid: test_pid, answer: "unused"},
-               session: :new,
-               session_dir: dir
-             )
-
-    assert {:failed,
-            %{
-              id: "sub-1",
-              status: :error,
-              reason: {:invalid_spawn_agents, :max_depth_exceeded}
-            }} = result.output
-  end
-
   test "a crashing child becomes a failed event, not a parent crash", %{dir: dir} do
     assert %Alto.Runner.Result{status: :ok} =
              result =

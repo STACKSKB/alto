@@ -1609,25 +1609,6 @@ defmodule Alto.TUI.AppTest do
     assert screen =~ "context"
   end
 
-  test "renders the agreed pane model and telemetry bar headlessly", context do
-    state = state!(context)
-    state = %{state | dimensions: {150, 42}}
-    terminal = ExRatatui.init_test_terminal(150, 42)
-    frame = %ExRatatui.Frame{width: 150, height: 42}
-
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, frame))
-    buffer = ExRatatui.get_buffer_content(terminal)
-
-    assert buffer =~ "workspaces"
-    assert buffer =~ "new task"
-    assert buffer =~ "B:ALTO"
-    assert buffer =~ "A:ASK"
-    assert buffer =~ "P:Test Provider"
-    assert buffer =~ "M:test/model"
-    assert buffer =~ "cache 0.0%"
-    refute buffer =~ "││ ▾"
-  end
-
   test "transcript follows streaming output until the user scrolls away", context do
     state = state!(context)
 

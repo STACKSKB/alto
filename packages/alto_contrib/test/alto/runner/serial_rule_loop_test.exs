@@ -259,6 +259,8 @@ defmodule Alto.Runner.SerialRuleLoopTest do
 
     # The host emitted live tool lifecycle events but no model events.
     events = received_events()
+    completed = Enum.find(events, &(&1.type == :tool_completed))
+    assert %{value: %{echo: "a"}} = completed.data
 
     assert Enum.any?(
              events,
@@ -397,23 +399,6 @@ defmodule Alto.Runner.SerialRuleLoopTest do
     # run consumed exactly the frozen value prepare returned: the
     # result carries the same token, so it cannot come from a second preparation.
     assert %{stamped: "frozen", token: ^token} = result.output
-  end
-
-  test "tool_completed carries the native value" do
-    parent = self()
-
-    assert %Alto.Runner.Result{status: :ok} =
-             _result =
-             Alto.Contrib.run(["a"],
-               loop: Alto.loop(CountingRuleLoop),
-               tools: [RuleEchoTool],
-               event_sink: fn event -> send(parent, {:event, event}) end
-             )
-
-    events = received_events()
-    completed = Enum.find(events, &(&1.type == :tool_completed))
-
-    assert %{value: %{echo: "a"}} = completed.data
   end
 
   test "model_tools projects a subset to the provider while all tools stay invokable" do

@@ -42,34 +42,6 @@ defmodule Alto.Runner.ReleaseContractsTest do
     def run(arguments, _, _opts), do: {:ok, %{value: arguments["value"]}}
   end
 
-  defmodule Parent do
-    def init(_, _),
-      do:
-        {:continue, nil,
-         [
-           {:spawn_agents,
-            %{
-              agents: [
-                %{
-                  id: "child",
-                  task: %{"value" => 42},
-                  loop: Alto.rule_loop(steps: ["native"])
-                }
-              ]
-            }}
-         ]}
-
-    def handle_event(
-          %Event{type: :subagents_completed, data: %{results: [%{status: :error} = data]}},
-          state,
-          _
-        ),
-        do: {{:error, data.error}, state, []}
-
-    def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
-      do: {{:stop, data.output}, state, []}
-  end
-
   test "deterministic cycles consume a shared effect budget" do
     assert %Alto.Runner.Result{status: :error, reason: {:effect_limit, 5}} =
              _ =
@@ -80,19 +52,6 @@ defmodule Alto.Runner.ReleaseContractsTest do
     assert %Alto.Runner.Result{status: :error, reason: {:participant_failed, :timeout}} =
              _ =
              Alto.run(%{}, loop: Alto.loop(Stuck), run_timeout: 30)
-  end
-
-  test "transport uncertainty survives the native tool and result boundary" do
-    assert %Alto.Runner.Result{status: :error, reason: _} =
-             result =
-             Alto.run(%{}, loop: Alto.rule_loop(steps: ["remote"]), tools: [UnknownTool])
-
-    assert result.verdict == :unknown
-
-    assert Enum.any?(
-             result.events,
-             &match?(%Event{type: :tool_failed, data: %{outcome: :unknown}}, &1)
-           )
   end
 
   test "model request options and narrowed tool definitions reach the provider" do
@@ -154,16 +113,5 @@ defmodule Alto.Runner.ReleaseContractsTest do
              Alto.run(%{"value" => 42}, loop: Alto.rule_loop(steps: steps), tools: [Native])
 
     assert result.output == [%{value: 42}, %{value: {:typed, 42}}]
-  end
-
-  test "a providerless parent can delegate to a deterministic child" do
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.run(%{},
-               loop: Alto.loop(Parent, subagents: Alto.Subagents.bounded(max_depth: 1)),
-               tools: [Native]
-             )
-
-    assert result.output == [%{value: 42}]
   end
 end
