@@ -131,3 +131,38 @@ For explicit reuse of pinned upstream `SKILL.md` directories and their supportin
 files, see the [upstream skills example](../../examples/upstream_skills/README.md).
 It composes the existing prompt and workspace tools without maintaining a skill
 catalogue.
+
+## Cache warming during tools
+
+Native Anthropic callers can opt in without changing core or global defaults:
+
+```elixir
+result = Alto.Contrib.CacheWarmer.run("Review the repository", options,
+  max_requests: 3,
+  max_duration_ms: 900_000
+)
+```
+
+`options` must select `Alto.Contrib.Providers.Anthropic`. `start/3` returns an
+ordinary Alto handle. Warming protects only this execution's last successful
+normal request while its tools run; shared-session children and compaction do
+not replace it. Timers and in-flight requests stop with the run, cancellation,
+owner death, or the finite horizon.
+
+Refreshes use the provider's zero-output prewarming API, preserving tools,
+messages and cache-sensitive options. Thinking, structured output and forced
+selection requests are skipped. OpenAI-compatible endpoints are intentionally
+unsupported until their replay and retention behavior have a dedicated adapter.
+
+These are **additional paid requests**, separately bounded by `max_requests`,
+`request_timeout_ms` (10 seconds), `max_duration_ms`, and `max_prompt_bytes`
+(1 MB). `refresh_margin_ms` defaults to 30 seconds before the configured
+5-minute or 1-hour TTL. No retention or savings guarantee is made: cache misses
+still bill input, and a miss/error stops that candidate. The live
+`cache_warm_finished` event reports separate canonical usage, or `usage_unknown`
+when a cancelled/failed attempt cannot report billing. It does not alter model
+step limits, normal run usage, or the transcript; billing collectors should
+include these events.
+
+The lifecycle approach is informed by [OMP's cache warmer](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/cache-warmer.ts).
+The transport follows [Anthropic's native prewarming protocol](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache).

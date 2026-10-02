@@ -2,6 +2,10 @@ defmodule Alto.Provider do
   @moduledoc """
   Contract for provider adapters. Provider calls run under runtime supervision.
 
+  Normal execution requests include `run_id`, identifying this execution, and
+  `session_id`, identifying its conversation (which children may share).
+  Auxiliary requests such as reductions may omit `run_id`.
+
   A request may set `tool_choice: :none` to retain historical tool schemas while
   requesting text only (for example, context reduction). Adapters translate it
   to their wire protocol. Reduction never dispatches returned tool calls, even

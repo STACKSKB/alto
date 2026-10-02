@@ -60,6 +60,68 @@ defmodule Alto.Contrib.Providers.Anthropic do
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
   end
 
+  @doc false
+  def cache_warm_plan(request, opts) do
+    with {:ok, config} <- config(opts),
+         {:ok, body} <- request_body(request, config),
+         # Eligibility checks use exactly the nested key shape sent on the wire.
+         body <- JSON.decode!(JSON.encode!(body)),
+         %{"type" => "ephemeral"} = control <- body["cache_control"],
+         ttl when ttl in [nil, "5m", "1h"] <- control["ttl"],
+         true <- body["thinking"] in [nil, %{"type" => "disabled"}],
+         false <- is_map(body["output_config"]) and Map.has_key?(body["output_config"], "format"),
+         true <- body["tool_choice"] in [nil, %{"type" => "auto"}, %{"type" => "none"}] do
+      # Do not change tool_choice, thinking, tools or messages: these participate
+      # in the cache key. Zero-token native prewarming produces no output.
+      body = body |> Map.put("max_tokens", 0) |> Map.put("stream", false)
+
+      {:ok,
+       %{
+         body: body,
+         config: %{config | streaming: false},
+         ttl_ms: if(ttl == "1h", do: 3_600_000, else: 300_000),
+         bytes: byte_size(JSON.encode!(body))
+       }}
+    else
+      _ -> {:error, :cache_warming_unsupported_request}
+    end
+  end
+
+  @doc false
+  def warm_cache(%{body: body, config: config}, timeout) do
+    config = %{config | timeout: min(config.timeout, timeout)}
+
+    # A zero-token success deliberately ends with max_tokens. Keep that special
+    # case out of the ordinary generation decoder, which rejects truncation.
+    with {:ok, chunks} <-
+           StreamEnvelope.request(
+             config,
+             headers(config),
+             [method: :post, body: JSON.encode!(body)],
+             [],
+             fn chunks, data -> {:ok, [data | chunks]} end
+           ),
+         {:ok,
+          %{
+            "content" => [],
+            "stop_reason" => "max_tokens",
+            "usage" => %{"output_tokens" => 0} = raw_usage
+          }} <-
+           JSON.decode(chunks |> Enum.reverse() |> IO.iodata_to_binary()) do
+      usage = Alto.Contrib.Usage.normalize(raw_usage)
+      {:ok, %{usage: usage, cache_hit: usage.cached_input_tokens > 0, output: false}}
+    else
+      {:error, _} = error ->
+        error
+
+      {:ok, %{"usage" => raw_usage}} when is_map(raw_usage) ->
+        {:error, {:invalid_cache_warm_response, Alto.Contrib.Usage.normalize(raw_usage)}}
+
+      _ ->
+        {:error, :invalid_cache_warm_response}
+    end
+  end
+
   defp config(opts) do
     with {:ok, config} <-
            HTTPOptions.validate(
@@ -243,14 +305,15 @@ defmodule Alto.Contrib.Providers.Anthropic do
   defp anthropic_media(%{"type" => "file", "media_type" => media}),
     do: {:error, {:unsupported_anthropic_file_type, media}}
 
-  defp send_request(body, config, sink) do
-    headers = [
+  defp send_request(body, config, sink),
+    do: StreamEnvelope.post(config, body, headers(config), Stream, sink)
+
+  defp headers(config) do
+    [
       {"accept", if(config.streaming, do: "text/event-stream", else: "application/json")},
       {"x-api-key", config.api_key},
       {"anthropic-version", "2023-06-01"},
       {"content-type", "application/json"}
     ]
-
-    StreamEnvelope.post(config, body, headers, Stream, sink)
   end
 end
