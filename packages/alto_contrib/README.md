@@ -80,6 +80,37 @@ rejected. Retain the original revision for outstanding continuations and
 reconcile uncertain effects before creating new work; do not replay them to
 work around a rejected checkpoint.
 
+## Retaining command output
+
+`RunCommand` and `RunShell` can preserve output omitted from their bounded inline
+result. Enable retention in the host's executor options:
+
+```elixir
+{Alto.Contrib.Tools.RunCommand,
+ executor:
+   {Alto.Contrib.Command.Executors.Unsandboxed,
+    output_retention: [directory: ".alto/command-output", max_bytes: 8_000_000, max_files: 16]}}
+```
+
+The same option works with `Executors.Bubblewrap`; capture happens in the host
+without adding sandbox mounts. Preparation includes the directory and limits
+in approval details and creates no files. Model arguments cannot raise these
+limits. The directory must be inside the workspace.
+
+When inline output is truncated, `output_retention` reports a workspace-relative
+`path` readable with `ReadFile`, retained `bytes`, observed `total_bytes`, and
+whether the file is also `truncated`. Files contain the first `max_bytes` raw
+stdout/stderr bytes, including binary output. Small outputs release their slots.
+Retention failure or exhausted slots returns `output_retention.error` alongside
+the ordinary command result; exit status and timeout behavior remain unchanged.
+
+Atomic reservations cap storage at `max_files * max_bytes` for one directory
+using consistent host limits. Existing slots and reported files are never
+overwritten or automatically evicted. Hosts remove entire `slot-*` directories
+after their consumers finish; killed collectors can leave partial slots, but
+their file descriptors close with the collector. These also count against the
+quota. Do not change limits or remove active slots while commands are running.
+
 ## Verify
 
 ```sh

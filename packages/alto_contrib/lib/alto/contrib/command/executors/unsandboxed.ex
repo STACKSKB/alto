@@ -4,10 +4,12 @@ defmodule Alto.Contrib.Command.Executors.Unsandboxed do
   @behaviour Alto.Contrib.Command.Executor
 
   alias Alto.Contrib.External.Process, as: ExternalProcess
+  alias Alto.Contrib.Command.OutputRetention
 
   @impl true
-  def prepare(invocation, _opts) do
-    {:ok, invocation, %{backend: :unsandboxed, isolation: :none}}
+  def prepare(invocation, opts) do
+    with {:ok, invocation, details} <- OutputRetention.prepare(invocation, opts),
+         do: {:ok, invocation, Map.merge(%{backend: :unsandboxed, isolation: :none}, details)}
   end
 
   @impl true
@@ -22,28 +24,34 @@ defmodule Alto.Contrib.Command.Executors.Unsandboxed do
   @impl true
   def execute(invocation) do
     started_ms = System.monotonic_time(:millisecond)
+    retention = OutputRetention.open(Map.get(invocation, :output_retention))
 
-    case ExternalProcess.open(invocation.executable, invocation.args,
-           cwd: invocation.cwd,
-           startup_timeout: min(invocation.timeout_ms, 30_000),
-           stdin: :null,
-           stderr_to_stdout: true
-         ) do
-      {:ok, process} ->
-        try do
-          collect(
-            ExternalProcess.port(process),
-            started_ms,
-            started_ms + invocation.timeout_ms,
-            invocation.max_output_bytes,
-            %{bytes: <<>>, seen: 0, pending: <<>>}
-          )
-        after
-          ExternalProcess.close(process)
-        end
+    try do
+      case ExternalProcess.open(invocation.executable, invocation.args,
+             cwd: invocation.cwd,
+             startup_timeout: min(invocation.timeout_ms, 30_000),
+             stdin: :null,
+             stderr_to_stdout: true
+           ) do
+        {:ok, process} ->
+          try do
+            collect(
+              ExternalProcess.port(process),
+              started_ms,
+              started_ms + invocation.timeout_ms,
+              invocation.max_output_bytes,
+              %{bytes: <<>>, seen: 0, pending: <<>>, retention: retention}
+            )
+          after
+            ExternalProcess.close(process)
+          end
 
-      {:error, reason} ->
-        {:error, {:command_start_failed, reason}}
+        {:error, reason} ->
+          OutputRetention.discard(retention)
+          {:error, {:command_start_failed, reason}}
+      end
+    after
+      OutputRetention.close(retention)
     end
   end
 
@@ -79,7 +87,8 @@ defmodule Alto.Contrib.Command.Executors.Unsandboxed do
       capture
       | bytes: bytes,
         seen: capture.seen + byte_size(data),
-        pending: update_utf8(capture.pending, data)
+        pending: update_utf8(capture.pending, data),
+        retention: OutputRetention.append(capture.retention, data)
     }
   end
 
@@ -104,6 +113,8 @@ defmodule Alto.Contrib.Command.Executors.Unsandboxed do
       timed_out: termination == :timeout,
       duration_ms: max(System.monotonic_time(:millisecond) - started_ms, 0)
     }
+
+    base = Map.merge(base, OutputRetention.finish(capture.retention, truncated?, capture.seen))
 
     if capture.pending != :invalid and String.valid?(output) do
       Map.put(base, :output, output)
