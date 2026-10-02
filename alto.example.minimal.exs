@@ -47,7 +47,7 @@ Alto.default_config()
     Alto.Contrib.Tools.ReadFile,
     Alto.Contrib.Tools.EditFile,
     Alto.Contrib.Tools.WriteFile,
-    {Alto.Contrib.Tools.RunCommand, executor: Alto.Contrib.Command.Executors.Unsandboxed}
+    {Alto.Contrib.Tools.RunCommand, executor: {Alto.Contrib.Command.Executors.Unsandboxed, []}}
   ],
   approval: &Alto.Contrib.Approval.interactive/2,
   prompt: &Alto.Contrib.Prompts.Coding.build/1,

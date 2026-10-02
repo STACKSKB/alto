@@ -49,7 +49,7 @@ Alto.default_config()
     Alto.Contrib.Tools.SearchFiles,
     Alto.Contrib.Tools.GitInspect
   ],
-  approval: :deny,
+  approval: {:deny, :read_only_profile},
   prompt: fn context ->
     Alto.Prompt.render([
       Alto.Contrib.Prompts.Coding.build(context),
