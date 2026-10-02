@@ -12,7 +12,8 @@ defmodule Alto.SessionWriterTest do
     dir: dir,
     opts: opts
   } do
-    {:ok, id} = Session.create("concurrency", %{}, opts)
+    {id, pid, ref} = owned_writer(dir, "concurrency")
+    assert :ok = Session.append(id, Session.started_record(%{task: "concurrency"}), opts)
 
     results =
       Task.async_stream(
@@ -28,8 +29,6 @@ defmodule Alto.SessionWriterTest do
     assert {:ok, records} = Session.read(id, opts)
     assert Enum.sort(Enum.map(tl(records), & &1["n"])) == Enum.to_list(1..100)
     assert :ok = Session.with_lock(id, opts, fn -> :ok end)
-    assert [{pid, _}] = Registry.lookup(Alto.Session.WriterRegistry, {Path.expand(dir), id})
-    ref = Process.monitor(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2500
   end
 
@@ -37,9 +36,8 @@ defmodule Alto.SessionWriterTest do
     dir: dir,
     opts: opts
   } do
-    {:ok, id} = Session.create("death", %{}, opts)
-    [{pid, _}] = Registry.lookup(Alto.Session.WriterRegistry, {Path.expand(dir), id})
-    ref = Process.monitor(pid)
+    {id, pid, ref} = owned_writer(dir, "death")
+    assert :ok = Session.append(id, Session.started_record(%{task: "death"}), opts)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
     assert :ok = Session.append(id, %{"v" => 1, "type" => "after_death"}, opts)
@@ -52,5 +50,13 @@ defmodule Alto.SessionWriterTest do
     File.rmdir!(Path.join(dir, "sess-abc.jsonl"))
     assert :ok = Session.append("sess-abc", %{"v" => 1, "type" => "recovered"}, opts)
     assert {:ok, [%{"type" => "recovered"}]} = Session.read("sess-abc", opts)
+  end
+
+  defp owned_writer(dir, suffix) do
+    # The shared pool can legitimately fall back to direct writes at capacity.
+    # Own the participant whose expiry/death this test needs to observe.
+    id = "sess-" <> suffix
+    pid = start_supervised!({Alto.Session.Writer, {Path.expand(dir), id}})
+    {id, pid, Process.monitor(pid)}
   end
 end
