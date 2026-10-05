@@ -34,12 +34,22 @@ defmodule Alto.TUI.Transcript do
             %{}
         end
 
+      missing = entries |> Enum.reject(&Map.has_key?(previous, &1)) |> Enum.uniq()
+
+      markdown =
+        missing
+        |> Enum.filter(
+          &(&1[:kind] in [:assistant, :codex_assistant, :reasoning] and is_binary(&1[:text]))
+        )
+        |> Enum.map(& &1.text)
+        |> Alto.TUI.Markdown.layouts(width)
+
       build = fn entry ->
         plan =
           cond do
             entry[:kind] in [:assistant, :codex_assistant, :reasoning] and
                 is_binary(entry[:text]) ->
-              {:markdown, Alto.TUI.Markdown.layout(entry.text, width)}
+              {:markdown, Map.fetch!(markdown, entry.text)}
 
             to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
                 is_binary(entry[:text]) ->
@@ -52,8 +62,6 @@ defmodule Alto.TUI.Transcript do
 
         {entry, plan}
       end
-
-      missing = entries |> Enum.reject(&Map.has_key?(previous, &1)) |> Enum.uniq()
 
       built =
         if length(missing) < 32 do

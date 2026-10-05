@@ -336,7 +336,7 @@ defmodule Alto.TUI.Backends.Codex do
     task = State.selected_task(state)
     task_id = task && task["id"]
     thread_id = task && task["conversation_id"]
-    entries = Map.get(state.entries, task_id, [])
+    entries = State.task_entries(state, task_id)
 
     if selected?(state) and is_binary(thread_id) and entries == [] and
          not MapSet.member?(data(state).history_loading, task_id) and is_pid(data(state).client) do
@@ -616,7 +616,7 @@ defmodule Alto.TUI.Backends.Codex do
   defp apply_codex_run_event(state, run, method, %{"delta" => delta} = params)
        when method in ["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"] do
     key = {:codex_reasoning, run.turn_id, params["itemId"]}
-    entries = Map.get(state.entries, run.task_id, [])
+    entries = State.task_entries(state, run.task_id)
     previous = Enum.find(entries, &(&1[:entry_key] == key)) || %{}
     parts = Map.get(previous, :reasoning_parts, %{summary: %{}, raw: %{}})
     type = if method == "item/reasoning/summaryTextDelta", do: :summary, else: :raw

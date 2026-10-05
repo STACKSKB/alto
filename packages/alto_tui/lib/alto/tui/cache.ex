@@ -26,6 +26,14 @@ defmodule Alto.TUI.Cache do
     end)
   end
 
+  @doc "Peek at a derived value without changing its ownership or LRU order."
+  def peek(namespace, id) do
+    case stats().items[{namespace, id}] do
+      %{value: value} -> {:ok, value}
+      nil -> :error
+    end
+  end
+
   def fetch(namespace, id, count_limit, build) do
     key = {namespace, id}
     cache = stats()

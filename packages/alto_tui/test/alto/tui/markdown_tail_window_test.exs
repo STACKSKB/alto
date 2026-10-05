@@ -52,4 +52,32 @@ defmodule Alto.TUI.MarkdownTailWindowTest do
       end
     end
   end
+
+  test "batched shared metrics preserve native rows and styles for plain, rich and Unicode blocks" do
+    sources = [
+      "## Answer 1",
+      "Simple text",
+      "1. list",
+      "- list",
+      "---",
+      "## **Rich** 猫",
+      "猫 é 👍",
+      "```elixir\n  :ok  \n\n  :next\n\n```",
+      "```text\n   \n\n```",
+      "```text\n\n```",
+      "```elixir\n\t:ok\n```",
+      "## Answer 2\n\nShared **text**\n\n```elixir\n:ok\n```",
+      "## Answer 3\n\nShared **text**\n\n```elixir\n:ok\n```"
+    ]
+
+    for width <- [6, 84] do
+      plans = Markdown.layouts(sources, width)
+
+      for source <- sources do
+        full = Markdown.render(source, width).lines
+        assert plans[source].rows == length(full)
+        assert Markdown.window(plans[source], 0, 100) == full
+      end
+    end
+  end
 end

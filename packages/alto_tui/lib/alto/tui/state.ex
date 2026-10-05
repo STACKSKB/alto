@@ -430,7 +430,17 @@ defmodule Alto.TUI.State do
 
   @doc "Entries displayed for the selected task or scratch composer."
   def current_entries(%__MODULE__{} = state),
-    do: Map.get(state.entries, state.selected_task_id || :scratch, [])
+    do: task_entries(state, state.selected_task_id)
+
+  @doc "Materialize a task's displayed history, including its separately owned live tail."
+  def task_entries(%__MODULE__{} = state, task_id) do
+    key = task_id || :scratch
+
+    case Map.get(state.stream_tails, key) do
+      %{prefix: prefix, entry: entry} -> prefix ++ [entry]
+      nil -> Map.get(state.entries, key, [])
+    end
+  end
 
   @doc "Transcript plus transient pending input, kept outside the streamed conversation."
   def visible_entries(%__MODULE__{} = state) do
@@ -483,13 +493,13 @@ defmodule Alto.TUI.State do
 
   def append_entry(%__MODULE__{} = state, task_id, entry) do
     key = task_id || :scratch
-    put_entries(state, key, Map.get(state.entries, key, []) ++ [entry])
+    put_entries(state, key, task_entries(state, key) ++ [entry])
   end
 
   def upsert_entry(%__MODULE__{} = state, task_id, key, entry) do
     task_key = task_id || :scratch
     tagged = Map.put(entry, :entry_key, key)
-    entries = Map.get(state.entries, task_key, [])
+    entries = task_entries(state, task_key)
 
     entries =
       if Enum.any?(entries, &(&1[:entry_key] == key)) do
@@ -510,7 +520,7 @@ defmodule Alto.TUI.State do
           tail
 
         _ ->
-          entries = Map.get(state.entries, key, [])
+          entries = task_entries(state, key)
 
           {entry, prefix} =
             case List.pop_at(entries, -1) do
@@ -521,19 +531,22 @@ defmodule Alto.TUI.State do
           %{
             kind: kind,
             entry: entry,
+            truncated?: false,
             prefix: prefix,
             count: length(prefix),
             bytes: Enum.reduce(prefix, 0, &(:erlang.external_size(&1) + &2))
           }
       end
 
-    entry = %{tail.entry | text: bounded_value(tail.entry.text <> text)}
+    combined = if tail.truncated?, do: tail.entry.text, else: tail.entry.text <> text
+    entry = %{tail.entry | text: bounded_value(combined)}
+    tail = %{tail | truncated?: tail.truncated? or byte_size(combined) > 64_000}
     tail = trim_stream_prefix(tail, :erlang.external_size(entry))
     tail = %{tail | entry: entry}
 
     %{
       state
-      | entries: Map.put(state.entries, key, tail.prefix ++ [entry]),
+      | entries: Map.put(state.entries, key, tail.prefix),
         entry_bytes: Map.put(state.entry_bytes, key, tail.bytes + :erlang.external_size(entry)),
         stream_tails: Map.put(state.stream_tails, key, tail)
     }

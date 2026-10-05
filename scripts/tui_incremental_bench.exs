@@ -12,12 +12,19 @@ for count <- [100, 1000, 2000] do
 
   state = State.put_entries(state, nil, entries)
 
+  {init_us, state} = :timer.tc(fn -> State.append_assistant_delta(state, nil, "text ") end)
+
   {us, _} =
     :timer.tc(fn ->
       Enum.reduce(1..1000, state, fn _, s -> State.append_assistant_delta(s, nil, "text ") end)
     end)
 
-  IO.inspect(%{history_entries: count, streaming_deltas: 1000, state_update_total_ms: us / 1000})
+  IO.inspect(%{
+    history_entries: count,
+    streaming_deltas: 1000,
+    stream_initialization_ms: init_us / 1000,
+    state_update_total_ms: us / 1000
+  })
 end
 
 for id <- System.argv() do

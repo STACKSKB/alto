@@ -78,12 +78,70 @@ defmodule Alto.TUI.Markdown do
     end)
   end
 
-  defp layout_blocks(blocks, width) do
+  @doc "Build cold layouts together so shared native block metrics are measured only once."
+  def layouts(sources, width) do
+    width = max(width, 1)
+
+    parsed =
+      Map.new(Enum.uniq(sources), fn source ->
+        {source, source |> String.split("\n") |> blocks([]) |> expand_tables()}
+      end)
+
+    frequencies = parsed |> Map.values() |> List.flatten() |> Enum.frequencies()
+    unique = Map.keys(frequencies)
+
+    {known, missing} =
+      Enum.reduce(unique, {%{}, []}, fn block, {known, missing} ->
+        case Alto.TUI.Cache.peek({__MODULE__, :block_metrics}, {block, width}) do
+          {:ok, rows} -> {Map.put(known, block, rows), missing}
+          :error -> {known, [block | missing]}
+        end
+      end)
+
+    build = fn block -> {block, block_plain(block, width)} end
+
+    built =
+      if length(missing) < 32 do
+        Enum.map(missing, build)
+      else
+        missing
+        |> Enum.chunk_every(16)
+        |> Task.async_stream(&Enum.map(&1, build),
+          max_concurrency: 4,
+          ordered: true,
+          timeout: 30_000
+        )
+        |> Enum.flat_map(fn {:ok, values} -> values end)
+      end
+
+    Enum.each(built, fn {block, rows} ->
+      if frequencies[block] > 1 do
+        Alto.TUI.Cache.fetch({__MODULE__, :block_metrics}, {block, width}, 256, fn -> rows end)
+      end
+    end)
+
+    metrics = Map.merge(known, Map.new(built))
+
+    Map.new(parsed, fn {source, blocks} ->
+      # Transcript.index owns these plans. Retaining every whole layout again
+      # would enlarge the LRU working set on every warm viewport lookup.
+      {source, layout_parts(blocks, width, metrics)}
+    end)
+  end
+
+  defp layout_blocks(blocks, width), do: layout_parts(expand_tables(blocks), width, %{})
+
+  defp layout_parts(blocks, width, metrics) do
     {parts, rows} =
       blocks
-      |> expand_tables()
       |> Enum.map_reduce(0, fn block, offset ->
-        plain = block_plain(block, width)
+        plain =
+          Map.get_lazy(metrics, block, fn ->
+            Alto.TUI.Cache.fetch({__MODULE__, :block_metrics}, {block, width}, 256, fn ->
+              block_plain(block, width)
+            end)
+          end)
+
         count = length(plain)
         {{block, offset, count, plain}, offset + count + 1}
       end)
@@ -173,7 +231,35 @@ defmodule Alto.TUI.Markdown do
   defp native_plain({_kind, ""}, _width), do: [""]
   defp native_plain({:code, _, ""}, _width), do: [""]
 
-  defp native_plain(block, width) do
+  defp native_plain({:code, _, _} = block, width) do
+    lines = block |> content_source() |> String.split("\n")
+
+    if Enum.all?(lines, &(byte_size(&1) <= width and Regex.match?(~r/\A[\x20-\x7E]*\z/, &1))) do
+      # CodeBlock's native wrapping retains indentation. Printable ASCII that
+      # fits already has exact cell widths, so metrics need no syntax setup.
+      lines
+      |> Enum.reverse()
+      |> Enum.drop_while(&(String.trim(&1) == ""))
+      |> Enum.reverse()
+      |> Enum.map(&String.trim_trailing/1)
+    else
+      measure_native_plain(block, width)
+    end
+  end
+
+  defp native_plain({:markdown, source} = block, width) do
+    # Plain printable ASCII that fits one row has the same native layout, and
+    # needs no scratch terminal or buffer export. Rich/wrapped/Unicode content
+    # continues through the native renderer.
+    if byte_size(source) <= width and
+         Regex.match?(~r/\A[A-Za-z][A-Za-z0-9 ,?!:;()\-]*\z/, source),
+       do: [String.trim(source)],
+       else: measure_native_plain(block, width)
+  end
+
+  defp native_plain(block, width), do: measure_native_plain(block, width)
+
+  defp measure_native_plain(block, width) do
     marker = marker(block)
     source = content_source(block) <> "\n\n" <> marker
     estimate = length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4

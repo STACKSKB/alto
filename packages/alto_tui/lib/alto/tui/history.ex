@@ -84,7 +84,7 @@ defmodule Alto.TUI.History do
         # Live input/events take precedence over a snapshot loaded before them.
         case kind do
           :entries ->
-            State.put_entries(state, id, value ++ Map.get(state.entries, id, []))
+            State.put_entries(state, id, value ++ State.task_entries(state, id))
 
           :usage ->
             %{state | usage: Map.update(state.usage, id, value, &Alto.Usage.merge(value, &1))}
