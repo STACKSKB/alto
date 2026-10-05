@@ -48,8 +48,8 @@ diagnostics: diagnostics}` preserves accounting on direct adapter errors. The
 runner keeps the original error reason and exposes bounded `provider_attempts`
 in the result and persisted provider diagnostics. Diagnostics include received and
 accepted wire bytes, parsed event count, content/reasoning byte counts when the
-adapter supplies them, byte arrival and last SSE-event times relative to request start, callback
-latency and configured limits. They do not retain partial response text. No retry
+adapter supplies them, byte arrival and last SSE-event times relative to request
+start, callback latency and configured limits. They do not retain partial response text. No retry
 occurs after text or reasoning delivery. Unavailable usage remains `nil` in the
 attempt evidence; aggregate zeroes cannot establish zero consumption.
 

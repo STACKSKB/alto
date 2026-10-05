@@ -1,0 +1,154 @@
+{
+  "date": "2026-10-05",
+  "baseline_revision": "700fb3a09430f4f0de83e123ceb9ab89e2743a6c",
+  "implementation_tip": "eadc5a2",
+  "implementation_commits": [
+    "4150d8f",
+    "6906079",
+    "a1359a8",
+    "8bab17e",
+    "9a24ef8",
+    "221c98c",
+    "b74933b",
+    "eadc5a2"
+  ],
+  "environment": {
+    "platform": "Linux",
+    "elixir": "1.18.3",
+    "otp": "27",
+    "schedulers_online": 16,
+    "dirty_cpu_schedulers": 16
+  },
+  "external_model_requests": 0,
+  "original_audit_evidence_modified": false,
+  "original_saved_sessions_modified": false,
+  "validation": {
+    "core_tests": 417,
+    "contrib_tests": 814,
+    "tui_tests": 240,
+    "failures": 0,
+    "format_and_diff_checks": "passed",
+    "workload_exit_codes": {
+      "tool_batches": 0,
+      "storage_publication": 0,
+      "redundant_storage": 0,
+      "core_rss": 0,
+      "tui_incremental": 0,
+      "tui_scroll": 0,
+      "tui_viewport": 0,
+      "reproducible_beam_append_probe": 0
+    }
+  },
+  "tool_batches": {
+    "calls_per_sample": 8,
+    "fake_io_ms_per_call": 20,
+    "serial_samples_ms": [276.19, 193.21, 192.95],
+    "serial_mean_ms": 220.78,
+    "parallel_samples_ms": [49.06, 48.95, 49.22],
+    "parallel_mean_ms": 49.08
+  },
+  "storage": {
+    "messages": 400,
+    "transcript_bytes": 760400,
+    "baseline_method": "Load unchanged pre-batch AtomicFile and Conversation.Store source in a disposable VM; run the separated publication workload",
+    "before": {
+      "first_publication_ms": 1415.933,
+      "unchanged_mean_ms": 48.1153,
+      "unchanged_samples": 10,
+      "appended_tail_ms": 95.114
+    },
+    "after": {
+      "durable_append_mean_ms": 0.0595,
+      "durable_append_samples": 50,
+      "first_publication_ms": 102.807,
+      "unchanged_mean_ms": 40.4728,
+      "unchanged_samples": 10,
+      "appended_tail_ms": 139.588,
+      "head_fetch_mean_ms": 34.19715,
+      "resume_mean_ms": 55.16855
+    }
+  },
+  "tui_incremental": [
+    {"history_entries": 100, "initialization_ms": 0.049, "deltas": 1000, "steady_updates_ms": 3.915},
+    {"history_entries": 1000, "initialization_ms": 0.117, "deltas": 1000, "steady_updates_ms": 3.325},
+    {"history_entries": 2000, "initialization_ms": 0.282, "deltas": 1000, "steady_updates_ms": 3.523}
+  ],
+  "saved_projection": {
+    "events": 2000,
+    "cold_ms": 47.746,
+    "unchanged_ms": 3.085,
+    "appended_ms": 4.243
+  },
+  "tui_scroll": {
+    "assistant_entries": 100,
+    "before": {
+      "static_index_samples_ms": [413.319, 0.002, 0.0, 0.0, 0.0],
+      "changed_tail_samples_ms": [0.739, 0.561, 0.592, 0.583, 0.579],
+      "code_scroll_samples_ms": [97.691, 0.411, 0.317, 0.539, 0.557],
+      "twenty_frames_samples_ms": [31.392, 24.823, 25.471, 24.482, 26.447]
+    },
+    "after": {
+      "static_index_samples_ms": [37.448, 0.002, 0.0, 0.0, 0.0],
+      "changed_tail_samples_ms": [0.648, 0.298, 1.153, 0.293, 0.291],
+      "code_scroll_samples_ms": [98.871, 0.41, 0.294, 0.301, 0.305],
+      "twenty_frames_samples_ms": [31.098, 24.628, 26.128, 26.838, 25.192]
+    }
+  },
+  "beam_append_probe": {
+    "delta_bytes": 4,
+    "owned_binary": [
+      {"deltas": 4096, "samples_us": [209, 189, 154, 129, 128], "bytes": 16384, "backing_bytes": 16888},
+      {"deltas": 8192, "samples_us": [386, 293, 286, 276, 306], "bytes": 32768, "backing_bytes": 33784},
+      {"deltas": 16384, "samples_us": [660, 564, 611, 615, 603], "bytes": 65536, "backing_bytes": 67576}
+    ],
+    "bounded_tui": [
+      {"deltas": 4096, "samples_us": [19002, 15584, 15214, 15134, 14884], "bytes": 16384, "backing_bytes": 16384},
+      {"deltas": 8192, "samples_us": [33643, 34601, 33868, 33694, 39073], "bytes": 32768, "backing_bytes": 32768}
+    ]
+  },
+  "redundant_storage": {
+    "event_legacy_bytes": 76688,
+    "event_current_bytes": 32987,
+    "children": 8,
+    "unique_checkpoint_bytes": 262200,
+    "serialized_checkpoint_occurrences": 8,
+    "update_records": 16,
+    "log_bytes": 357607,
+    "context_bytes": 2100028,
+    "referenced_packet_bytes": 2345,
+    "legacy_inline_state_bytes": 2101479,
+    "exact_restore": true
+  },
+  "viewport": {
+    "entries": 200,
+    "total_rows": 20790,
+    "visible_rows": 40,
+    "viewport_serialized_bytes": 13559,
+    "visible_serialized_bytes": 13650
+  },
+  "rss": {
+    "boot_rss_mib": 115.68,
+    "peak_rss_mib": 153.32,
+    "retained_events_after_gc_binary_mib": 8.5,
+    "cleared_caches_after_gc_binary_mib": 0.95,
+    "worker_exited_rss_mib": 131.92
+  },
+  "cli": {
+    "environment": "prod",
+    "core_dependency_force_compiled": true,
+    "packaged_core_modules_verified": 88,
+    "packaged_contrib_modules_verified": 105,
+    "verification": "BEAM code fingerprints and application manifests match the active build; packaging strips debug chunks",
+    "root_help_exit_code": 0,
+    "sha256": "06711569d1377c33086ddcc777da942fd12ad027d5676caee843dda4b59fb4b2"
+  },
+  "limits_and_interpretation": [
+    "Default cumulative stream limit is 16000000 bytes; per-event limit remains 1000000 bytes",
+    "Observed failed-attempt usage is summed; unavailable usage remains nil in attempt evidence",
+    "Synchronous observers still consume provider deadlines; buffered delivery is opt-in and requires inspection of drain status",
+    "Cold publication and cold index measurements are single samples; appended-tail and warm frame timings show no established improvement",
+    "Owned binary append timings and backing sizes do not prove that every TUI append avoids copying",
+    "The original live 240-second timeout remains unattributed without a new live trace; no external model was called to investigate it",
+    "Serialized viewport size is not an RSS measurement"
+  ]
+}
