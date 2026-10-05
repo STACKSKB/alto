@@ -18,6 +18,45 @@ Compatibility tests exercise every two-chunk split of multibyte/CRLF input,
 comments, multiline data, unfinished frames, raw bodies and per-frame limits.
 Provider and streaming retry tests cover the shared HTTP integration.
 
+## Stream budgets and partial responses
+
+OpenAI-compatible and Anthropic transports default to `max_stream_bytes: 16_000_000`
+for the entire wire response and `max_event_bytes: 1_000_000` for any one SSE frame
+(or raw JSON response). Both include envelope overhead. A long reasoning/tool
+response can exceed 2 MB even when each frame is small. Configure the cumulative
+budget deliberately for the selected model and output reservation:
+
+```elixir
+{Alto.Contrib.Providers.OpenAICompatible,
+ model: "configured-model",
+ max_stream_bytes: 16_000_000,
+ max_event_bytes: 1_000_000,
+ timeout: 240_000,
+ idle_timeout: 60_000}
+```
+
+The legacy `max_response_bytes` option remains a cumulative-stream alias. An
+explicit `max_stream_bytes` takes precedence. Model catalogs keep their independent
+8 MB `max_models_response_bytes` budget. No limit may be infinity. Raising the
+wire budget does not raise transcript, retained-event, context or output-token
+budgets; those limits remain independent.
+
+An overflowing chunk is rejected before decoding or delivery. Earlier deltas may
+already have been displayed; they are partial output, not a completed assistant
+message. `%Alto.Provider.Failure{reason: reason, usage: usage, metadata: metadata,
+diagnostics: diagnostics}` preserves accounting on direct adapter errors. The
+runner keeps the original error reason and exposes bounded `provider_attempts`
+in the result and persisted provider diagnostics. Diagnostics include received and
+accepted wire bytes, parsed event count, content/reasoning byte counts when the
+adapter supplies them, byte arrival times relative to request start, callback
+latency and configured limits. They do not retain partial response text. No retry
+occurs after text or reasoning delivery. Unavailable usage remains `nil` in the
+attempt evidence; aggregate zeroes cannot establish zero consumption.
+
+`finish_reason` and `terminal_status` describe provider termination. Reasoning-only
+output fails separately with `:reasoning_only_model_response`; reasoning is saved
+for inspection and is never automatically used as the final answer.
+
 ## Persistence-library assessment
 
 SQLite remains a separate storage migration, not part of the parser replacement.

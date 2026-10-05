@@ -176,6 +176,7 @@ defmodule Alto.Runner.Execution.Model do
         diagnostic(caps, :provider_attempt_started, %{step: step, attempt: attempt})
         started = System.monotonic_time(:millisecond)
 
+        callbacks = :atomics.new(2, [])
         progress = :ets.new(__MODULE__, [:set, :public])
         :ets.insert(progress, {:snapshot, %{usage: nil, metadata: %{}, diagnostics: %{}}})
 
@@ -186,7 +187,15 @@ defmodule Alto.Runner.Execution.Model do
 
           event ->
             :atomics.put(delivered, 1, 1)
-            sink.(event)
+            began = System.monotonic_time(:microsecond)
+            :atomics.put(callbacks, 2, began)
+
+            try do
+              sink.(event)
+            after
+              :atomics.add(callbacks, 1, System.monotonic_time(:microsecond) - began)
+              :atomics.put(callbacks, 2, 0)
+            end
         end
 
         {outcome, evidence} =
@@ -216,6 +225,22 @@ defmodule Alto.Runner.Execution.Model do
           after
             :ets.delete(progress)
           end
+
+        active = :atomics.get(callbacks, 2)
+
+        evidence =
+          Map.update!(
+            evidence,
+            :diagnostics,
+            &Map.merge(&1, %{
+              callback_ms: :atomics.get(callbacks, 1) / 1000,
+              active_callback_ms:
+                if(active == 0,
+                  do: 0,
+                  else: (System.monotonic_time(:microsecond) - active) / 1000
+                )
+            })
+          )
 
         evidence =
           Map.merge(evidence, %{

@@ -9,7 +9,9 @@ defmodule Alto.Contrib.Providers.HTTPOptions do
       # Optional silence deadline; timeout remains the total request deadline.
       idle_timeout: [type: :pos_integer],
       max_event_bytes: [type: :pos_integer, default: 1_000_000],
-      max_response_bytes: [type: :pos_integer, default: 2_000_000],
+      # Legacy alias; an explicit max_stream_bytes takes precedence.
+      max_response_bytes: [type: :pos_integer],
+      max_stream_bytes: [type: :pos_integer, default: 16_000_000],
       supports_images: [type: :boolean, default: false],
       supports_files: [type: :boolean, default: false],
       input_modalities: [type: {:list, {:in, ~w(text image audio video file)}}]
@@ -27,7 +29,23 @@ defmodule Alto.Contrib.Providers.HTTPOptions do
 
   def validate(opts, schema) do
     with {:ok, values} <- NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema) do
-      {:ok, Map.new(values)}
+      config = Map.new(values)
+
+      config =
+        if Map.has_key?(config, :max_stream_bytes) do
+          limit =
+            Keyword.get(
+              opts,
+              :max_stream_bytes,
+              Map.get(config, :max_response_bytes, config.max_stream_bytes)
+            )
+
+          config |> Map.put(:max_stream_bytes, limit) |> Map.put(:max_response_bytes, limit)
+        else
+          config
+        end
+
+      {:ok, config}
     end
   end
 

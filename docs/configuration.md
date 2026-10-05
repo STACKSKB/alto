@@ -284,6 +284,9 @@ a custom loop. Context reduction is opt-in and configured separately through
 Timeouts are milliseconds. HTTP providers also accept `timeout` for a total
 request deadline and `idle_timeout` for stream silence. Set `provider_timeout`
 above the HTTP deadline if the transport should report its own timeout first.
+HTTP streaming also has independent provider options `max_stream_bytes` (16 MB
+cumulative wire budget) and `max_event_bytes` (1 MB per frame). These differ from
+the runner retained-event limit of the same name. See [stream budgets](sse-adapter.md#stream-budgets-and-partial-responses).
 Config changes apply when a run starts or resumes.
 
 The library defaults to 32 model steps, 256 shared model requests, and a 128 MB

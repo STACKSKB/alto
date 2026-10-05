@@ -143,4 +143,36 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     assert {:error, %Alto.Provider.Failure{usage: nil}} =
              run(OpenAICompatible, ["data: invalid\n\n"], evidence: true)
   end
+
+  test "default stream budget accepts over 2 MB while legacy and event bounds remain enforced" do
+    chunk =
+      "data: " <>
+        JSON.encode!(%{
+          "choices" => [%{"delta" => %{"content" => String.duplicate("x", 100_000)}}]
+        }) <> "\n\n"
+
+    chunks = List.duplicate(chunk, 21) ++ ["data: [DONE]\n\n"]
+    assert {:ok, result} = run(OpenAICompatible, chunks)
+    assert byte_size(result.message) == 2_100_000
+    assert result.diagnostics.response_bytes > 2_000_000
+    assert result.diagnostics.events == 22
+
+    assert {:error,
+            %Alto.Provider.Failure{
+              reason: {:provider_response_too_large, 2_000_000},
+              diagnostics: diagnostics
+            }} = run(OpenAICompatible, chunks, evidence: true, max_response_bytes: 2_000_000)
+
+    assert diagnostics.content_bytes == 1_900_000
+    assert diagnostics.accepted_bytes < 2_000_000
+    assert diagnostics.response_bytes > 2_000_000
+    assert diagnostics.max_stream_bytes == 2_000_000
+
+    assert {:error, %Alto.Provider.Failure{reason: {:sse_event_too_large, 100}}} =
+             run(OpenAICompatible, [chunk],
+               evidence: true,
+               max_stream_bytes: 16_000_000,
+               max_event_bytes: 100
+             )
+  end
 end

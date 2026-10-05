@@ -4,6 +4,8 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   alias Alto.Event
 
   defstruct content: [],
+            content_bytes: 0,
+            reasoning_bytes: 0,
             media: [],
             reasoning: [],
             reasoning_fields: %{},
@@ -105,6 +107,9 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   def accounting(state),
     do: %{
       usage: state.usage,
+      diagnostics:
+        %{content_bytes: state.content_bytes, reasoning_bytes: state.reasoning_bytes}
+        |> Map.reject(fn {_, v} -> v == 0 end),
       metadata:
         Map.put(state.metadata, :finish_reason, state.finish_reason)
         |> Map.reject(fn {_, value} -> is_nil(value) end)
@@ -194,7 +199,12 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
 
   defp consume_content(state, text, sink) when is_binary(text) and text != "" do
     sink.(Event.live(:model_delta, %{text: text}))
-    %{state | content: [text | state.content]}
+
+    %{
+      state
+      | content: [text | state.content],
+        content_bytes: state.content_bytes + byte_size(text)
+    }
   end
 
   defp consume_content(state, parts, sink) when is_list(parts) do
@@ -245,6 +255,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
     %{
       state
       | reasoning: if(text == "", do: state.reasoning, else: [text | state.reasoning]),
+        reasoning_bytes: state.reasoning_bytes + byte_size(text),
         reasoning_fields: fields,
         reasoning_details: details,
         reasoning_order: order
