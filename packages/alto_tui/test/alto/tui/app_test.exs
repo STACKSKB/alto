@@ -2592,4 +2592,31 @@ defmodule Alto.TUI.AppTest do
     assert state.stream_frame == nil
     assert hd(State.current_entries(state)).text == String.duplicate("x", 257)
   end
+
+  test "terminal results reconcile failed attempt usage with already displayed completions",
+       context do
+    {:ok, state, task} = App.ensure_task(state!(context), "usage task")
+    ref = make_ref()
+    run = %{task_id: task["id"], ref: ref, phase: "working"}
+    state = %{state | runs: %{"usage-run" => run}}
+    state = State.put_usage(state, task["id"], Alto.Usage.normalize(%{input_tokens: 7}))
+
+    event =
+      Alto.Event.durable(:model_completed, %{
+        message: "one",
+        usage: %{input_tokens: 10, output_tokens: 2}
+      })
+
+    {:noreply, state} = App.handle_info({:alto_tui_event, "usage-run", event}, state)
+
+    result = %Alto.Runner.Result{
+      status: :error,
+      reason: :synthetic,
+      usage: Alto.Usage.normalize(%{input_tokens: 30, output_tokens: 4, requests: 2})
+    }
+
+    {:noreply, state} = App.handle_info({:alto_runner_result, ref, result}, state)
+    assert state.usage[task["id"]].input_tokens == 37
+    assert state.usage[task["id"]].requests == 3
+  end
 end

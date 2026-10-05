@@ -143,4 +143,46 @@ defmodule Alto.TUI.SavedSessionTest do
     File.rm!(cache)
     assert {:ok, ^next} = SavedSession.load(id, opts)
   end
+
+  test "attempt diagnostics account failed and reduction usage without double counting completion events",
+       %{id: id, opts: opts, cache: cache} do
+    for usage <- [
+          %{input_tokens: 10, output_tokens: 2},
+          %{input_tokens: 20, output_tokens: 4},
+          nil
+        ] do
+      assert :ok =
+               Session.append(
+                 id,
+                 Session.diagnostic_record("run-a", :provider_attempt_finished, %{usage: usage}),
+                 opts
+               )
+    end
+
+    assert :ok = usage(id, opts, 20)
+    assert {:ok, first} = SavedSession.load(id, opts)
+    assert first.usage.input_tokens == 30
+    assert first.usage.output_tokens == 6
+    assert first.usage.requests == 2
+    assert {:ok, ^first} = SavedSession.load(id, opts)
+    File.rm!(cache)
+    assert {:ok, ^first} = SavedSession.load(id, opts)
+  end
+
+  test "legacy attempt diagnostics without accounting preserve completion usage", %{
+    id: id,
+    opts: opts
+  } do
+    assert :ok =
+             Session.append(
+               id,
+               Session.diagnostic_record("run-a", :provider_attempt_finished, %{outcome: :ok}),
+               opts
+             )
+
+    assert :ok = usage(id, opts, 10)
+    assert {:ok, projection} = SavedSession.load(id, opts)
+    assert projection.usage.input_tokens == 10
+    assert projection.usage.requests == 1
+  end
 end

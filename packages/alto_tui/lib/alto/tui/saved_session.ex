@@ -43,11 +43,12 @@ defmodule Alto.TUI.SavedSession do
 
   defp empty,
     do: %{
-      "v" => 1,
+      "v" => 2,
       "offset" => 0,
       "digest" => digest(""),
       "records" => 0,
       "usage" => stringify(Usage.new()),
+      "accounting_runs" => %{},
       "runs" => %{},
       "truncated" => false
     }
@@ -56,10 +57,11 @@ defmodule Alto.TUI.SavedSession do
     with {:ok, bytes} <- Alto.BoundedFile.read(path, 4_000_000),
          {:ok,
           %{
-            "v" => 1,
+            "v" => 2,
             "offset" => offset,
             "records" => records,
             "usage" => usage,
+            "accounting_runs" => accounting_runs,
             "runs" => runs,
             "truncated" => truncated,
             "digest" => digest
@@ -69,7 +71,11 @@ defmodule Alto.TUI.SavedSession do
              records in 0..20_000,
          true <-
            is_boolean(truncated) and is_binary(digest) and is_map(usage) and is_map(runs) and
-             map_size(runs) <= 256,
+             map_size(runs) <= 256 and is_map(accounting_runs) and
+             map_size(accounting_runs) <= 256 and
+             Enum.all?(accounting_runs, fn {id, value} ->
+               is_binary(id) and byte_size(id) <= 128 and value == true
+             end),
          true <-
            Enum.all?(runs, fn {id, run} ->
              is_binary(id) and is_map(run) and is_integer(run["order"]) and
@@ -104,11 +110,48 @@ defmodule Alto.TUI.SavedSession do
 
   defp fold(
          state,
+         %{
+           "type" => "diagnostic",
+           "event" => "provider_attempt_finished",
+           "data" => %{"usage" => _} = data
+         } =
+           record,
+         id
+       ) do
+    run_id = to_string(record["run_id"])
+
+    if byte_size(run_id) <= 128 and
+         (Map.has_key?(state["accounting_runs"], run_id) or
+            map_size(state["accounting_runs"]) < 256) do
+      state = %{state | "accounting_runs" => Map.put(state["accounting_runs"], run_id, true)}
+      state = if is_map(data["usage"]), do: merge_usage(state, data["usage"]), else: state
+      activity(state, record, id)
+    else
+      %{state | "truncated" => true}
+    end
+  end
+
+  defp fold(state, %{"type" => "completed"} = record, id),
+    do:
+      activity(
+        %{
+          state
+          | "accounting_runs" => Map.delete(state["accounting_runs"], to_string(record["run_id"]))
+        },
+        record,
+        id
+      )
+
+  defp fold(
+         state,
          %{"type" => "event", "event" => "model_completed"} = record,
          id
        ) do
     state =
-      case Session.event_data(record) do
+      case if(Map.has_key?(state["accounting_runs"], to_string(record["run_id"])),
+             do: :accounted,
+             else: Session.event_data(record)
+           ) do
         {:ok, %{"usage" => usage}} when is_map(usage) ->
           %{
             state
@@ -124,6 +167,12 @@ defmodule Alto.TUI.SavedSession do
   end
 
   defp fold(state, record, id), do: activity(state, record, id)
+
+  defp merge_usage(state, usage),
+    do: %{
+      state
+      | "usage" => stringify(Usage.merge(Usage.normalize(state["usage"]), Usage.normalize(usage)))
+    }
 
   defp activity(state, %{"type" => "started", "subagent" => true} = record, id) do
     agent = Subagents.saved_agent(id, record, [record]) |> stringify() |> Alto.Retained.detach()

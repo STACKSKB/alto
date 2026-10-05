@@ -71,7 +71,7 @@ defmodule Alto.Runner.SerialUsageTest do
       result =
         Alto.run("task",
           provider: {FailingProvider, usage: usage, timeout: timeout?},
-          provider_timeout: 100
+          provider_timeout: 500
         )
 
       assert result.status == :error

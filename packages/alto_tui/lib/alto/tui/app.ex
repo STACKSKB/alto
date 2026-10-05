@@ -1142,6 +1142,18 @@ defmodule Alto.TUI.App do
   defp maybe_context_window(options, _metadata), do: options
 
   defp finish_runner_result(state, local_id, result) do
+    run = Map.fetch!(state.runs, local_id)
+    total = Alto.Usage.normalize(result.usage)
+    accounted = Map.get(run, :accounted_usage, Alto.Usage.new())
+
+    missing =
+      Enum.reduce(
+        ~w(input_tokens output_tokens total_tokens cached_input_tokens requests)a,
+        total,
+        fn key, acc -> Map.put(acc, key, max(total[key] - accounted[key], 0)) end
+      )
+
+    state = State.update_usage(state, run.task_id, missing)
     completed? = result.status == :ok
     status = if completed?, do: "completed", else: "failed"
 
@@ -1222,6 +1234,19 @@ defmodule Alto.TUI.App do
       run ->
         phase = Alto.TUI.Activity.phase(event, Map.get(run, :phase, "working"))
         run = if run[:phase] == "cancelling", do: run, else: Map.put(run, :phase, phase)
+
+        run =
+          if event.type == :model_completed do
+            Map.update(
+              run,
+              :accounted_usage,
+              Alto.Usage.normalize(event.data[:usage]),
+              &Alto.Usage.merge(&1, Alto.Usage.normalize(event.data[:usage]))
+            )
+          else
+            run
+          end
+
         state = put_in(state.runs[local_id], run)
         do_ingest_event(state, run.task_id, event)
     end
