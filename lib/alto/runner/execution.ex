@@ -746,7 +746,7 @@ defmodule Alto.Runner.Execution do
       not (is_binary(message) or is_list(message) or is_nil(message)) ->
         {:error, :invalid_model_content, run}
 
-      calls == [] and message in [nil, "", []] ->
+      calls == [] and message in [nil, "", []] and completion[:reasoning] in [nil, ""] ->
         {:error, :empty_model_response, run}
 
       true ->
@@ -769,19 +769,38 @@ defmodule Alto.Runner.Execution do
 
         assistant = Map.merge(assistant_message(message, calls), fields)
 
+        assistant =
+          if is_map(completion[:metadata]),
+            do: Map.put(assistant, "alto_provider_metadata", completion.metadata),
+            else: assistant
+
         case RunTranscript.append(run, assistant) do
           {:ok, run} ->
             run = add_pending_provider_calls(run, calls)
 
-            event =
-              Event.durable(:model_completed, %{
-                message: message,
-                reasoning: Map.get(completion, :reasoning),
-                tool_calls: calls,
-                usage: completion.usage
-              })
+            if calls == [] and message in [nil, "", []] do
+              {:error,
+               {:reasoning_only_model_response,
+                %{
+                  terminal_status: Map.get(completion, :terminal_status, :incomplete),
+                  finish_reason: completion[:finish_reason],
+                  usage: completion.usage,
+                  metadata: Map.get(completion, :metadata, %{})
+                }}, run}
+            else
+              event =
+                Event.durable(:model_completed, %{
+                  message: message,
+                  reasoning: Map.get(completion, :reasoning),
+                  tool_calls: calls,
+                  usage: completion.usage,
+                  finish_reason: completion[:finish_reason],
+                  terminal_status: completion[:terminal_status],
+                  metadata: Map.get(completion, :metadata, %{})
+                })
 
-            {:event, event, run}
+              {:event, event, run}
+            end
 
           {:error, reason, run} ->
             {:error, reason, run}

@@ -45,4 +45,38 @@ defmodule Alto.ProviderFieldsTest do
     refute Map.has_key?(assistant, "tool_call_id")
     refute Map.has_key?(assistant, "name")
   end
+
+  defmodule ReasoningProvider do
+    def describe(_), do: %{}
+
+    def stream(_request, _sink, opts) do
+      {:ok,
+       %{
+         message: nil,
+         tool_calls: [],
+         reasoning: "private reasoning",
+         provider_fields: %{"reasoning" => "private reasoning"},
+         usage: %{input_tokens: 100, output_tokens: 6144},
+         finish_reason: opts[:finish_reason],
+         terminal_status: opts[:status]
+       }}
+    end
+  end
+
+  test "reasoning-only exhaustion and incomplete output retain reasoning without returning an answer" do
+    for {status, finish} <- [{:exhausted, "length"}, {:incomplete, nil}, {:finished, "stop"}] do
+      result =
+        Alto.run("task", provider: {ReasoningProvider, status: status, finish_reason: finish})
+
+      assert result.status == :error
+      assert result.output == nil
+
+      assert {:reasoning_only_model_response, %{terminal_status: ^status, finish_reason: ^finish}} =
+               result.reason
+
+      assert result.usage.output_tokens == 6144
+      assert List.last(result.messages)["reasoning"] == "private reasoning"
+      assert List.last(result.messages)["content"] == nil
+    end
+  end
 end

@@ -113,4 +113,37 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
              "reasoning_details" => [%{"type" => "reasoning.encrypted", "data" => "secret"}]
            }) == ""
   end
+
+  test "terminal status and bounded provider provenance survive SSE and JSON fallback" do
+    response = %{
+      "id" => "request-1",
+      "model" => "actual-model",
+      "provider" => "route",
+      "usage" => %{"prompt_tokens" => 100, "completion_tokens" => 6144, "cost" => 0.0},
+      "choices" => [%{"delta" => %{"reasoning" => "Thinking"}, "finish_reason" => "length"}]
+    }
+
+    state = Stream.consume(Stream.new(), JSON.encode!(response), fn _ -> :ok end)
+    assert {:ok, result} = Stream.result(state)
+    assert result.message == nil
+    assert result.finish_reason == "length"
+    assert result.terminal_status == :exhausted
+
+    assert result.metadata == %{
+             request_id: "request-1",
+             model: "actual-model",
+             provider: "route",
+             finish_reason: "length",
+             reported_cost: 0.0
+           }
+
+    json =
+      put_in(response, ["choices"], [
+        %{"message" => %{"reasoning" => "Thinking"}, "finish_reason" => "length"}
+      ])
+
+    assert {:ok, state} = Stream.from_response(json, fn _ -> :ok end)
+    assert {:ok, %{finish_reason: "length", terminal_status: :exhausted}} = Stream.result(state)
+    assert {:ok, %{terminal_status: :incomplete}} = Stream.result(Stream.new())
+  end
 end

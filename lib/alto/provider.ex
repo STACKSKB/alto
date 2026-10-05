@@ -21,6 +21,12 @@ defmodule Alto.Provider do
   `provider_fields` retains opaque adapter metadata in the transcript, subject
   to transcript bounds. It cannot replace role, content, tool calls, call IDs,
   or names. Adapters own decoding and filtering that metadata on subsequent calls.
+
+  `finish_reason` preserves the provider stop reason; `terminal_status` distinguishes
+  finished, exhausted and incomplete responses. Bounded `metadata` records reported
+  request ID, model, route and cost separately from requested configuration.
+  Reasoning without content or calls is retained for inspection and fails with
+  `:reasoning_only_model_response`; it never becomes the final answer.
   """
 
   @doc "Observe every attempted request, including retries and reductions. Observers run inside the provider call's timeout and cancellation boundary, fail independently, and do not count as streamed output."
@@ -60,7 +66,10 @@ defmodule Alto.Provider do
           required(:tool_calls) => [map()],
           optional(:usage) => map() | nil,
           optional(:reasoning) => String.t() | nil,
-          optional(:provider_fields) => map()
+          optional(:provider_fields) => map(),
+          optional(:finish_reason) => String.t() | nil,
+          optional(:terminal_status) => :finished | :exhausted | :incomplete,
+          optional(:metadata) => map()
         }
   @type model :: %{
           required(:id) => String.t(),

@@ -11,6 +11,9 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
             reasoning_order: [],
             calls: %{},
             usage: nil,
+            finish_reason: nil,
+            done?: false,
+            metadata: %{},
             error: nil
 
   @type t :: %__MODULE__{
@@ -24,7 +27,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   def new, do: %__MODULE__{}
 
   @spec consume(t(), binary(), (Event.t() -> any())) :: t()
-  def consume(%__MODULE__{} = state, "[DONE]", _sink), do: state
+  def consume(%__MODULE__{} = state, "[DONE]", _sink), do: %{state | done?: true}
 
   def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
     case JSON.decode(payload) do
@@ -45,13 +48,20 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   @spec from_response(map(), (Event.t() -> any())) :: {:ok, t()} | {:error, term()}
   def from_response(%{"error" => error}, _sink), do: {:error, {:provider_error, error}}
 
-  def from_response(%{"choices" => [%{"message" => message} | _]} = response, sink)
+  def from_response(%{"choices" => [%{"message" => message} = choice | _]} = response, sink)
       when is_map(message) do
     calls =
       Enum.with_index(message["tool_calls"] || [], &Map.put(&1, "index", &2))
 
     state = consume_delta(new(), Map.put(message, "tool_calls", calls), sink)
-    {:ok, %{state | usage: response["usage"]}}
+
+    {:ok,
+     %{
+       metadata(state, response)
+       | usage: response["usage"],
+         finish_reason: choice["finish_reason"],
+         done?: true
+     }}
   end
 
   def from_response(other, _sink), do: {:error, {:unexpected_response, other}}
@@ -80,6 +90,9 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
            ),
          tool_calls: tool_calls,
          usage: state.usage,
+         finish_reason: state.finish_reason,
+         terminal_status: terminal_status(state),
+         metadata: Map.put(state.metadata, :finish_reason, state.finish_reason),
          reasoning: state.reasoning |> Enum.reverse() |> IO.iodata_to_binary(),
          provider_fields: reasoning_fields(state)
        }}
@@ -87,15 +100,54 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   end
 
   defp consume_chunk(state, chunk, sink) do
+    state = metadata(state, chunk)
     state = if is_map(chunk["usage"]), do: %{state | usage: chunk["usage"]}, else: state
 
     case chunk["choices"] do
-      [%{"delta" => delta} | _] when is_map(delta) -> consume_delta(state, delta, sink)
-      [] -> state
-      nil -> state
-      _other -> %{state | error: {:unexpected_stream_chunk, chunk}}
+      [%{} = choice | _] ->
+        state =
+          if is_binary(choice["finish_reason"]),
+            do: %{state | finish_reason: choice["finish_reason"]},
+            else: state
+
+        if is_map(choice["delta"]), do: consume_delta(state, choice["delta"], sink), else: state
+
+      [] ->
+        state
+
+      nil ->
+        state
+
+      _other ->
+        %{state | error: {:unexpected_stream_chunk, chunk}}
     end
   end
+
+  defp metadata(state, chunk) do
+    fields =
+      Enum.reduce(
+        [{"id", :request_id}, {"model", :model}, {"provider", :provider}],
+        state.metadata,
+        fn {wire, key}, acc ->
+          case chunk[wire] do
+            value when is_binary(value) and byte_size(value) <= 256 -> Map.put(acc, key, value)
+            _ -> acc
+          end
+        end
+      )
+
+    cost = get_in(chunk, ["usage", "cost"])
+
+    fields =
+      if is_number(cost) and cost >= 0, do: Map.put(fields, :reported_cost, cost), else: fields
+
+    %{state | metadata: fields}
+  end
+
+  defp terminal_status(%{finish_reason: "length"}), do: :exhausted
+  defp terminal_status(%{finish_reason: reason}) when is_binary(reason), do: :finished
+  defp terminal_status(%{done?: true}), do: :finished
+  defp terminal_status(_), do: :incomplete
 
   defp consume_delta(state, delta, sink) do
     state = consume_reasoning(state, delta, sink)

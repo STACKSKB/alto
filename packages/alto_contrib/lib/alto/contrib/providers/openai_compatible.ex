@@ -196,7 +196,11 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   end
 
   defp provider_message(message, capabilities) when is_map(message) do
-    message = message |> Map.delete("alto_anthropic_content") |> replayable_tool_arguments()
+    message =
+      message
+      |> Map.delete("alto_anthropic_content")
+      |> Map.delete("alto_provider_metadata")
+      |> replayable_tool_arguments()
 
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
