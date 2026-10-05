@@ -55,12 +55,16 @@ defmodule Alto.Session.Conversation.Store do
   end
 
   def write(plan) do
-    Alto.Result.reduce(plan.missing, :ok, fn {path, encoded}, :ok ->
-      with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true),
-           :ok <- AtomicFile.write(path, encoded, mode: 0o600),
-           do: {:ok, :ok}
-    end)
-    |> unwrap()
+    dirs = plan.missing |> Enum.map(fn {path, _} -> Path.dirname(path) end) |> Enum.uniq()
+
+    with {:ok, _} <-
+           Alto.Result.traverse(dirs, fn dir ->
+             with :ok <- Storage.ensure_private_dir(dir, owned: true), do: {:ok, :ok}
+           end),
+         do:
+           AtomicFile.write_many(
+             Enum.map(plan.missing, fn {path, encoded} -> {path, encoded, [mode: 0o600]} end)
+           )
   end
 
   def read(id, root, count, opts)
@@ -287,6 +291,4 @@ defmodule Alto.Session.Conversation.Store do
     do: Path.join([dir(id, opts), "objects", "#{kind}-#{ref}.json"])
 
   defp dir(id, opts), do: Path.join([Session.dir(opts), "conversations", id])
-  defp unwrap({:ok, value}), do: value
-  defp unwrap(error), do: error
 end

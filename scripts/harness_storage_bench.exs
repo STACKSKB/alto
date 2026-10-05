@@ -23,9 +23,23 @@ try do
   bytes = Alto.Context.Transcript.bytes(messages)
   IO.inspect(%{snapshot_bytes: bytes})
 
-  measure.("persist whole transcript boundary", 10, fn ->
+  {cold_us, {:ok, _}} =
+    :timer.tc(fn -> Alto.Session.persist_settled(id, messages, bytes, opts) end)
+
+  IO.inspect(%{operation: "first transcript publication", ms: cold_us / 1000})
+
+  measure.("persist unchanged transcript boundary", 10, fn ->
     {:ok, _} = Alto.Session.persist_settled(id, messages, bytes, opts)
   end)
+
+  appended = messages ++ [%{"role" => "assistant", "content" => "new tail"}]
+
+  {append_us, {:ok, _}} =
+    :timer.tc(fn ->
+      Alto.Session.persist_settled(id, appended, Alto.Context.Transcript.bytes(appended), opts)
+    end)
+
+  IO.inspect(%{operation: "publish appended tail", ms: append_us / 1000})
 
   measure.("fetch atomic head", 20, fn ->
     {:ok, _} = Alto.Session.conversation(id, :latest, opts)

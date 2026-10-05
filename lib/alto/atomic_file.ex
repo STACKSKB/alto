@@ -19,11 +19,37 @@ defmodule Alto.AtomicFile do
   @spec write(binary(), iodata(), keyword()) :: :ok | {:error, term()}
   def write(path, content, opts \\ []) do
     with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)) do
-      write_temp(path, content, mode, opts)
+      write_temp(path, content, mode, opts, true)
     end
   end
 
-  defp write_temp(path, content, mode, opts) do
+  @doc """
+  Publish independent files and sync each containing directory once after every
+  file's bytes have been synced and renamed. This is not a multi-file transaction:
+  an error may leave a published prefix. Callers must publish any manifest/head
+  only after success. This is suitable for immutable content-addressed objects.
+  """
+  def write_many(files) do
+    with {:ok, _} <-
+           Alto.Result.reduce(files, :ok, fn {path, content, opts}, :ok ->
+             with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)),
+                  :ok <- write_temp(path, content, mode, opts, false),
+                  do: {:ok, :ok}
+           end),
+         {:ok, _} <-
+           files
+           |> Enum.map(fn {path, _, _} -> Path.dirname(path) end)
+           |> Enum.uniq()
+           |> Alto.Result.traverse(fn dir ->
+             case sync_directory(dir) do
+               :ok -> {:ok, :ok}
+               {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
+             end
+           end),
+         do: :ok
+  end
+
+  defp write_temp(path, content, mode, opts, sync_directory?) do
     temp =
       Path.join(
         Path.dirname(path),
@@ -37,7 +63,7 @@ defmodule Alto.AtomicFile do
            :ok <- write_sync_close(io, content, fn -> maybe_chmod(temp, mode) end),
            :ok <- before_rename.(),
            :ok <- File.rename(temp, path) do
-        case sync_directory(Path.dirname(path)) do
+        case if(sync_directory?, do: sync_directory(Path.dirname(path)), else: :ok) do
           :ok -> :ok
           {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
         end
