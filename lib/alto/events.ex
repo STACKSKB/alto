@@ -1,5 +1,23 @@
 defmodule Alto.Events do
   @moduledoc "Synchronous ordered event fan-out for host composition. Each observer fails independently."
+  @doc """
+  Run host work with a bounded observer and return `{result, delivery_status}`.
+
+  Host ownership ends after a bounded drain. Inspect the status before reporting
+  observer delivery as successful. Use `Observer.open/2` for a longer-lived owner.
+  """
+  def with_buffered(sink, opts \\ [], work) when is_function(work, 1) do
+    {:ok, observer} = Alto.Events.Observer.open(sink, Keyword.delete(opts, :drain_timeout))
+
+    try do
+      result = work.(Alto.Events.Observer.sink(observer))
+      status = Alto.Events.Observer.close(observer, Keyword.get(opts, :drain_timeout, 5_000))
+      {result, status}
+    after
+      if Process.alive?(observer), do: GenServer.stop(observer, :normal, 1_000)
+    end
+  end
+
   def combine(sinks) when is_list(sinks) do
     fn event -> Enum.each(sinks, &Alto.Events.notify(&1, event)) end
   end

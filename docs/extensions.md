@@ -523,6 +523,28 @@ application sink, preserving host backpressure. Request diagnostics are composed
 with `Alto.Provider.observe/2` in the profile; the core executor has no
 prefix-continuity dependency.
 
+Slow host observers can opt into `Alto.Events.with_buffered/3`:
+
+```elixir
+{result, delivery} = Alto.Events.with_buffered(observer,
+  [max_events: 128, max_bytes: 2_000_000, callback_timeout: 250, drain_timeout: 5_000],
+  fn buffered -> Alto.run(task, event_sink: buffered) end)
+```
+
+The owner must inspect `delivery` before claiming successful observer delivery.
+Admission acknowledges bounded queue ownership; it does not acknowledge callback
+completion. Accepted events run in order on one supervised callback at a time.
+Only adjacent queued live text/reasoning deltas with identical attribution may
+coalesce; durable events keep their individual position. Queue overflow rejects
+admission and appears in the drain result. A callback exception or deadline also
+appears there and later events continue in order. Nothing silently drops an
+accepted durable event. A timed-out drain reports failure and ends the observer's
+ownership; durable session storage remains the execution host's responsibility.
+The owner exiting terminates the dispatcher and its callback. For longer-lived
+ownership use `Alto.Events.Observer.open/2`, `sink/1` and `close/2` directly.
+A synchronous observer still consumes the provider deadline; attempt diagnostics
+record accumulated callback time and any active callback at termination.
+
 NimbleOptions now owns context-window, child-limit and compaction option schemas.
 Authority relationships and domain-specific validation remain explicit.
 
