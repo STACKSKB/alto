@@ -3,7 +3,10 @@ defmodule Alto.Usage do
   Provider-neutral token accounting as an atom-keyed map.
 
   Adapters decode their wire fields before ingestion. Accounting maps flow unchanged
-  through execution, events, results and front ends; cache reads remain separate
+  through execution, events, results and front ends. Totals sum observed usage;
+  `requests` counts reports rather than transport attempts. Unknown attempt usage
+  remains `nil` in `Result.provider_attempts`, so zero totals never prove zero
+  consumption. Cache reads remain separate
   from total input and the most recent request remains separate from totals.
   """
 

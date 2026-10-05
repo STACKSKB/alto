@@ -23,19 +23,47 @@ defmodule Alto.Runner.Execution.Model do
     {provider, opts} = run.provider
     step = run.model_requests + 1
     Alto.Events.notify(run.event_sink, Event.live(:model_started, %{step: step}))
-    outcome = stream(provider, request, sink, opts, run, step)
-    run = %{run | model_requests: step}
+    attempts = :ets.new(__MODULE__, [:set, :public])
 
-    case outcome do
-      {:ok, completion} when is_map(completion) ->
-        usage = Usage.normalize(completion[:usage])
-        {{:ok, Map.put(completion, :usage, usage)}, %{run | usage: Usage.merge(run.usage, usage)}}
+    try do
+      outcome =
+        stream(provider, request, sink, opts, Map.put(run, :accounting_table, attempts), step)
 
-      {:ok, other} ->
-        {{:error, {:invalid_completion, other}}, run}
+      evidence = :ets.tab2list(attempts) |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
 
-      {:error, _} ->
-        {outcome, run}
+      usage =
+        Enum.reduce(evidence, Usage.new(), fn data, acc ->
+          Usage.merge(acc, Usage.normalize(data.usage))
+        end)
+
+      run = %{run | model_requests: step, usage: Usage.merge(run.usage, usage)}
+
+      run =
+        Map.put(
+          run,
+          :provider_attempts,
+          Enum.take(Map.get(run, :provider_attempts, []) ++ evidence, -32)
+        )
+
+      case outcome do
+        {:ok, completion} when is_map(completion) ->
+          known? = is_map(completion[:usage])
+
+          completion =
+            completion
+            |> Map.put(:usage, Usage.normalize(completion[:usage]))
+            |> Map.put(:usage_known, known?)
+
+          {{:ok, completion}, run}
+
+        {:ok, other} ->
+          {{:error, {:invalid_completion, other}}, run}
+
+        {:error, reason} ->
+          {{:error, Alto.Provider.Failure.reason(reason)}, run}
+      end
+    after
+      :ets.delete(attempts)
     end
   end
 
@@ -115,7 +143,17 @@ defmodule Alto.Runner.Execution.Model do
            do: Alto.Provider.stream(provider, request, attempt_sink, provider_opts)
     end
 
-    attempt_stream(invoke, sink, caps, step, 1)
+    attempt_stream(
+      invoke,
+      sink,
+      Map.merge(caps, %{
+        provider_module: provider,
+        requested_model: Keyword.get(provider_opts, :model)
+      }),
+      step,
+      1
+    )
+    |> unwrap()
   end
 
   defp attempt_stream(invoke, sink, caps, step, attempt) do
@@ -138,28 +176,63 @@ defmodule Alto.Runner.Execution.Model do
         diagnostic(caps, :provider_attempt_started, %{step: step, attempt: attempt})
         started = System.monotonic_time(:millisecond)
 
-        attempt_sink = fn event ->
-          :atomics.put(delivered, 1, 1)
-          sink.(event)
+        progress = :ets.new(__MODULE__, [:set, :public])
+        :ets.insert(progress, {:snapshot, %{usage: nil, metadata: %{}, diagnostics: %{}}})
+
+        attempt_sink = fn
+          %Event{type: :provider_accounting, data: data} ->
+            :ets.insert(progress, {:snapshot, accounting(data)})
+            :ok
+
+          event ->
+            :atomics.put(delivered, 1, 1)
+            sink.(event)
         end
 
-        outcome =
-          Call.run(
-            fn -> invoke.(attempt_sink) end,
-            Budget.timeout(caps.budget, caps.provider_timeout),
-            caps.cancel_ref
-          )
+        {outcome, evidence} =
+          try do
+            outcome =
+              Call.run(
+                fn -> invoke.(attempt_sink) end,
+                Budget.timeout(caps.budget, caps.provider_timeout),
+                caps.cancel_ref
+              )
 
-        diagnostic(caps, :provider_attempt_finished, %{
-          step: step,
-          attempt: attempt,
-          duration_ms: System.monotonic_time(:millisecond) - started,
-          output_delivered: :atomics.get(delivered, 1) != 0,
-          outcome: outcome_kind(outcome)
-        })
+            [{:snapshot, snapshot}] = :ets.lookup(progress, :snapshot)
+
+            evidence =
+              case outcome do
+                {:ok, completion} when is_map(completion) ->
+                  accounting(completion)
+
+                {:error, %Alto.Provider.Failure{} = failure} ->
+                  accounting(Map.from_struct(failure))
+
+                _ ->
+                  snapshot
+              end
+
+            {outcome, evidence}
+          after
+            :ets.delete(progress)
+          end
+
+        evidence =
+          Map.merge(evidence, %{
+            step: step,
+            attempt: attempt,
+            provider_module: caps.provider_module,
+            requested_model: caps.requested_model,
+            duration_ms: System.monotonic_time(:millisecond) - started,
+            output_delivered: :atomics.get(delivered, 1) != 0,
+            outcome: outcome_kind(outcome)
+          })
+
+        if caps[:accounting_table], do: :ets.insert(caps.accounting_table, {attempt, evidence})
+        diagnostic(caps, :provider_attempt_finished, evidence)
 
         decision =
-          case outcome do
+          case unwrap(outcome) do
             {:error, {kind, _}} when kind in [:participant_failed, :cancelled] ->
               :stop
 
@@ -213,6 +286,46 @@ defmodule Alto.Runner.Execution.Model do
       end)
     end
   end
+
+  defp unwrap({:error, reason}), do: {:error, Alto.Provider.Failure.reason(reason)}
+  defp unwrap(other), do: other
+
+  defp accounting(data) do
+    metadata = Map.get(data, :metadata, %{})
+
+    metadata =
+      for {key, value} <-
+            Map.take(metadata, [:request_id, :model, :provider, :finish_reason, :reported_cost]),
+          (is_binary(value) and byte_size(value) <= 256) or
+            (key == :reported_cost and is_number(value) and value >= 0),
+          into: %{},
+          do: {key, value}
+
+    %{
+      usage: if(is_map(data[:usage]), do: Usage.normalize(data.usage)),
+      metadata: metadata,
+      diagnostics:
+        data
+        |> Map.get(:diagnostics, %{})
+        |> Map.take([
+          :response_bytes,
+          :events,
+          :http_status,
+          :accepted_bytes,
+          :content_bytes,
+          :reasoning_bytes,
+          :first_byte_ms,
+          :last_byte_ms,
+          :last_event_ms,
+          :callback_ms,
+          :max_event_bytes,
+          :max_stream_bytes
+        ])
+    }
+  end
+
+  defp outcome_kind({:error, %Alto.Provider.Failure{reason: reason}}),
+    do: outcome_kind({:error, reason})
 
   defp outcome_kind({:ok, _}), do: :ok
   defp outcome_kind({:error, {:http_error, status, _}}), do: %{kind: :http_error, status: status}

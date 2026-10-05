@@ -5,6 +5,8 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
   alias Alto.Contrib.Providers.OpenAICompatible
 
   defp run(provider, chunks, extra \\ [], status \\ 200) do
+    evidence? = Keyword.get(extra, :evidence, false)
+    extra = Keyword.delete(extra, :evidence)
     response_headers = Keyword.get(extra, :response_headers, [])
     extra = Keyword.delete(extra, :response_headers)
 
@@ -32,7 +34,12 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
         )
       )
     else
-      provider.stream(request, fn event -> send(self(), {:event, event}) end, options)
+      result = provider.stream(request, fn event -> send(self(), {:event, event}) end, options)
+
+      case result do
+        {:error, reason} when not evidence? -> {:error, Alto.Provider.Failure.reason(reason)}
+        result -> result
+      end
     end
   end
 
@@ -100,5 +107,40 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
       assert {:error, {:provider_exception, %RuntimeError{message: "adapter defect"}, _stack}} =
                provider.stream(%{messages: [], tools: []}, fn _ -> :ok end, options)
     end
+  end
+
+  test "usage and provenance survive errors later in the same chunk and later chunks" do
+    usage =
+      "data: " <>
+        JSON.encode!(%{
+          "id" => "req",
+          "model" => "actual",
+          "provider" => "route",
+          "choices" => [],
+          "usage" => %{"prompt_tokens" => 100, "completion_tokens" => 6144, "cost" => 0.0}
+        }) <> "\n\n"
+
+    for bad <- ["data: invalid\n\n", "data: {\"error\":{\"message\":\"failed\"}}\n\n"],
+        chunks <- [[usage, bad], [usage <> bad]] do
+      assert {:error, %Alto.Provider.Failure{} = failure} =
+               run(OpenAICompatible, chunks, evidence: true)
+
+      assert failure.usage.input_tokens == 100
+      assert failure.usage.output_tokens == 6144
+
+      assert failure.metadata == %{
+               request_id: "req",
+               model: "actual",
+               provider: "route",
+               reported_cost: 0.0
+             }
+
+      assert failure.diagnostics.response_bytes == byte_size(usage <> bad)
+    end
+  end
+
+  test "unknown usage stays nil on an error" do
+    assert {:error, %Alto.Provider.Failure{usage: nil}} =
+             run(OpenAICompatible, ["data: invalid\n\n"], evidence: true)
   end
 end

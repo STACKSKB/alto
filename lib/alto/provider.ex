@@ -22,6 +22,12 @@ defmodule Alto.Provider do
   to transcript bounds. It cannot replace role, content, tool calls, call IDs,
   or names. Adapters own decoding and filtering that metadata on subsequent calls.
 
+  Failed streams may return `{:error, %Alto.Provider.Failure{}}` to preserve
+  observed usage and bounded metadata. A live `:provider_accounting` snapshot
+  carries the same canonical fields before termination; the runner consumes it
+  without counting it as output or invoking host observers. This preserves
+  already reported accounting if the provider worker is killed by its deadline.
+
   `finish_reason` preserves the provider stop reason; `terminal_status` distinguishes
   finished, exhausted and incomplete responses. Bounded `metadata` records reported
   request ID, model, route and cost separately from requested configuration.

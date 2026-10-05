@@ -8,6 +8,7 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
   defstruct blocks: %{},
             block_order: [],
             usage: nil,
+            metadata: %{},
             stop_reason: nil,
             message_started?: false,
             message_stopped?: false,
@@ -53,7 +54,8 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
         message_started?: true,
         message_stopped?: true,
         stop_reason: reason,
-        usage: response["usage"]
+        usage: response["usage"],
+        metadata: message_metadata(response)
       })
 
     blocks
@@ -71,7 +73,8 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
   def from_response(_other, _sink), do: {:error, :invalid_anthropic_response}
 
   @spec result(t()) :: {:ok, map()} | {:error, term()}
-  def result(%__MODULE__{error: error}) when not is_nil(error), do: {:error, error}
+  def result(%__MODULE__{error: error} = state) when not is_nil(error),
+    do: {:error, Alto.Provider.Failure.wrap(error, accounting(state))}
 
   def result(%__MODULE__{} = state) do
     with :ok <- valid_final_response(state),
@@ -86,6 +89,9 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
          message: if(message == "", do: nil, else: message),
          tool_calls: calls,
          usage: state.usage,
+         finish_reason: state.stop_reason,
+         terminal_status: :finished,
+         metadata: accounting(state).metadata,
          reasoning: reasoning,
          provider_fields:
            if(Map.has_key?(by_type, "thinking"),
@@ -93,11 +99,26 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
              else: %{}
            )
        }}
+    else
+      {:error, reason} -> {:error, Alto.Provider.Failure.wrap(reason, accounting(state))}
     end
   end
 
+  def accounting(state),
+    do: %{
+      usage: state.usage,
+      metadata:
+        Map.put(state.metadata, :finish_reason, state.stop_reason)
+        |> Map.reject(fn {_, v} -> is_nil(v) end)
+    }
+
   defp consume_event(state, %{"type" => "message_start", "message" => message}, _sink) do
-    %{state | message_started?: true, usage: message["usage"] || state.usage}
+    %{
+      state
+      | message_started?: true,
+        usage: message["usage"] || state.usage,
+        metadata: message_metadata(message)
+    }
   end
 
   defp consume_event(state, %{"type" => "message_start"}, _sink),
@@ -222,6 +243,14 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
   end
 
   defp emit_block(_block, _sink), do: :ok
+
+  defp message_metadata(message) do
+    for {wire, key} <- [{"id", :request_id}, {"model", :model}],
+        value = message[wire],
+        is_binary(value) and byte_size(value) <= 256,
+        into: %{},
+        do: {key, value}
+  end
 
   defp valid_final_response(%__MODULE__{message_started?: false}),
     do: {:error, :incomplete_model_response}

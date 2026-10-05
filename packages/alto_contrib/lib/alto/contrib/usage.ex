@@ -40,9 +40,15 @@ defmodule Alto.Contrib.Usage do
 
   @doc false
   def completion({:ok, completion}),
-    do: {:ok, Map.update(completion, :usage, Alto.Usage.new(), &normalize/1)}
+    do: {:ok, Map.update(completion, :usage, nil, &known/1)}
+
+  def completion({:error, %Alto.Provider.Failure{} = failure}),
+    do: {:error, %{failure | usage: known(failure.usage)}}
 
   def completion(other), do: other
+
+  def known(usage) when is_map(usage), do: normalize(usage)
+  def known(_), do: nil
 
   @doc "Project a cumulative Codex thread/tokenUsage snapshot; its request count is unknown."
   @spec from_codex(term()) :: Alto.Usage.t()

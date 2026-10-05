@@ -6,6 +6,9 @@ defmodule Alto.Runner.Result do
   counts logical model cycles, including a cycle denied by the shared preflight
   budget after `:model_started` was emitted. It is not the number of provider
   transport calls: a transient retry may make several calls in one cycle.
+  `provider_attempts` retains at most 32 recent transport attempts, including
+  failures/retries, with reported metadata and `usage: nil` when unavailable.
+  `usage.requests` counts only requests with observed usage, not attempts.
   `verdict` describes
   tool-effect evidence, not whether an HTTP request was sent: `completed` means
   known completed effects (or successful effect-free work), `rejected_before_dispatch`
@@ -35,6 +38,7 @@ defmodule Alto.Runner.Result do
             workspace: nil,
             checkpoint: nil,
             usage: Alto.Usage.new(),
+            provider_attempts: [],
             persistence: :not_requested
 
   @type status :: :ok | :error | :cancelled | :suspended
@@ -59,6 +63,7 @@ defmodule Alto.Runner.Result do
           workspace: map() | nil,
           checkpoint: map() | nil,
           usage: map(),
+          provider_attempts: [map()],
           persistence: :not_requested | :ok | {:degraded, [term()]}
         }
 

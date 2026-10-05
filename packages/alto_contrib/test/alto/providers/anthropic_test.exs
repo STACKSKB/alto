@@ -255,7 +255,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
         ] do
       opts = configure(%{"content" => [block], "stop_reason" => "end_turn"})
 
-      assert {:error, :unsupported_anthropic_content} =
+      assert {:error, %Alto.Provider.Failure{reason: :unsupported_anthropic_content}} =
                Anthropic.stream(request, fn _ -> :ok end, opts)
     end
   end
@@ -269,7 +269,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
         "stop_reason" => "max_tokens"
       })
 
-    assert {:error, {:incomplete_model_response, "max_tokens"}} =
+    assert {:error, %Alto.Provider.Failure{reason: {:incomplete_model_response, "max_tokens"}}} =
              Anthropic.stream(request, fn _ -> :ok end, opts)
   end
 
@@ -391,7 +391,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
 
     opts = configure_stream(events)
 
-    assert {:error, {:sse_event_too_large, 32}} =
+    assert {:error, %Alto.Provider.Failure{reason: {:sse_event_too_large, 32}}} =
              Anthropic.stream(
                %{messages: [], tools: []},
                fn _ -> :ok end,
@@ -421,7 +421,7 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
       %{"type" => "message_stop"}
     ]
 
-    assert {:error, {:incomplete_model_response, "max_tokens"}} =
+    assert {:error, %Alto.Provider.Failure{reason: {:incomplete_model_response, "max_tokens"}}} =
              Anthropic.stream(
                %{messages: [], tools: []},
                fn _ -> :ok end,

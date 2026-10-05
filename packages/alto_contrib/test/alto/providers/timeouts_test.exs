@@ -63,7 +63,7 @@ defmodule Alto.Contrib.Providers.TimeoutsTest do
   end
 
   test "a silent stream fails at its idle limit" do
-    assert {:error, {:transport_error, _}} =
+    assert {:error, %Alto.Provider.Failure{reason: {:transport_error, _}}} =
              stream(endpoint([{0, ": start\n\n"}, {1_000, ": late\n\n"}]),
                timeout: 3_000,
                idle_timeout: 200
@@ -73,7 +73,7 @@ defmodule Alto.Contrib.Providers.TimeoutsTest do
   test "continuous heartbeats cannot evade the hard total deadline" do
     chunks = for _ <- 1..30, do: {40, ": keepalive\n\n"}
 
-    assert {:error, {:transport_error, _}} =
+    assert {:error, %Alto.Provider.Failure{reason: {:transport_error, _}}} =
              stream(endpoint(chunks), timeout: 300, idle_timeout: 1_000)
   end
 
@@ -96,5 +96,20 @@ defmodule Alto.Contrib.Providers.TimeoutsTest do
            )[
              :receive_timeout
            ] == 600
+  end
+
+  test "a transport timeout preserves a prior usage chunk" do
+    chunk =
+      "data: " <>
+        JSON.encode!(%{
+          "choices" => [],
+          "usage" => %{"prompt_tokens" => 100, "completion_tokens" => 6144}
+        }) <> "\n\n"
+
+    assert {:error, %Alto.Provider.Failure{usage: %{input_tokens: 100, output_tokens: 6144}}} =
+             stream(endpoint([{0, chunk}, {1000, ": late\n\n"}]),
+               timeout: 3000,
+               idle_timeout: 200
+             )
   end
 end

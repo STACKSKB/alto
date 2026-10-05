@@ -53,21 +53,22 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
     calls =
       Enum.with_index(message["tool_calls"] || [], &Map.put(&1, "index", &2))
 
-    state = consume_delta(new(), Map.put(message, "tool_calls", calls), sink)
+    state = %{
+      metadata(new(), response)
+      | usage: response["usage"],
+        finish_reason: choice["finish_reason"],
+        done?: true
+    }
 
-    {:ok,
-     %{
-       metadata(state, response)
-       | usage: response["usage"],
-         finish_reason: choice["finish_reason"],
-         done?: true
-     }}
+    emit_accounting(state, sink)
+    {:ok, consume_delta(state, Map.put(message, "tool_calls", calls), sink)}
   end
 
   def from_response(other, _sink), do: {:error, {:unexpected_response, other}}
 
   @spec result(t()) :: {:ok, map()} | {:error, term()}
-  def result(%__MODULE__{error: error}) when not is_nil(error), do: {:error, error}
+  def result(%__MODULE__{error: error} = state) when not is_nil(error),
+    do: {:error, Alto.Provider.Failure.wrap(error, accounting(state))}
 
   def result(%__MODULE__{} = state) do
     with {:ok, tool_calls} <- finalize_calls(state.calls),
@@ -96,8 +97,18 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
          reasoning: state.reasoning |> Enum.reverse() |> IO.iodata_to_binary(),
          provider_fields: reasoning_fields(state)
        }}
+    else
+      {:error, reason} -> {:error, Alto.Provider.Failure.wrap(reason, accounting(state))}
     end
   end
+
+  def accounting(state),
+    do: %{
+      usage: state.usage,
+      metadata:
+        Map.put(state.metadata, :finish_reason, state.finish_reason)
+        |> Map.reject(fn {_, value} -> is_nil(value) end)
+    }
 
   defp consume_chunk(state, chunk, sink) do
     state = metadata(state, chunk)
@@ -110,17 +121,27 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
             do: %{state | finish_reason: choice["finish_reason"]},
             else: state
 
+        emit_accounting(state, sink)
         if is_map(choice["delta"]), do: consume_delta(state, choice["delta"], sink), else: state
 
       [] ->
+        emit_accounting(state, sink)
         state
 
       nil ->
+        emit_accounting(state, sink)
         state
 
       _other ->
         %{state | error: {:unexpected_stream_chunk, chunk}}
     end
+  end
+
+  defp emit_accounting(state, sink) do
+    snapshot = accounting(state) |> Map.update!(:usage, &Alto.Contrib.Usage.known/1)
+
+    if snapshot.usage != nil or snapshot.metadata != %{},
+      do: sink.(Event.live(:provider_accounting, snapshot))
   end
 
   defp metadata(state, chunk) do

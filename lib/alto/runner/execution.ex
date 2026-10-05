@@ -785,6 +785,7 @@ defmodule Alto.Runner.Execution do
                   terminal_status: Map.get(completion, :terminal_status, :incomplete),
                   finish_reason: completion[:finish_reason],
                   usage: completion.usage,
+                  usage_known: completion[:usage_known],
                   metadata: Map.get(completion, :metadata, %{})
                 }}, run}
             else
@@ -794,6 +795,7 @@ defmodule Alto.Runner.Execution do
                   reasoning: Map.get(completion, :reasoning),
                   tool_calls: calls,
                   usage: completion.usage,
+                  usage_known: completion[:usage_known],
                   finish_reason: completion[:finish_reason],
                   terminal_status: completion[:terminal_status],
                   metadata: Map.get(completion, :metadata, %{})
@@ -1481,6 +1483,7 @@ defmodule Alto.Runner.Execution do
       resolved_operations: resolved_operations,
       transcript_persisted: transcript_persisted,
       usage: run.usage,
+      provider_attempts: Map.get(run, :provider_attempts, []),
       persistence: Result.persistence_status(Enum.reverse(run.persistence_errors))
     }
 
