@@ -352,7 +352,12 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
     body = JSON.encode!(%{"error" => %{"message" => "bad key"}})
     configure_adapter(self(), 401, "application/json", [body])
 
-    assert {:error, {:http_error, 401, %{"message" => "bad key"}}} =
+    assert {:error,
+            %Alto.Provider.Failure{
+              reason: {:http_error, 401, %{"message" => "bad key"}},
+              usage: nil,
+              diagnostics: %{http_status: 401}
+            }} =
              OpenAICompatible.stream(
                %{messages: [], tools: []},
                fn _event -> :ok end,

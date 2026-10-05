@@ -48,10 +48,16 @@ diagnostics: diagnostics}` preserves accounting on direct adapter errors. The
 runner keeps the original error reason and exposes bounded `provider_attempts`
 in the result and persisted provider diagnostics. Diagnostics include received and
 accepted wire bytes, parsed event count, content/reasoning byte counts when the
-adapter supplies them, byte arrival times relative to request start, callback
+adapter supplies them, byte arrival and last SSE-event times relative to request start, callback
 latency and configured limits. They do not retain partial response text. No retry
 occurs after text or reasoning delivery. Unavailable usage remains `nil` in the
 attempt evidence; aggregate zeroes cannot establish zero consumption.
+
+Heartbeats update byte arrival without advancing the last completed SSE event.
+HTTP failures carry the same wire counters even when usage is unavailable.
+Attempt outcomes preserve bounded parsed `retry_after_ms` and `rate_limit_reset_ms`
+hints; the separate `provider_retry` diagnostic records the policy's chosen delay.
+Request headers and error-body text are excluded from these persisted diagnostics.
 
 `finish_reason` and `terminal_status` describe provider termination. Reasoning-only
 output fails separately with `:reasoning_only_model_response`; reasoning is saved

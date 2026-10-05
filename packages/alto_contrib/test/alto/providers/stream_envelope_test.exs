@@ -144,6 +144,68 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
              run(OpenAICompatible, ["data: invalid\n\n"], evidence: true)
   end
 
+  test "HTTP failures retain wire diagnostics and only parsed rate limit hints" do
+    body = ~s({"error":"limited"})
+
+    for provider <- [Anthropic, OpenAICompatible] do
+      assert {:error,
+              %Alto.Provider.Failure{
+                reason: {:http_error, 429, "limited", %{retry_after_ms: 30_000}},
+                usage: nil,
+                diagnostics: diagnostics
+              }} =
+               run(
+                 provider,
+                 [body],
+                 [evidence: true, response_headers: [{"Retry-After", "30"}]],
+                 429
+               )
+
+      assert diagnostics.response_bytes == byte_size(body)
+      assert diagnostics.http_status == 429
+      assert diagnostics.events == 0
+      assert diagnostics.last_event_ms == nil
+    end
+  end
+
+  test "heartbeats advance byte arrival without advancing the last SSE event" do
+    frame = "data: {\"choices\":[]}\n\n"
+
+    adapter = fn request ->
+      {:cont, acc} = request.into.({:data, frame}, {request, Req.Response.new(status: 200)})
+      Process.sleep(10)
+      {:cont, acc} = request.into.({:data, ":ping\n\n"}, acc)
+      acc
+    end
+
+    assert {:ok, result} =
+             OpenAICompatible.stream(
+               %{messages: [], tools: []},
+               fn event -> send(self(), {:event, event}) end,
+               model: "test",
+               req_options: [adapter: adapter]
+             )
+
+    assert result.diagnostics.events == 1
+    assert result.diagnostics.last_event_ms < result.diagnostics.last_byte_ms
+
+    assert_receive {:event,
+                    %Alto.Event{
+                      type: :provider_accounting,
+                      data: %{diagnostics: %{last_byte_ms: last_byte, last_event_ms: last_event}}
+                    }}
+
+    assert last_byte == last_event
+
+    assert_receive {:event,
+                    %Alto.Event{
+                      type: :provider_accounting,
+                      data: %{diagnostics: %{last_byte_ms: last_byte, last_event_ms: last_event}}
+                    }}
+
+    assert last_byte > last_event
+  end
+
   test "default stream budget accepts over 2 MB while legacy and event bounds remain enforced" do
     chunk =
       "data: " <>

@@ -174,6 +174,47 @@ defmodule Alto.Runner.SerialRetryTest do
     end
   end
 
+  test "attempt evidence preserves bounded rate hints alongside the selected retry delay", %{
+    agent: agent
+  } do
+    dir = Path.join(System.tmp_dir!(), "alto-rate-hints-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    script = fn
+      0 ->
+        {:error,
+         {:http_error, 429, "PRIVATE ERROR BODY",
+          %{retry_after_ms: 30_000, rate_limit_reset_ms: 40_000, authorization: "PRIVATE HEADER"}}}
+
+      _ ->
+        {:ok, %{message: "done", tool_calls: []}}
+    end
+
+    result =
+      Alto.Contrib.run("PRIVATE REQUEST",
+        session: :new,
+        session_dir: dir,
+        provider: {ScriptedProvider, test_pid: self(), agent: agent, script: script},
+        provider_retries: 1,
+        retry_policy: fn _, _ -> {:retry, 0, {:http, 429}} end
+      )
+
+    assert result.status == :ok
+    assert [%{outcome: outcome}, _] = result.provider_attempts
+
+    assert outcome == %{
+             kind: :http_error,
+             status: 429,
+             retry_after_ms: 30_000,
+             rate_limit_reset_ms: 40_000
+           }
+
+    assert {:ok, records} = Alto.Session.read(result.session_id, session_dir: dir)
+    diagnostics = Enum.filter(records, &(&1["type"] == "diagnostic"))
+    assert Enum.find(diagnostics, &(&1["event"] == "provider_retry"))["data"]["delay_ms"] == 0
+    refute JSON.encode!(diagnostics) =~ "PRIVATE"
+  end
+
   test "exhausted retries surface the last failure uniformly", %{agent: agent} do
     script = fn _n -> {:error, {:transport_error, :timeout}} end
 

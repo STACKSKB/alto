@@ -355,8 +355,8 @@ defmodule Alto.Runner.Execution.Model do
   defp outcome_kind({:ok, _}), do: :ok
   defp outcome_kind({:error, {:http_error, status, _}}), do: %{kind: :http_error, status: status}
 
-  defp outcome_kind({:error, {:http_error, status, _, _}}),
-    do: %{kind: :http_error, status: status}
+  defp outcome_kind({:error, {:http_error, status, _, metadata}}),
+    do: Map.merge(%{kind: :http_error, status: status}, rate_limit_hints(metadata))
 
   defp outcome_kind({:error, {:transport_error, %{reason: reason}}}) when is_atom(reason),
     do: %{kind: :transport_error, reason: reason}
@@ -367,6 +367,16 @@ defmodule Alto.Runner.Execution.Model do
   defp outcome_kind({:error, {kind, _}}) when is_atom(kind), do: kind
   defp outcome_kind({:error, kind}) when is_atom(kind), do: kind
   defp outcome_kind(_), do: :error
+
+  defp rate_limit_hints(metadata) when is_map(metadata) do
+    for key <- [:retry_after_ms, :rate_limit_reset_ms],
+        value = metadata[key],
+        is_integer(value) and value in 0..86_400_000,
+        into: %{},
+        do: {key, value}
+  end
+
+  defp rate_limit_hints(_), do: %{}
 
   defp retry_decision(caps, reason, attempt) do
     policy = caps.retry_policy || fn _, _ -> :stop end
