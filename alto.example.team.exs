@@ -1,7 +1,7 @@
 # Bounded parallel investigation: one parent, at most three read-only children,
 # two at a time, with separate saved sessions. Shared workspace; no write tools.
 # Delegation needs approval. Choose a model with at least 32k context or adjust
-# the cap below. See examples/README.md for setup and per-run budget semantics.
+# the cap below. See examples/README.md for setup and shared-tree budget semantics.
 
 # Select a tool-capable Chat Completions model explicitly. No model discovery or
 # network access occurs while loading this file. Local endpoints may omit a key.
