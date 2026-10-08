@@ -126,8 +126,105 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     end
   end
 
+  defmodule LoopPolicyProvider do
+    @behaviour Alto.Provider
+    def describe(_), do: %{}
+
+    def stream(request, _sink, opts) do
+      send(opts[:owner], {:child_loop_request, request})
+
+      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
+        {:ok, %{message: "inspected", tool_calls: []}}
+      else
+        calls =
+          for id <- ["left", "right"],
+              do: %{id: id, name: "loop_policy_read", arguments_json: ~s({})}
+
+        {:ok, %{message: nil, tool_calls: calls}}
+      end
+    end
+  end
+
+  defmodule LoopPolicyRead do
+    use Alto.Tool, name: :loop_policy_read, execution_mode: :parallel, approval: :never
+    def schema(_), do: Alto.Tool.object_schema("Read fixture", %{})
+
+    def run(_, _, opts) do
+      send(opts[:owner], {:child_loop_read, self()})
+      receive do: (:release -> {:ok, "fixture"})
+    end
+  end
+
+  test "host child loop applies parallel reads and output bounds to ordinary child requests" do
+    child_loop =
+      Alto.default_loop(
+        tool_execution: {:parallel, 2},
+        context: Alto.Context.Window.new(max_tokens: 4000, reserve_output: 120)
+      )
+
+    loop =
+      Alto.loop(ParentLoop,
+        subagents:
+          Alto.Subagents.bounded(
+            max_depth: 1,
+            child_loop: child_loop
+          )
+      )
+
+    owner = self()
+
+    task =
+      Task.async(fn ->
+        Alto.run(%{spawn: %{id: "inspect", task: "Inspect fixture"}},
+          loop: loop,
+          provider: {LoopPolicyProvider, owner: owner},
+          tools: [{LoopPolicyRead, owner: owner}]
+        )
+      end)
+
+    assert_receive {:child_loop_request, request}, 2000
+    assert request.options["max_tokens"] == 120
+    assert_receive {:child_loop_read, first}, 2000
+    assert_receive {:child_loop_read, second}, 2000
+    refute first == second
+    send(first, :release)
+    send(second, :release)
+
+    assert %Alto.Runner.Result{status: :ok, output: %{status: :ok, output: "inspected"}} =
+             Task.await(task, 3000)
+  end
+
   defp parent_loop(depth, driver \\ ParentLoop, opts \\ []),
     do: Alto.loop(driver, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
+
+  test "host child loop supports providerless children and explicit specs take precedence" do
+    loop =
+      Alto.loop(ParentLoop,
+        subagents: Alto.Subagents.bounded(max_depth: 1, child_loop: Alto.loop(NativeLoop))
+      )
+
+    result =
+      Alto.run(%{spawn: %{id: "native", task: %{name: :safe}}}, loop: loop, tools: [SafeTool])
+
+    assert result.status == :ok
+    assert result.output.output.value == :safe
+
+    explicit = Alto.loop(NativeLoop)
+
+    loop =
+      Alto.loop(ParentLoop,
+        subagents: Alto.Subagents.bounded(max_depth: 1, child_loop: Alto.loop(SpawnLoop))
+      )
+
+    result =
+      Alto.run(%{spawn: %{id: "override", task: %{name: :safe}, loop: explicit}},
+        loop: loop,
+        tools: [SafeTool]
+      )
+
+    assert result.status == :ok
+    assert result.output.output.value == :safe
+  end
 
   test "child tools are an exact normalized subset and cannot add or replace capabilities" do
     guarded = Alto.Tool.transform(SafeTool, fn _args, _context -> {:error, :blocked} end)

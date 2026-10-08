@@ -191,6 +191,15 @@ delegation; children cannot widen their inherited absolute depth allowance.
 Batch concurrency is per loop, not a global service-wide limit. The entire
 execution tree also remains subject to the root's shared budget.
 
+`child_loop` optionally sets a trusted host's default loop for children. For
+example, `child_loop: Alto.default_loop(tool_execution: {:parallel, 4},
+context: Alto.Context.Window.new(max_tokens: 120_000, reserve_output: 4000))`
+gives model-selected children explicit read concurrency and context limits.
+A trusted child spec's `loop` takes precedence. When both are absent, children
+use a fresh `Alto.default_loop()`; parent loop settings are not inherited.
+Model-facing spawn tools cannot supply executable loops. A child loop cannot
+widen inherited tool authority, depth allowances, or shared budgets.
+
 The root run owns one shared effect counter, model-request counter, and
 monotonic deadline. Children and batches consume those same counters and
 deadline, so a batch cannot multiply the root allowance by its child count.
