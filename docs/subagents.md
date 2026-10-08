@@ -498,6 +498,12 @@ Source bytes, file counts, checkout bytes, patch bytes and command time are
 bounded. Host-global Git configuration and inherited Git environment are
 excluded; hooks and external diff commands are disabled.
 
+Git tree and index inventories have their own `max_inventory_bytes` backend
+option (1,000,000 bytes by default, at most 1,000,000). This accommodates
+repositories whose path metadata exceeds the ordinary 64,000-byte command
+capture limit. Inventories exceeding this bound fail with `:git_output_limit`;
+file-count, checkout-byte and patch-byte bounds still apply independently.
+
 Git metadata lives beside the checkout, outside the directory exposed to file
 tools. A frozen patch also lives outside that directory and is checked against
 its recorded hash whenever read. These are separate writable workspaces, not

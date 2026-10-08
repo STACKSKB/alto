@@ -9,6 +9,7 @@ defmodule Alto.Contrib.Workspaces.Git do
                     max_source_bytes: [type: :pos_integer, default: 512 * 1_024 * 1_024],
                     max_files: [type: :pos_integer, default: 20_000],
                     max_checkout_bytes: [type: :pos_integer, default: 128 * 1_024 * 1_024],
+                    max_inventory_bytes: [type: {:in, 1..1_000_000}, default: 1_000_000],
                     max_patch_bytes: [type: {:in, 1..1_000_000}, default: 1_000_000],
                     timeout_ms: [type: {:in, 1..120_000}, default: 120_000],
                     layout: [type: {:in, [:clone, :worktree]}, default: :clone],
@@ -285,7 +286,10 @@ defmodule Alto.Contrib.Workspaces.Git do
   end
 
   defp reject_index_gitlinks(root, git_dir, limits) do
-    with {:ok, output} <- workspace_git(root, git_dir, ["ls-files", "--stage", "-z"], limits) do
+    with {:ok, output} <-
+           workspace_git(root, git_dir, ["ls-files", "--stage", "-z"], limits,
+             max_output_bytes: limits.max_inventory_bytes
+           ) do
       if output
          |> String.split(<<0>>, trim: true)
          |> Enum.any?(fn entry -> String.starts_with?(entry, "160000 ") end) do
@@ -312,7 +316,10 @@ defmodule Alto.Contrib.Workspaces.Git do
   end
 
   defp checkout_size(root, commit, max, limits) do
-    with {:ok, output} <- git(root, ["ls-tree", "-r", "-l", "--full-tree", commit], limits),
+    with {:ok, output} <-
+           git(root, ["ls-tree", "-r", "-l", "--full-tree", commit], limits,
+             max_output_bytes: limits.max_inventory_bytes
+           ),
          do: parse_tree_sizes(output, max, limits.max_files)
   end
 
@@ -352,7 +359,8 @@ defmodule Alto.Contrib.Workspaces.Git do
              root,
              git_dir,
              ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-             limits
+             limits,
+             max_output_bytes: limits.max_inventory_bytes
            ) do
       paths = output |> String.split(<<0>>, trim: true) |> Enum.uniq()
 
