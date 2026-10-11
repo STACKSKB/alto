@@ -109,3 +109,7 @@ approvals, cancellation, and resource bounds.
 The repository maintenance and document intake runners execute from
 `packages/alto_contrib`; Oban declares contrib as a host dependency. Each example
 has its own run instructions and integration checks.
+
+## Resident workflows
+
+[Resident profiles](resident/alto.exs) provide offline inspection, approved writes and optional named-worker integration. [Service documentation](../docs/resident-service.md) covers durable tasks, remote terminals, restart recovery and release installation.

@@ -4,7 +4,13 @@ defmodule Alto.Contrib.Application do
 
   @impl true
   def start(_type, _args) do
+    for app <- [:alto, :alto_contrib], module <- Application.spec(app, :modules) || [] do
+      Code.ensure_loaded!(module)
+    end
+
     children = [
+      {Registry, keys: :unique, name: Alto.Contrib.Resident.ProcessRegistry},
+      {DynamicSupervisor, name: Alto.Contrib.Resident.Services, strategy: :one_for_one},
       {Registry, keys: :unique, name: Alto.Contrib.External.Registry},
       {DynamicSupervisor,
        name: Alto.Contrib.External.Supervisor,

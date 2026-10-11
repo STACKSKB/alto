@@ -38,6 +38,7 @@ defmodule Alto.Contrib.CLI.Arguments do
     Usage: alto [options] TASK...
            printf 'TASK' | alto [options]
            alto --serve [options]
+           alto resident help
 
     Configuration:
       --config FILE             load trusted compiled Elixir configuration
@@ -63,7 +64,8 @@ defmodule Alto.Contrib.CLI.Arguments do
     first-run credential store. Configure other endpoints and credentials in Elixir.
     Configuration defaults to ALTO_CONFIG, then ~/.config/alto/config.exs (or
     $XDG_CONFIG_HOME/alto/config.exs). Configuration is trusted arbitrary Elixir.
-    With --serve, the loaded configuration is served to front ends as "default";
+    With resident: [...], --serve composes the durable resident task host;
+    use alto resident help for operator commands. Otherwise, with --serve, the loaded configuration is served to front ends as "default";
     approval defaults to the WebSocket for served runs and the terminal for one-shot
     runs. Configured approval policies are honored in both modes, and a
     `listeners:` entry in the configuration selects the transports.

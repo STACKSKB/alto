@@ -8,6 +8,7 @@ interface for your workflow.
 | Guide | What it covers |
 | --- | --- |
 | [Configuration](configuration.md) | Defaults, providers, multiple `alto.exs` profiles, attachments, sessions, and named runs |
+| [Resident service](resident-service.md) | Durable tasks, exact recovery, remote terminal and native-free release installation |
 | [Terminal UI](../packages/alto_tui/README.md) | Running the TUI, keyboard controls, workspaces, and backend composition |
 | [Examples](../examples/README.md) | Coding profile, repository maintenance, document intake, and an optional Oban host |
 | [Conversation revisions](conversations.md) | Saved history, dispatch fences, resuming, and branching |

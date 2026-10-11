@@ -17,10 +17,42 @@ defmodule AltoContrib.MixProject do
       package: [
         licenses: ["MIT"],
         links: %{"Source" => "https://github.com/STACKSKB/alto"},
-        files: ["lib", "mix.exs", "README.md", "LICENSE"]
+        files: ["lib", "deploy", "mix.exs", "README.md", "LICENSE"]
+      ],
+      releases: [
+        alto: [
+          include_executables_for: [:unix],
+          include_src: false,
+          steps: [:assemble, &package_service/1, :tar]
+        ]
       ],
       deps: deps()
     ]
+  end
+
+  defp package_service(release) do
+    sources = [
+      {"deploy", "deploy"},
+      {"../../examples/resident", "examples/resident"},
+      {"../../docs/resident-service.md", "docs/resident-service.md"}
+    ]
+
+    paths =
+      Enum.flat_map(sources, fn {source, destination} ->
+        if File.exists?(source) do
+          target = Path.join(release.path, destination)
+          File.mkdir_p!(Path.dirname(target))
+
+          source
+          |> File.cp_r!(target)
+          |> Enum.filter(&File.regular?/1)
+          |> Enum.map(&Path.relative_to(&1, release.path))
+        else
+          []
+        end
+      end)
+
+    %{release | overlays: release.overlays ++ paths}
   end
 
   def application,
