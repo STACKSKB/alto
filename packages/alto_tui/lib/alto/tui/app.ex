@@ -306,12 +306,9 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{code: code, modifiers: modifiers}, state)
        when code == "esc" or (code == "c" and modifiers == ["ctrl"]) do
-    case active_run(state) do
-      nil ->
-        {if(code == "c", do: :stop, else: :noreply), state}
-
-      {_id, run} ->
-        {:noreply, stop_active_run(state, run)}
+    case Backend.ui(state, if(code == "c", do: :detach, else: {:cancel, :user})) do
+      :pass -> cancel_local(state, code)
+      next -> {:noreply, next}
     end
   end
 
@@ -853,6 +850,16 @@ defmodule Alto.TUI.App do
     if State.input_pending?(state, task_id),
       do: state,
       else: %{state | input_routes: Map.delete(state.input_routes, task_id)}
+  end
+
+  defp cancel_local(state, code) do
+    case active_run(state) do
+      nil ->
+        {if(code == "c", do: :stop, else: :noreply), state}
+
+      {_id, run} ->
+        {:noreply, stop_active_run(state, run)}
+    end
   end
 
   defp stop_active_run(state, run) do
@@ -1504,22 +1511,26 @@ defmodule Alto.TUI.App do
      state.selected_task_id}
   end
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+  defp overlay_key(state, key) do
+    with :pass <- Backend.ui(state, {:overlay_key, key}), do: local_overlay_key(state, key)
+  end
+
+  defp local_overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
          code: "n",
          modifiers: ["ctrl"]
        }),
        do: form_result(state, :create)
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+  defp local_overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
          code: "o",
          modifiers: ["ctrl"]
        }),
        do: form_result(state, :choose)
 
-  defp overlay_key(%{overlay: %{kind: :attachment_editor}} = state, key),
+  defp local_overlay_key(%{overlay: %{kind: :attachment_editor}} = state, key),
     do: Attachments.editor_key(state, key)
 
-  defp overlay_key(state, key) do
+  defp local_overlay_key(state, key) do
     case Menu.key(state.overlay, key) do
       :cancel -> close_overlay(state)
       :select -> select_overlay(state)
@@ -1875,10 +1886,15 @@ defmodule Alto.TUI.App do
     %{state | composer_mode: :prose, leader?: false, notice: "entry mode: prose · wrapping on"}
   end
 
-  defp decide_approval(%{pending_approvals: []} = state, _decision),
+  defp decide_approval(state, decision) do
+    with :pass <- Backend.ui(state, {:decide, decision}),
+         do: decide_local_approval(state, decision)
+  end
+
+  defp decide_local_approval(%{pending_approvals: []} = state, _decision),
     do: %{state | notice: "no pending approval"}
 
-  defp decide_approval(%{pending_approvals: [pending | rest]} = state, decision) do
+  defp decide_local_approval(%{pending_approvals: [pending | rest]} = state, decision) do
     pending.respond.(decision)
 
     state = Search.close(state)
@@ -2032,6 +2048,10 @@ defmodule Alto.TUI.App do
   end
 
   defp open_workspace_form(state) do
+    with :pass <- Backend.ui(state, :workspace_form), do: local_workspace_form(state)
+  end
+
+  defp local_workspace_form(state) do
     project = State.selected_project(state)
     base = if project, do: project["root"], else: File.cwd!()
 
@@ -2266,6 +2286,8 @@ defmodule Alto.TUI.App do
         }
 
       true ->
+        state = backend_action(state, :leaving)
+        task = State.selected_task(state)
         state = persist_task_backend(state, task, backend)
         next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 

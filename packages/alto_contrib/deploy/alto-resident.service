@@ -1,0 +1,16 @@
+[Unit]
+Description=Alto resident task service
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/alto/resident.env
+ExecStart=%h/.local/lib/alto/deploy/alto-resident serve %h/.config/alto/resident.exs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target
