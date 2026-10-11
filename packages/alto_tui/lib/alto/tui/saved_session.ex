@@ -41,7 +41,7 @@ defmodule Alto.TUI.SavedSession do
 
   defp empty,
     do: %{
-      "v" => 3,
+      "v" => 4,
       "offset" => 0,
       "digest" => digest(""),
       "records" => 0,
@@ -55,7 +55,7 @@ defmodule Alto.TUI.SavedSession do
     with {:ok, bytes} <- Alto.BoundedFile.read(path, 4_000_000),
          {:ok,
           %{
-            "v" => 3,
+            "v" => 4,
             "offset" => offset,
             "records" => records,
             "usage" => usage,

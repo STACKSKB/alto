@@ -90,16 +90,7 @@ defmodule Alto.TUI.History do
             %{state | usage: Map.update(state.usage, id, value, &Alto.Usage.merge(value, &1))}
 
           :subagents ->
-            {agents, warnings} = value
-            current = Map.get(state.subagents, id, %{})
-
-            state = State.put_subagents(state, id, Map.merge(agents, current))
-
-            %{
-              state
-              | notice:
-                  if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
-            }
+            State.restore_subagents(state, id, value)
         end
 
       _ ->

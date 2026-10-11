@@ -72,20 +72,12 @@ defmodule Alto.TUI.Subagents do
         _ -> %{}
       end
 
-    value = if is_map(data["value"]), do: data["value"], else: %{}
-    output = text_value(value["output"]) |> String.slice(-4_000, 4_000)
-
     case event do
       "model_completed" ->
         text_value(data["message"]) <> "\n"
 
       type when type in ["tool_started", "tool_completed", "tool_failed"] ->
-        "\n" <>
-          type <>
-          " › " <>
-          text_value(data["summary"] || data["name"]) <>
-          if(type == "tool_failed", do: " " <> inspect(data["error"], limit: 10), else: "") <>
-          "\n" <> output <> "\n"
+        tool_activity(type, data)
 
       _ ->
         ""
@@ -124,7 +116,7 @@ defmodule Alto.TUI.Subagents do
             text
 
           %{type: type, data: info} when type in [:tool_started, :tool_completed, :tool_failed] ->
-            "\n" <> Alto.TUI.Transcript.text(Alto.Contrib.ToolDisplay.entry(type, info)) <> "\n"
+            tool_activity(type, info)
 
           %{type: :input_received, data: info} ->
             "\ninput › " <> info.text <> "\n"
@@ -182,6 +174,9 @@ defmodule Alto.TUI.Subagents do
       state
     end
   end
+
+  defp tool_activity(type, data),
+    do: "\n" <> Alto.TUI.Transcript.text(Alto.Contrib.ToolDisplay.entry(type, data)) <> "\n"
 
   def summary(state) do
     case list(state) do

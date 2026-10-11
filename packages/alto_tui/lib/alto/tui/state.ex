@@ -468,11 +468,14 @@ defmodule Alto.TUI.State do
     |> evict_inactive_caches()
   end
 
-  def put_subagents(state, task, agents) do
+  def restore_subagents(state, task, {agents, warnings}) do
+    agents = Map.merge(agents, Map.get(state.subagents, task, %{}))
+
     %{
       state
       | subagents: Map.put(state.subagents, task, agents),
-        subagent_bytes: Map.put(state.subagent_bytes, task, :erlang.external_size(agents))
+        subagent_bytes: Map.put(state.subagent_bytes, task, :erlang.external_size(agents)),
+        notice: if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
     }
     |> evict_inactive_caches()
   end
@@ -768,16 +771,11 @@ defmodule Alto.TUI.State do
     state =
       if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend) and
            not Map.has_key?(state.subagents, state.selected_task_id) do
-        {agents, warnings} = Alto.TUI.Subagents.load(session_id, state.catalog_opts)
-
-        %{
-          state
-          | subagents: Map.put(state.subagents, state.selected_task_id, agents),
-            subagent_bytes:
-              Map.put(state.subagent_bytes, state.selected_task_id, :erlang.external_size(agents)),
-            notice:
-              if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
-        }
+        restore_subagents(
+          state,
+          state.selected_task_id,
+          Alto.TUI.Subagents.load(session_id, state.catalog_opts)
+        )
       else
         state
       end
