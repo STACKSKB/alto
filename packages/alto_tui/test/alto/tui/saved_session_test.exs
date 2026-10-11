@@ -98,6 +98,55 @@ defmodule Alto.TUI.SavedSessionTest do
     assert {:ok, ^completed} = SavedSession.load(id, opts)
   end
 
+  test "resuming an agent replaces its prior run before replaying later records", %{
+    id: id,
+    opts: opts,
+    cache: cache
+  } do
+    assert :ok = usage(id, opts, 10)
+    assert {:ok, _} = SavedSession.load(id, opts)
+
+    for record <- [
+          Session.started_record(%{
+            task: "continued child",
+            subagent: true,
+            run_id: "run-b",
+            agent_id: "agent-a"
+          }),
+          Session.completed_record(%{run_id: "run-a", status: :ok, output: "old result"}),
+          Session.event_record(
+            "run-b",
+            Event.durable(:model_completed, %{message: "new activity"})
+          )
+        ] do
+      assert :ok = Session.append(id, record, opts)
+    end
+
+    assert {:ok, resumed} = SavedSession.load(id, opts)
+    assert %{"agent-a" => agent} = resumed.agents
+    assert map_size(resumed.agents) == 1
+    assert agent.id == "continued child"
+    assert agent.status == "unknown"
+    assert agent.phase == "no saved completion"
+    assert agent.activity == "new activity\n"
+    assert agent.result =~ "No saved completion."
+    File.rm!(cache)
+    assert {:ok, ^resumed} = SavedSession.load(id, opts)
+
+    assert :ok =
+             Session.append(
+               id,
+               Session.completed_record(%{run_id: "run-b", status: :ok, output: "new result"}),
+               opts
+             )
+
+    assert {:ok, completed} = SavedSession.load(id, opts)
+    assert completed.agents["agent-a"].result == "new result\n"
+    assert completed.agents["agent-a"].phase == "ok"
+    File.rm!(cache)
+    assert {:ok, ^completed} = SavedSession.load(id, opts)
+  end
+
   test "same-length rewrites, truncation and malformed caches rebuild from authoritative records",
        %{id: id, opts: opts, path: path, cache: cache} do
     assert :ok = usage(id, opts, 10)

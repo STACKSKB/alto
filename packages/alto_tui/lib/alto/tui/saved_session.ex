@@ -28,10 +28,8 @@ defmodule Alto.TUI.SavedSession do
 
         agents =
           next["runs"]
-          |> Map.values()
-          |> Enum.sort_by(& &1["order"])
-          |> Map.new(fn run ->
-            agent = Map.new(@fields, &{&1, run["agent"][Atom.to_string(&1)]})
+          |> Map.new(fn {_run, saved} ->
+            agent = Map.new(@fields, &{&1, saved[Atom.to_string(&1)]})
             {agent.agent_id, Alto.Retained.detach(agent)}
           end)
 
@@ -43,7 +41,7 @@ defmodule Alto.TUI.SavedSession do
 
   defp empty,
     do: %{
-      "v" => 2,
+      "v" => 3,
       "offset" => 0,
       "digest" => digest(""),
       "records" => 0,
@@ -57,7 +55,7 @@ defmodule Alto.TUI.SavedSession do
     with {:ok, bytes} <- Alto.BoundedFile.read(path, 4_000_000),
          {:ok,
           %{
-            "v" => 2,
+            "v" => 3,
             "offset" => offset,
             "records" => records,
             "usage" => usage,
@@ -77,10 +75,7 @@ defmodule Alto.TUI.SavedSession do
                is_binary(id) and byte_size(id) <= 128 and value == true
              end),
          true <-
-           Enum.all?(runs, fn {id, run} ->
-             is_binary(id) and is_map(run) and is_integer(run["order"]) and
-               valid_agent?(run["agent"])
-           end) do
+           Enum.all?(runs, fn {id, agent} -> is_binary(id) and valid_agent?(agent) end) do
       Alto.Retained.detach(state)
     else
       _ -> empty()
@@ -99,22 +94,21 @@ defmodule Alto.TUI.SavedSession do
   defp replay(line, %{"records" => count} = state, id) do
     case JSON.decode(line) do
       {:ok, %{"v" => 1} = record} when count < 20_000 ->
-        {:ok, fold(%{state | "records" => count + 1}, record, id)}
+        {:ok, %{state | "records" => count + 1} |> account(record) |> activity(record, id)}
 
       _ ->
         {:error, :saved_session_corrupt}
     end
   end
 
-  defp fold(
+  defp account(
          state,
          %{
            "type" => "diagnostic",
            "event" => "provider_attempt_finished",
            "data" => %{"usage" => _} = data
          } =
-           record,
-         id
+           record
        ) do
     run_id = to_string(record["run_id"])
 
@@ -122,45 +116,29 @@ defmodule Alto.TUI.SavedSession do
          (Map.has_key?(state["accounting_runs"], run_id) or
             map_size(state["accounting_runs"]) < 256) do
       state = %{state | "accounting_runs" => Map.put(state["accounting_runs"], run_id, true)}
-      state = if is_map(data["usage"]), do: merge_usage(state, data["usage"]), else: state
-      activity(state, record, id)
+      if is_map(data["usage"]), do: merge_usage(state, data["usage"]), else: state
     else
       %{state | "truncated" => true}
     end
   end
 
-  defp fold(state, %{"type" => "completed"} = record, id),
-    do:
-      activity(
-        %{
-          state
-          | "accounting_runs" => Map.delete(state["accounting_runs"], to_string(record["run_id"]))
-        },
-        record,
-        id
-      )
+  defp account(state, %{"type" => "completed"} = record),
+    do: %{
+      state
+      | "accounting_runs" => Map.delete(state["accounting_runs"], to_string(record["run_id"]))
+    }
 
-  defp fold(
-         state,
-         %{"type" => "event", "event" => "model_completed"} = record,
-         id
-       ) do
-    state =
-      case if(Map.has_key?(state["accounting_runs"], to_string(record["run_id"])),
-             do: :accounted,
-             else: Session.event_data(record)
-           ) do
-        {:ok, %{"usage" => usage}} when is_map(usage) ->
-          merge_usage(state, usage)
-
-        _ ->
-          state
-      end
-
-    activity(state, record, id)
+  defp account(state, %{"type" => "event", "event" => "model_completed"} = record) do
+    case if(Map.has_key?(state["accounting_runs"], to_string(record["run_id"])),
+           do: :accounted,
+           else: Session.event_data(record)
+         ) do
+      {:ok, %{"usage" => usage}} when is_map(usage) -> merge_usage(state, usage)
+      _ -> state
+    end
   end
 
-  defp fold(state, record, id), do: activity(state, record, id)
+  defp account(state, _record), do: state
 
   defp merge_usage(state, usage),
     do: %{
@@ -169,22 +147,13 @@ defmodule Alto.TUI.SavedSession do
     }
 
   defp activity(state, %{"type" => "started", "subagent" => true} = record, id) do
-    agent = Subagents.saved_agent(id, record, [record]) |> stringify() |> Alto.Retained.detach()
+    agent = Subagents.saved_agent(id, record) |> stringify() |> Alto.Retained.detach()
 
     runs =
-      Map.reject(state["runs"], fn {_, value} ->
-        value["agent"]["agent_id"] == agent["agent_id"]
-      end)
+      Map.reject(state["runs"], fn {_, value} -> value["agent_id"] == agent["agent_id"] end)
 
     if map_size(runs) < 256 do
-      %{
-        state
-        | "runs" =>
-            Map.put(runs, to_string(record["run_id"]), %{
-              "agent" => agent,
-              "order" => state["records"]
-            })
-      }
+      %{state | "runs" => Map.put(runs, to_string(record["run_id"]), agent)}
     else
       %{state | "truncated" => true}
     end
@@ -194,9 +163,7 @@ defmodule Alto.TUI.SavedSession do
     key = to_string(record["run_id"])
 
     case Map.fetch(state["runs"], key) do
-      {:ok, run} ->
-        agent = run["agent"]
-
+      {:ok, agent} ->
         agent =
           if record["type"] == "completed" do
             status = record["status"] || "unknown"
@@ -219,7 +186,7 @@ defmodule Alto.TUI.SavedSession do
             }
           end
 
-        %{state | "runs" => Map.put(state["runs"], key, %{run | "agent" => agent})}
+        %{state | "runs" => Map.put(state["runs"], key, agent)}
 
       :error ->
         state
