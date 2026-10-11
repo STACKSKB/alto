@@ -141,26 +141,16 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   defp openai_tool_message(message, modalities) do
     message = Map.delete(message, "alto_anthropic_content")
 
-    case Content.decode_transcript(Map.get(message, "content")) do
-      :not_content ->
-        {:ok, {message, []}}
+    map_content(message, modalities, {message, []}, fn blocks ->
+      media = Enum.reject(blocks, &(&1["type"] == "text"))
 
-      {:ok, content} ->
-        with {:ok, blocks} <- Content.map_media(content, modalities, &openai_media/1) do
-          media = Enum.reject(blocks, &(&1["type"] == "text"))
+      text =
+        for(%{"type" => "text", "text" => text} <- blocks, do: text)
+        |> Enum.join("\n")
+        |> append_attachment_marker(message["tool_call_id"], media)
 
-          text =
-            for(%{"type" => "text", "text" => text} <- blocks, do: text)
-            |> Enum.join("\n")
-            |> append_attachment_marker(message["tool_call_id"], media)
-
-          {:ok,
-           {Map.put(message, "content", text), Enum.map(media, &{message["tool_call_id"], &1})}}
-        end
-
-      {:error, reason} ->
-        {:error, {:invalid_multimodal_content, reason}}
-    end
+      {Map.put(message, "content", text), Enum.map(media, &{message["tool_call_id"], &1})}
+    end)
   end
 
   defp append_attachment_marker(text, _call_id, []), do: text
@@ -192,22 +182,25 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
       |> Map.delete("alto_provider_metadata")
       |> replayable_tool_arguments()
 
+    map_content(message, modalities, message, &Map.put(message, "content", &1))
+  end
+
+  defp provider_message(message, _modalities),
+    do: {:error, {:invalid_provider_message, message}}
+
+  defp map_content(message, modalities, plain, transform) do
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
-        {:ok, message}
+        {:ok, plain}
 
       {:ok, content} ->
-        with {:ok, blocks} <- Content.map_media(content, modalities, &openai_media/1) do
-          {:ok, Map.put(message, "content", blocks)}
-        end
+        with {:ok, blocks} <- Content.map_media(content, modalities, &openai_media/1),
+             do: {:ok, transform.(blocks)}
 
       {:error, reason} ->
         {:error, {:invalid_multimodal_content, reason}}
     end
   end
-
-  defp provider_message(message, _modalities),
-    do: {:error, {:invalid_provider_message, message}}
 
   # A failed tool call remains in the audit transcript verbatim. Some endpoints
   # reject malformed JSON even in historical calls, preventing the model from

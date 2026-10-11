@@ -249,6 +249,26 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
            }
   end
 
+  test "rejects malformed typed user and tool content before sending HTTP" do
+    configure_adapter(self(), 200, "application/json", [])
+
+    for message <- [%{"role" => "user"}, %{"role" => "tool", "tool_call_id" => "call"}],
+        {content, reason} <- [
+          {[], :empty_content},
+          {[Alto.Content.text(<<255>>)], {:invalid_content_block, 0, :text_must_be_utf8}}
+        ] do
+      assert {:error, {:invalid_multimodal_content, ^reason}} =
+               OpenAICompatible.stream(
+                 %{messages: [Map.put(message, "content", content)], tools: []},
+                 fn _ -> :ok end,
+                 model: "test-model",
+                 req_options: [adapter: Adapter]
+               )
+
+      refute_received {:http_request, _}
+    end
+  end
+
   test "streams content and reconstructs fragmented function arguments" do
     first =
       sse(%{
