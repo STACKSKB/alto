@@ -332,7 +332,7 @@ defmodule Alto.Contrib.Resident.Lifecycle do
         {:ok, :retired}
 
       {:ok, handle, snapshot} ->
-        if resource_identity(resource["role"], handle)["generation"] != binding["generation"] do
+        if Retained.identity(handle)["generation"] != binding["generation"] do
           {:ok, :retired}
         else
           retire_existing(resource, handle, snapshot)
@@ -346,10 +346,6 @@ defmodule Alto.Contrib.Resident.Lifecycle do
   defp lookup_resource("budget", server, key), do: Account.lookup(server, key)
   defp lookup_resource("parent", server, key), do: Continuation.lookup(server, key)
   defp lookup_resource("binding", server, key), do: Retained.lookup(server, key, ParentRuns)
-
-  defp resource_identity("budget", account), do: Account.identity(account)
-  defp resource_identity("parent", cell), do: Continuation.identity(cell)
-  defp resource_identity("binding", cell), do: Retained.identity(cell)
 
   defp retire_existing(%{"role" => role, "revision" => revision}, handle, snapshot) do
     {module, method} =
@@ -372,16 +368,7 @@ defmodule Alto.Contrib.Resident.Lifecycle do
     do: %{"role" => role, "identity" => binding, "revision" => snapshot.revision}
 
   defp collect(values, fun) do
-    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
-      case fun.(value) do
-        {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, result} -> {:cont, {:ok, [result | acc]}}
-        error -> {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-      error -> error
-    end
+    with {:ok, values} <- Alto.Result.traverse(values, fun),
+         do: {:ok, Enum.reject(values, &is_nil/1)}
   end
 end

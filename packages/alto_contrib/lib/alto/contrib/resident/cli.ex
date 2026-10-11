@@ -130,6 +130,38 @@ defmodule Alto.Contrib.Resident.CLI do
     end
   end
 
+  @wire_commands %{
+    "tasks" => {"tasks.list", [], false},
+    "workspaces" => {"workspaces.list", [], true},
+    "workspace" => {"workspaces.get", ["id"], false},
+    "workspace-patch" => {"workspaces.patch", ["id"], true},
+    "team-batches" => {"children.list", [], true},
+    "team-batch" => {"children.get", ["key"], false},
+    "mailbox" => {"mailbox.list", ["root"], true},
+    "mailbox-compact" => {"mailbox.compact", [], false},
+    "mailbox-get" => {"mailbox.get", ["root", "key"], false},
+    "mailbox-cancel" => {"mailbox.cancel", ["root", "key"], false},
+    "task" => {"tasks.get", ["id"], false},
+    "task-cancel" => {"tasks.cancel", ["id"], false},
+    "workspace-discard" =>
+      {"workspaces.discard", ["id"], [:revision, :note],
+       :workspace_discard_requires_revision_and_note},
+    "team-child-approval" =>
+      {"children.approval", ["key", "child"], [:generation, :revision],
+       :team_child_approval_requires_generation_and_revision},
+    "task-decide" =>
+      {"tasks.decide", ["id", "decision"], [:revision], {:invalid_task_decide, :revision}},
+    "task-child-decide" =>
+      {"tasks.child_decide", ["id", "child", "decision"],
+       [:revision, :generation, :batch_revision, :attempt, :suspension, :key],
+       :invalid_task_child_decide},
+    "task-cleanup" => {"tasks.cleanup", ["id"], [:revision], :task_cleanup_requires_revision},
+    "task-recover" =>
+      {"tasks.recover", ["id", "key"], [:revision, :generation, :continuation_revision],
+       :invalid_parent_recovery_request}
+  }
+  @positive_keys ~w(revision batch_revision continuation_revision)
+
   defp command(["status"], _), do: {:ok, %{"type" => "sessions"}}
 
   defp command(["start", profile, task], _),
@@ -157,45 +189,13 @@ defmodule Alto.Contrib.Resident.CLI do
     {:ok, command_wire("tasks.submit", payload)}
   end
 
-  defp command(["tasks"], _opts), do: {:ok, command_wire("tasks.list", %{})}
-
-  defp command(["workspaces"], opts),
-    do: {:ok, command_wire("workspaces.list", %{"cursor" => Keyword.get(opts, :cursor, 0)})}
-
-  defp command(["workspace", id], _opts),
-    do: {:ok, command_wire("workspaces.get", %{"id" => id})}
-
-  defp command(["workspace-patch", id], opts),
-    do:
-      {:ok,
-       command_wire("workspaces.patch", %{"id" => id, "cursor" => Keyword.get(opts, :cursor, 0)})}
-
-  defp command(["workspace-discard", id], opts) do
-    revision = Keyword.get(opts, :revision)
-    note = Keyword.get(opts, :note)
-
-    if is_integer(revision) and revision > 0 and is_binary(note) and String.trim(note) != "" do
-      {:ok,
-       command_wire("workspaces.discard", %{"id" => id, "revision" => revision, "note" => note})}
-    else
-      {:error, :workspace_discard_requires_revision_and_note}
-    end
-  end
-
-  defp command(["team-batches"], opts),
-    do: {:ok, command_wire("children.list", %{"cursor" => Keyword.get(opts, :cursor, 0)})}
-
-  defp command(["team-batch", key], _opts),
-    do: {:ok, command_wire("children.get", %{"key" => key})}
-
   defp command(["team-result", key, child], opts) do
     generation = Keyword.get(opts, :generation)
     revision = Keyword.get(opts, :revision)
     cursor = Keyword.get(opts, :cursor, 0)
 
     cond do
-      not (is_binary(generation) and String.trim(generation) != "") or
-          not (is_integer(revision) and revision > 0) ->
+      not nonempty?(generation) or not positive?(revision) ->
         {:error, :team_result_requires_generation_and_revision}
 
       not (is_integer(cursor) and cursor >= 0) ->
@@ -213,52 +213,16 @@ defmodule Alto.Contrib.Resident.CLI do
     end
   end
 
-  defp command(["team-child-approval", key, child], opts) do
-    generation = Keyword.get(opts, :generation)
-    revision = Keyword.get(opts, :revision)
-
-    if nonempty?(generation) and positive?(revision) do
-      {:ok,
-       command_wire("children.approval", %{
-         "key" => key,
-         "child" => child,
-         "generation" => generation,
-         "revision" => revision
-       })}
-    else
-      {:error, :team_child_approval_requires_generation_and_revision}
-    end
-  end
-
-  defp command(["mailbox", root], opts),
-    do:
-      {:ok,
-       command_wire("mailbox.list", %{"root" => root, "cursor" => Keyword.get(opts, :cursor, 0)})}
-
-  defp command(["mailbox-compact"], _opts),
-    do: {:ok, command_wire("mailbox.compact", %{})}
-
-  defp command(["mailbox-get", root, key], _opts),
-    do: {:ok, command_wire("mailbox.get", %{"root" => root, "key" => key})}
-
-  defp command(["mailbox-cancel", root, key], _opts),
-    do: {:ok, command_wire("mailbox.cancel", %{"root" => root, "key" => key})}
-
-  defp command(["task", id], _opts), do: {:ok, command_wire("tasks.get", %{"id" => id})}
-
-  defp command(["task-cancel", id], _opts),
-    do: {:ok, command_wire("tasks.cancel", %{"id" => id})}
-
   defp command(["task-reconcile", id, resolution], opts)
        when resolution in ["committed", "failed", "retry"] do
     revision = Keyword.get(opts, :revision)
     note = Keyword.get(opts, :note)
 
     cond do
-      not (is_integer(revision) and revision > 0) ->
+      not positive?(revision) ->
         {:error, {:invalid_task_reconcile, :revision}}
 
-      not (is_binary(note) and String.trim(note) != "") ->
+      not nonempty?(note) ->
         {:error, {:invalid_task_reconcile, :note}}
 
       true ->
@@ -272,84 +236,13 @@ defmodule Alto.Contrib.Resident.CLI do
     end
   end
 
-  defp command(["task-decide", id, decision], opts) when decision in ["approve", "deny"] do
-    revision = Keyword.get(opts, :revision)
+  defp command(["task-decide", _id, decision], _opts)
+       when decision not in ["approve", "deny"],
+       do: {:error, {:invalid_task_decide, :decision}}
 
-    if is_integer(revision) and revision > 0 do
-      {:ok,
-       command_wire("tasks.decide", %{
-         "id" => id,
-         "revision" => revision,
-         "decision" => decision
-       })}
-    else
-      {:error, {:invalid_task_decide, :revision}}
-    end
-  end
-
-  defp command(["task-decide", _id, _decision], _opts),
-    do: {:error, {:invalid_task_decide, :decision}}
-
-  defp command(["task-child-decide", task, child, decision], opts)
-       when decision in ["approve", "deny"] do
-    revision = Keyword.get(opts, :revision)
-    batch_revision = Keyword.get(opts, :batch_revision)
-    generation = Keyword.get(opts, :generation)
-    attempt = Keyword.get(opts, :attempt)
-    suspension = Keyword.get(opts, :suspension)
-    key = Keyword.get(opts, :key)
-
-    if positive?(revision) and positive?(batch_revision) and nonempty?(generation) and
-         nonempty?(attempt) and nonempty?(suspension) and nonempty?(key) do
-      {:ok,
-       command_wire("tasks.child_decide", %{
-         "id" => task,
-         "child" => child,
-         "decision" => decision,
-         "revision" => revision,
-         "generation" => generation,
-         "batch_revision" => batch_revision,
-         "attempt" => attempt,
-         "suspension" => suspension,
-         "key" => key
-       })}
-    else
-      {:error, :invalid_task_child_decide}
-    end
-  end
-
-  defp command(["task-child-decide", _task, _child, _decision], _opts),
-    do: {:error, {:invalid_task_child_decide, :decision}}
-
-  defp command(["task-cleanup", task], opts) do
-    revision = Keyword.get(opts, :revision)
-
-    if positive?(revision),
-      do: {:ok, command_wire("tasks.cleanup", %{"id" => task, "revision" => revision})},
-      else: {:error, :task_cleanup_requires_revision}
-  end
-
-  defp command(["task-recover", id, key], opts) do
-    revision = Keyword.get(opts, :revision)
-    generation = Keyword.get(opts, :generation)
-    continuation_revision = Keyword.get(opts, :continuation_revision)
-
-    if is_binary(id) and String.trim(id) != "" and is_binary(key) and String.trim(key) != "" and
-         is_integer(revision) and revision > 0 and is_binary(generation) and
-         String.trim(generation) != "" and is_integer(continuation_revision) and
-         continuation_revision > 0 do
-      {:ok,
-       command_wire("tasks.recover", %{
-         "id" => id,
-         "key" => key,
-         "revision" => revision,
-         "generation" => generation,
-         "continuation_revision" => continuation_revision
-       })}
-    else
-      {:error, :invalid_parent_recovery_request}
-    end
-  end
+  defp command(["task-child-decide", _task, _child, decision], _opts)
+       when decision not in ["approve", "deny"],
+       do: {:error, {:invalid_task_child_decide, :decision}}
 
   defp command([decision, request], _) when decision in ["approve", "deny"],
     do:
@@ -360,7 +253,42 @@ defmodule Alto.Contrib.Resident.CLI do
          "decision" => if(decision == "approve", do: "approve", else: %{"deny" => "user"})
        }}
 
+  defp command([name | args], opts) do
+    case Map.get(@wire_commands, name) do
+      {wire, keys, cursor?} when length(args) == length(keys) ->
+        payload = Map.new(Enum.zip(keys, args))
+
+        payload =
+          if cursor?,
+            do: Map.put(payload, "cursor", Keyword.get(opts, :cursor, 0)),
+            else: payload
+
+        {:ok, command_wire(wire, payload)}
+
+      {wire, keys, required, error} when length(args) == length(keys) ->
+        if name == "task-recover" and not Enum.all?(args, &nonempty?/1) do
+          {:error, error}
+        else
+          checked_wire(wire, Map.new(Enum.zip(keys, args)), opts, required, error)
+        end
+
+      _ ->
+        {:error, :invalid_command}
+    end
+  end
+
   defp command(_, _), do: {:error, :invalid_command}
+
+  defp checked_wire(wire, base, opts, keys, error) do
+    values = Map.new(keys, fn key -> {Atom.to_string(key), Keyword.get(opts, key)} end)
+
+    valid? =
+      Enum.all?(values, fn {key, value} ->
+        if key in @positive_keys, do: positive?(value), else: nonempty?(value)
+      end)
+
+    if valid?, do: {:ok, command_wire(wire, Map.merge(base, values))}, else: {:error, error}
+  end
 
   defp command_wire(name, payload),
     do: %{"type" => "command", "name" => name, "payload" => payload}
