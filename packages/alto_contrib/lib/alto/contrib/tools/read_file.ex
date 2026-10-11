@@ -63,15 +63,15 @@ defmodule Alto.Contrib.Tools.ReadFile do
         bytes = binary_part(scanned, 0, min(byte_size(scanned), scan_limit))
 
         case line_offset(bytes, start - 1, 0) do
-          position when more and (position == :past_end or position == byte_size(bytes)) ->
+          position when more and (is_nil(position) or position == byte_size(bytes)) ->
             {:error,
              {:line_scan_limit, scan_limit,
               "Requested line is beyond the bounded scan. Use byte-offset reads with offset/limit, or increase the host max_scan_bytes setting."}}
 
           position ->
-            offset = if position == :past_end, do: byte_size(bytes), else: position
+            offset = position || byte_size(bytes)
             rest = binary_part(bytes, offset, byte_size(bytes) - offset)
-            requested = line_end(rest, Map.get(args, "line_count", 200), 0)
+            requested = line_offset(rest, Map.get(args, "line_count", 200), 0) || byte_size(rest)
             size = min(requested, args["limit"])
             content = binary_part(rest, 0, size)
             truncated = offset + size < byte_size(bytes) or more
@@ -144,20 +144,7 @@ defmodule Alto.Contrib.Tools.ReadFile do
         line_offset(binary_part(bytes, step, byte_size(bytes) - step), count - 1, offset + step)
 
       :nomatch ->
-        :past_end
-    end
-  end
-
-  defp line_end(_bytes, 0, offset), do: offset
-
-  defp line_end(bytes, count, offset) do
-    case :binary.match(bytes, "\n") do
-      {index, 1} ->
-        step = index + 1
-        line_end(binary_part(bytes, step, byte_size(bytes) - step), count - 1, offset + step)
-
-      :nomatch ->
-        offset + byte_size(bytes)
+        nil
     end
   end
 end
