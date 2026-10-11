@@ -18,18 +18,9 @@ defmodule Alto.Contrib.Tools.RunShell do
          type: Arguments.text(1, @max_command_bytes),
          required: true,
          doc: "Complete shell command text, including spaces and pipelines."
-       ],
-       timeout_ms: [
-         type: {:in, 1..120_000},
-         default: 30_000,
-         doc: "Deadline in milliseconds (1..120000; default 30000)."
-       ],
-       max_output_bytes: [
-         type: {:in, 1..1_000_000},
-         default: Alto.Contrib.Command.default_output_bytes(),
-         doc: "Combined stdout/stderr capture limit."
        ]
-     ]}
+     ] ++
+       Keyword.take(elem(Alto.Contrib.Command.arguments(), 1), [:timeout_ms, :max_output_bytes])}
   end
 
   @impl true
