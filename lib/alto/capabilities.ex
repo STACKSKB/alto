@@ -5,18 +5,13 @@ defmodule Alto.Capabilities do
   def normalize(module) when is_atom(module), do: {module, []}
   def normalize({module, options}), do: {module, options}
 
-  @defaults [
-    max_steps: 32,
-    max_effects: 10_000,
-    max_model_requests: 256,
-    run_timeout: 900_000,
-    max_transcript_bytes: 8_000_000,
-    max_tool_result_bytes: 64_000
-  ]
+  @limits ~w(max_steps max_effects max_model_requests run_timeout
+             max_transcript_bytes max_tool_result_bytes)a
 
   def describe(opts) when is_list(opts) do
-    loop = Keyword.get(opts, :loop, Alto.default_loop())
-    tools = Enum.map(Keyword.get(opts, :tools, []), &tool/1)
+    opts = Alto.Config.default(opts)
+    loop = opts[:loop]
+    tools = Enum.map(opts[:tools], &tool/1)
 
     exposure =
       Enum.map(Keyword.get(opts, :model_tools) || Enum.map(tools, & &1.name), &to_string/1)
@@ -28,11 +23,11 @@ defmodule Alto.Capabilities do
       subagents: subagents(loop.subagents),
       middleware: Enum.map(loop.middleware, &module_name/1),
       provider: module_name(Keyword.get(opts, :provider)),
-      approval: inspect(Keyword.get(opts, :approval, {:deny, :policy_denied})),
+      approval: inspect(opts[:approval]),
       tools: Enum.map(tools, &Map.put(&1, :model_visible, &1.name in exposure)),
       context: context(loop.context),
       compaction: compaction(Keyword.get(opts, :compaction, false)),
-      limits: Map.new(@defaults, fn {key, default} -> {key, Keyword.get(opts, key, default)} end)
+      limits: Map.new(@limits, &{&1, Keyword.get(opts, &1)})
     }
   end
 
