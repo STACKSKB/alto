@@ -83,44 +83,40 @@ defmodule Alto.TUI.Search do
     cached(:matches, {entries, query}, fn ->
       regex = Regex.compile!(Regex.escape(query), "iu")
 
-      {matches, _} =
-        Enum.reduce_while(Enum.with_index(entries), {[], 0}, fn {entry, index}, {acc, count} ->
+      matches =
+        entries
+        |> Stream.with_index()
+        |> Stream.flat_map(fn {entry, index} ->
           source = source(entry)
-          offsets = scan(regex, source, @max_matches + 1 - count)
 
-          found =
-            Enum.with_index(offsets, fn [{start, size}], occurrence ->
-              %{
-                entry: index,
-                start: start,
-                size: size,
-                occurrence: occurrence,
-                kind: to_string(entry[:kind] || "message"),
-                hit: Alto.Retained.detach(binary_part(source, start, size))
-              }
-            end)
-
-          next = {acc ++ found, count + length(found)}
-          if elem(next, 1) > @max_matches, do: {:halt, next}, else: {:cont, next}
+          scan(regex, source)
+          |> Stream.with_index()
+          |> Stream.map(fn {[{start, size}], occurrence} ->
+            %{
+              entry: index,
+              start: start,
+              size: size,
+              occurrence: occurrence,
+              kind: to_string(entry[:kind] || "message"),
+              hit: Alto.Retained.detach(binary_part(source, start, size))
+            }
+          end)
         end)
+        |> Enum.take(@max_matches + 1)
 
       %{matches: Enum.take(matches, @max_matches), truncated: length(matches) > @max_matches}
     end)
   end
 
-  # Regex.run with an offset keeps both the temporary scan and retained result
-  # bounded. Literal queries are nonempty, so every match advances.
-  defp scan(regex, source, limit), do: scan(regex, source, limit, 0, [])
-  defp scan(_, _, 0, _, acc), do: Enum.reverse(acc)
-
-  defp scan(regex, source, limit, offset, acc) do
-    case Regex.run(regex, source, return: :index, offset: offset) do
-      [{start, size}] = hit when size > 0 ->
-        scan(regex, source, limit - 1, start + size, [hit | acc])
-
-      _ ->
-        Enum.reverse(acc)
-    end
+  # Scan on demand so callers can bound results before allocating excerpts.
+  # Literal queries are nonempty, so every match advances.
+  defp scan(regex, source) do
+    Stream.unfold(0, fn offset ->
+      case Regex.run(regex, source, return: :index, offset: offset) do
+        [{start, size}] = hit when size > 0 -> {hit, start + size}
+        _ -> nil
+      end
+    end)
   end
 
   # The bounded prefix window may start inside a UTF-8 codepoint.
@@ -188,7 +184,7 @@ defmodule Alto.TUI.Search do
           body = if assistant?, do: Enum.drop(lines, 1), else: lines
           mapping = source_rows(body, source(entry), row + if(assistant?, do: 1, else: 0))
           text = Enum.map_join(body, "\n", &line_text/1)
-          offsets = if wrapped, do: scan(wrapped, text, @max_matches), else: []
+          offsets = if wrapped, do: Enum.take(scan(wrapped, text), @max_matches), else: []
 
           {{row + if(assistant?, do: 1, else: 0), text, offsets, mapping},
            row + length(lines) + 1}

@@ -1548,10 +1548,7 @@ defmodule Alto.TUI.App do
         select_backend(state, backend)
 
       %{value: {:folder, path}} ->
-        form = state.overlay.return_form
-        ExRatatui.text_input_set_value(Menu.field(form, :path).input, path)
-        ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
-        %{state | overlay: Menu.refresh_folder(%{form | index: 0, error: nil})}
+        %{state | overlay: Menu.complete_folder(overlay.return_form, path)}
 
       %{value: :new_workspace} ->
         open_workspace_form(state)
@@ -2109,21 +2106,16 @@ defmodule Alto.TUI.App do
   defp form_result(state, :cancel), do: close_overlay(state)
 
   defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :choose) do
-    path = Menu.value(form, :path)
-
-    saved =
-      if path == "",
-        do: Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/")),
-        else: []
-
-    found =
-      case Alto.TUI.Folders.suggest(path, form.base) do
-        {:ok, %{folders: folders}} -> folders
-        _ -> []
-      end
+    refreshed =
+      form
+      |> Map.put(
+        :folders,
+        Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/"))
+      )
+      |> Menu.refresh_folder()
 
     items =
-      Enum.map(Enum.take(Enum.uniq(saved ++ found), 50), &%{label: &1, value: {:folder, &1}})
+      Enum.map(refreshed.suggestions, &%{label: &1, value: {:folder, &1}})
 
     %{
       state
