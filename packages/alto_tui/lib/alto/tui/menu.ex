@@ -80,13 +80,9 @@ defmodule Alto.TUI.Menu do
     if count == 0, do: menu, else: %{menu | index: Integer.mod(menu.index + delta, count)}
   end
 
-  def window(%{kind: :workspace_form} = menu, height) do
-    offset = max(menu.index - max(height, 1) + 1, 1)
-    {Enum.slice(items(menu), offset, max(height, 0)), offset}
-  end
-
   def window(menu, height) do
-    offset = max(menu.index - max(height, 1) + 1, 0)
+    minimum = if menu[:kind] == :workspace_form, do: 1, else: 0
+    offset = max(menu.index - max(height, 1) + 1, minimum)
     {Enum.slice(items(menu), offset, max(height, 0)), offset}
   end
 

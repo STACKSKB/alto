@@ -65,12 +65,11 @@ defmodule Alto.TUI.Backend do
   end
 
   def message(state, message) do
-    Enum.reduce_while(configured(state.run_options), :pass, fn {_id, {module, opts}}, :pass ->
-      case contribution(module, {:message, message}, state, opts) do
-        :pass -> {:cont, :pass}
-        result -> {:halt, result}
-      end
+    configured(state.run_options)
+    |> Stream.map(fn {_id, {module, opts}} ->
+      contribution(module, {:message, message}, state, opts)
     end)
+    |> Enum.find(:pass, &(&1 != :pass))
   end
 
   defp contribution(module, event, state, opts) do
