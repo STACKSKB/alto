@@ -225,7 +225,9 @@ defmodule Alto.TUI.Markdown do
     source = content_source(block) <> "\n\n" <> marker
     estimate = length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4
     height = min(max(div(32_768, width), 1), max(estimate, 1))
-    terminal = Alto.TUI.Viewport.test_terminal(:markdown_metrics, width, height)
+    # Keep a spare column: native rendering of a wide glyph at the right edge
+    # can otherwise erase the first character of the following row.
+    terminal = Alto.TUI.Viewport.test_terminal(:markdown_metrics, width + 1, height)
     measure_pages(terminal, block, source, marker, width, height, 0, 0, [])
   end
 
@@ -270,21 +272,7 @@ defmodule Alto.TUI.Markdown do
 
   defp block_window({:heading, text}, width, offset, height) do
     native_window({:markdown, text}, width, offset, height)
-    |> Enum.map(fn line ->
-      %{
-        line
-        | spans:
-            Enum.map(line.spans, fn span ->
-              %{
-                span
-                | style: %{
-                    span.style
-                    | modifiers: Enum.uniq([:bold | span.style.modifiers || []])
-                  }
-              }
-            end)
-      }
-    end)
+    |> bold_lines()
   end
 
   defp block_window(block, width, offset, height), do: native_window(block, width, offset, height)
@@ -324,7 +312,7 @@ defmodule Alto.TUI.Markdown do
   defp native_window(_, _, _, height) when height <= 0, do: []
 
   defp native_window(block, width, offset, height) do
-    session = CellSession.new(width, height)
+    session = CellSession.new(width + 1, height)
 
     try do
       :ok =
@@ -333,7 +321,10 @@ defmodule Alto.TUI.Markdown do
            %Rect{width: width, height: height}}
         ])
 
-      CellSession.take_cells(session).cells |> Enum.chunk_every(width) |> styled_rows()
+      CellSession.take_cells(session).cells
+      |> Enum.chunk_every(width + 1)
+      |> Enum.map(&Enum.take(&1, width))
+      |> styled_rows()
     after
       CellSession.close(session)
     end
@@ -467,7 +458,24 @@ defmodule Alto.TUI.Markdown do
 
   defp render_block({:heading, source}, width) do
     materialize({:markdown, source}, width)
-    |> Enum.map(fn line ->
+    |> bold_lines()
+  end
+
+  defp render_block({:markdown, source}, width), do: materialize({:markdown, source}, width)
+
+  defp render_block({:code, language, code}, width) do
+    [code_label(language, width) | code_rows(materialize({:code, language, code}, width), width)]
+  end
+
+  defp render_block({:table, _, _} = table, width) do
+    expand_tables([table])
+    |> Enum.map(&materialize(&1, width))
+    |> Enum.intersperse([Line.new([])])
+    |> List.flatten()
+  end
+
+  defp bold_lines(lines) do
+    Enum.map(lines, fn line ->
       %{
         line
         | spans:
@@ -479,30 +487,6 @@ defmodule Alto.TUI.Markdown do
     end)
   end
 
-  defp render_block({:markdown, source}, width), do: materialize({:markdown, source}, width)
-
-  defp render_block({:code, language, code}, width) do
-    [code_label(language, width) | code_rows(materialize({:code, language, code}, width), width)]
-  end
-
-  defp render_block({:table, headers, records}, width) do
-    columns = Enum.reduce(records, length(headers), &max(length(&1), &2))
-    headers = headers ++ Enum.map((length(headers) + 1)..columns//1, &"Column #{&1}")
-    rows = if records == [], do: [[]], else: records
-
-    rows
-    |> Enum.map(fn row ->
-      headers
-      |> Enum.with_index()
-      |> Enum.map_join("\n\n", fn {header, index} ->
-        "**#{header}:** #{Enum.at(row, index, "")}"
-      end)
-    end)
-    |> Enum.map(&materialize({:markdown, &1}, width))
-    |> Enum.intersperse([Line.new([])])
-    |> List.flatten()
-  end
-
   defp materialize({_kind, ""}, _width), do: [Line.new([])]
   defp materialize({:code, _language, ""}, _width), do: [Line.new([])]
 
@@ -510,7 +494,7 @@ defmodule Alto.TUI.Markdown do
     marker = marker(content)
     source = content_source(content) <> "\n\n" <> marker
     height = min(64, length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4)
-    session = CellSession.new(width, height)
+    session = CellSession.new(width + 1, height)
 
     try do
       native_pages(session, content, source, marker, width, height, 0, [])
@@ -528,7 +512,11 @@ defmodule Alto.TUI.Markdown do
     :ok = CellSession.draw(session, [])
     widget = native_widget(content, source, offset)
     :ok = CellSession.draw(session, [{widget, %Rect{width: width, height: height}}])
-    cells = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
+
+    cells =
+      CellSession.take_cells(session).cells
+      |> Enum.chunk_every(width + 1)
+      |> Enum.map(&Enum.take(&1, width))
 
     case Enum.find_index(cells, fn row -> Enum.any?(row, &(&1.symbol == marker)) end) do
       nil when offset < 65_000 ->

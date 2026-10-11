@@ -306,6 +306,7 @@ defmodule Alto.TUI.MarkdownTest do
     sources = [
       "",
       "## Heading **strong**",
+      "## " <> String.duplicate("Heading **strong** 猫 ", 400),
       "- first\n- second `code`",
       "```elixir\n  IO.puts(\"猫\")\n\n  :ok\n```",
       "| 名 | Value |\n| --- | --- |\n| 猫 | **yes** |\n| two | `three` |",
@@ -323,6 +324,7 @@ defmodule Alto.TUI.MarkdownTest do
       full = Transcript.render(entries, width)
       index = Transcript.index(entries, width)
       assert index.rows == length(full.lines)
+      assert String.replace(plain(full), ~r/\s/u, "") =~ String.duplicate("Headingstrong猫", 400)
 
       plain =
         Transcript.plain_groups(index)
