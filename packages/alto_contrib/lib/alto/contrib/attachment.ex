@@ -146,23 +146,16 @@ defmodule Alto.Contrib.Attachment do
   defp chunks(text, limit, acc) when byte_size(text) <= limit, do: Enum.reverse([text | acc])
 
   defp chunks(text, limit, acc) do
-    size = utf8_boundary(text, limit)
-    prefix = binary_part(text, 0, size)
+    prefix = Alto.Text.prefix(text, limit)
     # Prefer a line boundary when it does not produce very small chunks.
     size =
       case :binary.matches(prefix, "\n") |> List.last() do
         {position, 1} when position >= div(limit, 2) -> position + 1
-        _ -> size
+        _ -> byte_size(prefix)
       end
 
     <<part::binary-size(size), rest::binary>> = text
     chunks(rest, limit, [part | acc])
-  end
-
-  defp utf8_boundary(text, size) do
-    if Bitwise.band(:binary.at(text, size), 0xC0) == 0x80,
-      do: utf8_boundary(text, size - 1),
-      else: size
   end
 
   defp block(data, name, "text/plain") do
