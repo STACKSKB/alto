@@ -14,11 +14,49 @@ defmodule Alto.TUI.Backends.Remote do
       options: Keyword.delete(options, :label),
       connection: nil,
       model: nil,
-      busy: false
+      busy: false,
+      local: nil
     })
   end
 
-  def ui(event, state, _options) when event in [:prepare, :selected], do: ensure_connection(state)
+  def ui(event, state, _options) when event in [:prepare, :selected] do
+    state =
+      if data(state).local == nil do
+        local =
+          Map.take(state, [
+            :projects,
+            :tasks,
+            :selected_project_id,
+            :selected_task_id,
+            :selected_provider_id
+          ])
+
+        put_data(state, %{data(state) | local: local})
+      else
+        state
+      end
+
+    state = ensure_connection(state)
+    if data(state).model, do: project(state, data(state).model), else: state
+  end
+
+  def ui(:leaving, state, _) do
+    case data(state).local do
+      nil ->
+        state
+
+      local ->
+        local =
+          case Alto.TUI.Catalog.navigation(state.catalog_opts) do
+            {:ok, projects, tasks} -> Map.merge(local, %{projects: projects, tasks: tasks})
+            _ -> local
+          end
+
+        next = state |> put_data(%{data(state) | local: nil}) |> Map.merge(local)
+        %{next | selected_task_id: nil}
+    end
+  end
+
   def ui(:provider_label, state, _), do: "Resident · " <> connection_label(state)
   def ui(:activity, state, _), do: selected_status(state)
 
@@ -150,6 +188,7 @@ defmodule Alto.TUI.Backends.Remote do
 
   def ui({:submit, prompt}, state, _), do: action(state, {:submit, prompt})
   def ui({:cancel, _}, state, _), do: action(state, :cancel)
+  def ui({:decide, _}, %{pending_approvals: [_ | _]}, _), do: :pass
   def ui({:decide, :approve}, state, _), do: action(state, :approve)
   def ui({:decide, _}, state, _), do: action(state, :deny)
   def ui(:new_task, state, _), do: action(state, :new)
@@ -364,10 +403,7 @@ defmodule Alto.TUI.Backends.Remote do
         tasks: tasks,
         selected_project_id: workspace,
         selected_task_id: model.selected_id,
-        notice: model.notice,
-        pending_approvals: [],
-        profiles: [],
-        selected_provider_id: nil
+        notice: model.notice
     }
 
     state = State.put_entries(state, model.selected_id, model.entries)

@@ -34,7 +34,8 @@ terminal, from the same package directory:
 `mix alto.resident ...` offers the same operator commands. `start` remains a
 direct resident run; `schedule` uses the bounded durable lifecycle, including
 revision-fenced decisions and recovery. Client closure never owns run lifetime.
-The default state path is `$XDG_STATE_HOME/alto/resident`, otherwise
+The default state path uses `$ALTO_STATE_HOME/alto/resident`, then
+`$XDG_STATE_HOME/alto/resident`, otherwise
 `~/.local/state/alto/resident`; set `ALTO_RESIDENT_STATE_DIR` in the example and
 pass `--socket STATE/service.sock` on clients for a custom location. Direct
 supervision uses `Resident.Service` with a validated `Resident.Config`.

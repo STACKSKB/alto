@@ -5,7 +5,7 @@ defmodule Alto.TUI.Backend do
 
   Runner adapters implement `start/4` and `cancel/3`. Interactive adapters
   implement `ui/3` and `cancel/3`, owning their connection and protocol lifecycle.
-  Optional UI contributions receive `:prepare`, `:selected`, `:models`,
+  Optional UI contributions receive `:prepare`, `:selected`, `:leaving`, `:models`,
   `:steering?`, `:session_usage?`, `:details`, `:new_task`,
   `{:select_project, id}`, `{:select_task, id}`, `{:open_workspace, path}`,
   `{:close_workspace, id}`, `{:cancel, reason}`, `{:decide, decision}`,

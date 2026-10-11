@@ -2286,6 +2286,8 @@ defmodule Alto.TUI.App do
         }
 
       true ->
+        state = backend_action(state, :leaving)
+        task = State.selected_task(state)
         state = persist_task_backend(state, task, backend)
         next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 

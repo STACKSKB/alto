@@ -171,10 +171,7 @@ defmodule Alto.Contrib.Resident.Config do
     error -> {:error, {:config_load_failed, Exception.message(error)}}
   end
 
-  def default_state_dir do
-    base = System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")
-    Path.join([base, "alto", "resident"])
-  end
+  def default_state_dir, do: Alto.Storage.dir("resident", nil)
 
   def socket_path(%__MODULE__{state_dir: dir}), do: Path.join(dir, "service.sock")
 

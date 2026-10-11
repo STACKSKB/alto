@@ -46,11 +46,14 @@ defmodule Alto.TUI.RemoteTest do
 
     options = [
       config: [
+        provider: {Alto.Contrib.Providers.OpenAICompatible, model: "client-model"},
+        models: [%{id: "client-model"}],
         tui_backends: [resident: {Remote, socket: Config.socket_path(config), profile: "chat"}]
       ],
       test_mode: {120, 36},
       name: nil,
       path: Path.join(root, "client.json"),
+      credentials_path: Path.join(root, "credentials.json"),
       project: root
     ]
 
@@ -164,6 +167,24 @@ defmodule Alto.TUI.RemoteTest do
     Runtime.inject_event(terminal, %Key{code: "n", modifiers: ["ctrl"], kind: "press"})
     eventually(fn -> File.dir?(Path.join(root, "Created on service")) end)
     eventually(fn -> state(terminal).overlay == nil end)
+    quit(terminal)
+  end
+
+  test "leaving remote navigation restores the local catalog and keeps provider choices", ctx do
+    {:ok, terminal} = App.start_link(ctx.options)
+    ready(terminal)
+    current = state(terminal)
+    local_root = ctx.config.workspace
+    {:ok, project} = Alto.TUI.Catalog.register_project(local_root, path: ctx.options[:path])
+
+    {:ok, local_task} =
+      Alto.TUI.Catalog.create_task(project["id"], "Local draft", path: ctx.options[:path])
+
+    next = Remote.ui(:leaving, current, [])
+    assert Enum.any?(next.tasks[project["id"]], &(&1["id"] == local_task["id"]))
+    assert next.selected_task_id == nil
+    assert next.profiles == current.profiles
+    assert next.profiles != []
     quit(terminal)
   end
 
