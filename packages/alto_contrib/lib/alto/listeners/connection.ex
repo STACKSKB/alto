@@ -123,7 +123,7 @@ defmodule Alto.Contrib.Listeners.Connection do
 
   defp session_events_payload(records) do
     Alto.Result.traverse(records, fn record ->
-      case session_event_data(record) do
+      case Alto.Session.event_data(record) do
         {:ok, data} ->
           {:ok,
            record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()}
@@ -133,8 +133,6 @@ defmodule Alto.Contrib.Listeners.Connection do
       end
     end)
   end
-
-  defp session_event_data(record), do: Alto.Session.event_data(record)
 
   # Leases must not survive an encoded reply that cannot fit the wire.
   defp queue_claim(registry, id, count, by, max_line_bytes) do
