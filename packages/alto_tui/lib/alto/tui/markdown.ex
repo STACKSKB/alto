@@ -28,19 +28,10 @@ defmodule Alto.TUI.Markdown do
   def tail(source, width, height) do
     width = max(width, 1)
 
-    {groups, _} =
-      source
-      |> String.split("\n")
-      |> blocks([])
-      |> Enum.reverse()
-      |> Enum.reduce_while({[], 0}, fn block, {groups, count} ->
-        {rows, total_rows} = tail_block(block, width, height)
-        count = count + total_rows + if(groups == [], do: 0, else: 1)
-        result = {[rows | groups], count}
-        if count >= height, do: {:halt, result}, else: {:cont, result}
-      end)
-
-    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten() |> Enum.take(-height))
+    source
+    |> String.split("\n")
+    |> blocks([])
+    |> Alto.TUI.Window.tail(height, &tail_block(&1, width, height))
   end
 
   defp cached_block(block, width),
@@ -100,19 +91,7 @@ defmodule Alto.TUI.Markdown do
 
     build = fn block -> {block, block_plain(block, width)} end
 
-    built =
-      if length(missing) < 32 do
-        Enum.map(missing, build)
-      else
-        missing
-        |> Enum.chunk_every(16)
-        |> Task.async_stream(&Enum.map(&1, build),
-          max_concurrency: 4,
-          ordered: true,
-          timeout: 30_000
-        )
-        |> Enum.flat_map(fn {:ok, values} -> values end)
-      end
+    built = Alto.TUI.Cache.build_many(missing, build)
 
     Enum.each(built, fn {block, rows} ->
       if frequencies[block] > 1 do
@@ -143,7 +122,7 @@ defmodule Alto.TUI.Markdown do
           end)
 
         count = length(plain)
-        {{block, offset, count, plain}, offset + count + 1}
+        {{block, plain, offset, count}, offset + count + 1}
       end)
 
     %{parts: parts, rows: max(rows - 1, 0), width: width}
@@ -151,27 +130,9 @@ defmodule Alto.TUI.Markdown do
 
   @doc "Materialize just a range of an indexed Markdown document."
   def window(plan, offset, height) do
-    last = min(offset + height, plan.rows)
-
-    if last <= offset do
-      []
-    else
-      rows =
-        Enum.reduce(plan.parts, %{}, fn {block, first, count, _plain}, acc ->
-          start = max(offset, first)
-          stop = min(last, first + count)
-
-          if stop > start do
-            cached_window(block, plan.width, start - first, stop - start)
-            |> Enum.with_index(start)
-            |> Enum.reduce(acc, fn {row, n}, acc -> Map.put(acc, n, row) end)
-          else
-            acc
-          end
-        end)
-
-      Enum.map(offset..(last - 1), &Map.get(rows, &1, Line.new([])))
-    end
+    Alto.TUI.Window.slice(plan, offset, height, fn block, _plain, start, count ->
+      cached_window(block, plan.width, start, count)
+    end)
   end
 
   defp cached_window(block, width, offset, height) do
@@ -218,7 +179,7 @@ defmodule Alto.TUI.Markdown do
   def plain_rows(plan),
     do:
       plan.parts
-      |> Enum.map(fn {_, _, _, plain} -> plain end)
+      |> Enum.map(fn {_, plain, _, _} -> plain end)
       |> Enum.intersperse([""])
       |> List.flatten()
 

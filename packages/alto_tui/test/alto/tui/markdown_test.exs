@@ -54,7 +54,9 @@ defmodule Alto.TUI.MarkdownTest do
       %{kind: :assistant, text: "### Results\n\n**Done**\n\n```elixir\n  :ok\n```"},
       %{kind: :tool, text: "shell", detail: Enum.map_join(1..30, "\n", &"line #{&1}")},
       %{kind: :reasoning, text: "## Next\n\nA `small` note."},
-      %{kind: :assistant, text: ""}
+      %{kind: :assistant, text: ""},
+      %{kind: :assistant, text: String.duplicate("Earlier **styled** 猫. ", 500)},
+      %{kind: :user, text: "last"}
     ]
 
     for width <- [12, 60], height <- [1, 4, 12, 100] do
