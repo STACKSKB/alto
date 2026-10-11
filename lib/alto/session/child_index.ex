@@ -41,15 +41,9 @@ defmodule Alto.Session.ChildIndex do
       end)
 
     headers =
-      Enum.flat_map(names, fn name ->
-        case entries[name] do
-          {_, %{"type" => "started", "subagent" => true} = record} ->
-            [%{id: Path.rootname(name), started: record}]
-
-          _ ->
-            []
-        end
-      end)
+      for name <- names,
+          {_, %{"type" => "started", "subagent" => true} = record} <- [entries[name]],
+          do: %{id: Path.rootname(name), started: record}
 
     if entries != previous, do: save(dir, entries)
     {:reply, headers, Enum.take([{dir, entries} | List.keydelete(directories, dir, 0)], 4)}
@@ -59,16 +53,10 @@ defmodule Alto.Session.ChildIndex do
     with {:ok, bytes} <- Alto.BoundedFile.read(cache_path(dir), 4_000_000),
          {:ok, %{"v" => 1, "entries" => entries}} when is_map(entries) <- JSON.decode(bytes),
          true <- map_size(entries) <= 4096 do
-      Enum.reduce(entries, %{}, fn
-        {name, [stamp, record]}, acc
-        when is_binary(name) and is_list(stamp) and length(stamp) == 5 ->
-          if is_map(record),
-            do: Map.put(acc, name, {List.to_tuple(stamp), Alto.Retained.detach(record)}),
-            else: acc
-
-        _, acc ->
-          acc
-      end)
+      for {name, [stamp, record]} <- entries,
+          is_binary(name) and is_list(stamp) and length(stamp) == 5 and is_map(record),
+          into: %{},
+          do: {name, {List.to_tuple(stamp), Alto.Retained.detach(record)}}
     else
       _ -> %{}
     end
