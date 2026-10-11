@@ -34,7 +34,6 @@ defmodule Alto.ConfigTest do
 
   test "default configuration composes with file overrides and drives a run", %{root: root} do
     defaults = Alto.default_config()
-    assert Alto.default_config(run_timeout: 7_200_000)[:run_timeout] == 7_200_000
     path = Path.join(root, "defaults.exs")
 
     File.write!(

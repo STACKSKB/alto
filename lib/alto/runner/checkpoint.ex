@@ -416,15 +416,15 @@ defmodule Alto.Runner.Checkpoint do
     Enum.sort(Map.keys(saved)) == Enum.sort(@fields) and
       Alto.AgentIdentity.valid?(saved.agent_identity) and
       is_list(saved.messages_rev) and Enum.all?(saved.messages_rev, &is_map/1) and
-      is_integer(saved.transcript_bytes) and saved.transcript_bytes >= 0 and
+      Enum.all?(
+        ~w(transcript_bytes transcript_revision model_requests op_seq compaction_count)a,
+        &(is_integer(saved[&1]) and saved[&1] >= 0)
+      ) and
       saved.transcript_bytes <= authority.max_transcript_bytes and
       Alto.Context.Transcript.bytes(saved.messages_rev) == saved.transcript_bytes and
-      is_integer(saved.transcript_revision) and saved.transcript_revision >= 0 and
-      is_integer(saved.model_requests) and saved.model_requests >= 0 and
-      is_integer(saved.op_seq) and saved.op_seq >= 0 and
       Alto.Usage.valid?(saved.usage) and
       is_list(saved.persistence_errors) and
-      valid_compaction_state?(saved) and valid_history_state?(saved) and
+      valid_history_state?(saved) and
       valid_pending_calls?(saved.pending_provider_calls) and
       (is_nil(saved.request_model_tools) or match?(%MapSet{}, saved.request_model_tools)) and
       saved.verdict in [:empty, :completed, :rejected_before_dispatch, :failed_known, :unknown]
@@ -433,10 +433,6 @@ defmodule Alto.Runner.Checkpoint do
   end
 
   defp valid_saved?(_, _), do: false
-
-  defp valid_compaction_state?(saved) do
-    is_integer(saved.compaction_count) and saved.compaction_count >= 0
-  end
 
   defp valid_history_state?(saved) do
     is_list(saved.resolved_operations) and length(saved.resolved_operations) <= 256 and
@@ -501,14 +497,6 @@ defmodule Alto.Runner.Checkpoint do
   end
 
   defp fingerprint(run) do
-    with {:ok, data} <- fingerprint_data_for(run) do
-      {:ok,
-       :crypto.hash(:sha256, :erlang.term_to_binary(data, [:deterministic]))
-       |> Base.encode16(case: :lower)}
-    end
-  end
-
-  defp fingerprint_data_for(run) do
     tools =
       Enum.map(run.tools, fn {name, tool} ->
         {name, tool.module, tool.module.module_info(:md5), tool.opts, tool.transforms,
@@ -529,7 +517,9 @@ defmodule Alto.Runner.Checkpoint do
         limit -> {data, {:conversation_retained_turns, limit}}
       end
 
-    {:ok, fingerprint_data(data)}
+    {:ok,
+     :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data), [:deterministic]))
+     |> Base.encode16(case: :lower)}
   catch
     {__MODULE__, :durable_identity_unavailable, reason} ->
       {:error, {:durable_identity_unavailable, reason}}
