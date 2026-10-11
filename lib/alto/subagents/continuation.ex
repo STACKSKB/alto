@@ -343,24 +343,20 @@ defmodule Alto.Subagents.Continuation do
   end
 
   defp change_child(batch, id, fun) do
-    update(batch, fn packet ->
-      with true <- is_nil(packet["join"]),
-           child when not is_nil(child) <- Map.get(packet["children"], id),
-           {:ok, child} <- fun.(child) do
-        {:ok, put_in(packet, ["children", id], child)}
-      else
-        false -> {:error, :batch_already_joined}
-        nil -> {:error, :unknown_child}
-        {:error, _} = error -> error
-      end
-    end)
-  end
+    Retained.update(batch, fn
+      %{phase: :children, packet: packet} ->
+        with true <- is_nil(packet["join"]),
+             child when not is_nil(child) <- Map.get(packet["children"], id),
+             {:ok, child} <- fun.(child) do
+          {:ok, put_in(packet, ["children", id], child)}
+        else
+          false -> {:error, :batch_already_joined}
+          nil -> {:error, :unknown_child}
+          {:error, _} = error -> error
+        end
 
-  defp update(batch, fun) do
-    Retained.update(batch, fn snapshot ->
-      if snapshot.phase == :children,
-        do: fun.(snapshot.packet),
-        else: {:error, :continuation_children_closed}
+      _ ->
+        {:error, :continuation_children_closed}
     end)
   end
 
