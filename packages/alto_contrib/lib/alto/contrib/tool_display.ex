@@ -16,8 +16,7 @@ defmodule Alto.Contrib.ToolDisplay do
 
         "run_command" ->
           program = first(args, ~w(program command)a) || name
-          argv = [program | List.wrap(get(args, :args))]
-          ["argv:", program, JSON.encode!(Enum.drop(argv, 1))]
+          ["argv:", program, JSON.encode!(List.wrap(get(args, :args)))]
 
         _ ->
           [name, target, range(args)]
@@ -51,30 +50,23 @@ defmodule Alto.Contrib.ToolDisplay do
     end
   end
 
-  defp completed(name, title, value)
+  defp completed(name, title, value) do
+    {kind, suffix} = completion(name, value)
+    %{kind: kind, text: title <> suffix, detail: result_detail(name, value)}
+  end
+
+  defp completion(name, value)
        when name in [:run_command, "run_command", :run_shell, "run_shell"] do
     result = decode(value)
-    status = get(result, :exit_status)
-    timed_out? = get(result, :timed_out) == true
 
-    cond do
-      timed_out? ->
-        %{kind: :error, text: title <> " timed out", detail: result_detail(name, value)}
-
-      is_integer(status) and status != 0 ->
-        %{
-          kind: :error,
-          text: title <> " failed (exit #{status})",
-          detail: result_detail(name, value)
-        }
-
-      true ->
-        %{kind: :tool, text: title <> " ✓", detail: result_detail(name, value)}
+    case {get(result, :exit_status), get(result, :timed_out)} do
+      {_, true} -> {:error, " timed out"}
+      {status, _} when is_integer(status) and status != 0 -> {:error, " failed (exit #{status})"}
+      _ -> {:tool, " ✓"}
     end
   end
 
-  defp completed(name, title, value),
-    do: %{kind: :tool, text: title <> " ✓", detail: result_detail(name, value)}
+  defp completion(_, _), do: {:tool, " ✓"}
 
   # Read results remain intact in the model/session; the terminal shows metadata.
   defp result_detail(name, value) when name in ["read_file", :read_file] do
