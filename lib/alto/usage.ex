@@ -13,10 +13,6 @@ defmodule Alto.Usage do
   @cumulative ~w(input_tokens output_tokens total_tokens cached_input_tokens requests)a
   @empty Map.new(@cumulative ++ [:last_input_tokens, :last_cached_input_tokens], &{&1, 0})
          |> Map.put(:context_window, nil)
-  @input ~w(input_tokens)
-  @output ~w(output_tokens)
-  @cached ~w(cached_input_tokens)
-  @total ~w(total_tokens)
 
   @type t :: %{
           input_tokens: non_neg_integer(),
@@ -46,28 +42,27 @@ defmodule Alto.Usage do
   @doc "Normalize canonical request usage or a serialized accounting map; string keys take precedence."
   @spec normalize(term()) :: t()
   def normalize(usage) when is_map(usage) do
-    usage = normalize_keys(usage)
-    accounting? = Map.has_key?(usage, "requests")
+    accounting? = Map.has_key?(usage, "requests") or Map.has_key?(usage, :requests)
 
-    input = integer(usage, @input)
+    input = integer(usage, :input_tokens)
 
-    output = integer(usage, @output)
-    cached = min(integer(usage, @cached), input)
-    last_input = integer(usage, ~w(last_input_tokens), input)
+    output = integer(usage, :output_tokens)
+    cached = min(integer(usage, :cached_input_tokens), input)
+    last_input = integer(usage, :last_input_tokens, input)
 
     %{
       input_tokens: input,
       output_tokens: output,
-      total_tokens: integer(usage, @total, if(accounting?, do: 0, else: input + output)),
+      total_tokens: integer(usage, :total_tokens, if(accounting?, do: 0, else: input + output)),
       cached_input_tokens: cached,
       last_input_tokens: last_input,
       last_cached_input_tokens:
         min(
-          integer(usage, ~w(last_cached_input_tokens), if(accounting?, do: 0, else: cached)),
+          integer(usage, :last_cached_input_tokens, if(accounting?, do: 0, else: cached)),
           last_input
         ),
-      context_window: integer(usage, ~w(context_window), nil),
-      requests: if(accounting?, do: integer(usage, ~w(requests)), else: 1)
+      context_window: integer(usage, :context_window, nil),
+      requests: if(accounting?, do: integer(usage, :requests), else: 1)
     }
   end
 
@@ -90,18 +85,10 @@ defmodule Alto.Usage do
   defp rate(_, 0), do: 0.0
   defp rate(cached, input), do: cached / input * 100.0
 
-  defp integer(map, keys, default \\ 0) do
-    Enum.find_value(keys, default, fn key ->
-      case map[key] do
-        n when is_integer(n) and n >= 0 -> n
-        _ -> nil
-      end
-    end)
-  end
-
-  defp normalize_keys(map) do
-    strings = for {key, value} when is_binary(key) <- map, into: %{}, do: {key, value}
-    atoms = for {key, value} when is_atom(key) <- map, into: %{}, do: {Atom.to_string(key), value}
-    Map.merge(atoms, strings)
+  defp integer(map, key, default \\ 0) do
+    case Map.get(map, Atom.to_string(key), Map.get(map, key)) do
+      n when is_integer(n) and n >= 0 -> n
+      _ -> default
+    end
   end
 end

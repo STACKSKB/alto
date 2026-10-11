@@ -27,7 +27,13 @@ defmodule Alto.Contrib.Providers.Media do
 
   defp data_url(_, _, _), do: {:error, :model_media_must_be_base64_data_url}
 
-  defp validate_image(bytes, media, true) when media in ["image/png", "image/jpeg"] do
+  defp validate_image(bytes, "image/" <> _ = media, true),
+    do: image_integrity(bytes, media)
+
+  defp validate_image(_, _, true), do: {:error, :invalid_image_media_type}
+  defp validate_image(_, _, false), do: :ok
+
+  def image_integrity(bytes, media) when media in ["image/png", "image/jpeg"] do
     case Alto.Image.Metadata.inspect(bytes, %{max_dimension: 16_384, max_pixels: 40_000_000}) do
       {:ok, ^media, _, _} -> :ok
       {:ok, _, _, _} -> {:error, :image_metadata_mismatch}
@@ -35,14 +41,12 @@ defmodule Alto.Contrib.Providers.Media do
     end
   end
 
-  defp validate_image(_bytes, "image/" <> _, true), do: :ok
-  defp validate_image(_, _, true), do: {:error, :invalid_image_media_type}
-  defp validate_image(_, _, false), do: :ok
+  def image_integrity(_, _), do: :ok
 
-  defp extension("image/png"), do: ".png"
-  defp extension("image/jpeg"), do: ".jpg"
-  defp extension("image/webp"), do: ".webp"
-  defp extension("image/gif"), do: ".gif"
-  defp extension("image/svg+xml"), do: ".svg"
-  defp extension(_), do: ".bin"
+  def extension("image/png"), do: ".png"
+  def extension("image/jpeg"), do: ".jpg"
+  def extension("image/webp"), do: ".webp"
+  def extension("image/gif"), do: ".gif"
+  def extension("image/svg+xml"), do: ".svg"
+  def extension(_), do: ".bin"
 end
