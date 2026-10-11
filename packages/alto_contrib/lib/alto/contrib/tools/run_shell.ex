@@ -32,15 +32,9 @@ defmodule Alto.Contrib.Tools.RunShell do
       "max_output_bytes" => arguments["max_output_bytes"]
     }
 
-    case Alto.Contrib.Command.prepare(command_arguments, context, command_options(opts)) do
-      {:ok, prepared} -> {:ok, prepared, prepared.approval_details}
-      {:error, _} = error -> error
-    end
+    Alto.Contrib.Tools.RunCommand.prepare(command_arguments, context, Enum.to_list(opts))
   end
 
   @impl true
   def run(prepared, %{}, _opts \\ []), do: Alto.Contrib.Command.execute(prepared)
-
-  defp command_options(opts) when is_map(opts), do: Map.to_list(opts)
-  defp command_options(opts), do: opts
 end
