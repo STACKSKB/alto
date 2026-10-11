@@ -769,12 +769,12 @@ defmodule Alto.Contrib.Resident.Console do
               ""
 
             [a | rest] ->
-              "\nDecision: #{clean(a["tool"])}\n#{clean(a["arguments"])}\n#{clean(a["details"])}\nCtrl+A approve / Ctrl+D deny\n#{length(rest)} more pending"
+              "\nDecision: #{clean(a["tool"])}\n#{clean(a["arguments"])}\n#{clean(a["details"])}\nApprove or deny the exact pending action\n#{length(rest)} more pending"
           end
 
         review =
           if task.status == "requires_operator" do
-            "\nReview: #{clean(Map.get(task, :evidence))}\nResolve with /retry NOTE, /committed NOTE or /failed NOTE"
+            "\nReview: #{clean(Map.get(task, :evidence))}\nOperator decision: committed, failed or permitted retry with an explanatory note"
           else
             ""
           end
@@ -891,7 +891,7 @@ defmodule Alto.Contrib.Resident.Console do
     suffix =
       if match?({:submit, _}, action),
         do: "; send outcome unknown—reconnect and inspect before resending",
-        else: "; Ctrl+R reconnect"
+        else: "; reconnect to inspect server state"
 
     %{
       model

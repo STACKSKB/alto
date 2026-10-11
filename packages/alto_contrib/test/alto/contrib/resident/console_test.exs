@@ -288,7 +288,7 @@ defmodule Alto.Contrib.Resident.ConsoleTest do
     start_supervised!({Service, config: config, name: name})
     model = Console.perform(model, :connect, self())
     assert model.detail =~ "requires_operator"
-    assert model.detail =~ "/retry NOTE"
+    assert model.detail =~ "Operator decision:"
     assert model.notice == "Connected"
 
     stale =
