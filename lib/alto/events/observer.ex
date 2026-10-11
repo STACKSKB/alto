@@ -57,13 +57,13 @@ defmodule Alto.Events.Observer do
     do: {:reply, {:error, :observer_closing}, state}
 
   def handle_call({:push, event}, _from, state) do
-    size = :erlang.external_size(event)
-
-    case coalesce(state, event, size) do
+    case coalesce(state, event) do
       {:ok, next} ->
         {:reply, :ok, next}
 
       :no ->
+        size = :erlang.external_size(event)
+
         if state.count < state.limits.max_events and state.bytes + size <= state.limits.max_bytes do
           state = %{
             state
@@ -192,38 +192,29 @@ defmodule Alto.Events.Observer do
 
   defp coalesce(
          %{limits: %{coalesce: true}} = state,
-         %Event{domain: :live, type: type, data: %{text: text}} = event,
-         _size
+         %Event{domain: :live, type: type, data: %{text: text}} = event
        )
        when type in [:model_delta, :model_reasoning_delta] and is_binary(text) do
-    case :queue.out_r(state.queue) do
-      {{:value, {%Event{domain: :live, type: ^type, data: %{text: prior}} = last, size}}, rest} ->
-        if Map.delete(last.data, :text) == Map.delete(event.data, :text) do
-          merged = %{last | data: Map.put(last.data, :text, prior <> text)}
-          bytes = :erlang.external_size(merged)
-
-          if state.bytes - size + bytes <= state.limits.max_bytes do
-            {:ok,
-             %{
-               state
-               | queue: :queue.in({merged, bytes}, rest),
-                 bytes: state.bytes - size + bytes,
-                 stats:
-                   state.stats
-                   |> Map.update!(:accepted, &(&1 + 1))
-                   |> Map.update!(:coalesced, &(&1 + 1))
-             }}
-          else
-            :no
-          end
-        else
-          :no
-        end
-
-      _ ->
-        :no
+    with {{:value, {%Event{domain: :live, type: ^type, data: %{text: prior}} = last, size}}, rest} <-
+           :queue.out_r(state.queue),
+         true <- Map.delete(last.data, :text) == Map.delete(event.data, :text),
+         merged <- %{last | data: Map.put(last.data, :text, prior <> text)},
+         bytes <- :erlang.external_size(merged),
+         true <- state.bytes - size + bytes <= state.limits.max_bytes do
+      {:ok,
+       %{
+         state
+         | queue: :queue.in({merged, bytes}, rest),
+           bytes: state.bytes - size + bytes,
+           stats:
+             state.stats
+             |> Map.update!(:accepted, &(&1 + 1))
+             |> Map.update!(:coalesced, &(&1 + 1))
+       }}
+    else
+      _ -> :no
     end
   end
 
-  defp coalesce(_, _, _), do: :no
+  defp coalesce(_, _), do: :no
 end
