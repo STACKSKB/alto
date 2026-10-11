@@ -17,11 +17,7 @@ defmodule Alto.AtomicFile do
   is therefore an uncertain outcome for callers.
   """
   @spec write(binary(), iodata(), keyword()) :: :ok | {:error, term()}
-  def write(path, content, opts \\ []) do
-    with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)) do
-      write_temp(path, content, mode, opts, true)
-    end
-  end
+  def write(path, content, opts \\ []), do: write_many([{path, content, opts}])
 
   @doc """
   Publish independent files and sync each containing directory once after every
@@ -33,7 +29,7 @@ defmodule Alto.AtomicFile do
     with :ok <-
            Alto.Result.each(files, fn {path, content, opts} ->
              with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)),
-                  do: write_temp(path, content, mode, opts, false)
+                  do: write_temp(path, content, mode, opts)
            end),
          do:
            files
@@ -47,7 +43,7 @@ defmodule Alto.AtomicFile do
            end)
   end
 
-  defp write_temp(path, content, mode, opts, sync_directory?) do
+  defp write_temp(path, content, mode, opts) do
     temp =
       Path.join(
         Path.dirname(path),
@@ -59,12 +55,8 @@ defmodule Alto.AtomicFile do
     result =
       with {:ok, io} <- File.open(temp, [:write, :binary, :raw, :exclusive]),
            :ok <- write_sync_close(io, content, fn -> maybe_chmod(temp, mode) end),
-           :ok <- before_rename.(),
-           :ok <- File.rename(temp, path) do
-        case if(sync_directory?, do: sync_directory(Path.dirname(path)), else: :ok) do
-          :ok -> :ok
-          {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
-        end
+           :ok <- before_rename.() do
+        File.rename(temp, path)
       end
 
     if result != :ok, do: File.rm(temp)
