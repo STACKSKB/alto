@@ -109,7 +109,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     end
   end
 
-  test "usage and provenance survive errors later in the same chunk and later chunks" do
+  test "usage and provenance survive parsing and finalization errors across chunks" do
     usage =
       "data: " <>
         JSON.encode!(%{
@@ -120,7 +120,14 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
           "usage" => %{"prompt_tokens" => 100, "completion_tokens" => 6144, "cost" => 0.0}
         }) <> "\n\n"
 
-    for bad <- ["data: invalid\n\n", "data: {\"error\":{\"message\":\"failed\"}}\n\n"],
+    unfinished_call =
+      ~s(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call","function":{"arguments":"{}"}}]}}]})
+
+    for bad <- [
+          "data: invalid\n\n",
+          "data: {\"error\":{\"message\":\"failed\"}}\n\n",
+          unfinished_call
+        ],
         chunks <- [[usage, bad], [usage <> bad]] do
       assert {:error, %Alto.Provider.Failure{} = failure} =
                run(OpenAICompatible, chunks, evidence: true)
@@ -136,6 +143,11 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
              }
 
       assert failure.diagnostics.response_bytes == byte_size(usage <> bad)
+
+      if bad == unfinished_call do
+        assert failure.reason == {:tool_call_missing_name, "call"}
+        assert failure.diagnostics.events == 2
+      end
     end
   end
 

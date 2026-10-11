@@ -59,11 +59,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
               {:ok, Map.put(result, :diagnostics, diagnostics)}
 
             {:error, reason} ->
-              {:error,
-               Failure.wrap(
-                 Failure.reason(reason),
-                 Map.put(accounting(completion, decoder), :diagnostics, diagnostics)
-               )}
+              on_error.(reason, %{state | completion: completion}, diagnostics)
           end
 
         {:error, reason} ->
@@ -290,13 +286,9 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       {:raw, raw} ->
         case JSON.decode(raw) do
           {:ok, response} ->
-            case decoder.from_response(response, sink) do
-              {:ok, completion} ->
-                emit_accounting(completion, decoder, sink)
-                {:ok, completion, 0}
-
-              error ->
-                error
+            with {:ok, completion} <- decoder.from_response(response, sink) do
+              emit_accounting(completion, decoder, sink)
+              {:ok, completion, 0}
             end
 
           {:error, error} ->
