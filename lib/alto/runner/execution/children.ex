@@ -466,10 +466,9 @@ defmodule Alto.Runner.Execution.Children do
       concurrency,
       start,
       fn ->
-        case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-          {{:cancelled, _} = cancelled, _} -> cancelled
-          {_, {:error, _} = error} -> error
-          _ -> :continue
+        case Alto.Runner.Execution.check(run) do
+          :ok -> :continue
+          stopped -> stopped
         end
       end,
       event_sink: run.event_sink,

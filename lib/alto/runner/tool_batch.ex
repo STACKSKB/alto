@@ -33,18 +33,15 @@ defmodule Alto.Runner.ToolBatch do
   end
 
   defp collect(tasks, caps, results) do
-    case {Call.cancellation(caps.cancel_ref), Budget.check(caps.budget)} do
-      {{:cancelled, reason}, _} ->
-        results = harvest(tasks, results)
-        {:cancelled, reason, ordered(tasks, results, {:unknown, :cancelled})}
+    status = Alto.Runner.Execution.check(caps)
+    results = harvest(tasks, results)
 
-      {_, {:error, reason}} ->
-        results = harvest(tasks, results)
-        {:error, reason, ordered(tasks, results, {:unknown, reason})}
+    case status do
+      {kind, reason} when kind in [:cancelled, :error] ->
+        fallback = if kind == :cancelled, do: :cancelled, else: reason
+        {kind, reason, ordered(tasks, results, {:unknown, fallback})}
 
-      {:continue, :ok} ->
-        results = harvest(tasks, results)
-
+      :ok ->
         results =
           Enum.reduce(tasks, results, fn {task, deadline}, acc ->
             if not Map.has_key?(acc, task.ref) and

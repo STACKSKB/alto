@@ -173,14 +173,14 @@ defmodule Alto.Runner.Execution do
 
   @doc "Execute at most one effect, returning the next frame or a final outcome."
   def step({effects, terminal}, run) do
-    case {Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-      {{:cancelled, reason}, _} ->
+    case check(run) do
+      {:cancelled, reason} ->
         {:done, cancelled(reason, run)}
 
-      {_, {:error, reason}} ->
+      {:error, reason} ->
         {:done, result(run, nil, :error, reason)}
 
-      {:continue, :ok} ->
+      :ok ->
         run = activate_agents(run)
 
         if Alto.Messaging.paused?(run.messaging) == true do
