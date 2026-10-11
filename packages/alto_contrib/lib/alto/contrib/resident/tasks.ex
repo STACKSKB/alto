@@ -166,8 +166,20 @@ defmodule Alto.Contrib.Resident.Tasks do
   end
 
   def handle_call({"get", %{"id" => id}}, _from, state) when is_binary(id) do
+    record =
+      case find_record(state, id) do
+        {:ok, r} -> r
+        _ -> nil
+      end
+
+    recovery =
+      case OperationLog.request(state.ledger, {:recovery, id}) do
+        {:ok, r} -> r
+        _ -> nil
+      end
+
     reply =
-      case describe(state, id, true) do
+      case describe(state, id, record, recovery, true) do
         nil -> {:error, :unknown_task}
         task -> {:ok, %{"task" => task}}
       end
@@ -646,19 +658,7 @@ defmodule Alto.Contrib.Resident.Tasks do
      }}
   end
 
-  defp describe(state, id, include_parent \\ false) do
-    record =
-      case find_record(state, id) do
-        {:ok, r} -> r
-        _ -> nil
-      end
-
-    recovery =
-      case OperationLog.request(state.ledger, {:recovery, id}) do
-        {:ok, r} -> r
-        _ -> nil
-      end
-
+  defp describe(state, id, record, recovery, include_parent \\ false) do
     payload = (record && record.payload) || (recovery && get_in(recovery, [:recovery, :payload]))
 
     if payload do
@@ -874,64 +874,48 @@ defmodule Alto.Contrib.Resident.Tasks do
   defp reconcile_restart(state) do
     # No consumers have started yet. A persisted dispatch cannot prove whether
     # an external participant committed; park it before any queue claim resumes.
-    Enum.reduce_while(
-      Enum.map(OperationLog.request(state.ledger, {:entries, :all}), & &1.operation_key),
-      :ok,
-      fn id, :ok ->
-        result =
-          case OperationLog.request(state.ledger, {:status, id}) do
-            {:dispatched, attempt} ->
-              OperationLog.request(
-                state.ledger,
-                {:outcome, id, attempt, :requires_operator,
-                 %{
-                   park_reason: :resident_restarted
-                 }}
-              )
+    with :ok <-
+           Alto.Result.each(OperationLog.request(state.ledger, {:entries, :all}), fn entry ->
+             id = entry.operation_key
 
-            {:intended} ->
-              case repair_admission(state, id) do
-                {:error, :queue_full} -> :ok
-                result -> result
-              end
+             case OperationLog.request(state.ledger, {:status, id}) do
+               {:dispatched, attempt} ->
+                 OperationLog.request(
+                   state.ledger,
+                   {:outcome, id, attempt, :requires_operator,
+                    %{park_reason: :resident_restarted}}
+                 )
 
-            {:decided, :rejected_before_dispatch, evidence} ->
-              if (evidence[:status] || evidence["status"]) == "cancelled",
-                do: remove_cancelled_record(state, id),
-                else: :ok
+               {:intended} ->
+                 case repair_admission(state, id) do
+                   {:error, :queue_full} -> :ok
+                   result -> result
+                 end
 
-            _ ->
-              :ok
-          end
+               {:decided, :rejected_before_dispatch, evidence} ->
+                 if (evidence[:status] || evidence["status"]) == "cancelled",
+                   do: remove_cancelled_record(state, id),
+                   else: :ok
 
-        if result == :ok, do: {:cont, :ok}, else: {:halt, result}
-      end
-    )
-    |> case do
-      :ok -> release_recovered_claims(state)
-      error -> error
-    end
+               _ ->
+                 :ok
+             end
+           end),
+         do: release_recovered_claims(state)
   end
 
   defp release_recovered_claims(state) do
-    Enum.reduce_while(queue_records(state.queue), :ok, fn record, :ok ->
-      result =
-        if record.status == :claimed do
-          case OperationLog.request(state.ledger, {:status, operation_key(record)}) do
-            {:checkpointed, _, _} ->
-              Queue.request(state.queue, {:settle, record.claim_id, :ack, []})
-
-            {:decided, _, _} ->
-              Queue.request(state.queue, {:settle, record.claim_id, :ack, []})
-
-            _ ->
-              Queue.request(state.queue, {:settle, record.claim_id, :release, []})
-          end
-        else
-          :ok
+    state.queue
+    |> queue_records()
+    |> Enum.filter(&(&1.status == :claimed))
+    |> Alto.Result.each(fn record ->
+      resolution =
+        case OperationLog.request(state.ledger, {:status, operation_key(record)}) do
+          {status, _, _} when status in [:checkpointed, :decided] -> :ack
+          _ -> :release
         end
 
-      if result == :ok, do: {:cont, :ok}, else: {:halt, result}
+      Queue.request(state.queue, {:settle, record.claim_id, resolution, []})
     end)
   end
 
@@ -939,17 +923,15 @@ defmodule Alto.Contrib.Resident.Tasks do
     do: is_list(ids) and length(ids) <= 100 and Enum.all?(ids, &is_binary/1)
 
   defp list_tasks(state, session_ids, ids) do
-    records = queue_records(state.queue)
+    records =
+      state.queue |> queue_records() |> Enum.reverse() |> Map.new(&{operation_key(&1), &1})
 
-    keys =
-      Enum.uniq(
-        Enum.map(records, &operation_key/1) ++
-          Enum.map(OperationLog.request(state.ledger, {:entries, :all}), & &1.operation_key)
-      )
+    recoveries =
+      Map.new(OperationLog.request(state.ledger, {:entries, :all}), &{&1.operation_key, &1})
 
     tasks =
-      keys
-      |> Enum.map(&describe(state, &1))
+      Enum.uniq(Map.keys(records) ++ Map.keys(recoveries))
+      |> Enum.map(&describe(state, &1, records[&1], recoveries[&1]))
       |> Enum.reject(&is_nil/1)
       |> Enum.sort_by(&{&1["created_at_ms"] || 0, &1["id"]}, :desc)
 
