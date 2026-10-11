@@ -60,6 +60,34 @@ defmodule Alto.SessionIncrementalTest do
     assert {:ok, %{"messages" => ^messages}} = Session.conversation(id, 1, opts)
   end
 
+  test "archive conflicts reject a save before publishing objects or advancing the head", %{
+    dir: dir,
+    id: id,
+    opts: opts
+  } do
+    first = [user("first")]
+    {:ok, _} = save(id, first, opts)
+    original = File.read!(head(dir, id))
+    existing = objects(dir, id, "*")
+    archive = Path.join([dir, "conversations", id, "revision-1.json"])
+
+    for conflicting <- ["", "conflicting archive"] do
+      File.write!(archive, conflicting)
+
+      assert {:error, {:conversation_revision_conflict, %{session_id: ^id, revision: 1}}} =
+               save(id, first ++ [assistant("next")], opts)
+
+      assert File.read!(head(dir, id)) == original
+      assert File.read!(archive) == conflicting
+      assert objects(dir, id, "*") == existing
+    end
+
+    File.rm!(archive)
+    assert {:ok, %{"revision" => 2}} = save(id, first ++ [assistant("next")], opts)
+    assert {:ok, %{"messages" => ^first}} = Session.conversation(id, 1, opts)
+    assert Bitwise.band(File.stat!(archive).mode, 0o777) == 0o600
+  end
+
   test "retention groups all model boundaries in a turn, and keeps current context", %{
     dir: dir,
     id: id,

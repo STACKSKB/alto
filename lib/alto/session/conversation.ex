@@ -5,7 +5,6 @@ defmodule Alto.Session.Conversation do
   """
 
   alias Alto.Context.Transcript
-  alias Alto.DurableLog
   alias Alto.Session
   alias Alto.Storage
   alias Alto.Session.Conversation.Store
@@ -260,7 +259,7 @@ defmodule Alto.Session.Conversation do
          {:ok, _} <- encode_bounded(draft),
          {:ok, plan} <- Store.plan(id, draft["messages"], opts),
          {:ok, disk_bytes} <- Store.disk_bytes(id, opts),
-         {:ok, archive_bytes} <- archive_size(id, current, current_encoded, keep_current, opts),
+         {:ok, archive} <- plan_archive(id, current, current_encoded, keep_current, opts),
          record <-
            Map.merge(draft, %{
              "revision" => revision,
@@ -270,7 +269,7 @@ defmodule Alto.Session.Conversation do
              "turn" => turn,
              "turn_id" => constraints.turn_id,
              "retained_turns" => constraints.retained_turns,
-             "retained_bytes_before" => disk_bytes + plan.added_bytes + archive_bytes
+             "retained_bytes_before" => disk_bytes + plan.added_bytes + archive.added_bytes
            }),
          {:ok, pruning} <-
            retention(id, record, current, keep_current, plan, constraints.retained_turns, opts),
@@ -284,25 +283,27 @@ defmodule Alto.Session.Conversation do
              constraints.max_conversation_bytes,
              byte_size(encoded) + plan.added_bytes
            ),
+         # Sync each phase before starting the next; retries reuse published files.
          :ok <- Store.write(plan),
-         :ok <-
-           if(keep_current, do: archive_current(id, current, current_encoded, opts), else: :ok),
+         :ok <- Store.write(archive),
          :ok <- write_encoded_head(id, encoded, opts),
          :ok <- Store.prune(pruning) do
       {:ok, Map.put(record, "conversation_bytes", total)}
     end
   end
 
-  defp archive_size(_id, _current, _encoded, nil, _opts), do: {:ok, 0}
-  defp archive_size(_id, _current, _encoded, false, _opts), do: {:ok, 0}
+  defp plan_archive(_id, _current, _encoded, keep, _opts) when keep in [nil, false],
+    do: {:ok, %{missing: [], added_bytes: 0}}
 
-  defp archive_size(id, current, encoded, true, opts) do
-    case Alto.BoundedFile.read(entry_path(opts, id, current["revision"]), @max_entry_bytes) do
+  defp plan_archive(id, current, encoded, true, opts) do
+    path = entry_path(opts, id, current["revision"])
+
+    case Alto.BoundedFile.read(path, @max_entry_bytes) do
       {:error, :enoent} ->
-        {:ok, byte_size(encoded)}
+        {:ok, %{missing: [{path, encoded}], added_bytes: byte_size(encoded)}}
 
       {:ok, ^encoded} ->
-        {:ok, 0}
+        {:ok, %{missing: [], added_bytes: 0}}
 
       _ ->
         {:error,
@@ -347,11 +348,6 @@ defmodule Alto.Session.Conversation do
     end
   end
 
-  defp archive_current(_id, nil, _encoded, _opts), do: :ok
-
-  defp archive_current(id, snapshot, encoded, opts),
-    do: put_entry(id, snapshot["revision"], encoded, opts)
-
   defp resolve_parent(_id, nil, parent), do: {:ok, parent}
 
   defp resolve_parent(id, current, nil),
@@ -363,29 +359,6 @@ defmodule Alto.Session.Conversation do
     if requested == own,
       do: {:ok, own},
       else: {:error, {:conversation_parent_conflict, %{current: own, requested: requested}}}
-  end
-
-  defp put_entry(id, revision, encoded, opts) do
-    path = entry_path(opts, id, revision)
-
-    with :ok <- Storage.ensure_private_dir(Path.dirname(path), owned: true) do
-      case Alto.BoundedFile.read(path, @max_entry_bytes) do
-        {:ok, ""} ->
-          DurableLog.replace(path, encoded, mode: 0o600)
-
-        {:ok, ^encoded} ->
-          :ok
-
-        {:ok, _existing} ->
-          {:error, {:conversation_revision_conflict, %{session_id: id, revision: revision}}}
-
-        {:error, :enoent} ->
-          DurableLog.replace(path, encoded, mode: 0o600)
-
-        {:error, reason} ->
-          {:error, {:conversation_write_failed, reason}}
-      end
-    end
   end
 
   defp write_head(id, record, opts) do
