@@ -97,6 +97,7 @@ defmodule Alto.Runner.ParentContinuationTest do
          name: nil,
          dir: dir,
          max_recovery_bytes: 2_200_000,
+         max_checkpoint_bytes: 2_200_000,
          max_record_bytes: 3_000_000},
         id: {:parent_ledger, suffix}
       )

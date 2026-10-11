@@ -155,6 +155,7 @@ defmodule Alto.Runner.ChildContinuationTest do
       name: nil,
       dir: dir,
       max_recovery_bytes: 3_000_000,
+      max_checkpoint_bytes: 3_000_000,
       max_record_bytes: 4_000_000
     ]
 

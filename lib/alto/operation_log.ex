@@ -47,12 +47,6 @@ defmodule Alto.OperationLog do
   ## Client API
 
   def start_link(opts) do
-    opts =
-      if Keyword.has_key?(opts, :max_recovery_bytes) and
-           not Keyword.has_key?(opts, :max_checkpoint_bytes),
-         do: Keyword.put(opts, :max_checkpoint_bytes, opts[:max_recovery_bytes]),
-         else: opts
-
     id = Keyword.fetch!(opts, :id)
     :ok = validate_id!(id)
 

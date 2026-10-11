@@ -78,9 +78,8 @@ their saved bodies, torn trailing writes repair, and corrupt bases fail closed.
 
 The aggregate checkpoint cap is independently configurable through
 `max_checkpoint_bytes` (default 8,000,000 B). The default 64,000 B recovery-metadata
-cap no longer prevents the second 32 KiB child from suspending. Explicit legacy
-`max_recovery_bytes` settings continue to bound checkpoints unless the new option
-is also set. Record (128,000 B) and log (64,000,000 B) defaults still apply.
+cap no longer prevents the second 32 KiB child from suspending. Record (128,000 B)
+and log (64,000,000 B) defaults still apply.
 Operation logs are not automatically compacted; legitimate changes still consume
 space and callers can configure bounds appropriate to their workloads.
 

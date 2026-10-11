@@ -65,8 +65,9 @@ defmodule Alto.OperationLogTest do
 
   test "retained initialization is one durable command and never overwrites an existing record",
        %{dir: dir, id: id} do
-    %{name: name, pid: pid} = start_ledger!(id: id, dir: dir)
-    packet = %{count: 0}
+    opts = [id: id, dir: dir, max_recovery_bytes: 64]
+    %{name: name, pid: pid} = start_ledger!(opts)
+    packet = %{count: 0, text: String.duplicate("x", 100)}
 
     assert :ok =
              OperationLog.request(name, {:retain, "cell", "counter", %{limit: 3}, "init", packet})
@@ -81,7 +82,7 @@ defmodule Alto.OperationLogTest do
     assert File.read!(path) == bytes
     assert {:ok, ^original} = OperationLog.request(name, {:recovery, "cell"})
     GenServer.stop(pid)
-    %{name: replayed} = start_ledger!(id: id, dir: dir)
+    %{name: replayed} = start_ledger!(opts)
     assert {:ok, ^original} = OperationLog.request(replayed, {:recovery, "cell"})
   end
 

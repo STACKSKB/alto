@@ -15,6 +15,7 @@ defmodule Alto.Subagents.ContinuationFrameTest do
          dir: dir,
          name: nil,
          max_recovery_bytes: 2_100_000,
+         max_checkpoint_bytes: 2_100_000,
          max_record_bytes: 2_500_000}
       )
 
