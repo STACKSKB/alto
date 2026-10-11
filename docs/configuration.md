@@ -294,7 +294,7 @@ conversation storage budget. The supplied coding profile selects `:infinity` for
 those three limits to support long tasks. All turns are retained incrementally by
 default; `conversation_retained_turns: N` limits rewind/fork history while keeping
 the entire current context. Run deadlines, effect budgets and cancellation still
-apply. See [conversation revisions](conversations.md) for storage and migration.
+apply. See [conversation revisions](conversations.md) for storage and retention.
 
 `provider_retries` bounds retries before any model output is delivered; it is
 zero by default. The transient policy honors provider retry hints, keeps waiting

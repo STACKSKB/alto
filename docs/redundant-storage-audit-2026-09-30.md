@@ -16,9 +16,10 @@ Collection removes only objects unreachable from every remaining revision.
 
 Implementation: [Conversation](../lib/alto/session/conversation.ex),
 [Store](../lib/alto/session/conversation/store.ex),
-[configuration and migration](conversations.md).
+[configuration and retention](conversations.md).
 
-Measured conversion on temporary copies, with every revision's message digest
+Historical conversion measurements (the v4 migration path has since been removed)
+on temporary copies, with every revision's message digest
 and the current dispatch fence verified afterward:
 
 | Session | Revisions | Before | After | Reduction | Conversion |

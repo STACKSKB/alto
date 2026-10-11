@@ -114,40 +114,23 @@ defmodule Alto.SessionIncrementalTest do
     assert {:ok, _} = Session.transcript(id, opts)
   end
 
-  test "legacy migration preserves revisions, fenced effects, and is restartable", %{
+  test "compaction preserves revisions and dispatch fences and is repeatable", %{
     dir: dir,
     id: id,
     opts: opts
   } do
     first = [user("one")]
     second = first ++ [assistant("two")]
-
-    legacy = fn revision, messages ->
-      %{
-        "v" => 4,
-        "session_id" => id,
-        "revision" => revision,
-        "messages" => messages,
-        "transcript_bytes" => Transcript.bytes(messages),
-        "settled" => true,
-        "dispatch" => nil,
-        "parent" =>
-          if(revision > 1, do: %{"session_id" => id, "revision" => revision - 1}, else: nil),
-        "summary" => nil,
-        "context_observation" => nil,
-        "retained_bytes_before" => 0
-      }
-    end
-
+    {:ok, _} = save(id, first, opts)
+    {:ok, _} = save(id, second, opts)
+    {:ok, fence} = Session.mark_dispatched(id, ["op"], Keyword.put(opts, :run_id, "run"))
     archive = Path.join([dir, "conversations", id, "revision-1.json"])
-    File.mkdir_p!(Path.dirname(archive))
-    File.write!(archive, JSON.encode!(legacy.(1, first)))
-    fence = %{"revision" => 2, "tool_call_ids" => ["op"], "run_id" => "old-run"}
-    File.write!(head(dir, id), JSON.encode!(Map.put(legacy.(2, second), "dispatch", fence)))
+    encoded = File.read!(archive)
+
     assert {:ok, compacted} = Session.Conversation.compact(id, opts)
     assert compacted["revision"] == 2
     assert compacted["dispatch"] == fence
-    assert JSON.decode!(File.read!(archive))["v"] == 5
+    assert File.read!(archive) == encoded
     assert {:error, {:session_unsettled_tool_dispatch, _}} = Session.transcript(id, opts)
     assert {:ok, %{"messages" => ^first}} = Session.conversation(id, 1, opts)
     assert {:ok, ^compacted} = Session.Conversation.compact(id, opts)
@@ -158,26 +141,44 @@ defmodule Alto.SessionIncrementalTest do
     assert {:ok, %{"messages" => ^second}} = Session.conversation(id, 2, opts)
   end
 
-  test "ordinary saves automatically convert legacy history", %{dir: dir, id: id, opts: opts} do
+  test "old heads and archives are rejected without rewriting saved data", %{
+    dir: dir,
+    id: id,
+    opts: opts
+  } do
     messages = [user("old")]
+    {:ok, snapshot} = save(id, messages, opts)
+    original = File.read!(head(dir, id))
 
-    legacy = %{
-      "v" => 4,
-      "session_id" => id,
-      "revision" => 1,
-      "messages" => messages,
-      "transcript_bytes" => Transcript.bytes(messages),
-      "settled" => true,
-      "dispatch" => nil,
-      "parent" => nil,
-      "summary" => nil,
-      "context_observation" => nil,
-      "retained_bytes_before" => 0
-    }
+    legacy =
+      snapshot
+      |> Map.drop(~w(message_root message_count turn turn_id retained_turns conversation_bytes))
+      |> Map.put("v", 4)
+      |> JSON.encode!()
 
-    File.write!(head(dir, id), JSON.encode!(legacy))
-    assert {:ok, %{"revision" => 2}} = save(id, messages ++ [user("new")], opts)
-    assert {:ok, %{"messages" => ^messages, "v" => 5}} = Session.conversation(id, 1, opts)
+    File.write!(head(dir, id), legacy)
+
+    assert {:error, {:session_corrupt, ^id, :transcript}} = Session.transcript(id, opts)
+
+    assert {:error, {:session_corrupt, ^id, :transcript}} =
+             save(id, messages ++ [user("new")], opts)
+
+    assert {:error, {:session_corrupt, ^id, :transcript}} = Session.Conversation.compact(id, opts)
+    assert File.read!(head(dir, id)) == legacy
+
+    File.write!(head(dir, id), original)
+    {:ok, _} = save(id, messages ++ [user("new")], opts)
+    current = File.read!(head(dir, id))
+    archive = Path.join([dir, "conversations", id, "revision-1.json"])
+    File.write!(archive, legacy)
+
+    assert {:error, {:conversation_corrupt, ^id, 1}} = Session.conversation(id, 1, opts)
+
+    assert {:error, {:conversation_corrupt, ^id, :retention}} =
+             Session.Conversation.compact(id, opts)
+
+    assert File.read!(head(dir, id)) == current
+    assert File.read!(archive) == legacy
   end
 
   test "missing or altered objects and malicious references fail closed", %{

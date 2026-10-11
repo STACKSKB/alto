@@ -138,10 +138,8 @@ defmodule Alto.Session.Conversation.Store do
              fn path, {drop, keep} ->
                with {:ok, encoded} <- BoundedFile.read(path, @max_bytes),
                     {:ok, old} when is_map(old) <- JSON.decode(encoded),
-                    true <- old["v"] in [4, 5] and old["session_id"] == id,
-                    turn when is_integer(turn) and turn > 0 <-
-                      old["turn"] ||
-                        max(Enum.count(old["messages"] || [], &(&1["role"] == "user")), 1) do
+                    true <- old["v"] == 5 and old["session_id"] == id,
+                    turn when is_integer(turn) and turn > 0 <- old["turn"] do
                  if is_integer(limit) and turn < max(record["turn"] - limit + 1, 1),
                    do: {:ok, {[path | drop], keep}},
                    else: {:ok, {drop, [old | keep]}}
@@ -163,9 +161,6 @@ defmodule Alto.Session.Conversation.Store do
       Alto.Result.reduce(records, %{}, fn
         %{"v" => 5, "message_root" => root, "message_count" => count}, seen ->
           reachable_nodes(id, root, count, opts, seen)
-
-        %{"v" => 4}, seen ->
-          {:ok, seen}
 
         _, _ ->
           {:error, {:conversation_corrupt, id, :retention}}
