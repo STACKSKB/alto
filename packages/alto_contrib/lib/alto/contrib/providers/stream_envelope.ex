@@ -8,25 +8,20 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
   @state_key :alto_stream_envelope
 
   def post(config, body, headers, decoder, sink) do
+    limits = Map.take(config, [:max_event_bytes, :max_stream_bytes])
+
     initial = %{
       sse: SSE.new(config.max_event_bytes),
       completion: decoder.new(),
       events: 0,
       last_event_ms: nil,
-      diagnostics: %{
-        max_event_bytes: config.max_event_bytes,
-        max_stream_bytes: config.max_response_bytes
-      }
+      diagnostics: limits
     }
 
     on_error = fn reason, state, diagnostics ->
       evidence = accounting(state.completion, decoder)
 
-      diagnostics =
-        Map.merge(diagnostics, %{
-          max_event_bytes: config.max_event_bytes,
-          max_stream_bytes: config.max_response_bytes
-        })
+      diagnostics = Map.merge(diagnostics, limits)
 
       {:error,
        Failure.wrap(
@@ -55,9 +50,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
                   if(final_events > 0,
                     do: state.diagnostics.last_byte_ms,
                     else: state.last_event_ms
-                  ),
-                max_event_bytes: config.max_event_bytes,
-                max_stream_bytes: config.max_response_bytes
+                  )
               })
             )
 
@@ -116,11 +109,11 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
       next =
         cond do
-          size > config.max_response_bytes ->
+          size > config.max_stream_bytes ->
             %{
               current
               | bytes: size,
-                error: {:error, {:provider_response_too_large, config.max_response_bytes}}
+                error: {:error, {:provider_response_too_large, config.max_stream_bytes}}
             }
 
           response.status in 200..299 ->

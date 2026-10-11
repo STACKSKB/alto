@@ -352,7 +352,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
        %{
          endpoint: config.endpoint,
          timeout: config.timeout,
-         max_response_bytes: config.max_models_response_bytes,
+         max_stream_bytes: config.max_models_response_bytes,
          query: Keyword.get(opts, :model_query, []),
          headers: headers(opts, [{"accept", "application/json"}]),
          req_options: Keyword.get(opts, :req_options, [])

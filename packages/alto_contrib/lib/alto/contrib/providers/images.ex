@@ -28,7 +28,7 @@ defmodule Alto.Contrib.Providers.Images do
       )
 
   def stream(request, sink, opts) do
-    defaults = [max_event_bytes: 8_100_000, max_response_bytes: 16_000_000, timeout: 600_000]
+    defaults = [max_event_bytes: 8_100_000, max_stream_bytes: 16_000_000, timeout: 600_000]
     opts = Keyword.merge(defaults, opts)
     endpoint_opts = HTTPOptions.endpoint_options(opts, "https://openrouter.ai/api/v1", "/images")
 

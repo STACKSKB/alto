@@ -35,8 +35,8 @@ budget deliberately for the selected model and output reservation:
  idle_timeout: 60_000}
 ```
 
-The legacy `max_response_bytes` option remains a cumulative-stream alias. An
-explicit `max_stream_bytes` takes precedence. Model catalogs keep their independent
+Use `max_stream_bytes` for the cumulative response limit; the former
+`max_response_bytes` alias is no longer read. Model catalogs keep their independent
 8 MB `max_models_response_bytes` budget. No limit may be infinity. Raising the
 wire budget does not raise transcript, retained-event, context or output-token
 budgets; those limits remain independent.

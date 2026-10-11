@@ -30,7 +30,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
         Keyword.put(
           options,
           :max_models_response_bytes,
-          options[:max_response_bytes] || 8_000_000
+          options[:max_stream_bytes] || 8_000_000
         )
       )
     else
@@ -47,23 +47,23 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     for provider <- [Anthropic, OpenAICompatible, :catalog],
         chunks <- [[":ping\n\n", ":ping\n\n"], ["\n\n\n\n\n\n", "\n\n\n\n\n\n"]] do
       assert {:error, {:provider_response_too_large, 10}} =
-               run(provider, chunks, max_response_bytes: 10)
+               run(provider, chunks, max_stream_bytes: 10)
     end
   end
 
   test "HTTP error bodies obey the same response bound" do
     for provider <- [Anthropic, OpenAICompatible, :catalog] do
       assert {:error, {:provider_response_too_large, 10}} =
-               run(provider, ["123456", "789012"], [max_response_bytes: 10], 503)
+               run(provider, ["123456", "789012"], [max_stream_bytes: 10], 503)
 
       assert {:error, {:http_error, 503, "oops"}} =
-               run(provider, ["oops"], [max_response_bytes: 10], 503)
+               run(provider, ["oops"], [max_stream_bytes: 10], 503)
 
       assert {:error, {:http_error, 503, retained}} =
                run(
                  provider,
                  [String.duplicate("x", 32_000), String.duplicate("x", 40_000)],
-                 [max_response_bytes: 80_000],
+                 [max_stream_bytes: 80_000],
                  503
                )
 
@@ -206,7 +206,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     assert last_byte > last_event
   end
 
-  test "default stream budget accepts over 2 MB while legacy and event bounds remain enforced" do
+  test "default stream budget accepts over 2 MB while configured stream and event bounds remain enforced" do
     chunk =
       "data: " <>
         JSON.encode!(%{
@@ -218,12 +218,14 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     assert byte_size(result.message) == 2_100_000
     assert result.diagnostics.response_bytes > 2_000_000
     assert result.diagnostics.events == 22
+    assert result.diagnostics.max_stream_bytes == 16_000_000
+    assert result.diagnostics.max_event_bytes == 1_000_000
 
     assert {:error,
             %Alto.Provider.Failure{
               reason: {:provider_response_too_large, 2_000_000},
               diagnostics: diagnostics
-            }} = run(OpenAICompatible, chunks, evidence: true, max_response_bytes: 2_000_000)
+            }} = run(OpenAICompatible, chunks, evidence: true, max_stream_bytes: 2_000_000)
 
     assert diagnostics.content_bytes == 1_900_000
     assert diagnostics.accepted_bytes < 2_000_000
