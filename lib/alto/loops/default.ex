@@ -27,19 +27,16 @@ defmodule Alto.Loops.Default do
 
   @impl true
   def init(task, spec) do
-    state = %__MODULE__{task: task, phase: :awaiting_model}
-    {:continue, state, [model_request(state, spec)]}
+    request_model(%__MODULE__{task: task}, spec)
   end
 
   @impl true
   def handle_event(%Event{type: :input_received, data: %{sender: %{kind: :agent}}}, state, spec) do
-    next = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
-    {:continue, next, [model_request(next, spec)]}
+    request_model(%{state | step: state.step + 1}, spec)
   end
 
   def handle_event(%Event{type: :input_received, data: %{text: text}}, state, spec) do
-    next = %{state | task: text, phase: :awaiting_model, step: state.step + 1, observations: []}
-    {:continue, next, [model_request(next, spec)]}
+    request_model(%{state | task: text, step: state.step + 1}, spec)
   end
 
   def handle_event(
@@ -111,12 +108,7 @@ defmodule Alto.Loops.Default do
         %__MODULE__{phase: {:settling, :request_model}} = state,
         spec
       ) do
-    next_state = %{state | phase: :awaiting_model, step: state.step + 1, observations: []}
-
-    {:continue, next_state,
-     [
-       model_request(next_state, spec, Enum.reverse(state.observations))
-     ]}
+    request_model(%{state | step: state.step + 1}, spec, Enum.reverse(state.observations))
   end
 
   def handle_event(
@@ -153,27 +145,15 @@ defmodule Alto.Loops.Default do
   end
 
   @impl true
-  def dump_checkpoint(%__MODULE__{} = state, _spec) when map_size(state) == 5 do
-    with :ok <- validate_checkpoint_state(state), do: {:ok, state}
+  def dump_checkpoint(%__MODULE__{step: step, observations: observations} = state, _spec)
+      when map_size(state) == 5 and is_integer(step) and step >= 1 and is_list(observations) do
+    with :ok <- validate_phase(state.phase), do: {:ok, state}
   end
 
   def dump_checkpoint(_state, _spec), do: {:error, :invalid_checkpoint}
 
   @impl true
   def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
-
-  defp validate_checkpoint_state(state) do
-    with :ok <- validate_phase(state.phase),
-         :ok <- validate_step(state.step),
-         true <- is_list(state.observations) do
-      :ok
-    else
-      _ -> {:error, :invalid_checkpoint}
-    end
-  end
-
-  defp validate_step(step) when is_integer(step) and step >= 1, do: :ok
-  defp validate_step(_step), do: {:error, :invalid_checkpoint}
 
   defp validate_phase(:awaiting_model), do: :ok
 
@@ -197,13 +177,16 @@ defmodule Alto.Loops.Default do
     {:continue, %{state | phase: {:settling, continuation}}, [{:emit, event}]}
   end
 
-  defp model_request(state, spec, observations \\ []) do
-    {:request_model,
-     %{
-       task: state.task,
-       step: state.step,
-       context: spec.context,
-       observations: observations
-     }}
+  defp request_model(state, spec, observations \\ []) do
+    next = %{state | phase: :awaiting_model, observations: []}
+
+    request = %{
+      task: next.task,
+      step: next.step,
+      context: spec.context,
+      observations: observations
+    }
+
+    {:continue, next, [{:request_model, request}]}
   end
 end
