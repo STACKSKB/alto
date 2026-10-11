@@ -10,20 +10,13 @@ defmodule Alto.Session.LogScan do
                 stat <- File.Stat.from_record(info),
                 true <- stat.type == :regular or {:error, :not_regular},
                 true <- stat.size <= max_bytes or {:error, {:too_large, stat.size, max_bytes}} do
-             prefix =
-               if offset <= stat.size,
-                 do: hash_prefix(file, offset, :crypto.hash_init(:sha256)),
-                 else: :invalid
-
              {state, start, hash} =
-               case prefix do
-                 {:ok, hash} ->
-                   if hex(hash) == digest,
-                     do: {initial, offset, hash},
-                     else: {fallback, 0, :crypto.hash_init(:sha256)}
-
-                 _ ->
-                   {fallback, 0, :crypto.hash_init(:sha256)}
+               with true <- offset <= stat.size,
+                    {:ok, hash} <- hash_prefix(file, offset, :crypto.hash_init(:sha256)),
+                    true <- hex(hash) == digest do
+                 {initial, offset, hash}
+               else
+                 _ -> {fallback, 0, :crypto.hash_init(:sha256)}
                end
 
              with {:ok, _} <- :file.position(file, start),
@@ -67,18 +60,13 @@ defmodule Alto.Session.LogScan do
         {tail, lines} = List.pop_at(parts, -1)
 
         result =
-          Enum.reduce_while(lines, {:ok, state, offset, hash}, fn line, {:ok, acc, pos, hash} ->
-            case if(line == "", do: {:ok, acc}, else: fun.(line, acc)) do
-              {:ok, next} ->
-                {:cont,
-                 {:ok, next, pos + byte_size(line) + 1, :crypto.hash_update(hash, [line, "\n"])}}
-
-              error ->
-                {:halt, error}
+          Alto.Result.reduce(lines, {state, offset, hash}, fn line, {acc, pos, hash} ->
+            with {:ok, next} <- if(line == "", do: {:ok, acc}, else: fun.(line, acc)) do
+              {:ok, {next, pos + byte_size(line) + 1, :crypto.hash_update(hash, [line, "\n"])}}
             end
           end)
 
-        with {:ok, next, pos, hash} <- result,
+        with {:ok, {next, pos, hash}} <- result,
              do: replay(file, left - byte_size(bytes), next, pos, hash, tail, fun, complete_only)
 
       :eof ->
