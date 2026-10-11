@@ -74,7 +74,7 @@ defmodule Alto.AttachmentTest do
              })
 
     assert {:ok, blocks} =
-             Content.map_media(content, %{images: false, files: false}, fn _ ->
+             Content.map_media(content, ["text"], fn _ ->
                flunk("opaque bytes sent to provider")
              end)
 

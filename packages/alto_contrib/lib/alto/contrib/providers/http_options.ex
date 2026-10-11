@@ -12,8 +12,6 @@ defmodule Alto.Contrib.Providers.HTTPOptions do
       # Legacy alias; an explicit max_stream_bytes takes precedence.
       max_response_bytes: [type: :pos_integer],
       max_stream_bytes: [type: :pos_integer, default: 16_000_000],
-      supports_images: [type: :boolean, default: false],
-      supports_files: [type: :boolean, default: false],
       input_modalities: [type: {:list, {:in, ~w(text image audio video file)}}]
     ]
   end

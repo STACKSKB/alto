@@ -43,7 +43,7 @@ defmodule Alto.Contrib.Tools.CodexAgent do
     opts =
       if model == opts[:model],
         do: opts,
-        else: Keyword.drop(opts, [:input_modalities, :supports_images, :supports_files])
+        else: Keyword.delete(opts, :input_modalities)
 
     with_client(context, opts, fn client ->
       with :ok <- Client.subscribe(client),

@@ -16,8 +16,7 @@ defmodule Alto.Contrib.Providers.Images do
     do: %{
       protocol: :image_generation,
       model: opts[:model],
-      vision: "image" in Keyword.get(opts, :input_modalities, ["text"]),
-      input_modalities: Keyword.get(opts, :input_modalities, ["text"]),
+      input_modalities: Alto.InputModalities.configured(opts),
       tools: :none,
       output_modalities: ["image"]
     }

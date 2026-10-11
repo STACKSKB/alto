@@ -15,6 +15,16 @@ defmodule Alto.InputModalitiesTest do
     end
   end
 
+  defmodule AdvertisedProvider do
+    @behaviour Alto.Provider
+    def describe(_opts), do: %{input_modalities: ["text", "image"]}
+
+    def stream(request, _sink, opts) do
+      send(opts[:owner], {:advertised_dispatch, request})
+      {:ok, %{message: "ok", tool_calls: []}}
+    end
+  end
+
   defmodule CodexClient do
     use GenServer
     def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
@@ -48,7 +58,7 @@ defmodule Alto.InputModalitiesTest do
       id: "capture",
       provider:
         {CaptureProvider,
-         model: "vision", supports_images: true, supports_files: true, owner: self()},
+         model: "vision", input_modalities: ["text", "image", "file"], owner: self()},
       models: [
         %{id: "vision", input_modalities: ["text", "image"]},
         %{id: "text", input_modalities: ["text"]}
@@ -88,6 +98,23 @@ defmodule Alto.InputModalitiesTest do
              )
 
     assert_receive {:dispatched, _}
+  end
+
+  test "explicit modalities override the provider description before dispatch" do
+    request = %{messages: [%{"role" => "user", "content" => [image()]}], tools: []}
+
+    assert {:error, :model_does_not_support_images} =
+             Provider.stream(AdvertisedProvider, request, fn _ -> :ok end,
+               owner: self(),
+               input_modalities: ["text"]
+             )
+
+    refute_receive {:advertised_dispatch, _}
+
+    assert {:ok, _} =
+             Provider.stream(AdvertisedProvider, request, fn _ -> :ok end, owner: self())
+
+    assert_receive {:advertised_dispatch, ^request}
   end
 
   test "Codex checks discovered model modalities before sending a turn" do

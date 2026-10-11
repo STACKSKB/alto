@@ -72,22 +72,12 @@ defmodule Alto.Content do
   def prepend(content, text) when is_binary(content), do: text <> content
 
   @doc "Translate all media blocks with explicit provider capabilities."
-  def map_media(%__MODULE__{blocks: blocks}, capabilities, encode) do
+  def map_media(%__MODULE__{blocks: blocks}, modalities, encode) do
     Alto.Result.traverse(blocks, fn
       %{"type" => type} = block when type in ["image", "file"] ->
         modality = Alto.InputModalities.modality(block)
 
-        key =
-          case modality do
-            "image" -> :images
-            "audio" -> :audio
-            "video" -> :video
-            "file" -> :files
-          end
-
-        if Map.get(capabilities, key, false),
-          do: encode.(block),
-          else: {:error, Alto.InputModalities.error(modality)}
+        with :ok <- Alto.InputModalities.check([modality], modalities), do: encode.(block)
 
       %{"type" => "artifact", "name" => name, "media_type" => media} ->
         {:ok, text("Generated file: #{name} (#{media})")}

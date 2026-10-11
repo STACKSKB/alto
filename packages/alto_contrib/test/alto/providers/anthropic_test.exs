@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Providers.AnthropicTest do
   use ExUnit.Case, async: true
+  alias Alto.Content
   alias Alto.Contrib.Providers.Anthropic
 
   defmodule Adapter do
@@ -95,15 +96,15 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
       }
     ]
 
-    assert Anthropic.describe(opts).vision == false
+    assert Anthropic.describe(opts).input_modalities == ["text"]
 
     assert {:error, :model_does_not_support_images} =
              Anthropic.stream(%{messages: messages, tools: []}, fn _ -> :ok end, opts)
 
     refute_received {:request, _}
 
-    vision_opts = Keyword.put(opts, :supports_images, true)
-    assert Anthropic.describe(vision_opts).vision == true
+    vision_opts = Keyword.put(opts, :input_modalities, ["text", "image"])
+    assert Anthropic.describe(vision_opts).input_modalities == ["text", "image"]
 
     assert {:ok, _completion} =
              Anthropic.stream(%{messages: messages, tools: []}, fn _ -> :ok end, vision_opts)
@@ -127,6 +128,19 @@ defmodule Alto.Contrib.Providers.AnthropicTest do
                ]
              }
            ]
+  end
+
+  test "rejects audio and video at the codec boundary even when configured" do
+    opts = [input_modalities: ["text", "audio", "video"]]
+    assert Anthropic.describe(opts).input_modalities == ["text"]
+
+    for {name, media, bytes, reason} <- [
+          {"clip.wav", "audio/wav", "RIFF", :model_does_not_support_audio},
+          {"clip.mp4", "video/mp4", "video", :model_does_not_support_video}
+        ] do
+      content = Content.new([Content.file(name, media, Base.encode64(bytes))])
+      assert {:error, ^reason} = Anthropic.check_input(content, opts)
+    end
   end
 
   test "native messages carry system policy, tool schemas and correlated tool results" do

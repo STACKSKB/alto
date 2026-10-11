@@ -166,9 +166,9 @@ not depend on the original path. See the [TUI guide](../packages/alto_tui/README
 for uploads, editable large pastes and clipboard images.
 
 Declare inputs for the actual configured model with provider options such as
-`input_modalities: ["text", "image", "audio", "file"]`. Legacy `supports_images:
-true` and `supports_files: true` declare image/file support for one configured
-model. Catalog metadata takes precedence when selecting models, including
+`input_modalities: ["text", "image", "audio", "file"]`. This is the single capability
+declaration; the former `supports_images` and `supports_files` flags are no longer
+read. Catalog metadata takes precedence when selecting models, including
 OpenRouter architecture metadata and Codex `inputModalities`. For catalogs without
 metadata, use `model_input_modalities: %{"model-id" => ["text", "image"]}`.
 Unsupported or unknown media fails before dispatch. Switching or delegating to

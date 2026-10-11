@@ -912,9 +912,7 @@ defmodule Alto.TUI.App do
   end
 
   defp input_provider({module, options}),
-    do:
-      {module,
-       Keyword.take(options, [:model, :input_modalities, :supports_images, :supports_files])}
+    do: {module, Keyword.take(options, [:model, :input_modalities])}
 
   defp input_provider(nil), do: nil
 

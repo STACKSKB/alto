@@ -219,7 +219,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
              OpenAICompatible.stream(
                %{messages: messages, tools: []},
                fn _ -> :ok end,
-               Keyword.put(opts, :supports_images, true)
+               Keyword.put(opts, :input_modalities, ["text", "image"])
              )
 
     assert_receive {:http_request, request}
