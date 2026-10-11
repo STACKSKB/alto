@@ -294,30 +294,24 @@ defmodule Alto.Contrib.Tools.CodexAgent do
     end
   end
 
-  defp send_input(turn, entry, :steer) do
-    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
-         do:
-           Client.request(
-             turn.client,
-             "turn/steer",
+  defp send_input(turn, entry, kind) when kind in [:steer, :next_turn] do
+    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts) do
+      {method, params} =
+        case kind do
+          :steer ->
+            {"turn/steer",
              %{
                "threadId" => turn.thread_id,
                "expectedTurnId" => turn.turn_id,
                "input" => Backend.user_input(input_content(entry))
-             },
-             Keyword.get(turn.opts, :request_timeout, 5_000)
-           )
-  end
+             }}
 
-  defp send_input(turn, entry, :next_turn) do
-    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
-         do:
-           Client.request(
-             turn.client,
-             "turn/start",
-             Backend.turn_params(turn.thread_id, input_content(entry), turn.opts),
-             Keyword.get(turn.opts, :request_timeout, 5_000)
-           )
+          :next_turn ->
+            {"turn/start", Backend.turn_params(turn.thread_id, input_content(entry), turn.opts)}
+        end
+
+      Client.request(turn.client, method, params, Keyword.get(turn.opts, :request_timeout, 5_000))
+    end
   end
 
   defp delivered_turn(turn, %{"turnId" => id}, :steer) when id == turn.turn_id, do: {:ok, turn}

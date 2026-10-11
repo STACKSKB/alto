@@ -86,34 +86,21 @@ defmodule Alto.Contrib.Listeners.Connection do
     end
   end
 
-  defp execute(
-         :send_message,
-         [run_id, %Alto.Content{} = content, to, delivery, key, reply_to],
-         registry
-       ) do
-    text = content |> Alto.Content.text_value() |> Alto.Text.truncate(63_000, "…")
+  defp execute(:send_message, [run_id, message, to, delivery, key, reply_to], registry) do
+    metadata = [to: to, delivery: delivery, idempotency_key: key, in_reply_to: reply_to]
 
-    Registry.request(
-      registry,
-      {:send_message, run_id,
-       [
-         text: text,
-         content: content.blocks,
-         to: to,
-         delivery: delivery,
-         idempotency_key: key,
-         in_reply_to: reply_to
-       ]}
-    )
+    message_fields =
+      case message do
+        %Alto.Content{} = content ->
+          text = content |> Alto.Content.text_value() |> Alto.Text.truncate(63_000, "…")
+          [text: text, content: content.blocks]
+
+        text ->
+          [text: text]
+      end
+
+    Registry.request(registry, {:send_message, run_id, message_fields ++ metadata})
   end
-
-  defp execute(:send_message, [run_id, text, to, delivery, key, reply_to], registry),
-    do:
-      Registry.request(
-        registry,
-        {:send_message, run_id,
-         [text: text, to: to, delivery: delivery, idempotency_key: key, in_reply_to: reply_to]}
-      )
 
   defp execute(:cancel, [run_id, reason], registry),
     do: Registry.request(registry, {:cancel, run_id, reason || :user})

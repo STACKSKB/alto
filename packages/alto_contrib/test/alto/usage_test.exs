@@ -47,6 +47,33 @@ defmodule Alto.Contrib.UsageTest do
     assert usage.requests == 0
   end
 
+  test "wire aliases preserve explicit zeros and serialized accounting defaults" do
+    usage =
+      Alto.Contrib.Usage.normalize(%{
+        :prompt_tokens => 99,
+        "prompt_tokens" => 0,
+        "input_tokens" => 100,
+        "completion_tokens" => -1,
+        "outputTokens" => 3,
+        "cachedInputTokens" => 200,
+        "cache_creation_input_tokens" => 5,
+        "last_input_tokens" => 2,
+        "last_cached_input_tokens" => 50,
+        "requests" => 0
+      })
+
+    assert usage == %{
+             input_tokens: 5,
+             output_tokens: 3,
+             total_tokens: 0,
+             cached_input_tokens: 5,
+             last_input_tokens: 2,
+             last_cached_input_tokens: 2,
+             requests: 0,
+             context_window: nil
+           }
+  end
+
   test "context limits survive Codex normalization, serialization and additive updates" do
     usage =
       Alto.Contrib.Usage.from_codex(%{

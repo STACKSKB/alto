@@ -6,7 +6,13 @@ defmodule Alto.TUI.HistoryTest do
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-history-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+
+    on_exit(fn ->
+      # Killing hydration does not cancel its already-dispatched index request.
+      :sys.get_state(Alto.Session.ChildIndex)
+      File.rm_rf!(dir)
+    end)
+
     opts = [session_dir: dir]
     {:ok, session} = Alto.Session.create("saved", %{}, opts)
 

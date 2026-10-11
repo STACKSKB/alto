@@ -20,7 +20,7 @@ defmodule Alto.TUI.SavedSession do
                prior["digest"],
                prior,
                empty(),
-               fn line, state -> replay([line], state, id) end
+               &replay(&1, &2, id)
              ) do
         next = %{next | "offset" => offset, "digest" => digest}
 
@@ -96,16 +96,14 @@ defmodule Alto.TUI.SavedSession do
 
   defp valid_agent?(_), do: false
 
-  defp replay(lines, state, id) do
-    Enum.reduce_while(lines, {:ok, state}, fn line, {:ok, %{"records" => count} = acc} ->
-      case JSON.decode(line) do
-        {:ok, %{"v" => 1} = record} when count < 20_000 ->
-          {:cont, {:ok, fold(%{acc | "records" => acc["records"] + 1}, record, id)}}
+  defp replay(line, %{"records" => count} = state, id) do
+    case JSON.decode(line) do
+      {:ok, %{"v" => 1} = record} when count < 20_000 ->
+        {:ok, fold(%{state | "records" => count + 1}, record, id)}
 
-        _ ->
-          {:halt, {:error, :saved_session_corrupt}}
-      end
-    end)
+      _ ->
+        {:error, :saved_session_corrupt}
+    end
   end
 
   defp fold(
@@ -153,11 +151,7 @@ defmodule Alto.TUI.SavedSession do
              else: Session.event_data(record)
            ) do
         {:ok, %{"usage" => usage}} when is_map(usage) ->
-          %{
-            state
-            | "usage" =>
-                stringify(Usage.merge(Usage.normalize(state["usage"]), Usage.normalize(usage)))
-          }
+          merge_usage(state, usage)
 
         _ ->
           state
