@@ -216,9 +216,7 @@ defmodule Alto.Contrib.Tools.CodexAgent do
         nil when map_size(turn.calls) < 256 ->
           outcome =
             with :ok <- Alto.Runner.Budget.take(turn.context.budget),
-                 {:ok, prepared, _} <-
-                   Alto.Tool.prepare(messaging_module(name), args, turn.context, []),
-                 do: messaging_module(name).run(prepared, turn.context, [])
+                 do: Alto.Tool.run(messaging_module(name), args, turn.context)
 
           {success, value} =
             case outcome do

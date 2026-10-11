@@ -53,10 +53,7 @@ defmodule Alto.Contrib.Tools.EditFile do
   end
 
   @impl true
-  def prepare(arguments, context, opts \\ [])
-
-  def prepare(arguments, %{} = context, opts)
-      when is_map(arguments) do
+  def prepare(arguments, %{} = context, opts \\ []) do
     with edits = arguments["edits"],
          true <-
            Enum.sum(Enum.map(edits, &(byte_size(&1["old_text"]) + byte_size(&1["new_text"])))) <=
@@ -75,8 +72,6 @@ defmodule Alto.Contrib.Tools.EditFile do
       )
     end
   end
-
-  def prepare(_arguments, _context, _opts), do: {:error, :edit_arguments_must_be_object}
 
   @impl true
   def run(prepared, %{} = context, _opts \\ []),

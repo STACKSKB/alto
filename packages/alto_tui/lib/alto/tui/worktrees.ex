@@ -24,11 +24,10 @@ defmodule Alto.TUI.Worktrees do
           session_id: "harness-worktree-" <> Base.encode16(:crypto.hash(:sha256, source))
         }
 
-        with {:ok, prepared, _} <-
-               Alto.Tool.prepare(Alto.Contrib.Tools.CreateWorktree, arguments, context,
+        with {:ok, result} <-
+               Alto.Tool.run(Alto.Contrib.Tools.CreateWorktree, arguments, context,
                  manager: manager
                ),
-             {:ok, result} <- Alto.Contrib.Tools.CreateWorktree.run(prepared, context, []),
              {:ok, project} <-
                Alto.TUI.Catalog.register_project(
                  result["cwd"],
