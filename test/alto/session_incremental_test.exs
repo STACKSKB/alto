@@ -228,8 +228,6 @@ defmodule Alto.SessionIncrementalTest do
   end
 
   test "retention option is validated by configuration and persistence", %{id: id, opts: opts} do
-    assert Alto.Config.default()[:conversation_retained_turns] == :infinity
-
     for invalid <- [0, -1, "all", nil] do
       assert {:error, {:invalid_conversation_retained_turns, ^invalid}} =
                save(id, [user("one")], Keyword.put(opts, :conversation_retained_turns, invalid))

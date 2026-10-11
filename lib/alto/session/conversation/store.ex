@@ -122,9 +122,7 @@ defmodule Alto.Session.Conversation.Store do
   end
 
   def disk_bytes(id, opts) do
-    with {:ok, files} <- files(id, opts),
-         {:ok, sizes} <- sizes(files),
-         do: {:ok, Enum.reduce(sizes, 0, fn {_, size}, n -> n + size end)}
+    with {:ok, files} <- files(id, opts), do: file_bytes(files)
   end
 
   # Prepared under the session lock, then applied only after the new atomic
@@ -151,8 +149,8 @@ defmodule Alto.Session.Conversation.Store do
          {:ok, seen} <- reachable(id, keep, opts),
          {:ok, objects} <- object_files(id, opts),
          unused <- Enum.reject(objects, fn path -> MapSet.member?(seen, Path.basename(path)) end),
-         {:ok, sizes} <- sizes(drop ++ unused) do
-      {:ok, %{files: drop ++ unused, bytes: Enum.reduce(sizes, 0, fn {_, n}, sum -> sum + n end)}}
+         {:ok, bytes} <- file_bytes(drop ++ unused) do
+      {:ok, %{files: drop ++ unused, bytes: bytes}}
     end
   end
 
@@ -251,10 +249,10 @@ defmodule Alto.Session.Conversation.Store do
          do: {:ok, revisions ++ objects}
   end
 
-  defp sizes(files) do
-    Alto.Result.traverse(files, fn path ->
+  defp file_bytes(files) do
+    Alto.Result.reduce(files, 0, fn path, total ->
       case File.stat(path) do
-        {:ok, %{type: :regular, size: size}} -> {:ok, {path, size}}
+        {:ok, %{type: :regular, size: size}} -> {:ok, total + size}
         _ -> {:error, {:conversation_read_failed, path}}
       end
     end)

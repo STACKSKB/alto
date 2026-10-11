@@ -363,7 +363,6 @@ defmodule Alto.TUI.Selection do
     Enum.reduce(rect.y..(rect.y + rect.height - 1), history, fn y, rows ->
       Map.put_new_lazy(rows, y + offset - rect.y, fn ->
         row = elem(snapshot.rows, y) |> Map.take([:raw, :ranges])
-        row = %{row | raw: Alto.Retained.detach(row.raw)}
         %{row | raw: :binary.copy(row.raw)}
       end)
     end)
