@@ -154,8 +154,6 @@ defmodule Alto.TUI.State do
         credentials_path: credentials_path,
         catalog_opts: catalog_opts,
         async_history?: Keyword.get(opts, :async_history, false),
-        render_cache_bytes: Keyword.get(tui_options, :render_cache_bytes, 16_000_000),
-        history_cache_bytes: Keyword.get(tui_options, :history_cache_bytes, 12_000_000),
         projects: projects,
         tasks: tasks,
         selected_project_id: selected_project["id"],
@@ -163,20 +161,18 @@ defmodule Alto.TUI.State do
         profiles: profiles,
         preferences: preferences,
         selected_provider_id: profile && profile.id,
-        type_to_compose?: Keyword.get(tui_options, :type_to_compose, true),
-        narrow_context: Keyword.get(tui_options, :narrow_context, :adaptive),
-        narrow_context_width: Keyword.get(tui_options, :narrow_context_width, 75),
-        narrow_context_fullscreen_below:
-          Keyword.get(tui_options, :narrow_context_fullscreen_below, 72),
-        paste_inline_bytes: Keyword.get(tui_options, :paste_inline_bytes, 4_096),
-        paste_chunk_bytes: Keyword.get(tui_options, :paste_chunk_bytes, 32_000),
-        approval_auto_open?: Keyword.get(tui_options, :approval_auto_open, true),
         selected_model: profile && profile.default_model,
-        selected_backend: selected_backend,
-        usage: %{}
+        selected_backend: selected_backend
       }
 
-      state = Alto.TUI.Backend.initialize(state)
+      fields =
+        Enum.map(Keyword.delete(tui_options, :approval_reviewer), fn
+          {:type_to_compose, value} -> {:type_to_compose?, value}
+          {:approval_auto_open, value} -> {:approval_auto_open?, value}
+          field -> field
+        end)
+
+      state = state |> struct!(fields) |> Alto.TUI.Backend.initialize()
       {:ok, state |> restore_model() |> hydrate_selected()}
     end
   end
@@ -360,7 +356,6 @@ defmodule Alto.TUI.State do
           state
           | selected_project_id: id,
             selected_task_id: nil,
-            search: nil,
             transcript_scroll: 0,
             transcript_follow?: true
         }
@@ -377,7 +372,6 @@ defmodule Alto.TUI.State do
         |> Alto.TUI.Search.close()
         |> Map.put(:selected_task_id, id)
         |> Map.put(:selected_agent_id, nil)
-        |> Map.put(:search, nil)
         |> Map.put(:transcript_follow?, true)
         |> sync_backend(task)
         |> touch_cache(id)
@@ -393,7 +387,6 @@ defmodule Alto.TUI.State do
       state
       | selected_task_id: nil,
         selected_agent_id: nil,
-        search: nil,
         overlay: nil,
         leader?: false,
         notice: "new task — your draft is preserved",

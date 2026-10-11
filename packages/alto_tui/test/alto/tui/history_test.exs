@@ -52,11 +52,12 @@ defmodule Alto.TUI.HistoryTest do
     assert state.selected_task_id == "task-a"
     refute Map.has_key?(state.entries, "task-a")
     assert %{token: token, monitor: monitor} = state.history_load
+    assert_receive {:tui_history, ^token, kind, usage}, 2000
+    assert kind == :usage
+    state = History.apply(state, token, :usage, usage)
     assert_receive {:tui_history, ^token, :entries, entries}, 2000
     {:noreply, state, _} = App.handle_info({:tui_history, token, :entries, entries}, state)
     assert [%{text: "saved request"}] = State.visible_entries(state)
-    assert_receive {:tui_history, ^token, :usage, usage}, 2000
-    state = History.apply(state, token, :usage, usage)
     assert_receive {:tui_history, ^token, :subagents, agents}, 2000
     state = History.apply(state, token, :subagents, agents)
     assert_receive {:DOWN, ^monitor, :process, pid, :normal}, 2000
