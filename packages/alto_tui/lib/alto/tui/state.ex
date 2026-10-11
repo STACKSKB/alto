@@ -288,6 +288,11 @@ defmodule Alto.TUI.State do
     do: %{state | leader?: false, overlay: nil, notice: "No workspace to close"}
 
   def close_workspace(state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:close_workspace, id}),
+         do: local_close_workspace(state, id)
+  end
+
+  defp local_close_workspace(state, id) do
     case Catalog.close_project(id, state.catalog_opts) do
       {:ok, closed} ->
         next = %{
@@ -345,6 +350,11 @@ defmodule Alto.TUI.State do
   def select_rail_row(state, _row), do: state
 
   def select_project(%__MODULE__{} = state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:select_project, id}),
+         do: local_select_project(state, id)
+  end
+
+  defp local_select_project(state, id) do
     case Enum.find(state.projects, &(&1["id"] == id)) do
       nil ->
         state
@@ -363,6 +373,10 @@ defmodule Alto.TUI.State do
   end
 
   def select_task(%__MODULE__{} = state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:select_task, id}), do: local_select_task(state, id)
+  end
+
+  defp local_select_task(state, id) do
     case Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
       nil ->
         state
@@ -381,6 +395,10 @@ defmodule Alto.TUI.State do
 
   @doc "Leave the current task selected project intact and compose a new task."
   def new_task(%__MODULE__{} = state) do
+    with :pass <- Alto.TUI.Backend.ui(state, :new_task), do: local_new_task(state)
+  end
+
+  defp local_new_task(state) do
     state = state |> Alto.TUI.Search.close() |> Alto.TUI.History.cancel()
 
     %{
@@ -398,6 +416,11 @@ defmodule Alto.TUI.State do
 
   @doc "Open a folder as a workspace and prepare a new task without losing the draft."
   def open_workspace(state, path) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:open_workspace, path}),
+         do: local_open_workspace(state, path)
+  end
+
+  defp local_open_workspace(state, path) do
     base =
       case selected_project(state) do
         nil -> File.cwd!()

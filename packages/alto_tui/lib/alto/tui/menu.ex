@@ -92,9 +92,12 @@ defmodule Alto.TUI.Menu do
     saved = if path == "", do: Map.get(menu, :folders, []), else: []
 
     {found, completion, error} =
-      case Alto.TUI.Folders.suggest(path, base) do
+      case Map.get(menu, :complete, &Alto.TUI.Folders.suggest(&1, base)).(path) do
         {:ok, %{folders: folders, completion: completion}} ->
           {folders, completion, nil}
+
+        :pending ->
+          {[], :pending, nil}
 
         {:error, reason} ->
           {[], nil, "Could not list folders: " <> Alto.Contrib.Display.error(reason)}
@@ -103,7 +106,9 @@ defmodule Alto.TUI.Menu do
     Map.merge(menu, %{
       suggestions: Enum.take(Enum.uniq(saved ++ found), 50),
       suggestion_index: nil,
-      completion: completion,
+      completion: if(completion == :pending, do: nil, else: completion),
+      completion_pending?: completion == :pending,
+      tab_pending?: false,
       error: error
     })
   end
@@ -152,11 +157,16 @@ defmodule Alto.TUI.Menu do
   def key(%{kind: :workspace_form} = menu, %Key{code: "tab"}) do
     completion = folder_selection(menu) || if(value(menu, :path) != "", do: menu[:completion])
 
-    if menu.index == 0 and is_binary(completion) and completion != "" and
-         completion != value(menu, :path) do
-      {:edit, complete_folder(menu, completion)}
-    else
-      {:edit, Map.put(move(menu, 1), :suggestion_index, nil)}
+    cond do
+      menu.index == 0 and menu[:completion_pending?] and value(menu, :path) != "" ->
+        {:edit, Map.put(menu, :tab_pending?, true)}
+
+      menu.index == 0 and is_binary(completion) and completion != "" and
+          completion != value(menu, :path) ->
+        {:edit, complete_folder(menu, completion)}
+
+      true ->
+        {:edit, Map.put(move(menu, 1), :suggestion_index, nil)}
     end
   end
 
