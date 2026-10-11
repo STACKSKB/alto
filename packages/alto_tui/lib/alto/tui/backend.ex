@@ -5,8 +5,10 @@ defmodule Alto.TUI.Backend do
 
   Runner adapters implement `start/4` and `cancel/3`. Interactive adapters
   implement `ui/3` and `cancel/3`, owning their connection and protocol lifecycle.
-  Optional UI contributions receive `:prepare`, `:selected`, `:models`,
-  `:steering?`, `:session_usage?`,
+  Optional UI contributions receive `:prepare`, `:selected`, `:leaving`, `:models`,
+  `:steering?`, `:session_usage?`, `:details`, `:new_task`,
+  `{:select_project, id}`, `{:select_task, id}`, `{:open_workspace, path}`,
+  `{:close_workspace, id}`, `{:cancel, reason}`, `{:decide, decision}`,
   `{:submit, prompt}`, `{:overlay, kind}`, `{:select, value}` and
   `{:message, message}`. Return `:pass` to use ordinary terminal behavior.
   Message contributions use the application's `handle_info` return contract;
@@ -65,12 +67,11 @@ defmodule Alto.TUI.Backend do
   end
 
   def message(state, message) do
-    Enum.reduce_while(configured(state.run_options), :pass, fn {_id, {module, opts}}, :pass ->
-      case contribution(module, {:message, message}, state, opts) do
-        :pass -> {:cont, :pass}
-        result -> {:halt, result}
-      end
+    configured(state.run_options)
+    |> Stream.map(fn {_id, {module, opts}} ->
+      contribution(module, {:message, message}, state, opts)
     end)
+    |> Enum.find(:pass, &(&1 != :pass))
   end
 
   defp contribution(module, event, state, opts) do

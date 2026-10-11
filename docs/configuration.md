@@ -166,9 +166,9 @@ not depend on the original path. See the [TUI guide](../packages/alto_tui/README
 for uploads, editable large pastes and clipboard images.
 
 Declare inputs for the actual configured model with provider options such as
-`input_modalities: ["text", "image", "audio", "file"]`. Legacy `supports_images:
-true` and `supports_files: true` declare image/file support for one configured
-model. Catalog metadata takes precedence when selecting models, including
+`input_modalities: ["text", "image", "audio", "file"]`. This is the single capability
+declaration; the former `supports_images` and `supports_files` flags are no longer
+read. Catalog metadata takes precedence when selecting models, including
 OpenRouter architecture metadata and Codex `inputModalities`. For catalogs without
 metadata, use `model_input_modalities: %{"model-id" => ["text", "image"]}`.
 Unsupported or unknown media fails before dispatch. Switching or delegating to
@@ -294,7 +294,7 @@ conversation storage budget. The supplied coding profile selects `:infinity` for
 those three limits to support long tasks. All turns are retained incrementally by
 default; `conversation_retained_turns: N` limits rewind/fork history while keeping
 the entire current context. Run deadlines, effect budgets and cancellation still
-apply. See [conversation revisions](conversations.md) for storage and migration.
+apply. See [conversation revisions](conversations.md) for storage and retention.
 
 `provider_retries` bounds retries before any model output is delivered; it is
 zero by default. The transient policy honors provider retry hints, keeps waiting

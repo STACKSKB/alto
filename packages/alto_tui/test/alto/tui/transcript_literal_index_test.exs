@@ -31,8 +31,7 @@ defmodule Alto.TUI.TranscriptLiteralIndexTest do
 
       assert Enum.map(plain_lines, &line_text/1) == Enum.map(full, &line_text/1)
 
-      for offset <- [0, 1, 3, div(index.rows, 2), max(index.rows - 2, 0)],
-          height <- [1, 7, 30] do
+      for offset <- 0..(index.rows + 1), height <- [0, 1, 2, 7, 30] do
         assert Transcript.window(index, offset, height) == Enum.slice(full, offset, height)
       end
     end

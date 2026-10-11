@@ -9,16 +9,12 @@ defmodule Alto.Storage do
 
   @doc "Resolve the storage root; callers may override their own directory explicitly."
   def state_home do
-    case System.get_env("ALTO_STATE_HOME") do
-      path when is_binary(path) and path != "" ->
-        path
-
-      _other ->
-        case System.get_env("XDG_STATE_HOME") do
-          path when is_binary(path) and path != "" -> path
-          _other -> Path.join(System.user_home!(), ".local/state")
-        end
-    end
+    Enum.find_value(["ALTO_STATE_HOME", "XDG_STATE_HOME"], fn key ->
+      case System.get_env(key) do
+        path when is_binary(path) and path != "" -> path
+        _ -> nil
+      end
+    end) || Path.join(System.user_home!(), ".local/state")
   end
 
   @doc "Read a bounded JSON snapshot, using the supplied domain validator."

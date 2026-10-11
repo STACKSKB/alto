@@ -3,6 +3,19 @@ defmodule Alto.TUI.MarkdownTailWindowTest do
 
   alias Alto.TUI.Markdown
 
+  test "multipart windows preserve every separator and empty viewport boundary" do
+    source = "## Heading\n\n**Text** 猫\n\n```elixir\n  :ok\n```\n\nLast paragraph"
+
+    for width <- [6, 40] do
+      full = Markdown.render(source, width).lines
+      plan = Markdown.layout(source, width)
+
+      for offset <- 0..(length(full) + 1), height <- [0, 1, 2, 9] do
+        assert Markdown.window(plan, offset, height) == Enum.slice(full, offset, height)
+      end
+    end
+  end
+
   test "scroll windows cross cached page boundaries without losing native styles or rows" do
     sources = [
       "```elixir\n" <>

@@ -84,8 +84,7 @@ defmodule Alto.Contrib.CacheWarmer do
         case start_run(task, opts, server) do
           {:ok, handle} ->
             case Alto.Runner.subscribe(handle, server) do
-              {:ok, ref} ->
-                Server.subscribe(server, ref)
+              {:ok, _ref} ->
                 {:ok, handle}
 
               {:error, reason} ->
@@ -99,8 +98,6 @@ defmodule Alto.Contrib.CacheWarmer do
             error
         end
       end
-    else
-      {:error, _} = error -> error
     end
   end
 

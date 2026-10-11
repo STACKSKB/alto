@@ -17,11 +17,7 @@ defmodule Alto.AtomicFile do
   is therefore an uncertain outcome for callers.
   """
   @spec write(binary(), iodata(), keyword()) :: :ok | {:error, term()}
-  def write(path, content, opts \\ []) do
-    with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)) do
-      write_temp(path, content, mode, opts, true)
-    end
-  end
+  def write(path, content, opts \\ []), do: write_many([{path, content, opts}])
 
   @doc """
   Publish independent files and sync each containing directory once after every
@@ -30,26 +26,24 @@ defmodule Alto.AtomicFile do
   only after success. This is suitable for immutable content-addressed objects.
   """
   def write_many(files) do
-    with {:ok, _} <-
-           Alto.Result.reduce(files, :ok, fn {path, content, opts}, :ok ->
+    with :ok <-
+           Alto.Result.each(files, fn {path, content, opts} ->
              with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)),
-                  :ok <- write_temp(path, content, mode, opts, false),
-                  do: {:ok, :ok}
+                  do: write_temp(path, content, mode, opts)
            end),
-         {:ok, _} <-
+         do:
            files
            |> Enum.map(fn {path, _, _} -> Path.dirname(path) end)
            |> Enum.uniq()
-           |> Alto.Result.traverse(fn dir ->
+           |> Alto.Result.each(fn dir ->
              case sync_directory(dir) do
-               :ok -> {:ok, :ok}
+               :ok -> :ok
                {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
              end
-           end),
-         do: :ok
+           end)
   end
 
-  defp write_temp(path, content, mode, opts, sync_directory?) do
+  defp write_temp(path, content, mode, opts) do
     temp =
       Path.join(
         Path.dirname(path),
@@ -61,12 +55,8 @@ defmodule Alto.AtomicFile do
     result =
       with {:ok, io} <- File.open(temp, [:write, :binary, :raw, :exclusive]),
            :ok <- write_sync_close(io, content, fn -> maybe_chmod(temp, mode) end),
-           :ok <- before_rename.(),
-           :ok <- File.rename(temp, path) do
-        case if(sync_directory?, do: sync_directory(Path.dirname(path)), else: :ok) do
-          :ok -> :ok
-          {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
-        end
+           :ok <- before_rename.() do
+        File.rename(temp, path)
       end
 
     if result != :ok, do: File.rm(temp)

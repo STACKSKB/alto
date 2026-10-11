@@ -11,12 +11,10 @@ defmodule Alto.TUI.Transcript do
     cached(:documents, {entries, width, assistant, opts}, 4, fn ->
       groups = Enum.map(entries, &cached_rows(&1, width, assistant, opts))
 
-      document = %{
+      %{
         text: Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten()),
         groups: groups
       }
-
-      {document, length(document.text.lines)}
     end)
   end
 
@@ -63,19 +61,7 @@ defmodule Alto.TUI.Transcript do
         {entry, plan}
       end
 
-      built =
-        if length(missing) < 32 do
-          Enum.map(missing, build)
-        else
-          missing
-          |> Enum.chunk_every(16)
-          |> Task.async_stream(&Enum.map(&1, build),
-            max_concurrency: 4,
-            ordered: true,
-            timeout: 30_000
-          )
-          |> Enum.flat_map(fn {:ok, plans} -> plans end)
-        end
+      built = Alto.TUI.Cache.build_many(missing, build)
 
       plans = Map.merge(previous, Map.new(built))
 
@@ -94,8 +80,7 @@ defmodule Alto.TUI.Transcript do
         end)
 
       # Literal rows stay as strings until a caller requests visible lines.
-      # Charge entries rather than visual rows so long histories remain cached.
-      {%{parts: parts, rows: max(rows - 1, 0)}, max(length(entries), 1)}
+      %{parts: parts, rows: max(rows - 1, 0)}
     end)
   end
 
@@ -120,46 +105,25 @@ defmodule Alto.TUI.Transcript do
   end
 
   def window(index, offset, height) do
-    last = min(offset + height, index.rows)
+    Alto.TUI.Window.slice(index, offset, height, fn entry, plan, start, count ->
+      case plan do
+        {:literal, rows} ->
+          for row <- start..(start + count - 1), do: rows |> elem(row) |> literal_line()
 
-    if last <= offset do
-      []
-    else
-      rows =
-        Enum.reduce(index.parts, %{}, fn {entry, plan, first, count}, acc ->
-          start = max(offset, first)
-          stop = min(last, first + count)
+        {:styled, rows} ->
+          Enum.slice(rows, start, count)
 
-          if stop > start do
-            lines =
-              case plan do
-                {:literal, rows} ->
-                  for row <- (start - first)..(stop - first - 1),
-                      do: rows |> elem(row) |> literal_line()
+        {:markdown, layout} ->
+          body =
+            Alto.TUI.Markdown.window(
+              layout,
+              max(start - 1, 0),
+              count - if(start == 0, do: 1, else: 0)
+            )
 
-                {:styled, rows} ->
-                  Enum.slice(rows, start - first, stop - start)
-
-                {:markdown, layout} ->
-                  body =
-                    Alto.TUI.Markdown.window(
-                      layout,
-                      max(start - first - 1, 0),
-                      stop - max(start, first + 1)
-                    )
-
-                  if start == first, do: [assistant_label(entry, "alto") | body], else: body
-              end
-
-            Enum.with_index(lines, start)
-            |> Enum.reduce(acc, fn {row, n}, acc -> Map.put(acc, n, row) end)
-          else
-            acc
-          end
-        end)
-
-      Enum.map(offset..(last - 1), &Map.get(rows, &1, Line.new([])))
-    end
+          if start == 0, do: [assistant_label(entry, "alto") | body], else: body
+      end
+    end)
   end
 
   # Preserve absolute coordinates without allocating hidden placeholder rows.
@@ -175,31 +139,21 @@ defmodule Alto.TUI.Transcript do
   def tail(entries, width, height, assistant \\ "alto") do
     height = max(height, 1)
 
-    {groups, _} =
-      entries
-      |> Enum.reverse()
-      |> Enum.reduce_while({[], 0}, fn entry, {groups, count} ->
-        rows = tail_rows(entry, width, assistant, height)
-        count = count + length(rows) + if(groups == [], do: 0, else: 1)
-        result = {[rows | groups], count}
-        if count >= height, do: {:halt, result}, else: {:cont, result}
-      end)
-
-    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten() |> Enum.take(-height))
+    Alto.TUI.Window.tail(entries, height, fn entry ->
+      rows = tail_rows(entry, width, assistant, height)
+      {rows, length(rows)}
+    end)
   end
 
   defp tail_rows(entry, width, assistant, height) do
     if to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
          is_binary(entry[:text]) do
       cached(:entries, {entry, width, assistant, {:tail, height}}, 512, fn ->
-        rows =
-          [
-            assistant_label(entry, assistant)
-            | Alto.TUI.Markdown.tail(entry.text, width, height).lines
-          ]
-          |> Enum.take(-height)
-
-        {rows, length(rows)}
+        [
+          assistant_label(entry, assistant)
+          | Alto.TUI.Markdown.tail(entry.text, width, height).lines
+        ]
+        |> Enum.take(-height)
       end)
     else
       cached_rows(entry, width, assistant, [])
@@ -221,17 +175,12 @@ defmodule Alto.TUI.Transcript do
 
   defp cached_rows(entry, width, assistant, opts) do
     cached(:entries, {entry, width, assistant, opts}, 512, fn ->
-      rows = entry_rows(entry, width, assistant, opts)
-      {rows, length(rows)}
+      entry_rows(entry, width, assistant, opts)
     end)
   end
 
-  defp cached(kind, id, limit, build) do
-    Alto.TUI.Cache.fetch({__MODULE__, kind}, id, limit, fn ->
-      {value, _rows} = build.()
-      value
-    end)
-  end
+  defp cached(kind, id, limit, build),
+    do: Alto.TUI.Cache.fetch({__MODULE__, kind}, id, limit, build)
 
   defp entry_rows(entry, width, assistant, opts) do
     kind = to_string(entry[:kind] || "message")

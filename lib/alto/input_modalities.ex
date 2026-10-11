@@ -23,19 +23,11 @@ defmodule Alto.InputModalities do
     options |> Keyword.put(:model, model) |> Keyword.put(:input_modalities, modalities)
   end
 
-  @doc "Explicit modalities override legacy single-model image/file declarations. Audio is opt-in."
+  @doc "Return the selected model's declared inputs; undeclared models accept text only."
   def configured(options) do
-    case Keyword.fetch(options, :input_modalities) do
-      {:ok, values} when is_list(values) ->
-        Enum.filter(values, &(&1 in @modalities))
-
-      {:ok, _} ->
-        []
-
-      :error ->
-        ["text"] ++
-          if(options[:supports_images], do: ["image"], else: []) ++
-          if(options[:supports_files], do: ["file"], else: [])
+    case Keyword.get(options, :input_modalities, ["text"]) do
+      values when is_list(values) -> Enum.filter(values, &(&1 in @modalities))
+      _ -> []
     end
   end
 
@@ -69,19 +61,11 @@ defmodule Alto.InputModalities do
     if required == [] do
       :ok
     else
-      description = provider.describe(Alto.Provider.options(options))
-      declared = from_model(description)
-
-      defaults =
-        configured(
-          options ++ [supports_images: description[:vision], supports_files: description[:files]]
-        )
-
       check(
         required,
         if(Keyword.has_key?(options, :input_modalities),
           do: configured(options),
-          else: declared || defaults
+          else: from_model(provider.describe(Alto.Provider.options(options))) || ["text"]
         )
       )
     end

@@ -10,30 +10,19 @@ defmodule Alto.Contrib.Usage do
   @spec normalize(term()) :: Alto.Usage.t()
   def normalize(usage) when is_map(usage) do
     usage = normalize_keys(usage)
-    accounting? = Map.has_key?(usage, "requests")
 
     input =
       integer(usage, @input) + integer(usage, ~w(cache_read_input_tokens)) +
         integer(usage, ~w(cache_creation_input_tokens))
 
-    output = integer(usage, @output)
-    cached = min(max(integer(usage, @cached), nested_cached(usage)), input)
-    last_input = integer(usage, ~w(last_input_tokens), input)
-
-    %{
-      input_tokens: input,
-      output_tokens: output,
-      total_tokens: integer(usage, @total, if(accounting?, do: 0, else: input + output)),
-      cached_input_tokens: cached,
-      last_input_tokens: last_input,
-      last_cached_input_tokens:
-        min(
-          integer(usage, ~w(last_cached_input_tokens), if(accounting?, do: 0, else: cached)),
-          last_input
-        ),
-      context_window: integer(usage, ~w(context_window), nil),
-      requests: if(accounting?, do: integer(usage, ~w(requests)), else: 1)
-    }
+    usage
+    |> Map.merge(%{
+      "input_tokens" => input,
+      "output_tokens" => integer(usage, @output),
+      "total_tokens" => integer(usage, @total, nil),
+      "cached_input_tokens" => max(integer(usage, @cached), nested_cached(usage))
+    })
+    |> Alto.Usage.normalize()
   end
 
   def normalize(_), do: Alto.Usage.new()

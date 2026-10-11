@@ -18,18 +18,9 @@ defmodule Alto.Contrib.Tools.RunShell do
          type: Arguments.text(1, @max_command_bytes),
          required: true,
          doc: "Complete shell command text, including spaces and pipelines."
-       ],
-       timeout_ms: [
-         type: {:in, 1..120_000},
-         default: 30_000,
-         doc: "Deadline in milliseconds (1..120000; default 30000)."
-       ],
-       max_output_bytes: [
-         type: {:in, 1..1_000_000},
-         default: Alto.Contrib.Command.default_output_bytes(),
-         doc: "Combined stdout/stderr capture limit."
        ]
-     ]}
+     ] ++
+       Keyword.take(elem(Alto.Contrib.Command.arguments(), 1), [:timeout_ms, :max_output_bytes])}
   end
 
   @impl true
@@ -41,15 +32,9 @@ defmodule Alto.Contrib.Tools.RunShell do
       "max_output_bytes" => arguments["max_output_bytes"]
     }
 
-    case Alto.Contrib.Command.prepare(command_arguments, context, command_options(opts)) do
-      {:ok, prepared} -> {:ok, prepared, prepared.approval_details}
-      {:error, _} = error -> error
-    end
+    Alto.Contrib.Tools.RunCommand.prepare(command_arguments, context, Enum.to_list(opts))
   end
 
   @impl true
   def run(prepared, %{}, _opts \\ []), do: Alto.Contrib.Command.execute(prepared)
-
-  defp command_options(opts) when is_map(opts), do: Map.to_list(opts)
-  defp command_options(opts), do: opts
 end

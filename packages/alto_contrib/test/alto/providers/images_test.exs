@@ -17,11 +17,15 @@ defmodule Alto.Contrib.Providers.ImagesTest do
     ihdr = <<1::32, 1::32, 8, 2, 0, 0, 0>>
     png = signature <> <<13::32, "IHDR", ihdr::binary, :erlang.crc32(["IHDR", ihdr])::32>>
     data = Base.encode64(png)
+    gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
     Process.put(
       :image_response,
       JSON.encode!(%{
-        data: [%{b64_json: data, media_type: "image/png"}],
+        data: [
+          %{b64_json: data, media_type: "image/png"},
+          %{b64_json: gif, media_type: "image/gif"}
+        ],
         usage: %{total_tokens: 12}
       })
     )
@@ -47,13 +51,33 @@ defmodule Alto.Contrib.Providers.ImagesTest do
     ]
 
     assert {:ok, result} = Images.stream(request, fn _ -> :ok end, opts)
-    assert [%{"type" => "artifact", "name" => "image-1.png", "data" => ^data}] = result.message
+
+    assert [
+             %{"type" => "artifact", "name" => "image-1.png", "data" => ^data},
+             %{"type" => "artifact", "name" => "image-2.gif", "data" => ^gif}
+           ] = result.message
+
     assert_receive {:wire, body}
     assert body["size"] == "1024x1024"
     assert body["prompt"] == "edit this"
 
     assert get_in(body, ["input_references", Access.at(0), "image_url", "url"]) ==
              "data:image/png;base64," <> data
+
+    assert {:error, :image_metadata_mismatch} =
+             Images.Stream.from_response(
+               %{"data" => [%{"b64_json" => data, "media_type" => "image/jpeg"}]},
+               fn _ -> :ok end
+             )
+
+    assert {:error, :image_metadata_mismatch} =
+             Alto.Contrib.Providers.Media.output(
+               %{
+                 "type" => "image_url",
+                 "image_url" => %{"url" => "data:image/jpeg;base64," <> data}
+               },
+               1
+             )
   end
 
   test "partial images are provisional and an incomplete stream fails" do

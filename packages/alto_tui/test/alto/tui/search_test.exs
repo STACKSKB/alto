@@ -385,4 +385,28 @@ defmodule Alto.TUI.SearchTest do
     Search.close(state)
     refute Enum.any?(Alto.TUI.Cache.stats().items, fn {{{mod, _}, _}, _} -> mod == Search end)
   end
+
+  test "the match cap spans entries and only shows overflow when another hit exists", %{
+    state: state
+  } do
+    for {last, count} <- [{"CAFÉ Café", "1/1000"}, {"CAFÉ Café café", "1/1000+"}] do
+      entries = [
+        %{kind: :assistant, text: String.duplicate("café ", 998)},
+        %{kind: :assistant, text: "no match here"},
+        %{kind: :assistant, text: last}
+      ]
+
+      searching =
+        state |> State.put_entries(nil, entries) |> Search.open() |> Search.paste("café")
+
+      matches = Search.matches(searching)
+      assert Search.count(searching) == count
+      assert length(matches) == 1000
+
+      assert [
+               %{entry: 2, occurrence: 0, start: 0, hit: "CAFÉ"},
+               %{entry: 2, occurrence: 1, start: 6, hit: "Café"}
+             ] = Enum.take(matches, -2)
+    end
+  end
 end

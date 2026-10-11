@@ -306,12 +306,9 @@ defmodule Alto.TUI.App do
 
   defp route_event(%Key{code: code, modifiers: modifiers}, state)
        when code == "esc" or (code == "c" and modifiers == ["ctrl"]) do
-    case active_run(state) do
-      nil ->
-        {if(code == "c", do: :stop, else: :noreply), state}
-
-      {_id, run} ->
-        {:noreply, stop_active_run(state, run)}
+    case Backend.ui(state, if(code == "c", do: :detach, else: {:cancel, :user})) do
+      :pass -> cancel_local(state, code)
+      next -> {:noreply, next}
     end
   end
 
@@ -855,6 +852,16 @@ defmodule Alto.TUI.App do
       else: %{state | input_routes: Map.delete(state.input_routes, task_id)}
   end
 
+  defp cancel_local(state, code) do
+    case active_run(state) do
+      nil ->
+        {if(code == "c", do: :stop, else: :noreply), state}
+
+      {_id, run} ->
+        {:noreply, stop_active_run(state, run)}
+    end
+  end
+
   defp stop_active_run(state, run) do
     cancel_run(run)
 
@@ -912,9 +919,7 @@ defmodule Alto.TUI.App do
   end
 
   defp input_provider({module, options}),
-    do:
-      {module,
-       Keyword.take(options, [:model, :input_modalities, :supports_images, :supports_files])}
+    do: {module, Keyword.take(options, [:model, :input_modalities])}
 
   defp input_provider(nil), do: nil
 
@@ -1506,22 +1511,26 @@ defmodule Alto.TUI.App do
      state.selected_task_id}
   end
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+  defp overlay_key(state, key) do
+    with :pass <- Backend.ui(state, {:overlay_key, key}), do: local_overlay_key(state, key)
+  end
+
+  defp local_overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
          code: "n",
          modifiers: ["ctrl"]
        }),
        do: form_result(state, :create)
 
-  defp overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
+  defp local_overlay_key(%{overlay: %{kind: :workspace_form}} = state, %Key{
          code: "o",
          modifiers: ["ctrl"]
        }),
        do: form_result(state, :choose)
 
-  defp overlay_key(%{overlay: %{kind: :attachment_editor}} = state, key),
+  defp local_overlay_key(%{overlay: %{kind: :attachment_editor}} = state, key),
     do: Attachments.editor_key(state, key)
 
-  defp overlay_key(state, key) do
+  defp local_overlay_key(state, key) do
     case Menu.key(state.overlay, key) do
       :cancel -> close_overlay(state)
       :select -> select_overlay(state)
@@ -1548,10 +1557,7 @@ defmodule Alto.TUI.App do
         select_backend(state, backend)
 
       %{value: {:folder, path}} ->
-        form = state.overlay.return_form
-        ExRatatui.text_input_set_value(Menu.field(form, :path).input, path)
-        ExRatatui.text_input_handle_key(Menu.field(form, :path).input, "end")
-        %{state | overlay: Menu.refresh_folder(%{form | index: 0, error: nil})}
+        %{state | overlay: Menu.complete_folder(overlay.return_form, path)}
 
       %{value: :new_workspace} ->
         open_workspace_form(state)
@@ -1880,10 +1886,15 @@ defmodule Alto.TUI.App do
     %{state | composer_mode: :prose, leader?: false, notice: "entry mode: prose · wrapping on"}
   end
 
-  defp decide_approval(%{pending_approvals: []} = state, _decision),
+  defp decide_approval(state, decision) do
+    with :pass <- Backend.ui(state, {:decide, decision}),
+         do: decide_local_approval(state, decision)
+  end
+
+  defp decide_local_approval(%{pending_approvals: []} = state, _decision),
     do: %{state | notice: "no pending approval"}
 
-  defp decide_approval(%{pending_approvals: [pending | rest]} = state, decision) do
+  defp decide_local_approval(%{pending_approvals: [pending | rest]} = state, decision) do
     pending.respond.(decision)
 
     state = Search.close(state)
@@ -2037,6 +2048,10 @@ defmodule Alto.TUI.App do
   end
 
   defp open_workspace_form(state) do
+    with :pass <- Backend.ui(state, :workspace_form), do: local_workspace_form(state)
+  end
+
+  defp local_workspace_form(state) do
     project = State.selected_project(state)
     base = if project, do: project["root"], else: File.cwd!()
 
@@ -2109,21 +2124,16 @@ defmodule Alto.TUI.App do
   defp form_result(state, :cancel), do: close_overlay(state)
 
   defp form_result(%{overlay: %{kind: :workspace_form} = form} = state, :choose) do
-    path = Menu.value(form, :path)
-
-    saved =
-      if path == "",
-        do: Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/")),
-        else: []
-
-    found =
-      case Alto.TUI.Folders.suggest(path, form.base) do
-        {:ok, %{folders: folders}} -> folders
-        _ -> []
-      end
+    refreshed =
+      form
+      |> Map.put(
+        :folders,
+        Enum.map(state.projects, &(String.trim_trailing(&1["root"], "/") <> "/"))
+      )
+      |> Menu.refresh_folder()
 
     items =
-      Enum.map(Enum.take(Enum.uniq(saved ++ found), 50), &%{label: &1, value: {:folder, &1}})
+      Enum.map(refreshed.suggestions, &%{label: &1, value: {:folder, &1}})
 
     %{
       state
@@ -2276,6 +2286,8 @@ defmodule Alto.TUI.App do
         }
 
       true ->
+        state = backend_action(state, :leaving)
+        task = State.selected_task(state)
         state = persist_task_backend(state, task, backend)
         next = state |> State.sync_backend(backend) |> Map.put(:overlay, nil)
 

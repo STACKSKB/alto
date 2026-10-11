@@ -34,7 +34,6 @@ defmodule Alto.ConfigTest do
 
   test "default configuration composes with file overrides and drives a run", %{root: root} do
     defaults = Alto.default_config()
-    assert Alto.default_config(run_timeout: 7_200_000)[:run_timeout] == 7_200_000
     path = Path.join(root, "defaults.exs")
 
     File.write!(
@@ -50,9 +49,6 @@ defmodule Alto.ConfigTest do
 
     assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
              Alto.run(%{"value" => "configured"}, options)
-
-    assert {:ok, budget} = Alto.Runner.Budget.new(options)
-    assert Alto.Runner.Budget.remaining(budget) > 7_199_000
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do

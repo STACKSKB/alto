@@ -28,8 +28,7 @@ openrouter_options =
     # Reasoning may stream for minutes; silence is still bounded independently.
     timeout: 1_800_000,
     idle_timeout: 120_000,
-    supports_images: vision_enabled,
-    supports_files: true,
+    input_modalities: if(vision_enabled, do: ~w(text image file), else: ~w(text file)),
     model_query: [supported_parameters: "tools", sort: "most-popular"]
   ]
   |> Keyword.reject(fn {_key, value} -> is_nil(value) end)

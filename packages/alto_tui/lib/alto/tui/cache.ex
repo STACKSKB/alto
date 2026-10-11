@@ -16,6 +16,22 @@ defmodule Alto.TUI.Cache do
   def stats, do: Process.get(@key, %{items: %{}, order: [], bytes: 0})
   def clear, do: Process.delete(@key)
 
+  @doc "Build missing derived values in order, using bounded parallel chunks for larger batches."
+  def build_many(items, build) do
+    if length(items) < 32 do
+      Enum.map(items, build)
+    else
+      items
+      |> Enum.chunk_every(16)
+      |> Task.async_stream(&Enum.map(&1, build),
+        max_concurrency: 4,
+        ordered: true,
+        timeout: 30_000
+      )
+      |> Enum.flat_map(fn {:ok, values} -> values end)
+    end
+  end
+
   @doc "Peek at the most recently used item in a namespace within the shared byte budget."
   def latest(namespace) do
     cache = stats()

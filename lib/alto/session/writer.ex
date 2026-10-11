@@ -102,9 +102,6 @@ defmodule Alto.Session.Writer do
   def handle_info({:release, token}, %{token: token} = state),
     do: {:noreply, release(state), 1000}
 
-  def handle_info({:release, _}, state),
-    do: {:noreply, state, if(state.lock, do: :infinity, else: 1000)}
-
   def handle_info(:timeout, state), do: {:stop, :normal, state}
 
   def handle_info(_, state),

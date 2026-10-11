@@ -16,8 +16,7 @@ defmodule Alto.Contrib.Providers.Images do
     do: %{
       protocol: :image_generation,
       model: opts[:model],
-      vision: "image" in Keyword.get(opts, :input_modalities, ["text"]),
-      input_modalities: Keyword.get(opts, :input_modalities, ["text"]),
+      input_modalities: Alto.InputModalities.configured(opts),
       tools: :none,
       output_modalities: ["image"]
     }
@@ -29,7 +28,7 @@ defmodule Alto.Contrib.Providers.Images do
       )
 
   def stream(request, sink, opts) do
-    defaults = [max_event_bytes: 8_100_000, max_response_bytes: 16_000_000, timeout: 600_000]
+    defaults = [max_event_bytes: 8_100_000, max_stream_bytes: 16_000_000, timeout: 600_000]
     opts = Keyword.merge(defaults, opts)
     endpoint_opts = HTTPOptions.endpoint_options(opts, "https://openrouter.ai/api/v1", "/images")
 
@@ -96,6 +95,8 @@ defmodule Alto.Contrib.Providers.Images do
 
   defmodule Stream do
     @moduledoc false
+    alias Alto.Contrib.Providers.Media
+
     defstruct images: [], usage: nil, error: nil
     def new, do: %__MODULE__{}
     def consume(state, "[DONE]", _sink), do: state
@@ -139,16 +140,6 @@ defmodule Alto.Contrib.Providers.Images do
            usage: Alto.Contrib.Usage.normalize(state.usage)
          }}
 
-    defp image_integrity(bytes, media) when media in ["image/png", "image/jpeg"] do
-      case Alto.Image.Metadata.inspect(bytes, %{max_dimension: 16_384, max_pixels: 40_000_000}) do
-        {:ok, ^media, _, _} -> :ok
-        {:ok, _, _, _} -> {:error, :image_metadata_mismatch}
-        error -> error
-      end
-    end
-
-    defp image_integrity(_, _), do: :ok
-
     defp decode_images(images) do
       images
       |> Enum.with_index(1)
@@ -158,19 +149,10 @@ defmodule Alto.Contrib.Providers.Images do
           with {:ok, bytes} <- Base.decode64(data) do
             media = image["media_type"] || Alto.Contrib.Attachment.media_type(bytes, "image.bin")
 
-            extension =
-              case media do
-                "image/png" -> ".png"
-                "image/jpeg" -> ".jpg"
-                "image/webp" -> ".webp"
-                "image/svg+xml" -> ".svg"
-                _ -> ".bin"
-              end
-
-            block = Alto.Content.artifact("image-#{index}" <> extension, media, data)
+            block = Alto.Content.artifact("image-#{index}" <> Media.extension(media), media, data)
 
             with {:ok, _} <- Alto.Content.decode_transcript([block]),
-                 :ok <- image_integrity(bytes, media),
+                 :ok <- Media.image_integrity(bytes, media),
                  do: {:ok, block}
           else
             :error -> {:error, :invalid_image_base64}

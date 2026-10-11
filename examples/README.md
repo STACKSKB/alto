@@ -68,7 +68,10 @@ request and needs saved history. The assistant uses the provider's text estimato
 so published files count as references in model context; their full bytes still
 count toward transcript limits. Runs have finite time, step, request and byte
 limits. Child runs inherit limits individually; the team profile's 48-request
-limit is **per run**, not a total billing cap across parent and children.
+limit is **shared across the execution tree**, including native children and
+compaction requests. `max_steps` remains a separate per-run limit. External
+agent backends can make model requests outside the native counter, and retries
+can add transport attempts; the request budget is not a token or billing cap.
 
 The CLI prints a session ID. Continue with the same config and
 `--resume SESSION_ID "next task"`; `--no-session` disables persistence and makes
@@ -106,3 +109,7 @@ approvals, cancellation, and resource bounds.
 The repository maintenance and document intake runners execute from
 `packages/alto_contrib`; Oban declares contrib as a host dependency. Each example
 has its own run instructions and integration checks.
+
+## Resident workflows
+
+[Resident profiles](resident/alto.exs) provide offline inspection, approved writes and optional named-worker integration. [Service documentation](../docs/resident-service.md) covers durable tasks, remote terminals, restart recovery and release installation.

@@ -98,6 +98,55 @@ defmodule Alto.TUI.SavedSessionTest do
     assert {:ok, ^completed} = SavedSession.load(id, opts)
   end
 
+  test "resuming an agent replaces its prior run before replaying later records", %{
+    id: id,
+    opts: opts,
+    cache: cache
+  } do
+    assert :ok = usage(id, opts, 10)
+    assert {:ok, _} = SavedSession.load(id, opts)
+
+    for record <- [
+          Session.started_record(%{
+            task: "continued child",
+            subagent: true,
+            run_id: "run-b",
+            agent_id: "agent-a"
+          }),
+          Session.completed_record(%{run_id: "run-a", status: :ok, output: "old result"}),
+          Session.event_record(
+            "run-b",
+            Event.durable(:model_completed, %{message: "new activity"})
+          )
+        ] do
+      assert :ok = Session.append(id, record, opts)
+    end
+
+    assert {:ok, resumed} = SavedSession.load(id, opts)
+    assert %{"agent-a" => agent} = resumed.agents
+    assert map_size(resumed.agents) == 1
+    assert agent.id == "continued child"
+    assert agent.status == "unknown"
+    assert agent.phase == "no saved completion"
+    assert agent.activity == "new activity\n"
+    assert agent.result =~ "No saved completion."
+    File.rm!(cache)
+    assert {:ok, ^resumed} = SavedSession.load(id, opts)
+
+    assert :ok =
+             Session.append(
+               id,
+               Session.completed_record(%{run_id: "run-b", status: :ok, output: "new result"}),
+               opts
+             )
+
+    assert {:ok, completed} = SavedSession.load(id, opts)
+    assert completed.agents["agent-a"].result == "new result\n"
+    assert completed.agents["agent-a"].phase == "ok"
+    File.rm!(cache)
+    assert {:ok, ^completed} = SavedSession.load(id, opts)
+  end
+
   test "same-length rewrites, truncation and malformed caches rebuild from authoritative records",
        %{id: id, opts: opts, path: path, cache: cache} do
     assert :ok = usage(id, opts, 10)
@@ -184,5 +233,57 @@ defmodule Alto.TUI.SavedSessionTest do
     assert {:ok, projection} = SavedSession.load(id, opts)
     assert projection.usage.input_tokens == 10
     assert projection.usage.requests == 1
+  end
+
+  test "saved tool activity retains the readable failures and summaries shown live", %{
+    id: id,
+    opts: opts,
+    cache: cache
+  } do
+    events = [
+      Event.durable(:tool_started, %{name: "read_file", arguments: %{path: "a.ex"}}),
+      Event.durable(:tool_completed, %{
+        name: "read_file",
+        arguments: %{path: "a.ex"},
+        value: %{content: "PRIVATE_CANARY", truncated: true}
+      }),
+      Event.durable(:tool_failed, %{name: "write_file", error: {:error, :eacces}}),
+      Event.durable(:tool_completed, %{
+        name: "run_command",
+        value: %{exit_status: 7, output: "failed assertion"}
+      })
+    ]
+
+    state = %Alto.TUI.State{
+      textarea: nil,
+      run_options: [],
+      catalog_opts: [],
+      selected_task_id: id
+    }
+
+    live =
+      Enum.reduce(events, state, fn event, state ->
+        assert :ok = Session.append(id, Session.event_record("run-a", event), opts)
+
+        Alto.TUI.Subagents.ingest(
+          state,
+          id,
+          Event.live(:subagent_progress, %{agent_id: "agent-a", id: "child", event: event})
+        )
+      end)
+
+    assert {:ok, restored} = SavedSession.load(id, opts)
+    activity = restored.agents["agent-a"].activity
+    assert activity == live.subagents[id]["agent-a"].activity
+    assert activity =~ "read_file a.ex …"
+    assert activity =~ "14 bytes read · more available"
+    assert activity =~ "Permission denied"
+    assert activity =~ "failed (exit 7)"
+    assert activity =~ "failed assertion"
+    refute activity =~ "PRIVATE_CANARY"
+    refute activity =~ "$tuple"
+    assert {:ok, ^restored} = SavedSession.load(id, opts)
+    File.rm!(cache)
+    assert {:ok, ^restored} = SavedSession.load(id, opts)
   end
 end

@@ -35,21 +35,11 @@ defmodule Alto.TUI.Subagents do
     end
   end
 
-  def saved_agent(session, start, records) do
+  def saved_agent(session, start) do
     run_id = start["run_id"]
-    completed = Enum.find(Enum.reverse(records), &(&1["type"] == "completed"))
     identity = if is_map(start["agent_identity"]), do: start["agent_identity"], else: %{}
     path = identity["path"]
     label = if is_list(path) and Enum.all?(path, &is_binary/1), do: Enum.join(path, "/"), else: ""
-    status = if completed, do: completed["status"], else: "unknown"
-
-    result =
-      if completed,
-        do: saved_value(completed["output"]) <> "\n" <> saved_value(completed["reason"]),
-        else:
-          "No saved completion. Another process may still be running, or may have stopped before recording its result."
-
-    activity = Enum.reduce(records, "", fn record, acc -> tail(acc <> saved_activity(record)) end)
 
     %{
       agent_id: start["agent_id"] || session <> ":" <> to_string(run_id),
@@ -58,10 +48,11 @@ defmodule Alto.TUI.Subagents do
       session_id: session,
       model: start["model"],
       backend: start["provider"],
-      status: status,
-      phase: if(completed, do: status, else: "no saved completion"),
-      activity: activity,
-      result: tail(result)
+      status: "unknown",
+      phase: "no saved completion",
+      activity: "",
+      result:
+        "No saved completion. Another process may still be running, or may have stopped before recording its result."
     }
   end
 
@@ -81,20 +72,12 @@ defmodule Alto.TUI.Subagents do
         _ -> %{}
       end
 
-    value = if is_map(data["value"]), do: data["value"], else: %{}
-    output = text_value(value["output"]) |> String.slice(-4_000, 4_000)
-
     case event do
       "model_completed" ->
         text_value(data["message"]) <> "\n"
 
       type when type in ["tool_started", "tool_completed", "tool_failed"] ->
-        "\n" <>
-          type <>
-          " › " <>
-          text_value(data["summary"] || data["name"]) <>
-          if(type == "tool_failed", do: " " <> inspect(data["error"], limit: 10), else: "") <>
-          "\n" <> output <> "\n"
+        tool_activity(type, data)
 
       _ ->
         ""
@@ -133,7 +116,7 @@ defmodule Alto.TUI.Subagents do
             text
 
           %{type: type, data: info} when type in [:tool_started, :tool_completed, :tool_failed] ->
-            "\n" <> Alto.TUI.Transcript.text(Alto.Contrib.ToolDisplay.entry(type, info)) <> "\n"
+            tool_activity(type, info)
 
           %{type: :input_received, data: info} ->
             "\ninput › " <> info.text <> "\n"
@@ -191,6 +174,9 @@ defmodule Alto.TUI.Subagents do
       state
     end
   end
+
+  defp tool_activity(type, data),
+    do: "\n" <> Alto.TUI.Transcript.text(Alto.Contrib.ToolDisplay.entry(type, data)) <> "\n"
 
   def summary(state) do
     case list(state) do

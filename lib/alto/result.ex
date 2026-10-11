@@ -23,4 +23,15 @@ defmodule Alto.Result do
            end),
          do: {:ok, Enum.reverse(values)}
   end
+
+  @doc "Run operations in enumeration order, stopping at the first error."
+  @spec each(Enumerable.t(), (term() -> :ok | {:error, term()})) :: :ok | {:error, term()}
+  def each(items, fun) do
+    Enum.reduce_while(items, :ok, fn item, :ok ->
+      case fun.(item) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
 end

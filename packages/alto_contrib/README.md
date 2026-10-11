@@ -166,3 +166,7 @@ include these events.
 
 The lifecycle approach is informed by [OMP's cache warmer](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/cache-warmer.ts).
 The transport follows [Anthropic's native prewarming protocol](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache).
+
+## Resident task service
+
+`Resident.*` composes existing Alto execution, queue, operation ledger, checkpoints and continuation stores. `Socket.Client` and `Socket.SSH` provide bounded local and managed remote transport. `alto --serve --config ...` accepts an optional trusted `resident:` configuration; `alto resident ...` controls its durable lifecycle. See [profiles, recovery and native-free installation](../../docs/resident-service.md).

@@ -51,17 +51,19 @@ defmodule Alto.Contrib.Listeners.ConnectionMessagingTest do
     consumed = command(registry, "send_message", fields)
     assert consumed["status"] == "consumed"
 
+    content = [Alto.Content.text("follow up"), Alto.Content.text("with more context")]
+
     follow_up =
       command(registry, "send_message", %{
         "run_id" => id,
-        "text" => "follow up",
+        "text" => content,
         "delivery" => "follow_up"
       })
 
     assert follow_up["status"] == "queued"
     send(worker, :answer)
     assert_receive {:request, request, worker}, 5_000
-    assert List.last(request.messages)["content"] == "follow up"
+    assert List.last(request.messages)["content"] == content
     send(worker, :answer)
     eventually(fn -> assert {:ok, _} = Registry.request(registry, {:run_result, id}) end)
     assert command(registry, "send_message", fields)["status"] == "consumed"

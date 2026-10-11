@@ -36,7 +36,11 @@ defmodule Alto.Contrib.Providers.MultimodalFilesTest do
       refute_receive {:wire, _}
 
       assert {:ok, _} =
-               provider.stream(request, fn _ -> :ok end, Keyword.put(opts, :supports_files, true))
+               provider.stream(
+                 request,
+                 fn _ -> :ok end,
+                 Keyword.put(opts, :input_modalities, ["text", "file"])
+               )
 
       assert_receive {:wire, body}
       [_, file] = get_in(body, ["messages", Access.at(0), "content"])
@@ -118,7 +122,7 @@ defmodule Alto.Contrib.Providers.MultimodalFilesTest do
              Anthropic.stream(request, fn _ -> :ok end,
                model: "test",
                api_key: "test",
-               supports_files: true,
+               input_modalities: ["text", "file"],
                req_options: [adapter: Adapter]
              )
 
@@ -166,7 +170,7 @@ defmodule Alto.Contrib.Providers.MultimodalFilesTest do
     }
 
     Process.put(:multimodal_response, JSON.encode!(%{choices: [%{message: %{content: "ok"}}]}))
-    opts = [model: "audio", supports_files: true, req_options: [adapter: Adapter]]
+    opts = [model: "audio", input_modalities: ["text", "file"], req_options: [adapter: Adapter]]
 
     assert {:error, :model_does_not_support_audio} =
              OpenAICompatible.stream(request, fn _ -> :ok end, opts)

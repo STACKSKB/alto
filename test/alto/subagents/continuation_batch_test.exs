@@ -304,7 +304,11 @@ defmodule Alto.Subagents.ContinuationTest do
     id: id
   } do
     %{ledger: ledger} =
-      start_ledger!(dir, id, max_recovery_bytes: 128_000, max_record_bytes: 256_000)
+      start_ledger!(dir, id,
+        max_recovery_bytes: 128_000,
+        max_checkpoint_bytes: 128_000,
+        max_record_bytes: 256_000
+      )
 
     ids = Enum.map(1..64, &Integer.to_string/1)
 

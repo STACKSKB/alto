@@ -6,7 +6,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
   Messages SSE response is consumed incrementally and bounded while received.
   Signed thinking blocks are preserved for subsequent tool turns. Typed image
   content is accepted only when the provider is explicitly configured with
-  `supports_images: true`.
+  `input_modalities: ["text", "image"]`.
 
   Protocol: https://platform.claude.com/docs/en/api/messages/create
   """
@@ -34,16 +34,14 @@ defmodule Alto.Contrib.Providers.Anthropic do
       context_window: opts[:context_window],
       streaming: Keyword.get(opts, :streaming, true),
       tools: :client_tools,
-      input_modalities: Alto.InputModalities.configured(opts),
-      vision: "image" in Alto.InputModalities.configured(opts),
-      files: "file" in Alto.InputModalities.configured(opts)
+      input_modalities: input_modalities(opts)
     }
 
   @doc "Check typed input using the wire codec without resolving credentials or sending a request."
   def check_input(%Content{} = content, opts) do
     case anthropic_content(
            content.blocks,
-           input_capabilities(Alto.InputModalities.configured(opts))
+           input_modalities(opts)
          ) do
       {:ok, _} -> :ok
       error -> error
@@ -130,7 +128,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
            ) do
       {:ok,
        Map.merge(config, %{
-         input_modalities: Alto.InputModalities.configured(opts),
+         input_modalities: input_modalities(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),
          max_tokens: Keyword.get(opts, :max_tokens),
          thinking: Keyword.get(opts, :thinking),
@@ -160,7 +158,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
          {:ok, messages} <-
            Alto.Result.traverse(
              messages,
-             &message(&1, input_capabilities(config.input_modalities))
+             &message(&1, config.input_modalities)
            ) do
       body =
         Map.merge(options, %{
@@ -211,8 +209,8 @@ defmodule Alto.Contrib.Providers.Anthropic do
     end
   end
 
-  defp message(%{"role" => "tool"} = message, capabilities) do
-    with {:ok, content} <- anthropic_content(message["content"], capabilities) do
+  defp message(%{"role" => "tool"} = message, modalities) do
+    with {:ok, content} <- anthropic_content(message["content"], modalities) do
       {:ok,
        %{
          "role" => "user",
@@ -227,13 +225,13 @@ defmodule Alto.Contrib.Providers.Anthropic do
     end
   end
 
-  defp message(%{"role" => role, "alto_anthropic_content" => content}, _capabilities)
+  defp message(%{"role" => role, "alto_anthropic_content" => content}, _modalities)
        when role in ["user", "assistant"],
        do: {:ok, %{"role" => role, "content" => content}}
 
-  defp message(%{"role" => role} = message, capabilities)
+  defp message(%{"role" => role} = message, modalities)
        when role in ["user", "assistant"] do
-    with {:ok, content} <- anthropic_content(message["content"], capabilities) do
+    with {:ok, content} <- anthropic_content(message["content"], modalities) do
       calls =
         Enum.map(message["tool_calls"] || [], fn call ->
           input = JSON.decode!(call["function"]["arguments"])
@@ -255,13 +253,13 @@ defmodule Alto.Contrib.Providers.Anthropic do
     end
   end
 
-  defp message(message, _capabilities),
+  defp message(message, _modalities),
     do: {:error, {:invalid_anthropic_message, message}}
 
-  defp input_capabilities(modalities),
-    do: %{images: "image" in modalities, files: "file" in modalities}
+  defp input_modalities(opts),
+    do: Enum.filter(Alto.InputModalities.configured(opts), &(&1 in ~w(text image file)))
 
-  defp anthropic_content(value, capabilities) do
+  defp anthropic_content(value, modalities) do
     case Content.decode_transcript(value) do
       :not_content when value in [nil, ""] ->
         {:ok, []}
@@ -270,7 +268,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
         {:ok, [%{"type" => "text", "text" => value}]}
 
       {:ok, content} ->
-        Content.map_media(content, capabilities, &anthropic_media/1)
+        Content.map_media(content, modalities, &anthropic_media/1)
 
       {:error, reason} ->
         {:error, {:invalid_multimodal_content, reason}}

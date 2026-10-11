@@ -1,12 +1,12 @@
 defmodule Mix.Tasks.Alto.Session.Compact do
   use Mix.Task
-  @shortdoc "Convert a session's retained conversations to incremental storage"
+  @shortdoc "Compact a session's retained conversation history"
   @moduledoc """
       mix alto.session.compact SESSION_ID --session-dir /state/sessions
       mix alto.session.compact SESSION_ID --retained-turns 20
 
   Keeps all turns by default. Revisions, current context, and dispatch fences
-  survive conversion. A finite retained-turns policy removes older rewind points.
+  are preserved. A finite retained-turns policy removes older rewind points.
   """
   @impl true
   def run(argv) do

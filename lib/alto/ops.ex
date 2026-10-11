@@ -72,17 +72,11 @@ defmodule Alto.Ops do
       entries = Alto.OperationLog.request(ledger, {:entries, :all})
 
       ledger_items =
-        entries
-        |> Enum.reject(&(&1.status == {:intended} and &1.attempts > 0))
-        |> Enum.sort_by(&inspection_rank/1)
-        |> Enum.flat_map(fn entry ->
-          record = Map.get(live_by_operation, entry.operation_key)
-
-          case disposition(entry, record) do
-            nil -> []
-            guidance -> [{entry.operation_key, item(record, entry, guidance)}]
-          end
-        end)
+        for entry <- Enum.sort_by(entries, &inspection_rank/1),
+            not (entry.status == {:intended} and entry.attempts > 0),
+            record <- [Map.get(live_by_operation, entry.operation_key)],
+            guidance = disposition(entry, record),
+            do: {entry.operation_key, item(record, entry, guidance)}
 
       ledger_by_operation = Map.new(ledger_items)
 

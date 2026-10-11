@@ -6,7 +6,6 @@ defmodule Alto.Contrib.CacheWarmer.Server do
   def start(args), do: GenServer.start(__MODULE__, args)
   def request(pid, request), do: safe_call(pid, {:request, request})
   def event(pid, event), do: safe_call(pid, {:event, event, self()})
-  def subscribe(pid, ref), do: safe_call(pid, {:subscribe, ref})
   def stop(pid), do: safe_call(pid, :stop)
   # Explicit pulse plus injected monotonic clock keeps scheduling tests deterministic.
   def pulse(pid), do: safe_call(pid, :pulse)
@@ -31,7 +30,6 @@ defmodule Alto.Contrib.CacheWarmer.Server do
          expires: now + args.max_duration_ms,
          owner_ref: if(args.owner, do: Process.monitor(args.owner)),
          execution_ref: nil,
-         subscription: nil,
          pending: nil,
          candidate: nil,
          tools: MapSet.new(),
@@ -46,7 +44,6 @@ defmodule Alto.Contrib.CacheWarmer.Server do
   end
 
   @impl true
-  def handle_call({:subscribe, ref}, _, state), do: {:reply, :ok, %{state | subscription: ref}}
   def handle_call(:stop, _, state), do: {:stop, :normal, :ok, state}
   def handle_call(:pulse, _, state), do: {:reply, :ok, maybe_warm(state)}
 
@@ -97,8 +94,7 @@ defmodule Alto.Contrib.CacheWarmer.Server do
 
   @impl true
   def handle_info(:horizon, state), do: {:stop, :normal, state}
-  # Subscription can finish before its reference is attached; only this run has
-  # this private process as a subscriber, so early terminal delivery is safe.
+  # Only this run has this private process as a subscriber.
   def handle_info({:alto_runner_result, _, _}, state), do: {:stop, :normal, state}
 
   def handle_info({:tick, epoch}, %{epoch: epoch} = state),
@@ -184,19 +180,12 @@ defmodule Alto.Contrib.CacheWarmer.Server do
   defp schedule(%{worker: worker} = state) when not is_nil(worker), do: state
 
   defp schedule(state) do
-    cond do
-      MapSet.size(state.tools) == 0 or state.requests >= state.max_requests ->
-        state
-
-      state.clock.() >= state.expires ->
-        state
-
-      state.timer != nil ->
-        state
-
-      true ->
-        delay = max(0, min(state.candidate.due, state.expires) - state.clock.())
-        %{state | timer: Process.send_after(self(), {:tick, state.epoch}, delay)}
+    if MapSet.size(state.tools) > 0 and state.requests < state.max_requests and
+         state.clock.() < state.expires and is_nil(state.timer) do
+      delay = max(0, min(state.candidate.due, state.expires) - state.clock.())
+      %{state | timer: Process.send_after(self(), {:tick, state.epoch}, delay)}
+    else
+      state
     end
   end
 

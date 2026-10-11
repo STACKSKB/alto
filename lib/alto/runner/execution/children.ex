@@ -276,7 +276,7 @@ defmodule Alto.Runner.Execution.Children do
     with {:ok, [spec]} <- register_agents([spec], run) do
       result =
         with {:ok, provider} <- resolve_child_provider(spec, run) do
-          if is_nil(provider) and is_nil(spec.loop) do
+          if is_nil(provider) and is_nil(spec.loop) and is_nil(run.child_limits[:child_loop]) do
             {:error, :provider_required}
           else
             sub_opts = child_options(spec, run, provider)
@@ -346,7 +346,7 @@ defmodule Alto.Runner.Execution.Children do
           provider: provider,
           child_profile: checkpoint_profile(spec),
           tools: subagent_tools(spec.tools, run),
-          loop: spec.loop || Alto.default_loop(),
+          loop: spec.loop || Map.get(run.child_limits, :child_loop) || Alto.default_loop(),
           prompt: if(provider, do: spec.system_prompt || run.prompt_config[:prompt]),
           project_instructions: run.prompt_config[:project_instructions],
           cwd: run.cwd,
@@ -466,10 +466,9 @@ defmodule Alto.Runner.Execution.Children do
       concurrency,
       start,
       fn ->
-        case {Alto.Runner.Execution.Call.cancellation(run.cancel_ref), Budget.check(run.budget)} do
-          {{:cancelled, _} = cancelled, _} -> cancelled
-          {_, {:error, _} = error} -> error
-          _ -> :continue
+        case Alto.Runner.Execution.check(run) do
+          :ok -> :continue
+          stopped -> stopped
         end
       end,
       event_sink: run.event_sink,

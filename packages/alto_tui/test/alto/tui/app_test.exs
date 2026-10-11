@@ -1267,8 +1267,8 @@ defmodule Alto.TUI.AppTest do
         state
       )
 
-    assert [%{kind: :reasoning, text: "Summary", reasoning_parts: %{raw: %{}}}] =
-             State.current_entries(state)
+    assert [%{kind: :reasoning, text: "Summary"} = entry] = State.current_entries(state)
+    refute inspect(entry) =~ "Raw"
 
     # Hidden raw deltas must not consume the transcript budget or evict the summary.
     state =
@@ -1283,8 +1283,7 @@ defmodule Alto.TUI.AppTest do
         state
       end)
 
-    assert [%{kind: :reasoning, text: "Summary", reasoning_parts: %{raw: %{}}}] =
-             State.current_entries(state)
+    assert [^entry] = State.current_entries(state)
 
     assert state.runs["run"].phase == "thinking"
 
@@ -1300,6 +1299,14 @@ defmodule Alto.TUI.AppTest do
       App.handle_info({:codex_notification, self(), "item/completed", params}, state)
 
     assert [%{kind: :reasoning, text: "Final summary"}] = State.current_entries(state)
+
+    for method <- ["item/reasoning/textDelta", "item/reasoning/summaryTextDelta"] do
+      assert {:noreply, ^state} =
+               App.handle_info(
+                 {:codex_notification, self(), method, %{params | "delta" => "Late delta"}},
+                 state
+               )
+    end
   end
 
   test "effort selector loads a cold model catalog without visiting model selection first",

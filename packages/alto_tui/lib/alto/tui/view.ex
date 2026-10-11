@@ -861,7 +861,11 @@ defmodule Alto.TUI.View do
     {" approval required ", Alto.TUI.ApprovalView.text(request)}
   end
 
-  defp details_content(state, _presentation) do
+  defp details_content(state, presentation) do
+    with :pass <- Backend.ui(state, :details), do: local_details_content(state, presentation)
+  end
+
+  defp local_details_content(state, _presentation) do
     recent =
       state
       |> State.visible_entries()

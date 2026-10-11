@@ -261,3 +261,7 @@ above that budget. These settings bound caches rather than total process RSS;
 saved transcripts and session logs have their own retention settings.
 
 For reproducible workloads, see [benchmarks](../../docs/benchmarks.md).
+
+## Remote resident backend
+
+Configure `Alto.TUI.Backends.Remote` in `tui_backends` to attach to an independently running service over a Unix socket or managed SSH. It shares Alto’s renderer and navigation and preserves server-owned task/approval state across detach and reconnect. See [resident terminal configuration](../../docs/resident-service.md).

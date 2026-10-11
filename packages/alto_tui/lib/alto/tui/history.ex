@@ -27,26 +27,16 @@ defmodule Alto.TUI.History do
           spawn_monitor(fn ->
             # Read accounting before publishing the transcript. A queued follow-up
             # starts only after :entries, so replay cannot double-count its events.
-            if usage?,
-              do:
-                send(
-                  owner,
-                  {:tui_history, token, :usage, State.load_session_usage(session, opts)}
-                )
-
-            if entries?,
-              do:
-                send(
-                  owner,
-                  {:tui_history, token, :entries, State.load_session_entries(session, opts)}
-                )
-
-            if children?,
-              do:
-                send(
-                  owner,
-                  {:tui_history, token, :subagents, Alto.TUI.Subagents.load(session, opts)}
-                )
+            Enum.each(
+              [
+                {usage?, :usage, &State.load_session_usage/2},
+                {entries?, :entries, &State.load_session_entries/2},
+                {children?, :subagents, &Alto.TUI.Subagents.load/2}
+              ],
+              fn {needed?, kind, load} ->
+                if needed?, do: send(owner, {:tui_history, token, kind, load.(session, opts)})
+              end
+            )
           end)
 
         %{state | history_load: %{id: id, token: token, pid: pid, monitor: monitor}}
@@ -90,16 +80,7 @@ defmodule Alto.TUI.History do
             %{state | usage: Map.update(state.usage, id, value, &Alto.Usage.merge(value, &1))}
 
           :subagents ->
-            {agents, warnings} = value
-            current = Map.get(state.subagents, id, %{})
-
-            state = State.put_subagents(state, id, Map.merge(agents, current))
-
-            %{
-              state
-              | notice:
-                  if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
-            }
+            State.restore_subagents(state, id, value)
         end
 
       _ ->

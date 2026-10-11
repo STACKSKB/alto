@@ -395,6 +395,7 @@ defmodule Alto.SessionConversationTest do
           Map.put(head, "dispatch", %{"revision" => 2, "tool_call_ids" => ["op-1"]}),
           Map.delete(head, "retained_bytes_before"),
           Map.delete(head, "dispatch"),
+          Map.put(head, "v", 4),
           %{"v" => 1, "revision" => 1},
           [],
           nil,

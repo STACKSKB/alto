@@ -157,3 +157,7 @@ runs and saved sessions to clients over Unix sockets or WebSockets.
 - [Changelog](CHANGELOG.md)
 
 Alto is distributed under the [MIT License](LICENSE).
+
+## Resident task service
+
+The optional resident host supports durable delayed tasks, exact approvals and parent/child recovery, scoped mailboxes and reviewed isolated-worker patches. Attach Alto’s shared TUI through its reconnecting remote backend. See [resident service and installation](docs/resident-service.md).

@@ -72,22 +72,12 @@ defmodule Alto.Content do
   def prepend(content, text) when is_binary(content), do: text <> content
 
   @doc "Translate all media blocks with explicit provider capabilities."
-  def map_media(%__MODULE__{blocks: blocks}, capabilities, encode) do
+  def map_media(%__MODULE__{blocks: blocks}, modalities, encode) do
     Alto.Result.traverse(blocks, fn
       %{"type" => type} = block when type in ["image", "file"] ->
         modality = Alto.InputModalities.modality(block)
 
-        key =
-          case modality do
-            "image" -> :images
-            "audio" -> :audio
-            "video" -> :video
-            "file" -> :files
-          end
-
-        if Map.get(capabilities, key, false),
-          do: encode.(block),
-          else: {:error, Alto.InputModalities.error(modality)}
+        with :ok <- Alto.InputModalities.check([modality], modalities), do: encode.(block)
 
       %{"type" => "artifact", "name" => name, "media_type" => media} ->
         {:ok, text("Generated file: #{name} (#{media})")}
@@ -137,20 +127,6 @@ defmodule Alto.Content do
   def decode_transcript(value) when is_list(value), do: {:error, :empty_content}
   def decode_transcript(_value), do: :not_content
 
-  @doc "Translate validated image blocks while preserving text and block order."
-  def map_images(%__MODULE__{blocks: blocks}, supports_images, encode) do
-    Alto.Result.traverse(blocks, fn
-      %{"type" => "image"} when not supports_images ->
-        {:error, :model_does_not_support_images}
-
-      %{"type" => "image"} = image ->
-        {:ok, encode.(image)}
-
-      text ->
-        {:ok, text}
-    end)
-  end
-
   defp validate_blocks([_ | _] = blocks) do
     blocks
     |> Enum.with_index()
@@ -179,20 +155,28 @@ defmodule Alto.Content do
          } = block
        )
        when map_size(block) == 5 do
-    with :ok <- validate_image(media_type, data, width, height), do: {:ok, block}
-  end
-
-  defp validate_block(%{"type" => "artifact"} = block) do
-    case validate_block(Map.put(block, "type", "file")) do
-      {:ok, _} -> {:ok, block}
+    with true <-
+           (is_binary(data) and data != "") or {:error, :image_data_must_be_nonempty_base64},
+         true <-
+           byte_size(data) <= @max_image_encoded_bytes or
+             {:error, {:image_encoded_too_large, @max_image_encoded_bytes}},
+         {:ok, decoded} <- Base.decode64(data),
+         {:ok, parsed_media, parsed_width, parsed_height} <-
+           Metadata.inspect(decoded, @image_limits),
+         true <-
+           {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
+             {:error, :image_metadata_mismatch} do
+      {:ok, block}
+    else
+      :error -> {:error, :invalid_image_base64}
       error -> error
     end
   end
 
   defp validate_block(
-         %{"type" => "file", "name" => name, "media_type" => media, "data" => data} = block
+         %{"type" => type, "name" => name, "media_type" => media, "data" => data} = block
        )
-       when map_size(block) == 4 do
+       when type in ["file", "artifact"] and map_size(block) == 4 do
     with true <-
            (is_binary(name) and byte_size(name) in 1..255 and String.valid?(name) and
               not String.contains?(name, ["/", "\\", <<0>>]) and
@@ -217,26 +201,4 @@ defmodule Alto.Content do
   end
 
   defp validate_block(_block), do: {:error, :unsupported_block}
-
-  defp validate_image(media_type, data, width, height) do
-    with true <-
-           (is_binary(data) and data != "") or {:error, :image_data_must_be_nonempty_base64},
-         true <-
-           byte_size(data) <= @max_image_encoded_bytes or
-             {:error, {:image_encoded_too_large, @max_image_encoded_bytes}},
-         {:ok, decoded} <- decode_image(data),
-         {:ok, parsed_media, parsed_width, parsed_height} <-
-           Metadata.inspect(decoded, @image_limits),
-         true <-
-           {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
-             {:error, :image_metadata_mismatch},
-         do: :ok
-  end
-
-  defp decode_image(data) do
-    case Base.decode64(data) do
-      {:ok, decoded} -> {:ok, decoded}
-      :error -> {:error, :invalid_image_base64}
-    end
-  end
 end

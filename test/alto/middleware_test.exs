@@ -26,10 +26,10 @@ defmodule Alto.MiddlewareTest do
       initial
     )
 
-    assert_receive {:middleware, :first, :before}
-    assert_receive {:middleware, :second, :before}
-    assert_receive {:middleware, :second, :after}
-    assert_receive {:middleware, :first, :after}
+    for expected <- [first: :before, second: :before, second: :after, first: :after] do
+      assert_receive {:middleware, label, stage}
+      assert {label, stage} == expected
+    end
   end
 
   test "after-step effects run before the default loop continuation" do

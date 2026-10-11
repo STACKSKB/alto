@@ -28,8 +28,15 @@ defmodule Alto.Contrib.CLI do
   end
 
   @spec run([binary()]) :: :ok | {:error, binary()}
+  def run(["resident" | args]) do
+    case Alto.Contrib.Resident.CLI.run(args) do
+      :ok -> :ok
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
   def run(argv) do
-    with {:ok, _applications} <- Application.ensure_all_started(:alto),
+    with {:ok, _applications} <- Application.ensure_all_started(:alto_contrib),
          {:ok, options, task} <- Arguments.parse(argv),
          :continue <- Arguments.maybe_help(options) do
       result =
@@ -174,8 +181,37 @@ defmodule Alto.Contrib.CLI do
   end
 
   defp do_serve(options) do
-    with {:ok, config} <- load_config(options),
-         {:ok, base_options} <- serve_run_options(config),
+    with {:ok, config} <- load_config(options) do
+      case Keyword.fetch(config, :resident) do
+        {:ok, resident} -> serve_resident(resident, options)
+        :error -> serve_front_end(config, options)
+      end
+    end
+  end
+
+  defp serve_resident(options, cli) do
+    config = Alto.Contrib.Resident.Config.new(options)
+
+    if Keyword.has_key?(cli, :port) or Keyword.has_key?(cli, :socket) do
+      {:error, "resident socket/state are selected by the trusted resident configuration"}
+    else
+      with {:ok, pid} <- Alto.Contrib.Resident.Service.start(config) do
+        IO.puts(
+          :stderr,
+          "alto: resident service at #{Alto.Contrib.Resident.Config.socket_path(config)}"
+        )
+
+        ref = Process.monitor(pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, reason} -> {:error, {:resident_stopped, reason}}
+        end
+      end
+    end
+  end
+
+  defp serve_front_end(config, options) do
+    with {:ok, base_options} <- serve_run_options(config),
          {:ok, listener_specs} <- serve_listener_specs(config, options),
          {:ok, queue} <- start_serve_queue(config),
          registry_opts = serve_registry_opts(config, queue, base_options),

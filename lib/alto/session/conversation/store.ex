@@ -57,10 +57,7 @@ defmodule Alto.Session.Conversation.Store do
   def write(plan) do
     dirs = plan.missing |> Enum.map(fn {path, _} -> Path.dirname(path) end) |> Enum.uniq()
 
-    with {:ok, _} <-
-           Alto.Result.traverse(dirs, fn dir ->
-             with :ok <- Storage.ensure_private_dir(dir, owned: true), do: {:ok, :ok}
-           end),
+    with :ok <- Alto.Result.each(dirs, &Storage.ensure_private_dir(&1, owned: true)),
          do:
            AtomicFile.write_many(
              Enum.map(plan.missing, fn {path, encoded} -> {path, encoded, [mode: 0o600]} end)
@@ -69,7 +66,7 @@ defmodule Alto.Session.Conversation.Store do
 
   def read(id, root, count, opts)
       when is_integer(count) and count >= 0 and count <= @max_bytes do
-    with {:ok, chunks, _seen} <- nodes(id, root, count, opts, [], MapSet.new()),
+    with {:ok, chunks} <- nodes(id, root, count, opts, []),
          {:ok, {messages, _bytes}} <-
            Alto.Result.reduce(List.flatten(chunks), {[], 0}, fn ref, {messages, bytes} ->
              with {:ok, encoded} <- read_object(id, {"message", ref}, opts),
@@ -87,16 +84,15 @@ defmodule Alto.Session.Conversation.Store do
 
   def read(id, _, _, _), do: {:error, {:conversation_object_corrupt, id, :root}}
 
-  defp nodes(_id, nil, 0, _opts, chunks, seen), do: {:ok, chunks, seen}
+  defp nodes(_id, nil, 0, _opts, chunks), do: {:ok, chunks}
 
-  defp nodes(id, root, count, opts, chunks, seen) when count > 0 do
+  defp nodes(id, root, count, opts, chunks) when count > 0 do
     with {:ok, previous, refs} <- node(id, root, count, opts) do
-      seen = Enum.reduce(refs, MapSet.put(seen, {"node", root}), &MapSet.put(&2, {"message", &1}))
-      nodes(id, previous, count - length(refs), opts, [refs | chunks], seen)
+      nodes(id, previous, count - length(refs), opts, [refs | chunks])
     end
   end
 
-  defp nodes(id, root, _, _, _, _), do: {:error, {:conversation_object_corrupt, id, root}}
+  defp nodes(id, root, _, _, _), do: {:error, {:conversation_object_corrupt, id, root}}
 
   defp node(id, root, count, opts) do
     with {:ok, encoded} <- read_object(id, {"node", root}, opts),
@@ -126,9 +122,7 @@ defmodule Alto.Session.Conversation.Store do
   end
 
   def disk_bytes(id, opts) do
-    with {:ok, files} <- files(id, opts),
-         {:ok, sizes} <- sizes(files),
-         do: {:ok, Enum.reduce(sizes, 0, fn {_, size}, n -> n + size end)}
+    with {:ok, files} <- files(id, opts), do: file_bytes(files)
   end
 
   # Prepared under the session lock, then applied only after the new atomic
@@ -142,10 +136,8 @@ defmodule Alto.Session.Conversation.Store do
              fn path, {drop, keep} ->
                with {:ok, encoded} <- BoundedFile.read(path, @max_bytes),
                     {:ok, old} when is_map(old) <- JSON.decode(encoded),
-                    true <- old["v"] in [4, 5] and old["session_id"] == id,
-                    turn when is_integer(turn) and turn > 0 <-
-                      old["turn"] ||
-                        max(Enum.count(old["messages"] || [], &(&1["role"] == "user")), 1) do
+                    true <- old["v"] == 5 and old["session_id"] == id,
+                    turn when is_integer(turn) and turn > 0 <- old["turn"] do
                  if is_integer(limit) and turn < max(record["turn"] - limit + 1, 1),
                    do: {:ok, {[path | drop], keep}},
                    else: {:ok, {drop, [old | keep]}}
@@ -157,8 +149,8 @@ defmodule Alto.Session.Conversation.Store do
          {:ok, seen} <- reachable(id, keep, opts),
          {:ok, objects} <- object_files(id, opts),
          unused <- Enum.reject(objects, fn path -> MapSet.member?(seen, Path.basename(path)) end),
-         {:ok, sizes} <- sizes(drop ++ unused) do
-      {:ok, %{files: drop ++ unused, bytes: Enum.reduce(sizes, 0, fn {_, n}, sum -> sum + n end)}}
+         {:ok, bytes} <- file_bytes(drop ++ unused) do
+      {:ok, %{files: drop ++ unused, bytes: bytes}}
     end
   end
 
@@ -167,9 +159,6 @@ defmodule Alto.Session.Conversation.Store do
       Alto.Result.reduce(records, %{}, fn
         %{"v" => 5, "message_root" => root, "message_count" => count}, seen ->
           reachable_nodes(id, root, count, opts, seen)
-
-        %{"v" => 4}, seen ->
-          {:ok, seen}
 
         _, _ ->
           {:error, {:conversation_corrupt, id, :retention}}
@@ -220,45 +209,30 @@ defmodule Alto.Session.Conversation.Store do
   defp prune_files(files) do
     dirs = Enum.map(files, &Path.dirname/1) |> Enum.uniq()
 
-    with {:ok, :ok} <-
-           Alto.Result.reduce(files, :ok, fn path, :ok ->
+    with :ok <-
+           Alto.Result.each(files, fn path ->
              case File.rm(path) do
-               :ok -> {:ok, :ok}
-               {:error, :enoent} -> {:ok, :ok}
+               :ok -> :ok
+               {:error, :enoent} -> :ok
                {:error, reason} -> {:error, {:conversation_prune_failed, reason}}
              end
            end),
-         {:ok, :ok} <-
-           Alto.Result.reduce(dirs, :ok, fn dir, :ok ->
-             with :ok <- AtomicFile.sync_directory(dir), do: {:ok, :ok}
-           end),
-         do: :ok
+         do: Alto.Result.each(dirs, &AtomicFile.sync_directory/1)
   end
 
-  def revision_files(id, opts) do
-    case File.ls(dir(id, opts)) do
-      {:ok, names} ->
-        {:ok,
-         names
-         |> Enum.filter(&Regex.match?(~r/^revision-\d+\.json$/, &1))
-         |> Enum.map(&Path.join(dir(id, opts), &1))}
+  def revision_files(id, opts),
+    do: matching_files(dir(id, opts), ~r/^revision-\d+\.json$/)
 
-      {:error, :enoent} ->
-        {:ok, []}
+  defp object_files(id, opts),
+    do:
+      matching_files(Path.join(dir(id, opts), "objects"), ~r/^(message|node)-[a-f0-9]{64}\.json$/)
 
-      {:error, reason} ->
-        {:error, {:conversation_read_failed, reason}}
-    end
-  end
-
-  defp object_files(id, opts) do
-    path = Path.join(dir(id, opts), "objects")
-
+  defp matching_files(path, pattern) do
     case File.ls(path) do
       {:ok, names} ->
         {:ok,
          names
-         |> Enum.filter(&Regex.match?(~r/^(message|node)-[a-f0-9]{64}\.json$/, &1))
+         |> Enum.filter(&Regex.match?(pattern, &1))
          |> Enum.map(&Path.join(path, &1))}
 
       {:error, :enoent} ->
@@ -275,10 +249,10 @@ defmodule Alto.Session.Conversation.Store do
          do: {:ok, revisions ++ objects}
   end
 
-  defp sizes(files) do
-    Alto.Result.traverse(files, fn path ->
+  defp file_bytes(files) do
+    Alto.Result.reduce(files, 0, fn path, total ->
       case File.stat(path) do
-        {:ok, %{type: :regular, size: size}} -> {:ok, {path, size}}
+        {:ok, %{type: :regular, size: size}} -> {:ok, total + size}
         _ -> {:error, {:conversation_read_failed, path}}
       end
     end)

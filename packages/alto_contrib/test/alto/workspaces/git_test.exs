@@ -32,6 +32,37 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     assert {:error, :invalid_workspace_options} = Git.command(repo, [], [:invalid])
   end
 
+  test "large bounded inventories support the complete isolated checkout lifecycle", c do
+    for index <- 1..600 do
+      name = "entry-#{index}-#{String.duplicate("long-", 22)}.txt"
+      File.write!(Path.join(c.repo, name), "bounded\n")
+    end
+
+    git!(c.repo, ["add", "."])
+
+    git!(c.repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "large inventory"
+    ])
+
+    assert byte_size(git!(c.repo, ["ls-tree", "-r", "-l", "HEAD"])) > 64_000
+    assert byte_size(git!(c.repo, ["ls-files", "-z"])) > 64_000
+
+    assert {:ok, snapshot} = Git.snapshot(c.repo)
+    destination = Path.join(c.root, "large-child")
+    assert :ok = Git.checkout(snapshot, destination)
+    assert {:ok, ""} = Git.diff(snapshot, destination)
+    assert {:error, :checkout_too_large} = Git.snapshot(c.repo, max_files: 50)
+    assert {:error, :checkout_too_large} = Git.snapshot(c.repo, max_checkout_bytes: 100)
+    assert {:error, :git_output_limit} = Git.snapshot(c.repo, max_inventory_bytes: 64_000)
+    assert {:ok, ""} = git_output(c.repo, ["status", "--porcelain"])
+  end
+
   test "clones an independent pinned checkout and emits new-file diff", %{root: root, repo: repo} do
     assert {:ok, snapshot} = Git.snapshot(repo)
     destination = Path.join(root, "child")

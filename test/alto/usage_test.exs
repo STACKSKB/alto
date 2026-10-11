@@ -40,4 +40,20 @@ defmodule Alto.UsageTest do
 
     assert Usage.normalize(%{"input_tokens" => 12}).last_input_tokens == 12
   end
+
+  test "serialized keys take precedence even when their values are missing or invalid" do
+    usage =
+      Usage.normalize(%{
+        :input_tokens => 99,
+        "input_tokens" => 0,
+        :output_tokens => 5,
+        "output_tokens" => nil,
+        :requests => 7,
+        "requests" => -1,
+        :context_window => 100,
+        "context_window" => nil
+      })
+
+    assert usage == Usage.new()
+  end
 end

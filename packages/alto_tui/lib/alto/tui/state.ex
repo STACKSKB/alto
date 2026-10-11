@@ -154,8 +154,6 @@ defmodule Alto.TUI.State do
         credentials_path: credentials_path,
         catalog_opts: catalog_opts,
         async_history?: Keyword.get(opts, :async_history, false),
-        render_cache_bytes: Keyword.get(tui_options, :render_cache_bytes, 16_000_000),
-        history_cache_bytes: Keyword.get(tui_options, :history_cache_bytes, 12_000_000),
         projects: projects,
         tasks: tasks,
         selected_project_id: selected_project["id"],
@@ -163,20 +161,18 @@ defmodule Alto.TUI.State do
         profiles: profiles,
         preferences: preferences,
         selected_provider_id: profile && profile.id,
-        type_to_compose?: Keyword.get(tui_options, :type_to_compose, true),
-        narrow_context: Keyword.get(tui_options, :narrow_context, :adaptive),
-        narrow_context_width: Keyword.get(tui_options, :narrow_context_width, 75),
-        narrow_context_fullscreen_below:
-          Keyword.get(tui_options, :narrow_context_fullscreen_below, 72),
-        paste_inline_bytes: Keyword.get(tui_options, :paste_inline_bytes, 4_096),
-        paste_chunk_bytes: Keyword.get(tui_options, :paste_chunk_bytes, 32_000),
-        approval_auto_open?: Keyword.get(tui_options, :approval_auto_open, true),
         selected_model: profile && profile.default_model,
-        selected_backend: selected_backend,
-        usage: %{}
+        selected_backend: selected_backend
       }
 
-      state = Alto.TUI.Backend.initialize(state)
+      fields =
+        Enum.map(Keyword.delete(tui_options, :approval_reviewer), fn
+          {:type_to_compose, value} -> {:type_to_compose?, value}
+          {:approval_auto_open, value} -> {:approval_auto_open?, value}
+          field -> field
+        end)
+
+      state = state |> struct!(fields) |> Alto.TUI.Backend.initialize()
       {:ok, state |> restore_model() |> hydrate_selected()}
     end
   end
@@ -292,6 +288,11 @@ defmodule Alto.TUI.State do
     do: %{state | leader?: false, overlay: nil, notice: "No workspace to close"}
 
   def close_workspace(state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:close_workspace, id}),
+         do: local_close_workspace(state, id)
+  end
+
+  defp local_close_workspace(state, id) do
     case Catalog.close_project(id, state.catalog_opts) do
       {:ok, closed} ->
         next = %{
@@ -349,6 +350,11 @@ defmodule Alto.TUI.State do
   def select_rail_row(state, _row), do: state
 
   def select_project(%__MODULE__{} = state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:select_project, id}),
+         do: local_select_project(state, id)
+  end
+
+  defp local_select_project(state, id) do
     case Enum.find(state.projects, &(&1["id"] == id)) do
       nil ->
         state
@@ -360,7 +366,6 @@ defmodule Alto.TUI.State do
           state
           | selected_project_id: id,
             selected_task_id: nil,
-            search: nil,
             transcript_scroll: 0,
             transcript_follow?: true
         }
@@ -368,6 +373,10 @@ defmodule Alto.TUI.State do
   end
 
   def select_task(%__MODULE__{} = state, id) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:select_task, id}), do: local_select_task(state, id)
+  end
+
+  defp local_select_task(state, id) do
     case Enum.find(Map.get(state.tasks, state.selected_project_id, []), &(&1["id"] == id)) do
       nil ->
         state
@@ -377,7 +386,6 @@ defmodule Alto.TUI.State do
         |> Alto.TUI.Search.close()
         |> Map.put(:selected_task_id, id)
         |> Map.put(:selected_agent_id, nil)
-        |> Map.put(:search, nil)
         |> Map.put(:transcript_follow?, true)
         |> sync_backend(task)
         |> touch_cache(id)
@@ -387,13 +395,16 @@ defmodule Alto.TUI.State do
 
   @doc "Leave the current task selected project intact and compose a new task."
   def new_task(%__MODULE__{} = state) do
+    with :pass <- Alto.TUI.Backend.ui(state, :new_task), do: local_new_task(state)
+  end
+
+  defp local_new_task(state) do
     state = state |> Alto.TUI.Search.close() |> Alto.TUI.History.cancel()
 
     %{
       state
       | selected_task_id: nil,
         selected_agent_id: nil,
-        search: nil,
         overlay: nil,
         leader?: false,
         notice: "new task — your draft is preserved",
@@ -405,6 +416,11 @@ defmodule Alto.TUI.State do
 
   @doc "Open a folder as a workspace and prepare a new task without losing the draft."
   def open_workspace(state, path) do
+    with :pass <- Alto.TUI.Backend.ui(state, {:open_workspace, path}),
+         do: local_open_workspace(state, path)
+  end
+
+  defp local_open_workspace(state, path) do
     base =
       case selected_project(state) do
         nil -> File.cwd!()
@@ -468,11 +484,14 @@ defmodule Alto.TUI.State do
     |> evict_inactive_caches()
   end
 
-  def put_subagents(state, task, agents) do
+  def restore_subagents(state, task, {agents, warnings}) do
+    agents = Map.merge(agents, Map.get(state.subagents, task, %{}))
+
     %{
       state
       | subagents: Map.put(state.subagents, task, agents),
-        subagent_bytes: Map.put(state.subagent_bytes, task, :erlang.external_size(agents))
+        subagent_bytes: Map.put(state.subagent_bytes, task, :erlang.external_size(agents)),
+        notice: if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
     }
     |> evict_inactive_caches()
   end
@@ -768,16 +787,11 @@ defmodule Alto.TUI.State do
     state =
       if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend) and
            not Map.has_key?(state.subagents, state.selected_task_id) do
-        {agents, warnings} = Alto.TUI.Subagents.load(session_id, state.catalog_opts)
-
-        %{
-          state
-          | subagents: Map.put(state.subagents, state.selected_task_id, agents),
-            subagent_bytes:
-              Map.put(state.subagent_bytes, state.selected_task_id, :erlang.external_size(agents)),
-            notice:
-              if(warnings == [], do: state.notice, else: Enum.join(Enum.uniq(warnings), "; "))
-        }
+        restore_subagents(
+          state,
+          state.selected_task_id,
+          Alto.TUI.Subagents.load(session_id, state.catalog_opts)
+        )
       else
         state
       end

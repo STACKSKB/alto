@@ -39,6 +39,7 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
          id: "continuations",
          dir: dir,
          max_recovery_bytes: 2_200_000,
+         max_checkpoint_bytes: 2_200_000,
          max_record_bytes: 3_000_000}
       )
 

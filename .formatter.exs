@@ -11,6 +11,7 @@
     "examples/repository_maintenance/{lib,test}/**/*.{ex,exs}",
     "examples/document_intake/{lib,test}/**/*.{ex,exs}",
     "examples/upstream_skills/lib/**/*.ex",
+    "examples/resident/*.exs",
     "examples/{repository_maintenance,document_intake}/run.exs"
   ]
 ]

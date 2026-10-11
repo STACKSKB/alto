@@ -8,25 +8,20 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
   @state_key :alto_stream_envelope
 
   def post(config, body, headers, decoder, sink) do
+    limits = Map.take(config, [:max_event_bytes, :max_stream_bytes])
+
     initial = %{
       sse: SSE.new(config.max_event_bytes),
       completion: decoder.new(),
       events: 0,
       last_event_ms: nil,
-      diagnostics: %{
-        max_event_bytes: config.max_event_bytes,
-        max_stream_bytes: config.max_response_bytes
-      }
+      diagnostics: limits
     }
 
     on_error = fn reason, state, diagnostics ->
       evidence = accounting(state.completion, decoder)
 
-      diagnostics =
-        Map.merge(diagnostics, %{
-          max_event_bytes: config.max_event_bytes,
-          max_stream_bytes: config.max_response_bytes
-        })
+      diagnostics = Map.merge(diagnostics, limits)
 
       {:error,
        Failure.wrap(
@@ -55,9 +50,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
                   if(final_events > 0,
                     do: state.diagnostics.last_byte_ms,
                     else: state.last_event_ms
-                  ),
-                max_event_bytes: config.max_event_bytes,
-                max_stream_bytes: config.max_response_bytes
+                  )
               })
             )
 
@@ -66,11 +59,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
               {:ok, Map.put(result, :diagnostics, diagnostics)}
 
             {:error, reason} ->
-              {:error,
-               Failure.wrap(
-                 Failure.reason(reason),
-                 Map.put(accounting(completion, decoder), :diagnostics, diagnostics)
-               )}
+              on_error.(reason, %{state | completion: completion}, diagnostics)
           end
 
         {:error, reason} ->
@@ -116,24 +105,15 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
       next =
         cond do
-          size > config.max_response_bytes ->
+          size > config.max_stream_bytes ->
             %{
               current
               | bytes: size,
-                error: {:error, {:provider_response_too_large, config.max_response_bytes}}
+                error: {:error, {:provider_response_too_large, config.max_stream_bytes}}
             }
 
           response.status in 200..299 ->
-            value =
-              if is_map(current.value) and Map.has_key?(current.value, :sse),
-                do:
-                  Map.update(
-                    current.value,
-                    :diagnostics,
-                    diagnostics(%{current | bytes: size}, response.status),
-                    &Map.merge(&1, diagnostics(%{current | bytes: size}, response.status))
-                  ),
-                else: current.value
+            value = attach_diagnostics(current.value, %{current | bytes: size}, response.status)
 
             case consume.(value, data) do
               {:ok, value} ->
@@ -176,18 +156,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
               on_error.(reason, state.value, diagnostics(state, response.status))
 
             response.status in 200..299 ->
-              value =
-                if is_map(state.value) and Map.has_key?(state.value, :sse),
-                  do:
-                    Map.update(
-                      state.value,
-                      :diagnostics,
-                      diagnostics(state, response.status),
-                      &Map.merge(&1, diagnostics(state, response.status))
-                    ),
-                  else: state.value
-
-              {:ok, value}
+              {:ok, attach_diagnostics(state.value, state, response.status)}
 
             true ->
               body = state.error_body |> Enum.reverse() |> IO.iodata_to_binary()
@@ -221,6 +190,13 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       events: if(is_map(state.value), do: Map.get(state.value, :events, 0), else: 0),
       http_status: status || state.http_status
     }
+
+  defp attach_diagnostics(%{sse: _} = value, state, status) do
+    evidence = diagnostics(state, status)
+    Map.update(value, :diagnostics, evidence, &Map.merge(&1, evidence))
+  end
+
+  defp attach_diagnostics(value, _state, _status), do: value
 
   defp decode_error_body(body) do
     case JSON.decode(body) do
@@ -261,9 +237,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
       # A heartbeat or incomplete frame can advance byte arrival without changing
       # decoder accounting. Publish this evidence before any host callback blocks.
-      snapshot = accounting(state.completion, decoder)
-      snapshot = Map.update!(snapshot, :usage, &Alto.Contrib.Usage.known/1)
-      progress_sink.(Alto.Event.live(:provider_accounting, snapshot))
+      emit_accounting(state.completion, decoder, progress_sink)
       completion = consume_payloads(payloads, state.completion, decoder, progress_sink)
 
       next = %{
@@ -286,9 +260,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       next = decoder.consume(state, payload, sink)
 
       if accounting(next, decoder) != accounting(state, decoder) do
-        snapshot = accounting(next, decoder)
-        snapshot = Map.update!(snapshot, :usage, &Alto.Contrib.Usage.known/1)
-        sink.(Alto.Event.live(:provider_accounting, snapshot))
+        emit_accounting(next, decoder, sink)
       end
 
       if next.error, do: {:halt, next}, else: {:cont, next}
@@ -301,6 +273,11 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       else: %{usage: Map.get(state, :usage), metadata: %{}}
   end
 
+  defp emit_accounting(state, decoder, sink) do
+    snapshot = accounting(state, decoder) |> Map.update!(:usage, &Alto.Contrib.Usage.known/1)
+    sink.(Alto.Event.live(:provider_accounting, snapshot))
+  end
+
   defp finish(state, decoder, sink) do
     case SSE.finish(state.sse) do
       {:ok, payloads} ->
@@ -309,17 +286,9 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       {:raw, raw} ->
         case JSON.decode(raw) do
           {:ok, response} ->
-            case decoder.from_response(response, sink) do
-              {:ok, completion} ->
-                snapshot =
-                  accounting(completion, decoder)
-                  |> Map.update!(:usage, &Alto.Contrib.Usage.known/1)
-
-                sink.(Alto.Event.live(:provider_accounting, snapshot))
-                {:ok, completion, 0}
-
-              error ->
-                error
+            with {:ok, completion} <- decoder.from_response(response, sink) do
+              emit_accounting(completion, decoder, sink)
+              {:ok, completion, 0}
             end
 
           {:error, error} ->

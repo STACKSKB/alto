@@ -129,11 +129,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
         emit_accounting(state, sink)
         if is_map(choice["delta"]), do: consume_delta(state, choice["delta"], sink), else: state
 
-      [] ->
-        emit_accounting(state, sink)
-        state
-
-      nil ->
+      empty when empty in [[], nil] ->
         emit_accounting(state, sink)
         state
 
@@ -151,16 +147,11 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
 
   defp metadata(state, chunk) do
     fields =
-      Enum.reduce(
-        [{"id", :request_id}, {"model", :model}, {"provider", :provider}],
-        state.metadata,
-        fn {wire, key}, acc ->
-          case chunk[wire] do
-            value when is_binary(value) and byte_size(value) <= 256 -> Map.put(acc, key, value)
-            _ -> acc
-          end
-        end
-      )
+      for {wire, key} <- [{"id", :request_id}, {"model", :model}, {"provider", :provider}],
+          value = chunk[wire],
+          is_binary(value) and byte_size(value) <= 256,
+          into: state.metadata,
+          do: {key, value}
 
     cost = get_in(chunk, ["usage", "cost"])
 
@@ -180,10 +171,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
 
     state = consume_content(state, delta["content"], sink)
 
-    state =
-      Enum.reduce(delta["images"] || [], state, fn part, acc ->
-        %{acc | media: [part | acc.media]}
-      end)
+    state = %{state | media: Enum.reverse(delta["images"] || [], state.media)}
 
     calls =
       Enum.reduce(delta["tool_calls"] || [], state.calls, fn fragment, calls ->

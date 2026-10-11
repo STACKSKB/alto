@@ -3,17 +3,12 @@ defmodule Alto.JSONLines do
   def split(""), do: {[], false}
 
   def split(contents) do
-    if :binary.last(contents) == ?\n do
-      {String.split(contents, "\n", trim: true), false}
-    else
-      {complete, [tail]} = contents |> String.split("\n") |> Enum.split(-1)
-      complete = Enum.reject(complete, &(&1 == ""))
+    lines = String.split(contents, "\n", trim: true)
+    torn? = :binary.last(contents) != ?\n
 
-      case JSON.decode(tail) do
-        {:ok, _} -> {complete ++ [tail], true}
-        {:error, _} -> {complete, true}
-      end
-    end
+    if torn? and match?({:error, _}, JSON.decode(List.last(lines))),
+      do: {Enum.drop(lines, -1), true},
+      else: {lines, torn?}
   end
 
   def join([]), do: ""

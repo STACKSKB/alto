@@ -25,8 +25,6 @@ defmodule Alto.Contrib.External.JSONRPC do
            ExternalProcess.resolve_executable(opts[:command]) ||
              {:error, {:external_executable_not_found, opts[:command]}} do
       {:ok, Keyword.put(opts, :command, executable)}
-    else
-      {:error, _} = error -> error
     end
   end
 
@@ -177,7 +175,7 @@ defmodule Alto.Contrib.External.JSONRPC do
     cancel_timer(state.initialize_timer)
 
     Enum.each(state.ready_waiters, fn {from, monitor} ->
-      demonitor(elem(from, 0), monitor)
+      demonitor(monitor)
       GenServer.reply(from, reply)
     end)
 
@@ -222,32 +220,32 @@ defmodule Alto.Contrib.External.JSONRPC do
   end
 
   def handle_info(message, state) do
-    case transport_event(message, state, &handle_message/2) do
+    case transport_event(message, state) do
       {:ok, state} -> {:noreply, state}
       {:error, reason, state} -> {:stop, reason, fail_all(state, reason)}
     end
   end
 
-  defp transport_event({port, {:data, {:eol, line}}}, %{process: %{port: port}} = state, handler),
-    do: decode_line(String.trim_trailing(line, "\r"), state, handler)
+  defp transport_event({port, {:data, {:eol, line}}}, %{process: %{port: port}} = state),
+    do: decode_line(String.trim_trailing(line, "\r"), state)
 
-  defp transport_event({port, {:data, {:noeol, _}}}, %{process: %{port: port}} = state, _),
+  defp transport_event({port, {:data, {:noeol, _}}}, %{process: %{port: port}} = state),
     do:
       {:error, {:json_rpc_incomplete_line, Keyword.fetch!(state.opts, :max_message_bytes)}, state}
 
-  defp transport_event({port, {:data, _}}, %{process: %{port: port}} = state, _),
+  defp transport_event({port, {:data, _}}, %{process: %{port: port}} = state),
     do: {:error, :json_rpc_unframed_data, state}
 
-  defp transport_event({port, {:exit_status, status}}, %{process: %{port: port}} = state, _),
+  defp transport_event({port, {:exit_status, status}}, %{process: %{port: port}} = state),
     do: {:error, {:json_rpc_process_exit, status}, state}
 
-  defp transport_event({:EXIT, port, reason}, %{process: %{port: port}} = state, _),
+  defp transport_event({:EXIT, port, reason}, %{process: %{port: port}} = state),
     do: {:error, {:json_rpc_process_exit, reason}, state}
 
-  defp transport_event(:initialize_timeout, %{phase: :starting} = state, _),
+  defp transport_event(:initialize_timeout, %{phase: :starting} = state),
     do: {:error, {:json_rpc_startup_timeout, Keyword.fetch!(state.opts, :startup_timeout)}, state}
 
-  defp transport_event(_, state, _), do: {:ok, state}
+  defp transport_event(_, state), do: {:ok, state}
 
   @impl true
   def terminate(_reason, %{process: nil}), do: :ok
@@ -263,7 +261,6 @@ defmodule Alto.Contrib.External.JSONRPC do
   end
 
   defp request(state, method, params, from, timeout, failure_class) do
-    owner = if from, do: elem(from, 0)
     limit = Keyword.fetch!(state.opts, :max_pending_requests)
 
     cond do
@@ -283,8 +280,7 @@ defmodule Alto.Contrib.External.JSONRPC do
             from: from,
             method: method,
             failure_class: failure_class,
-            owner: owner,
-            monitor: if(owner, do: Process.monitor(owner)),
+            monitor: if(from, do: Process.monitor(elem(from, 0))),
             timer: start_timer(id, timeout || Keyword.fetch!(state.opts, :request_timeout))
           }
 
@@ -293,12 +289,12 @@ defmodule Alto.Contrib.External.JSONRPC do
     end
   end
 
-  defp decode_line("", state, _handle_message), do: {:ok, state}
+  defp decode_line("", state), do: {:ok, state}
 
-  defp decode_line(line, state, handle_message) do
+  defp decode_line(line, state) do
     case JSON.decode(line) do
       {:ok, message} when is_map(message) ->
-        handle_message.(message, state)
+        handle_message(message, state)
 
       {:ok, _other} ->
         {:error, :json_rpc_message_not_object, state}
@@ -351,7 +347,7 @@ defmodule Alto.Contrib.External.JSONRPC do
   defp drop_owner(state, monitor, owner) do
     {owned, pending} =
       Enum.split_with(state.pending, fn {_id, entry} ->
-        entry.monitor == monitor and entry.owner == owner
+        entry.monitor == monitor and match?({^owner, _}, entry.from)
       end)
 
     Enum.each(owned, fn {id, entry} ->
@@ -366,13 +362,13 @@ defmodule Alto.Contrib.External.JSONRPC do
     }
   end
 
-  def release(%{timer: timer, owner: owner, monitor: monitor}) do
+  def release(%{timer: timer, monitor: monitor}) do
     cancel_timer(timer)
-    demonitor(owner, monitor)
+    demonitor(monitor)
   end
 
-  def demonitor(nil, _), do: :ok
-  def demonitor(_, monitor) when is_reference(monitor), do: Process.demonitor(monitor, [:flush])
+  defp demonitor(nil), do: :ok
+  defp demonitor(monitor) when is_reference(monitor), do: Process.demonitor(monitor, [:flush])
   def start_timer(_, :infinity), do: nil
   def start_timer(id, timeout), do: Process.send_after(self(), {:request_timeout, id}, timeout)
   def cancel_timer(nil), do: :ok

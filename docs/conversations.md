@@ -47,14 +47,12 @@ The built-in runner identifies a turn by the root execution identity: one user
 message and all subsequent model/tool steps, including checkpoint continuations
 and context reduction. Direct persistence callers can pass
 `conversation_turn_id: "stable-user-turn-id"` across those boundaries; without
-it, newly added user messages infer the turn count. Legacy snapshots have no turn
-IDs, so their user-message counts provide the migration fallback.
+it, newly added user messages infer the turn count.
 
-Version-4 full snapshots remain readable. The next changed save automatically
-converts old revisions in place before advancing the head. Conversion preserves
-revision numbers, message content, branch provenance, and outstanding fences.
-An explicit maintenance command also converts an idle session without advancing
-its head:
+Only version-5 manifests are supported. Older full-snapshot records are rejected
+without modifying them; there is no automatic conversion or migration command.
+The maintenance command applies retention and reclaims unreferenced objects in
+current-format sessions without advancing the head or changing dispatch fences:
 
 ```sh
 mix alto.session.compact SESSION_ID --session-dir /path/to/sessions
@@ -62,11 +60,9 @@ mix alto.session.compact SESSION_ID --session-dir /path/to/sessions
 mix alto.session.compact SESSION_ID --session-dir /path/to/sessions --retained-turns 20
 ```
 
-The API is `Alto.Session.Conversation.compact/2`. Conversion uses the session lock
-and atomically replaces each manifest after its objects are durable, making
-interruption restartable. Restart applications built against the old format
-before converting their sessions. First-save conversion performs a one-time
-scan of old snapshots; later saves write incremental content.
+The API is `Alto.Session.Conversation.compact/2`. It uses the session lock and
+commits the head's retention policy before removing obsolete manifests and
+objects. Keeping all turns remains the default.
 
 The coding profile also selects `max_steps: :infinity` and
 `max_model_requests: :infinity`; the library defaults remain 32 steps and 256

@@ -54,7 +54,9 @@ defmodule Alto.TUI.MarkdownTest do
       %{kind: :assistant, text: "### Results\n\n**Done**\n\n```elixir\n  :ok\n```"},
       %{kind: :tool, text: "shell", detail: Enum.map_join(1..30, "\n", &"line #{&1}")},
       %{kind: :reasoning, text: "## Next\n\nA `small` note."},
-      %{kind: :assistant, text: ""}
+      %{kind: :assistant, text: ""},
+      %{kind: :assistant, text: String.duplicate("Earlier **styled** 猫. ", 500)},
+      %{kind: :user, text: "last"}
     ]
 
     for width <- [12, 60], height <- [1, 4, 12, 100] do
@@ -304,6 +306,7 @@ defmodule Alto.TUI.MarkdownTest do
     sources = [
       "",
       "## Heading **strong**",
+      "## " <> String.duplicate("Heading **strong** 猫 ", 400),
       "- first\n- second `code`",
       "```elixir\n  IO.puts(\"猫\")\n\n  :ok\n```",
       "| 名 | Value |\n| --- | --- |\n| 猫 | **yes** |\n| two | `three` |",
@@ -321,6 +324,7 @@ defmodule Alto.TUI.MarkdownTest do
       full = Transcript.render(entries, width)
       index = Transcript.index(entries, width)
       assert index.rows == length(full.lines)
+      assert String.replace(plain(full), ~r/\s/u, "") =~ String.duplicate("Headingstrong猫", 400)
 
       plain =
         Transcript.plain_groups(index)

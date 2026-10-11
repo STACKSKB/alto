@@ -271,6 +271,8 @@ defmodule Alto.Contrib.External.MCP.ClientTest do
     caller = spawn(fn -> Client.call_tool(client, "echo", %{"hello" => "world"}, 5_000) end)
     assert eventually(fn -> map_size(:sys.get_state(client).pending) == 1 end)
     [request] = Map.values(:sys.get_state(client).pending)
+    send(client, {:DOWN, request.monitor, :process, self(), :killed})
+    assert map_size(:sys.get_state(client).pending) == 1
     Process.exit(caller, :kill)
 
     assert eventually(fn -> File.exists?(cancellation) end)

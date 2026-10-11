@@ -47,12 +47,6 @@ defmodule Alto.OperationLog do
   ## Client API
 
   def start_link(opts) do
-    opts =
-      if Keyword.has_key?(opts, :max_recovery_bytes) and
-           not Keyword.has_key?(opts, :max_checkpoint_bytes),
-         do: Keyword.put(opts, :max_checkpoint_bytes, opts[:max_recovery_bytes]),
-         else: opts
-
     id = Keyword.fetch!(opts, :id)
     :ok = validate_id!(id)
 
@@ -462,15 +456,9 @@ defmodule Alto.OperationLog do
 
     validation =
       Enum.zip(@commands[kind], args)
-      |> Enum.reduce_while(:ok, fn {field, value}, :ok ->
-        result =
-          with :ok <- validate(field, value, state),
-               do: if(field == :revision, do: expect_revision(record, value), else: :ok)
-
-        case result do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
+      |> Alto.Result.each(fn {field, value} ->
+        with :ok <- validate(field, value, state),
+             do: if(field == :revision, do: expect_revision(record, value), else: :ok)
       end)
 
     with :ok <- validation, do: apply_command(record, command, state)

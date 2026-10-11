@@ -110,17 +110,10 @@ defmodule Alto.Tool.Arguments do
   defp safe_field_name(key) when is_binary(key) do
     cond do
       not String.valid?(key) -> "[non-UTF-8 string key]"
-      byte_size(key) > 80 -> utf8_prefix(key, 80) <> "…"
+      byte_size(key) > 80 -> Alto.Text.prefix(key, 80) <> "…"
       true -> key
     end
   end
 
   defp safe_field_name(_), do: "[non-string key]"
-
-  defp utf8_prefix(_key, size) when size <= 0, do: ""
-
-  defp utf8_prefix(key, size) do
-    prefix = binary_part(key, 0, size)
-    if String.valid?(prefix), do: prefix, else: utf8_prefix(key, size - 1)
-  end
 end

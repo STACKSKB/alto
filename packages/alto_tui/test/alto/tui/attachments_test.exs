@@ -173,7 +173,7 @@ defmodule Alto.TUI.AttachmentsTest do
     assert :ok =
              Attachments.validate_provider(
                uploaded,
-               {Alto.Contrib.Providers.Anthropic, supports_files: true}
+               {Alto.Contrib.Providers.Anthropic, input_modalities: ["text", "file"]}
              )
 
     assert state.attachments == []
@@ -250,7 +250,9 @@ defmodule Alto.TUI.AttachmentsTest do
        %{state: state} do
     profile = %Alto.Contrib.ProviderProfile{
       id: "models",
-      provider: {Alto.Contrib.Providers.OpenAICompatible, model: "vision", supports_images: true},
+      provider:
+        {Alto.Contrib.Providers.OpenAICompatible,
+         model: "vision", input_modalities: ["text", "image"]},
       models: [
         %{id: "text", input_modalities: ["text"]},
         %{id: "vision", input_modalities: ["text", "image"]}

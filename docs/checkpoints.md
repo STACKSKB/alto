@@ -86,8 +86,7 @@ write. A rejected checkpoint restore does not replace a saved transcript.
 
 The ledger independently bounds checkpoint aggregates with `max_checkpoint_bytes`
 (default 8,000,000 B); `max_recovery_bytes` bounds recovery metadata (64,000 B).
-For compatibility, an explicit `max_recovery_bytes` also sets the checkpoint cap
-unless `max_checkpoint_bytes` is supplied. `max_record_bytes` (128,000 B) and
+`max_record_bytes` (128,000 B) and
 `max_log_bytes` (64,000,000 B) still bound individual writes and the whole log.
 Checkpoint updates store verified map/tuple deltas when smaller, so changing one
 child does not serialize unchanged sibling bodies again. Full commands remain

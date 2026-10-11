@@ -43,7 +43,7 @@ defmodule Alto.Contrib.Tools.CodexAgent do
     opts =
       if model == opts[:model],
         do: opts,
-        else: Keyword.drop(opts, [:input_modalities, :supports_images, :supports_files])
+        else: Keyword.delete(opts, :input_modalities)
 
     with_client(context, opts, fn client ->
       with :ok <- Client.subscribe(client),
@@ -216,9 +216,7 @@ defmodule Alto.Contrib.Tools.CodexAgent do
         nil when map_size(turn.calls) < 256 ->
           outcome =
             with :ok <- Alto.Runner.Budget.take(turn.context.budget),
-                 {:ok, prepared, _} <-
-                   Alto.Tool.prepare(messaging_module(name), args, turn.context, []),
-                 do: messaging_module(name).run(prepared, turn.context, [])
+                 do: Alto.Tool.run(messaging_module(name), args, turn.context)
 
           {success, value} =
             case outcome do
@@ -294,30 +292,24 @@ defmodule Alto.Contrib.Tools.CodexAgent do
     end
   end
 
-  defp send_input(turn, entry, :steer) do
-    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
-         do:
-           Client.request(
-             turn.client,
-             "turn/steer",
+  defp send_input(turn, entry, kind) when kind in [:steer, :next_turn] do
+    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts) do
+      {method, params} =
+        case kind do
+          :steer ->
+            {"turn/steer",
              %{
                "threadId" => turn.thread_id,
                "expectedTurnId" => turn.turn_id,
                "input" => Backend.user_input(input_content(entry))
-             },
-             Keyword.get(turn.opts, :request_timeout, 5_000)
-           )
-  end
+             }}
 
-  defp send_input(turn, entry, :next_turn) do
-    with :ok <- Backend.validate_input(turn.client, input_content(entry), turn.opts),
-         do:
-           Client.request(
-             turn.client,
-             "turn/start",
-             Backend.turn_params(turn.thread_id, input_content(entry), turn.opts),
-             Keyword.get(turn.opts, :request_timeout, 5_000)
-           )
+          :next_turn ->
+            {"turn/start", Backend.turn_params(turn.thread_id, input_content(entry), turn.opts)}
+        end
+
+      Client.request(turn.client, method, params, Keyword.get(turn.opts, :request_timeout, 5_000))
+    end
   end
 
   defp delivered_turn(turn, %{"turnId" => id}, :steer) when id == turn.turn_id, do: {:ok, turn}

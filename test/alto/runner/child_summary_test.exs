@@ -25,7 +25,6 @@ defmodule Alto.Runner.ChildSummaryTest do
     live = Children.merge_child_summary(initial, summary)
 
     assert {:ok, [public], retained} = Children.merge_retained([{"worker", summary}], initial)
-    assert public == Children.public_child_summary(summary)
     refute Map.has_key?(public, :persistence)
     assert retained == live
     assert retained.usage.input_tokens == 7

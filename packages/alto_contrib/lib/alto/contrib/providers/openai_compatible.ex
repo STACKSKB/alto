@@ -28,9 +28,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
       streaming: true,
       context_window: Keyword.get(opts, :context_window),
       tools: :function_calls,
-      input_modalities: Alto.InputModalities.configured(opts),
-      vision: "image" in Alto.InputModalities.configured(opts),
-      files: "file" in Alto.InputModalities.configured(opts)
+      input_modalities: Alto.InputModalities.configured(opts)
     }
   end
 
@@ -46,7 +44,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   """
   def estimate_text_context(%{messages: messages, tools: tools}) do
     projected =
-      case provider_messages(messages, input_capabilities(["text"])) do
+      case provider_messages(messages, ["text"]) do
         {:ok, projected} -> projected
         {:error, _reason} -> messages
       end
@@ -58,7 +56,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   def check_input(%Content{} = content, opts) do
     case provider_message(
            %{"role" => "user", "content" => content.blocks},
-           input_capabilities(Alto.InputModalities.configured(opts))
+           Alto.InputModalities.configured(opts)
          ) do
       {:ok, _} -> :ok
       error -> error
@@ -94,7 +92,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     with {:ok, messages} <-
            provider_messages(
              Map.fetch!(request, :messages),
-             input_capabilities(config.input_modalities)
+             config.input_modalities
            ) do
       body =
         request
@@ -115,27 +113,19 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     end
   end
 
-  defp input_capabilities(modalities),
-    do: %{
-      images: "image" in modalities,
-      audio: "audio" in modalities,
-      video: "video" in modalities,
-      files: "file" in modalities
-    }
-
-  defp provider_messages(messages, capabilities) do
+  defp provider_messages(messages, modalities) do
     messages
     |> Enum.chunk_by(&match?(%{"role" => "tool"}, &1))
-    |> Alto.Result.traverse(&provider_group(&1, capabilities))
+    |> Alto.Result.traverse(&provider_group(&1, modalities))
     |> case do
       {:ok, groups} -> {:ok, List.flatten(groups)}
       error -> error
     end
   end
 
-  defp provider_group([%{"role" => "tool"} | _] = messages, capabilities) do
+  defp provider_group([%{"role" => "tool"} | _] = messages, modalities) do
     with {:ok, results} <-
-           Alto.Result.traverse(messages, &openai_tool_message(&1, capabilities)) do
+           Alto.Result.traverse(messages, &openai_tool_message(&1, modalities)) do
       {tools, images} = Enum.unzip(results)
 
       case List.flatten(images) do
@@ -145,32 +135,22 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     end
   end
 
-  defp provider_group(messages, capabilities),
-    do: Alto.Result.traverse(messages, &provider_message(&1, capabilities))
+  defp provider_group(messages, modalities),
+    do: Alto.Result.traverse(messages, &provider_message(&1, modalities))
 
-  defp openai_tool_message(message, capabilities) do
+  defp openai_tool_message(message, modalities) do
     message = Map.delete(message, "alto_anthropic_content")
 
-    case Content.decode_transcript(Map.get(message, "content")) do
-      :not_content ->
-        {:ok, {message, []}}
+    map_content(message, modalities, {message, []}, fn blocks ->
+      media = Enum.reject(blocks, &(&1["type"] == "text"))
 
-      {:ok, content} ->
-        with {:ok, blocks} <- Content.map_media(content, capabilities, &openai_media/1) do
-          media = Enum.reject(blocks, &(&1["type"] == "text"))
+      text =
+        for(%{"type" => "text", "text" => text} <- blocks, do: text)
+        |> Enum.join("\n")
+        |> append_attachment_marker(message["tool_call_id"], media)
 
-          text =
-            for(%{"type" => "text", "text" => text} <- blocks, do: text)
-            |> Enum.join("\n")
-            |> append_attachment_marker(message["tool_call_id"], media)
-
-          {:ok,
-           {Map.put(message, "content", text), Enum.map(media, &{message["tool_call_id"], &1})}}
-        end
-
-      {:error, reason} ->
-        {:error, {:invalid_multimodal_content, reason}}
-    end
+      {Map.put(message, "content", text), Enum.map(media, &{message["tool_call_id"], &1})}
+    end)
   end
 
   defp append_attachment_marker(text, _call_id, []), do: text
@@ -195,29 +175,32 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
     %{"role" => "user", "content" => content}
   end
 
-  defp provider_message(message, capabilities) when is_map(message) do
+  defp provider_message(message, modalities) when is_map(message) do
     message =
       message
       |> Map.delete("alto_anthropic_content")
       |> Map.delete("alto_provider_metadata")
       |> replayable_tool_arguments()
 
+    map_content(message, modalities, message, &Map.put(message, "content", &1))
+  end
+
+  defp provider_message(message, _modalities),
+    do: {:error, {:invalid_provider_message, message}}
+
+  defp map_content(message, modalities, plain, transform) do
     case Content.decode_transcript(Map.get(message, "content")) do
       :not_content ->
-        {:ok, message}
+        {:ok, plain}
 
       {:ok, content} ->
-        with {:ok, blocks} <- Content.map_media(content, capabilities, &openai_media/1) do
-          {:ok, Map.put(message, "content", blocks)}
-        end
+        with {:ok, blocks} <- Content.map_media(content, modalities, &openai_media/1),
+             do: {:ok, transform.(blocks)}
 
       {:error, reason} ->
         {:error, {:invalid_multimodal_content, reason}}
     end
   end
-
-  defp provider_message(message, _capabilities),
-    do: {:error, {:invalid_provider_message, message}}
 
   # A failed tool call remains in the audit transcript verbatim. Some endpoints
   # reject malformed JSON even in historical calls, preventing the model from
@@ -362,7 +345,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
        %{
          endpoint: config.endpoint,
          timeout: config.timeout,
-         max_response_bytes: config.max_models_response_bytes,
+         max_stream_bytes: config.max_models_response_bytes,
          query: Keyword.get(opts, :model_query, []),
          headers: headers(opts, [{"accept", "application/json"}]),
          req_options: Keyword.get(opts, :req_options, [])

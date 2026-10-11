@@ -12,7 +12,7 @@ defmodule Alto.Contrib.Handoff do
   alias Alto.Session
   alias Alto.AtomicFile
 
-  @fields ~w(design pointers handoff next_step)a
+  @sections [design: "Design", pointers: "Pointers", handoff: "Handoff", next_step: "Next step"]
 
   @type artifact :: %{
           design: String.t(),
@@ -67,19 +67,9 @@ defmodule Alto.Contrib.Handoff do
   @doc "Render the structured handoff as the compact model-context replacement."
   @spec render(artifact()) :: String.t()
   def render(artifact) do
-    """
-    # Design
-    #{artifact.design}
-
-    # Pointers
-    #{artifact.pointers}
-
-    # Handoff
-    #{artifact.handoff}
-
-    # Next step
-    #{artifact.next_step}
-    """
+    Enum.map_join(@sections, "\n\n", fn {key, heading} ->
+      "# #{heading}\n#{Map.fetch!(artifact, key)}"
+    end)
     |> String.trim()
   end
 
@@ -121,7 +111,7 @@ defmodule Alto.Contrib.Handoff do
   end
 
   defp validate_fields(fields) when is_map(fields) do
-    Alto.Result.reduce(@fields, %{}, fn key, artifact ->
+    Alto.Result.reduce(@sections, %{}, fn {key, _heading}, artifact ->
       value = Map.get(fields, key, Map.get(fields, Atom.to_string(key)))
 
       if is_binary(value) and value != "" and String.valid?(value) do

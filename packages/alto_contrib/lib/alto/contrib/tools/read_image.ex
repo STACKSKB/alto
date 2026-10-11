@@ -30,9 +30,7 @@ defmodule Alto.Contrib.Tools.ReadImage do
   end
 
   @impl true
-  def run(arguments, context, opts \\ [])
-
-  def run(arguments, %{} = context, opts) when is_map(arguments) do
+  def run(arguments, %{} = context, opts \\ []) do
     with {:ok, resolved} <- SafePath.resolve(arguments["path"], context.cwd),
          {:ok, source} <- read_bounded(resolved, opts.max_encoded_bytes),
          {:ok, media_type, width, height} <- Metadata.inspect(source, opts),
@@ -54,8 +52,6 @@ defmodule Alto.Contrib.Tools.ReadImage do
   rescue
     error -> {:error, {:image_reader_exception, Exception.message(error)}}
   end
-
-  def run(_arguments, _context, _opts), do: {:error, :image_arguments_must_be_object}
 
   defp read_bounded(path, max_encoded_bytes) do
     limit = div(max_encoded_bytes, 4) * 3

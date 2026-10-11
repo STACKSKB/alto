@@ -191,6 +191,15 @@ delegation; children cannot widen their inherited absolute depth allowance.
 Batch concurrency is per loop, not a global service-wide limit. The entire
 execution tree also remains subject to the root's shared budget.
 
+`child_loop` optionally sets a trusted host's default loop for children. For
+example, `child_loop: Alto.default_loop(tool_execution: {:parallel, 4},
+context: Alto.Context.Window.new(max_tokens: 120_000, reserve_output: 4000))`
+gives model-selected children explicit read concurrency and context limits.
+A trusted child spec's `loop` takes precedence. When both are absent, children
+use a fresh `Alto.default_loop()`; parent loop settings are not inherited.
+Model-facing spawn tools cannot supply executable loops. A child loop cannot
+widen inherited tool authority, depth allowances, or shared budgets.
+
 The root run owns one shared effect counter, model-request counter, and
 monotonic deadline. Children and batches consume those same counters and
 deadline, so a batch cannot multiply the root allowance by its child count.
@@ -497,6 +506,12 @@ explicitly. Ignored build output is neither cloned nor captured; it does not con
 Source bytes, file counts, checkout bytes, patch bytes and command time are
 bounded. Host-global Git configuration and inherited Git environment are
 excluded; hooks and external diff commands are disabled.
+
+Git tree and index inventories have their own `max_inventory_bytes` backend
+option (1,000,000 bytes by default, at most 1,000,000). This accommodates
+repositories whose path metadata exceeds the ordinary 64,000-byte command
+capture limit. Inventories exceeding this bound fail with `:git_output_limit`;
+file-count, checkout-byte and patch-byte bounds still apply independently.
 
 Git metadata lives beside the checkout, outside the directory exposed to file
 tools. A frozen patch also lives outside that directory and is checked against
