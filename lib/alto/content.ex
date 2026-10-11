@@ -155,20 +155,28 @@ defmodule Alto.Content do
          } = block
        )
        when map_size(block) == 5 do
-    with :ok <- validate_image(media_type, data, width, height), do: {:ok, block}
-  end
-
-  defp validate_block(%{"type" => "artifact"} = block) do
-    case validate_block(Map.put(block, "type", "file")) do
-      {:ok, _} -> {:ok, block}
+    with true <-
+           (is_binary(data) and data != "") or {:error, :image_data_must_be_nonempty_base64},
+         true <-
+           byte_size(data) <= @max_image_encoded_bytes or
+             {:error, {:image_encoded_too_large, @max_image_encoded_bytes}},
+         {:ok, decoded} <- Base.decode64(data),
+         {:ok, parsed_media, parsed_width, parsed_height} <-
+           Metadata.inspect(decoded, @image_limits),
+         true <-
+           {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
+             {:error, :image_metadata_mismatch} do
+      {:ok, block}
+    else
+      :error -> {:error, :invalid_image_base64}
       error -> error
     end
   end
 
   defp validate_block(
-         %{"type" => "file", "name" => name, "media_type" => media, "data" => data} = block
+         %{"type" => type, "name" => name, "media_type" => media, "data" => data} = block
        )
-       when map_size(block) == 4 do
+       when type in ["file", "artifact"] and map_size(block) == 4 do
     with true <-
            (is_binary(name) and byte_size(name) in 1..255 and String.valid?(name) and
               not String.contains?(name, ["/", "\\", <<0>>]) and
@@ -193,26 +201,4 @@ defmodule Alto.Content do
   end
 
   defp validate_block(_block), do: {:error, :unsupported_block}
-
-  defp validate_image(media_type, data, width, height) do
-    with true <-
-           (is_binary(data) and data != "") or {:error, :image_data_must_be_nonempty_base64},
-         true <-
-           byte_size(data) <= @max_image_encoded_bytes or
-             {:error, {:image_encoded_too_large, @max_image_encoded_bytes}},
-         {:ok, decoded} <- decode_image(data),
-         {:ok, parsed_media, parsed_width, parsed_height} <-
-           Metadata.inspect(decoded, @image_limits),
-         true <-
-           {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
-             {:error, :image_metadata_mismatch},
-         do: :ok
-  end
-
-  defp decode_image(data) do
-    case Base.decode64(data) do
-      {:ok, decoded} -> {:ok, decoded}
-      :error -> {:error, :invalid_image_base64}
-    end
-  end
 end
