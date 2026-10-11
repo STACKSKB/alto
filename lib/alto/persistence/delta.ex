@@ -22,14 +22,12 @@ defmodule Alto.Persistence.Delta do
 
   def supported?(_), do: false
 
-  def apply(term, operations) when is_list(operations) and length(operations) <= 10_000 do
+  def apply(term, operations) do
     true = supported?(operations)
     {:ok, Enum.reduce(operations, term, &operation/2)}
   rescue
     _ -> {:error, :invalid_delta}
   end
-
-  def apply(_, _), do: {:error, :invalid_delta}
 
   defp diff(same, same, _), do: []
 
@@ -53,14 +51,11 @@ defmodule Alto.Persistence.Delta do
     resize = if tuple_size(before) == size, do: [], else: [{:resize, path, size}]
 
     changes =
-      if size == 0,
-        do: [],
-        else:
-          Enum.flat_map(0..(size - 1), fn i ->
-            if i < tuple_size(before),
-              do: diff(elem(before, i), elem(after_term, i), path ++ [i]),
-              else: [{:put, path ++ [i], elem(after_term, i)}]
-          end)
+      Enum.flat_map(0..(size - 1)//1, fn i ->
+        if i < tuple_size(before),
+          do: diff(elem(before, i), elem(after_term, i), path ++ [i]),
+          else: [{:put, path ++ [i], elem(after_term, i)}]
+      end)
 
     resize ++ changes
   end

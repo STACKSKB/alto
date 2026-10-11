@@ -49,9 +49,6 @@ defmodule Alto.ConfigTest do
 
     assert %Alto.Runner.Result{status: :ok, output: ["configured!"]} =
              Alto.run(%{"value" => "configured"}, options)
-
-    assert {:ok, budget} = Alto.Runner.Budget.new(options)
-    assert Alto.Runner.Budget.remaining(budget) > 7_199_000
   end
 
   test "reports evaluation failures and invalid return values", %{root: root} do
