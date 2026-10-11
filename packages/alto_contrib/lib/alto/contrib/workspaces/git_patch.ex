@@ -187,16 +187,12 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
   end
 
   defp sync_paths(root, paths) do
-    Enum.reduce_while(paths, :ok, fn relative, :ok ->
+    Alto.Result.each(paths, fn relative ->
       path = Path.join(root, relative)
 
       with :ok <- Workspaces.safe_path(path),
            :ok <- sync_file(path),
-           :ok <- sync_parents(Path.dirname(path), root) do
-        {:cont, :ok}
-      else
-        error -> {:halt, error}
-      end
+           do: sync_parents(Path.dirname(path), root)
     end)
   end
 

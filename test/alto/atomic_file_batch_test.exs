@@ -21,7 +21,8 @@ defmodule Alto.AtomicFileBatchTest do
     assert {:error, :injected} =
              Alto.AtomicFile.write_many([
                {one, "new", [mode: 0o600]},
-               {two, "new", [mode: 0o600, before_rename: fn -> {:error, :injected} end]}
+               {two, "new", [mode: 0o600, before_rename: fn -> {:error, :injected} end]},
+               {Path.join(dir, "must-not-write"), "later", [mode: 0o600]}
              ])
 
     assert File.read!(one) == "new"

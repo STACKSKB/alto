@@ -30,23 +30,21 @@ defmodule Alto.AtomicFile do
   only after success. This is suitable for immutable content-addressed objects.
   """
   def write_many(files) do
-    with {:ok, _} <-
-           Alto.Result.reduce(files, :ok, fn {path, content, opts}, :ok ->
+    with :ok <-
+           Alto.Result.each(files, fn {path, content, opts} ->
              with {:ok, mode} <- effective_mode(path, Keyword.get(opts, :mode)),
-                  :ok <- write_temp(path, content, mode, opts, false),
-                  do: {:ok, :ok}
+                  do: write_temp(path, content, mode, opts, false)
            end),
-         {:ok, _} <-
+         do:
            files
            |> Enum.map(fn {path, _, _} -> Path.dirname(path) end)
            |> Enum.uniq()
-           |> Alto.Result.traverse(fn dir ->
+           |> Alto.Result.each(fn dir ->
              case sync_directory(dir) do
-               :ok -> {:ok, :ok}
+               :ok -> :ok
                {:error, reason} -> {:error, {:post_rename_sync_failed, reason}}
              end
-           end),
-         do: :ok
+           end)
   end
 
   defp write_temp(path, content, mode, opts, sync_directory?) do
