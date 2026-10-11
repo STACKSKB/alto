@@ -617,33 +617,32 @@ defmodule Alto.TUI.Backends.Codex do
        when method in ["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"] do
     key = {:codex_reasoning, run.turn_id, params["itemId"]}
     entries = State.task_entries(state, run.task_id)
-    previous = Enum.find(entries, &(&1[:entry_key] == key)) || %{}
-    parts = Map.get(previous, :reasoning_parts, %{summary: %{}, raw: %{}})
-    type = if method == "item/reasoning/summaryTextDelta", do: :summary, else: :raw
-    index = params["summaryIndex"] || params["contentIndex"] || 0
-    # Once a summary exists, raw reasoning can never contribute to the display.
-    parts =
-      cond do
-        type == :summary ->
-          %{parts | raw: %{}, summary: Map.update(parts.summary, index, delta, &(&1 <> delta))}
+    previous = Enum.find(entries, &(&1[:entry_key] == key))
 
-        map_size(parts.summary) > 0 ->
-          parts
+    # Completed items replace the streaming entry and no longer have parts.
+    if previous && not Map.has_key?(previous, :reasoning_parts) do
+      state
+    else
+      type = if method == "item/reasoning/summaryTextDelta", do: :summary, else: :raw
+      index = params["summaryIndex"] || params["contentIndex"] || 0
+      # Once a summary exists, raw reasoning can never contribute to the display.
+      {type, parts} =
+        case previous[:reasoning_parts] do
+          {:summary, _} = saved when type == :raw -> saved
+          {^type, parts} -> {type, Map.update(parts, index, delta, &(&1 <> delta))}
+          _ -> {type, %{index => delta}}
+        end
 
-        true ->
-          %{parts | raw: Map.update(parts.raw, index, delta, &(&1 <> delta))}
-      end
+      text = parts |> Enum.sort_by(&elem(&1, 0)) |> Enum.map_join("\n\n", &elem(&1, 1))
 
-    chosen = if map_size(parts.summary) > 0, do: parts.summary, else: parts.raw
-    text = chosen |> Enum.sort_by(&elem(&1, 0)) |> Enum.map_join("\n\n", &elem(&1, 1))
-
-    state
-    |> codex_phase(run, "thinking")
-    |> State.upsert_entry(run.task_id, key, %{
-      kind: :reasoning,
-      text: text,
-      reasoning_parts: parts
-    })
+      state
+      |> codex_phase(run, "thinking")
+      |> State.upsert_entry(run.task_id, key, %{
+        kind: :reasoning,
+        text: text,
+        reasoning_parts: {type, parts}
+      })
+    end
   end
 
   defp apply_codex_run_event(state, run, "thread/tokenUsage/updated", %{"tokenUsage" => usage}) do
