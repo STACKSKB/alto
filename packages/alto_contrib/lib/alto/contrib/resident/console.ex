@@ -436,7 +436,12 @@ defmodule Alto.Contrib.Resident.Console do
     model = drain(model, 200)
     runs = request(model.client, %{type: "runs"})["runs"]
     sessions = request(model.client, %{type: "sessions"})["sessions"]
-    queued = task_command(model.client, "list", %{})
+
+    queued =
+      task_command(model.client, "list", %{
+        "session_ids" => Enum.map(sessions, & &1["id"]),
+        "ids" => if(model.selected_id, do: [model.selected_id], else: [])
+      })
 
     tasks =
       merge_tasks(sessions, runs, model.opts, model.tasks)
@@ -751,7 +756,7 @@ defmodule Alto.Contrib.Resident.Console do
 
     notices =
       []
-      |> flag(model.tasks_trimmed, "Showing the latest 100 scheduled tasks")
+      |> flag(model.tasks_trimmed, "Showing latest scheduled tasks and visible conversations")
       |> flag(model.history_gap, "History has a gap; reconnect to reload")
       |> flag(model.history_more, "Loading older activity…")
       |> flag(model.history_trimmed, "Showing the latest 500 activity records")

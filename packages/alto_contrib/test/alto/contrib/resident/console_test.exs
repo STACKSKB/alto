@@ -315,6 +315,64 @@ defmodule Alto.Contrib.Resident.ConsoleTest do
     Console.close(stale)
   end
 
+  test "old visible conversations retain durable identities and their original profile", %{
+    opts: opts,
+    name: name
+  } do
+    assert {:ok, _} =
+             Tasks.command(name, "submit", %{
+               "id" => "older",
+               "profile" => "chat",
+               "task" => "original profile"
+             })
+
+    assert_receive {:executing, provider, _}, 2_000
+    send(provider, {:finish, "old answer"})
+    model = Console.perform(Console.new(opts), :connect, self())
+    model = eventually(model, fn m -> Enum.any?(m.tasks, &(&1.status == "completed")) end)
+    original = Enum.find(model.tasks, &(&1.id == "older"))
+    Console.close(model)
+
+    # Terminal tasks consume retention, but never create newer conversations.
+    for n <- 1..100 do
+      id = "newer-#{n}"
+
+      assert {:ok, _} =
+               Tasks.command(name, "submit", %{
+                 "id" => id,
+                 "profile" => "chat",
+                 "task" => "newer",
+                 "delay_ms" => 60_000
+               })
+
+      assert {:ok, _} = Tasks.command(name, "cancel", %{"id" => id})
+    end
+
+    assert {:ok, %{"tasks" => page, "truncated" => true}} = Tasks.command(name, "list", %{})
+    refute Enum.any?(page, &(&1["id"] == "older"))
+
+    model = Console.perform(Console.new(Keyword.put(opts, :profile, "guarded")), :connect, self())
+    model = Console.perform(model, {:select, "older"}, self())
+    task = Enum.find(model.tasks, &(&1.id == "older"))
+    assert task.durable
+    assert task.config == "chat"
+    assert task.session_id == original.session_id
+    assert model.detail =~ "Profile: chat"
+    refute Enum.any?(model.tasks, &(&1.id == original.session_id))
+
+    model = Console.perform(model, {:submit, "continue old conversation"}, self())
+    assert model.notice == "Sent"
+    assert_receive {:executing, next_provider, messages}, 2_000
+    assert Enum.any?(messages, &(&1["content"] == "old answer"))
+    send(next_provider, {:finish, "continued"})
+
+    eventually(model, fn m ->
+      Enum.any?(m.tasks, &(&1.id == model.selected_id and &1.status == "completed"))
+    end)
+
+    Console.close(model)
+  end
+
   defp eventually(model, predicate, attempts \\ 100)
   defp eventually(model, _predicate, 0), do: flunk("state did not settle: #{inspect(model)}")
 

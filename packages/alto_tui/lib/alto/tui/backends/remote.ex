@@ -15,6 +15,7 @@ defmodule Alto.TUI.Backends.Remote do
       connection: nil,
       model: nil,
       busy: false,
+      submitted_draft: nil,
       local: nil
     })
   end
@@ -52,7 +53,9 @@ defmodule Alto.TUI.Backends.Remote do
             _ -> local
           end
 
-        next = state |> put_data(%{data(state) | local: nil}) |> Map.merge(local)
+        next =
+          state |> put_data(%{data(state) | local: nil, submitted_draft: nil}) |> Map.merge(local)
+
         %{next | selected_task_id: nil}
     end
   end
@@ -80,12 +83,16 @@ defmodule Alto.TUI.Backends.Remote do
   def ui({:message, {:alto_resident_snapshot, pid, action, model}}, state, _) do
     if data(state).connection == pid do
       busy = data(state).busy and action in [:poll, :connect]
-      next = put_data(state, %{data(state) | model: model, busy: busy})
-      next = if selected?(state), do: project(next, model), else: next
+      submitted? = match?({:submit, _}, action)
 
-      if match?({:submit, _}, action) and model.notice in ["Sent", ""] do
+      if submitted? and selected?(state) and model.notice in ["Sent", ""] and
+           data(state).submitted_draft == ExRatatui.textarea_get_value(state.textarea) do
         ExRatatui.textarea_set_value(state.textarea, "")
       end
+
+      draft = if submitted?, do: nil, else: data(state).submitted_draft
+      next = put_data(state, %{data(state) | model: model, busy: busy, submitted_draft: draft})
+      next = if selected?(state), do: project(next, model), else: next
 
       next =
         if action == :efforts and model.effort_catalog and selected?(state) do
@@ -265,7 +272,11 @@ defmodule Alto.TUI.Backends.Remote do
       %{state | notice: "A service command is pending; draft kept"}
     else
       Connection.action(data(state).connection, action)
-      state = put_data(state, %{data(state) | busy: true})
+
+      draft =
+        if match?({:submit, _}, action), do: ExRatatui.textarea_get_value(state.textarea)
+
+      state = put_data(state, %{data(state) | busy: true, submitted_draft: draft})
       %{state | overlay: nil, leader?: false, notice: "Waiting for service…"}
     end
   end

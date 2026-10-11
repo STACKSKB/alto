@@ -188,6 +188,51 @@ defmodule Alto.TUI.RemoteTest do
     quit(terminal)
   end
 
+  test "delayed submission replies preserve edited drafts and drafts after switching backend",
+       ctx do
+    options =
+      Keyword.update!(ctx.options, :config, fn config ->
+        Keyword.update!(config, :tui_backends, fn backends ->
+          backends ++ [local: {Alto.TUI.Backends.Native, []}]
+        end)
+      end)
+
+    for switch? <- [false, true] do
+      {:ok, terminal} = App.start_link(options)
+      ready(terminal)
+      connection = state(terminal).backend_state[Remote].connection
+      :sys.suspend(connection)
+      on_exit(fn -> if Process.alive?(connection), do: :sys.resume(connection) end)
+
+      Runtime.inject_event(terminal, %Paste{content: "Submitted draft"})
+      Runtime.inject_event(terminal, %Key{code: "enter", kind: "press"})
+      eventually(fn -> state(terminal).backend_state[Remote].busy end)
+
+      if switch? do
+        Runtime.inject_event(terminal, %Key{code: "f5", kind: "press"})
+        eventually(fn -> state(terminal).overlay != nil end)
+        Runtime.inject_event(terminal, %Key{code: "down", kind: "press"})
+        Runtime.inject_event(terminal, %Key{code: "enter", kind: "press"})
+        eventually(fn -> state(terminal).selected_backend == :local end)
+      end
+
+      ExRatatui.textarea_set_value(state(terminal).textarea, "New draft")
+      :sys.resume(connection)
+      assert_receive {:working, provider}, 2_000
+      eventually(fn -> not state(terminal).backend_state[Remote].busy end)
+      assert ExRatatui.textarea_get_value(state(terminal).textarea) == "New draft"
+      send(provider, :finish)
+
+      eventually(fn ->
+        id = state(terminal).backend_state[Remote].model.selected_id
+        {:ok, %{"task" => task}} = Tasks.command(ctx.name, "get", %{"id" => id})
+        task["status"] == "completed"
+      end)
+
+      quit(terminal)
+    end
+  end
+
   defp state(pid), do: :sys.get_state(pid).user_state
 
   defp ready(pid),

@@ -154,27 +154,15 @@ defmodule Alto.Contrib.Resident.Tasks do
     {:reply, reply, state}
   end
 
-  def handle_call({"list", _payload}, _from, state) do
-    records = queue_records(state.queue)
+  def handle_call({"list", payload}, _from, state) do
+    session_ids = Map.get(payload, "session_ids", [])
+    ids = Map.get(payload, "ids", [])
 
-    keys =
-      Enum.uniq(
-        Enum.map(records, &operation_key/1) ++
-          Enum.map(OperationLog.request(state.ledger, {:entries, :all}), & &1.operation_key)
-      )
-
-    tasks =
-      keys
-      |> Enum.map(&describe(state, &1))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(&{&1["created_at_ms"] || 0, &1["id"]}, :desc)
-
-    {:reply,
-     {:ok,
-      %{
-        "tasks" => Enum.map(Enum.take(tasks, 100), &task_summary/1),
-        "truncated" => length(tasks) > 100
-      }}, state}
+    if valid_selection?(session_ids) and valid_selection?(ids) do
+      {:reply, {:ok, list_tasks(state, session_ids, ids)}, state}
+    else
+      {:reply, {:error, :invalid_task_selection}, state}
+    end
   end
 
   def handle_call({"get", %{"id" => id}}, _from, state) when is_binary(id) do
@@ -945,6 +933,39 @@ defmodule Alto.Contrib.Resident.Tasks do
 
       if result == :ok, do: {:cont, :ok}, else: {:halt, result}
     end)
+  end
+
+  defp valid_selection?(ids),
+    do: is_list(ids) and length(ids) <= 100 and Enum.all?(ids, &is_binary/1)
+
+  defp list_tasks(state, session_ids, ids) do
+    records = queue_records(state.queue)
+
+    keys =
+      Enum.uniq(
+        Enum.map(records, &operation_key/1) ++
+          Enum.map(OperationLog.request(state.ledger, {:entries, :all}), & &1.operation_key)
+      )
+
+    tasks =
+      keys
+      |> Enum.map(&describe(state, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort_by(&{&1["created_at_ms"] || 0, &1["id"]}, :desc)
+
+    # A visible saved session must retain its newest durable task identity even
+    # when that task has fallen outside the default listing window.
+    by_session = Map.new(Enum.reverse(tasks), &{&1["session_id"], &1})
+    by_id = Map.new(tasks, &{&1["id"], &1})
+    requested = Enum.map(session_ids, &by_session[&1]) ++ Enum.map(ids, &by_id[&1])
+
+    %{
+      "tasks" =>
+        (Enum.take(tasks, 100) ++ Enum.reject(requested, &is_nil/1))
+        |> Enum.uniq_by(& &1["id"])
+        |> Enum.map(&task_summary/1),
+      "truncated" => length(tasks) > 100
+    }
   end
 
   defp task_summary(task) do
