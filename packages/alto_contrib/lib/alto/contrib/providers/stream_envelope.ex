@@ -94,11 +94,13 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
     into = fn {:data, data}, {request, response} ->
       current = Req.Response.get_private(response, @state_key, initial)
       size = current.bytes + byte_size(data)
+      error_bytes_left = 64_000 - current.bytes
       at = System.monotonic_time(:millisecond) - current.started
 
       current = %{
         current
-        | first_byte_ms: current.first_byte_ms || at,
+        | bytes: size,
+          first_byte_ms: current.first_byte_ms || at,
           last_byte_ms: at,
           http_status: response.status
       }
@@ -106,38 +108,33 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
       next =
         cond do
           size > config.max_stream_bytes ->
-            %{
-              current
-              | bytes: size,
-                error: {:error, {:provider_response_too_large, config.max_stream_bytes}}
-            }
+            %{current | error: {:error, {:provider_response_too_large, config.max_stream_bytes}}}
 
           response.status in 200..299 ->
-            value = attach_diagnostics(current.value, %{current | bytes: size}, response.status)
+            value = attach_diagnostics(current.value, current, response.status)
 
             case consume.(value, data) do
               {:ok, value} ->
-                %{current | value: value, bytes: size, accepted_bytes: size}
+                %{current | value: value, accepted_bytes: size}
 
               {:error, reason, value} ->
                 %{
                   current
                   | value: value,
-                    bytes: size,
                     accepted_bytes: size,
                     error: {:error, reason}
                 }
 
               {:error, _} = error ->
-                %{current | bytes: size, error: error}
+                %{current | error: error}
             end
 
-          current.bytes < 64_000 ->
-            prefix = binary_part(data, 0, min(byte_size(data), 64_000 - current.bytes))
-            %{current | bytes: size, error_body: [prefix | current.error_body]}
+          error_bytes_left > 0 ->
+            prefix = binary_part(data, 0, min(byte_size(data), error_bytes_left))
+            %{current | error_body: [prefix | current.error_body]}
 
           true ->
-            %{current | bytes: size}
+            current
         end
 
       Process.put(ref, next)
