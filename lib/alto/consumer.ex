@@ -25,6 +25,7 @@ defmodule Alto.Consumer do
   use GenServer
 
   require Logger
+  alias Alto.{OperationLog, Queue}
 
   @options [
     queue: [type: :any, required: true],
@@ -93,7 +94,7 @@ defmodule Alto.Consumer do
   ## One cycle
 
   defp cycle(state) do
-    case guarded_claim(state) do
+    case request(Queue, state.queue, {:claim, state.batch, state.by, state.claim_bytes, :all}) do
       {:error, reason} ->
         Logger.warning("alto consumer: claim failed: #{inspect(reason, limit: 3)}")
         {:error, reason}
@@ -104,12 +105,6 @@ defmodule Alto.Consumer do
       {:ok, records} ->
         {:handled, Enum.map(records, &handle_record(&1, state))}
     end
-  end
-
-  defp guarded_claim(state) do
-    Alto.Queue.request(state.queue, {:claim, state.batch, state.by, state.claim_bytes, :all})
-  catch
-    :exit, reason -> {:error, {:queue_unavailable, reason}}
   end
 
   defp handle_record(record, state) do
@@ -150,35 +145,31 @@ defmodule Alto.Consumer do
     if attempt_n >= state.max_attempts do
       park(op, claim_id, :attempts_exhausted, %{}, state)
     else
-      with :ok <-
-             ledger_call(fn ->
-               Alto.OperationLog.request(state.ledger, {:attempt, op, claim_id})
-             end),
+      with :ok <- request(OperationLog, state.ledger, {:attempt, op, claim_id}),
            do: run_handler(op, claim_id, attempt_n + 1, payload, state)
     end
   end
 
   defp recover_record(record, op, state) do
-    ledger_call(fn ->
-      case Alto.OperationLog.request(state.ledger, {:recovery, op}) do
-        {:error, :not_found} ->
-          with :ok <-
-                 Alto.OperationLog.request(
-                   state.ledger,
-                   {:intent, op, state.tool, record.key,
-                    %{
-                      key: record.key,
-                      generation_id: record.generation_id,
-                      payload: record.payload
-                    }}
-                 ) do
-            Alto.OperationLog.request(state.ledger, {:recovery, op})
-          end
+    case request(OperationLog, state.ledger, {:recovery, op}) do
+      {:error, :not_found} ->
+        with :ok <-
+               request(
+                 OperationLog,
+                 state.ledger,
+                 {:intent, op, state.tool, record.key,
+                  %{
+                    key: record.key,
+                    generation_id: record.generation_id,
+                    payload: record.payload
+                  }}
+               ) do
+          request(OperationLog, state.ledger, {:recovery, op})
+        end
 
-        result ->
-          result
-      end
-    end)
+      result ->
+        result
+    end
   end
 
   # The shared invocation boundary kills handlers on timeout or owner death.
@@ -223,7 +214,7 @@ defmodule Alto.Consumer do
           {{:outcome, op, claim_id, class, evidence}, :ack, success}
       end
 
-    case ledger_call(fn -> Alto.OperationLog.request(state.ledger, command) end) do
+    case request(OperationLog, state.ledger, command) do
       :ok -> {action, success}
       error when action == :release -> {:retain, error}
       error -> error
@@ -262,11 +253,10 @@ defmodule Alto.Consumer do
     attempt = original_attempt || claim_id
 
     with :ok <-
-           ledger_call(fn ->
-             if original_attempt,
-               do: :ok,
-               else: Alto.OperationLog.request(state.ledger, {:attempt, op, claim_id})
-           end) do
+           if(original_attempt,
+             do: :ok,
+             else: request(OperationLog, state.ledger, {:attempt, op, claim_id})
+           ) do
       apply_verdict(
         op,
         attempt,
@@ -285,7 +275,7 @@ defmodule Alto.Consumer do
         {action, success} -> {action, success}
       end
 
-    case queue_call(fn -> Alto.Queue.request(state.queue, {:settle, claim_id, action, []}) end) do
+    case request(Queue, state.queue, {:settle, claim_id, action, []}) do
       :ok ->
         success
 
@@ -298,15 +288,9 @@ defmodule Alto.Consumer do
     end
   end
 
-  defp ledger_call(fun) do
-    fun.()
+  defp request(module, server, command) do
+    module.request(server, command)
   catch
-    :exit, reason -> {:error, {:ledger_unavailable, reason}}
-  end
-
-  defp queue_call(fun) do
-    fun.()
-  catch
-    :exit, reason -> {:error, {:queue_unavailable, reason}}
+    :exit, reason -> {:error, {:store_unavailable, module, reason}}
   end
 end

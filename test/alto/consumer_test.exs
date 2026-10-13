@@ -377,8 +377,19 @@ defmodule Alto.ConsumerTest do
     GenServer.stop(pid)
 
     c = start_consumer!(queue: q, ledger: l, handler: done_handler(), by: "w-1")
-    assert {:error, {:queue_unavailable, _}} = Consumer.poll(c)
+    assert {:error, {:store_unavailable, Queue, _}} = Consumer.poll(c)
     assert Process.alive?(c)
+  end
+
+  test "a dead ledger releases the claim without running its handler", %{queue: q, ledger: l} do
+    {:ok, _} = Queue.request(q, {:admit, "src:offline", %{}, []})
+    c = start_consumer!(queue: q, ledger: l, handler: done_handler(self()))
+    GenServer.stop(Process.whereis(l))
+
+    assert {:handled, [{:error, {:store_unavailable, OperationLog, _}}]} = Consumer.poll(c)
+    assert %{pending: 1, claimed: 0} = Queue.request(q, :count)
+    assert Process.alive?(c)
+    refute_received :handled
   end
 
   test "a dead worker's lease hands parked work to the next owner", %{ledger: l} do
