@@ -326,21 +326,19 @@ defmodule Alto.TUI.State do
   @doc "Navigation rows in their exact on-screen order."
   def rail_rows(%__MODULE__{} = state) do
     Enum.flat_map(open_projects(state), fn project ->
-      project_row = %{kind: :project, id: project["id"], label: "▾ " <> project["name"]}
+      expanded? = project["id"] == state.selected_project_id
+      tasks = if expanded?, do: Map.get(state.tasks, project["id"], []), else: []
 
-      if project["id"] == state.selected_project_id do
-        task_rows =
-          state.tasks
-          |> Map.get(project["id"], [])
-          |> Enum.map(fn task ->
-            marker = status_marker(task["status"])
-            %{kind: :task, id: task["id"], label: "  #{marker} #{task["title"]}"}
-          end)
+      arrow = if expanded?, do: "▾", else: "▸"
+      project_row = %{kind: :project, id: project["id"], label: "#{arrow} #{project["name"]}"}
 
-        [project_row | task_rows]
-      else
-        [%{project_row | label: "▸ " <> project["name"]}]
-      end
+      task_rows =
+        Enum.map(tasks, fn task ->
+          marker = status_marker(task["status"])
+          %{kind: :task, id: task["id"], label: "  #{marker} #{task["title"]}"}
+        end)
+
+      [project_row | task_rows]
     end)
   end
 
