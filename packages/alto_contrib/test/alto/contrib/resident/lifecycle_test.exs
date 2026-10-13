@@ -211,7 +211,7 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
 
   test "interrupted cleanup resumes after task record eviction", %{name: name, config: config} do
     config = restart_with_one_task!(name, config)
-    resources = parent_resources!(name, "interrupted", :claimed, true)
+    resources = parent_resources!(name, "interrupted", :claimed)
     terminal = terminal_task!(name, "interrupted", "generation-one")
     {key, _plan} = manifest!(name, terminal, resources)
     assert :ok = OperationLog.request(Lifecycle.ledger(name), {:attempt, key, "retire-resources"})
@@ -245,10 +245,14 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
              })
   end
 
-  test "resume fences changed store identity", %{name: name, config: config} do
-    resources = parent_resources!(name, "fenced", :claimed, true)
+  test "cleanup and resume fence changed plan identity", %{name: name, config: config} do
+    resources = parent_resources!(name, "fenced", :claimed)
     terminal = terminal_task!(name, "fenced", "generation-fenced")
     _ = manifest!(name, terminal, resources)
+
+    assert {:error, :cleanup_plan_mismatch} =
+             Lifecycle.cleanup(config, name, %{terminal | revision: terminal.revision + 1})
+
     profile = config.profiles["parent"]
 
     changed =
@@ -268,7 +272,7 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
     config: config
   } do
     config = restart_with_one_task!(name, config)
-    resources = parent_resources!(name, "replace", :claimed, true)
+    resources = parent_resources!(name, "replace", :claimed)
     terminal = terminal_task!(name, "replace", "generation-old")
     _ = manifest!(name, terminal, resources)
     {:ok, old} = Continuation.read(resources.cell)
@@ -402,7 +406,7 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
     {:ok, cleanup} = OperationLog.request(Lifecycle.ledger(name), {:recovery, key})
     assert Map.keys(cleanup.recovery["stores"]) |> Enum.sort() == ["binding", "budget", "parent"]
 
-    resources = parent_resources!(name, "missing-journal", :claimed, true)
+    resources = parent_resources!(name, "missing-journal", :claimed)
     terminal = synthetic_terminal(name, "missing-journal", "generation-missing")
 
     terminal =
@@ -420,7 +424,7 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
         max_model_requests: 20
       )
 
-    resources = parent_resources!(name, "external", :claimed, true, external)
+    resources = parent_resources!(name, "external", :claimed, external)
     profile = config.profiles["parent"]
     shared = Alto.Config.default(Keyword.put(profile, :budget_account, external))
     config = %{config | profiles: Map.put(config.profiles, "parent", shared)}
@@ -435,9 +439,9 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
     name: name,
     config: config
   } do
-    for {phase, acknowledged?} <- [{:children, false}, {:ready, false}] do
+    for phase <- [:children, :ready] do
       id = "incomplete-#{phase}"
-      resources = parent_resources!(name, id, phase, acknowledged?)
+      resources = parent_resources!(name, id, phase)
       terminal = synthetic_terminal(name, id, "generation-#{phase}")
 
       assert {:error, :unconsumed_parent_resources} = Lifecycle.cleanup(config, name, terminal)
@@ -460,7 +464,7 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
     config
   end
 
-  defp parent_resources!(name, id, phase, _acknowledge?, existing_account \\ nil) do
+  defp parent_resources!(name, id, phase, existing_account \\ nil) do
     account =
       if existing_account do
         existing_account

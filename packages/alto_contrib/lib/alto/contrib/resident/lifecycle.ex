@@ -159,22 +159,19 @@ defmodule Alto.Contrib.Resident.Lifecycle do
 
   defp plan(ledger, key, payload, generation, task_revision, stores, opts) do
     task = payload["id"]
-    bindings = store_bindings(stores)
+
+    identity = %{
+      "task" => task,
+      "generation" => generation,
+      "task_revision" => task_revision,
+      "profile" => payload["profile"],
+      "parent_store" => payload["parent_store"],
+      "stores" => store_bindings(stores)
+    }
 
     case OperationLog.request(ledger, {:recovery, key}) do
-      {:ok,
-       %{
-         tool: @tool,
-         recovery: %{
-           "task" => ^task,
-           "generation" => ^generation,
-           "task_revision" => ^task_revision,
-           "profile" => profile,
-           "parent_store" => parent_store,
-           "stores" => ^bindings
-         }
-       } = entry} ->
-        if profile == payload["profile"] and parent_store == payload["parent_store"],
+      {:ok, %{tool: @tool, recovery: recovery} = entry} when is_map(recovery) ->
+        if Map.take(recovery, Map.keys(identity)) === identity,
           do: {:ok, entry},
           else: {:error, :cleanup_plan_mismatch}
 
@@ -186,16 +183,7 @@ defmodule Alto.Contrib.Resident.Lifecycle do
              :ok <-
                OperationLog.request(
                  ledger,
-                 {:intent, key, @tool, nil,
-                  %{
-                    "task" => task,
-                    "generation" => generation,
-                    "task_revision" => task_revision,
-                    "profile" => payload["profile"],
-                    "parent_store" => payload["parent_store"],
-                    "stores" => bindings,
-                    "resources" => resources
-                  }}
+                 {:intent, key, @tool, nil, Map.put(identity, "resources", resources)}
                ) do
           OperationLog.request(ledger, {:recovery, key})
         end
@@ -263,30 +251,25 @@ defmodule Alto.Contrib.Resident.Lifecycle do
   defp owned_task_account(task, cells, stores) do
     key = "task:" <> task
 
-    case Enum.uniq(Enum.map(cells, & &1.account)) do
-      [] ->
-        case Account.lookup(stores["budget"].server, key) do
-          {:ok, account, snapshot} ->
-            {:ok, [resource("budget", Account.identity(account), snapshot)]}
+    accounts = Enum.uniq(Enum.map(cells, & &1.account))
 
-          {:error, :not_found} ->
-            {:ok, []}
+    if accounts == [] or match?([%{"key" => ^key}], accounts) do
+      case Account.lookup(stores["budget"].server, key) do
+        {:ok, account, snapshot} ->
+          binding = Account.identity(account)
 
-          error ->
-            error
-        end
+          if accounts == [] or binding in accounts,
+            do: {:ok, [resource("budget", binding, snapshot)]},
+            else: {:error, :budget_account_mismatch}
 
-      [%{"key" => ^key} = binding] ->
-        with {:ok, account, snapshot} <- Account.lookup(stores["budget"].server, key),
-             true <- Account.identity(account) == binding do
-          {:ok, [resource("budget", binding, snapshot)]}
-        else
-          false -> {:error, :budget_account_mismatch}
-          {:error, _} = error -> error
-        end
+        {:error, :not_found} when accounts == [] ->
+          {:ok, []}
 
-      _ ->
-        {:error, :task_budget_ownership_mismatch}
+        error ->
+          error
+      end
+    else
+      {:error, :task_budget_ownership_mismatch}
     end
   end
 
