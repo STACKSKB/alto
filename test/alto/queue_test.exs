@@ -47,7 +47,7 @@ defmodule Alto.QueueTest do
   test "rejects an append that would exceed the configured log byte bound", %{dir: dir, id: id} do
     %{name: name} = start_queue!(id: id, dir: dir, max_log_bytes: 100)
 
-    assert {:error, {:queue_log_too_large, projected, 100}} =
+    assert {:error, {:log_too_large, projected, 100}} =
              Queue.request(name, {:put, "key", %{payload: String.duplicate("x", 200)}, []})
 
     assert projected > 100

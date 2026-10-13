@@ -206,7 +206,7 @@ defmodule Alto.Runner.BudgetAccountTest do
     size = File.stat!(Path.join(dir, "budget.jsonl")).size
     :sys.replace_state(ledger, fn state -> %{state | max_log_bytes: size + 1} end)
 
-    assert {:error, {:ledger_log_too_large, _, _}} = Account.close(account, active.revision)
+    assert {:error, {:log_too_large, _, _}} = Account.close(account, active.revision)
     assert Account.read(account) == {:ok, active}
     assert OperationLog.request(ledger, {:attempts, account.key}) == attempts
 

@@ -137,14 +137,8 @@ defmodule Alto.Queue do
     end
   end
 
-  defp replay(state) do
-    case DurableLog.replay(state.path, state.max_log_bytes, &replay_lines(state, &1)) do
-      :missing -> {:ok, state}
-      {:read_error, {:too_large, size, max}} -> {:error, {:queue_log_too_large, size, max}}
-      {:read_error, reason} -> {:error, {:queue_read_failed, reason}}
-      result -> result
-    end
-  end
+  defp replay(state),
+    do: DurableLog.replay(state.path, state.max_log_bytes, state, &replay_lines(state, &1))
 
   defp replay_lines(state, [snapshot | lines]) do
     with {:ok, state} <- restore_snapshot(state, snapshot) do
@@ -270,7 +264,7 @@ defmodule Alto.Queue do
           :release -> lease_command(%{unclaim(record) | not_before_ms: due})
         end
 
-      commit(state, state, [log], :ok, true)
+      commit(state, state, [log], :ok)
     else
       :error -> {:reply, {:error, :not_found}, state}
       {:error, :lease_expired} -> {:reply, {:error, :lease_expired}, reclaim_expired(state)}
@@ -335,7 +329,7 @@ defmodule Alto.Queue do
   end
 
   defp cancel_records(state, victims) do
-    commit(state, state, Enum.map(victims, &{:drop, &1.id}), :ok, true)
+    commit(state, state, Enum.map(victims, &{:drop, &1.id}), :ok)
   end
 
   # Completed keys are newest-first and unique; eviction permits re-admission.
@@ -386,7 +380,7 @@ defmodule Alto.Queue do
       {:ok, claimed} ->
         logs = Enum.map(claimed, &lease_command/1)
 
-        commit(state, state, logs, {:ok, claimed}, true)
+        commit(state, state, logs, {:ok, claimed})
     end
   end
 
@@ -571,15 +565,13 @@ defmodule Alto.Queue do
 
   # Live commands and restart replay apply the same records. Publish state only
   # after the complete mutation has been durably appended.
-  defp commit(original, current, records, reply, wrap_error \\ false) do
+  defp commit(original, current, records, reply) do
     with {:ok, next} <-
            Alto.Result.reduce(records, current, &apply_command/2),
          :ok <- append(current, records) do
       {:reply, reply, next}
     else
-      {:error, reason} ->
-        reason = if wrap_error, do: {:queue_write_failed, reason}, else: reason
-        {:reply, {:error, reason}, original}
+      {:error, _} = error -> {:reply, error, original}
     end
   end
 
@@ -657,7 +649,7 @@ defmodule Alto.Queue do
         if state.auto_compact do
           with {:ok, _} <- compact_log(state, append_bytes), do: :ok
         else
-          {:error, {:queue_log_too_large, current + append_bytes, state.max_log_bytes}}
+          {:error, {:log_too_large, current + append_bytes, state.max_log_bytes}}
         end
 
       {:error, reason} ->
@@ -678,7 +670,7 @@ defmodule Alto.Queue do
          bytes <- IO.iodata_length(lines),
          true <-
            bytes + reserved_bytes <= state.max_log_bytes or
-             {:error, {:queue_log_too_large, bytes + reserved_bytes, state.max_log_bytes}},
+             {:error, {:log_too_large, bytes + reserved_bytes, state.max_log_bytes}},
          {:ok, %{size: before}} <-
            (case File.stat(state.path) do
               {:error, :enoent} -> {:ok, %{size: 0}}

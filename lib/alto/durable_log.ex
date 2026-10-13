@@ -8,7 +8,7 @@ defmodule Alto.DurableLog do
   end
 
   @doc "Replay validated lines and repair a torn tail only after the domain decoder succeeds."
-  def replay(path, max_bytes, decode) do
+  def replay(path, max_bytes, initial, decode) do
     case Alto.BoundedFile.read(path, max_bytes) do
       {:ok, contents} ->
         {lines, torn?} = Alto.JSONLines.split(contents)
@@ -16,15 +16,18 @@ defmodule Alto.DurableLog do
         with {:ok, value} <- decode.(lines) do
           case if(torn?, do: replace(path, Alto.JSONLines.join(lines)), else: :ok) do
             :ok -> {:ok, value}
-            {:error, reason} -> {:read_error, reason}
+            {:error, reason} -> {:error, {:log_read_failed, reason}}
           end
         end
 
       {:error, :enoent} ->
-        :missing
+        {:ok, initial}
+
+      {:error, {:too_large, size, max}} ->
+        {:error, {:log_too_large, size, max}}
 
       {:error, reason} ->
-        {:read_error, reason}
+        {:error, {:log_read_failed, reason}}
     end
   end
 

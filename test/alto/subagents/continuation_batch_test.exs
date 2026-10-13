@@ -206,7 +206,7 @@ defmodule Alto.Subagents.ContinuationTest do
     size = File.stat!(Path.join(dir, id <> ".jsonl")).size
     :sys.replace_state(ledger, fn state -> %{state | max_log_bytes: size + 1} end)
 
-    assert {:error, {:ledger_log_too_large, _, _}} =
+    assert {:error, {:log_too_large, _, _}} =
              Continuation.retire(batch, acknowledged.revision)
 
     assert Continuation.read(batch) == {:ok, acknowledged}

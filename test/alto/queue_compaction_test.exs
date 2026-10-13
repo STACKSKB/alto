@@ -117,8 +117,8 @@ defmodule Alto.QueueCompactionTest do
     bytes = File.read!(c.path)
     before = Queue.request(q, {:snapshot_page, 0, 100})
     :sys.replace_state(q, &%{&1 | max_log_bytes: 100, auto_compact: true})
-    assert {:error, {:queue_log_too_large, _, 100}} = Queue.request(q, :compact, :infinity)
-    assert {:error, {:queue_log_too_large, _, 100}} = Queue.request(q, {:put, "new", %{}, []})
+    assert {:error, {:log_too_large, _, 100}} = Queue.request(q, :compact, :infinity)
+    assert {:error, {:log_too_large, _, 100}} = Queue.request(q, {:put, "new", %{}, []})
     assert File.read!(c.path) == bytes
     assert Queue.request(q, {:snapshot_page, 0, 100}) == before
   end
@@ -129,7 +129,7 @@ defmodule Alto.QueueCompactionTest do
     assert :ok = Queue.request(q, {:cancel_pending, "first"})
     bytes = File.read!(c.path)
 
-    assert {:error, {:queue_log_too_large, _, 600}} =
+    assert {:error, {:log_too_large, _, 600}} =
              Queue.request(q, {:admit, "second", %{payload: String.duplicate("x", 500)}, []})
 
     assert File.read!(c.path) == bytes
@@ -177,7 +177,7 @@ defmodule Alto.QueueCompactionTest do
   end
 
   test "failed initialization does not leave an empty log that blocks retry", c do
-    assert {:error, {:queue_log_too_large, _, 1}} =
+    assert {:error, {:log_too_large, _, 1}} =
              Queue.start_link(Keyword.put(c.opts, :max_log_bytes, 1))
 
     refute File.exists?(c.path)

@@ -60,7 +60,7 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
     size = byte_size(before)
     :sys.replace_state(name, fn current -> %{current | max_log_bytes: size + 1} end)
 
-    assert {:error, {:ledger_log_too_large, _, _}} =
+    assert {:error, {:log_too_large, _, _}} =
              OperationLog.request(name, {:checkpoint_update, "bank", 3, %{"used" => 2}})
 
     assert File.read!(state.path) == before

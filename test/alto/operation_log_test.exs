@@ -51,12 +51,12 @@ defmodule Alto.OperationLogTest do
   test "rejects an append that would exceed the configured log byte bound", %{dir: dir, id: id} do
     %{name: name} = start_ledger!(id: id, dir: dir, max_log_bytes: 20)
 
-    assert {:error, {:ledger_log_too_large, projected, 20}} =
+    assert {:error, {:log_too_large, projected, 20}} =
              OperationLog.request(name, {:intent, "op-1", "tool", nil, nil})
 
     assert projected > 20
 
-    assert {:error, {:ledger_log_too_large, _, 20}} =
+    assert {:error, {:log_too_large, _, 20}} =
              OperationLog.request(name, {:retain, "cell", "internal", %{}, "init", %{}})
 
     assert :no_intent = OperationLog.request(name, {:status, "cell"})
@@ -107,7 +107,7 @@ defmodule Alto.OperationLogTest do
     max_bytes = :sys.get_state(name).max_log_bytes
     :sys.replace_state(name, &%{&1 | max_log_bytes: byte_size(bytes) + 1})
 
-    assert {:error, {:ledger_log_too_large, _, _}} =
+    assert {:error, {:log_too_large, _, _}} =
              OperationLog.request(
                name,
                {:retire_checkpoint, "cell", 1, decision, "close", evidence}

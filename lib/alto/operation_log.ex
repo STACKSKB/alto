@@ -375,14 +375,8 @@ defmodule Alto.OperationLog do
     with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)
   end
 
-  defp replay(state) do
-    case DurableLog.replay(state.path, state.max_log_bytes, &replay_lines(state, &1)) do
-      :missing -> {:ok, state}
-      {:read_error, {:too_large, size, max}} -> {:error, {:ledger_log_too_large, size, max}}
-      {:read_error, reason} -> {:error, {:ledger_read_failed, reason}}
-      result -> result
-    end
-  end
+  defp replay(state),
+    do: DurableLog.replay(state.path, state.max_log_bytes, state, &replay_lines(state, &1))
 
   defp replay_lines(state, lines) do
     Alto.JSONLines.fold(state, lines, &apply_logged/3)
@@ -664,7 +658,7 @@ defmodule Alto.OperationLog do
         :ok
 
       {:ok, %{size: current}} ->
-        {:error, {:ledger_log_too_large, current + append_bytes, state.max_log_bytes}}
+        {:error, {:log_too_large, current + append_bytes, state.max_log_bytes}}
 
       {:error, reason} ->
         {:error, {:ledger_write_failed, reason}}

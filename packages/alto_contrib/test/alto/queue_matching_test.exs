@@ -164,7 +164,7 @@ defmodule Alto.QueueMatchingTest do
     before = File.read!(path)
     :sys.replace_state(name, fn state -> %{state | max_log_bytes: byte_size(before) + 10} end)
 
-    assert {:error, {:queue_write_failed, {:queue_log_too_large, _, max}}} =
+    assert {:error, {:log_too_large, _, max}} =
              Queue.request(name, {:claim, 2, "worker", 100_000, %{"mailbox" => "a"}})
 
     assert max == byte_size(before) + 10
