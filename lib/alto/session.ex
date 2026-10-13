@@ -114,16 +114,9 @@ defmodule Alto.Session do
   @doc "Read and decode every record of a session log, oldest first."
   @spec read(session_id(), keyword()) :: {:ok, [record()]} | {:error, term()}
   def read(id, opts \\ []) do
-    with :ok <- validate_id(id) do
-      path = log_path(dir(opts), id)
-
-      case Alto.BoundedFile.read(path, @max_log_bytes) do
-        {:ok, contents} -> decode_lines(contents, id)
-        {:error, :enoent} -> {:error, {:session_not_found, id}}
-        {:error, {:too_large, size, max}} -> {:error, {:session_too_large, id, size, max}}
-        {:error, reason} -> {:error, {:session_read_failed, reason}}
-      end
-    end
+    with :ok <- validate_id(id),
+         {:ok, records} <- scan_records(id, opts, [], &[&1 | &2]),
+         do: {:ok, Enum.reverse(records)}
   end
 
   @doc "Read a bounded page of durable event records using a stable event ordinal.
@@ -429,37 +422,53 @@ defmodule Alto.Session do
   defp event_run_id(run_id), do: {:error, {:invalid_event_run_id, run_id}}
 
   defp page_events(id, opts, cursor, limit, run_id) do
-    initial = %{records: 0, total: 0, candidates: 0, events: []}
+    initial = %{total: 0, candidates: 0, events: []}
 
-    reducer = fn line, acc ->
-      number = acc.records + 1
+    reducer = fn record, acc ->
+      if record["type"] == "event" do
+        ordinal = acc.total + 1
+        matches = ordinal > cursor and (is_nil(run_id) or record["run_id"] == run_id)
+        keep = matches and acc.candidates < limit
 
-      with true <-
-             number <= @max_records or {:error, {:session_too_many_records, id, @max_records}},
-           {:ok, record} <- decode_line(line, id, number) do
-        acc = %{acc | records: number}
+        events =
+          if keep,
+            do: [record |> Map.put("ordinal", ordinal) |> Alto.Retained.detach() | acc.events],
+            else: acc.events
 
-        if record["type"] == "event" do
-          ordinal = acc.total + 1
-          matches = ordinal > cursor and (is_nil(run_id) or record["run_id"] == run_id)
-          keep = matches and acc.candidates < limit
-
-          events =
-            if keep,
-              do: [record |> Map.put("ordinal", ordinal) |> Alto.Retained.detach() | acc.events],
-              else: acc.events
-
-          {:ok,
-           %{
-             acc
-             | total: ordinal,
-               candidates: acc.candidates + if(matches, do: 1, else: 0),
-               events: events
-           }}
-        else
-          {:ok, acc}
-        end
+        %{
+          acc
+          | total: ordinal,
+            candidates: acc.candidates + if(matches, do: 1, else: 0),
+            events: events
+        }
+      else
+        acc
       end
+    end
+
+    with {:ok, acc} <- scan_records(id, opts, initial, reducer) do
+      events = Enum.reverse(acc.events)
+      last = Map.get(List.last(events, %{}), "ordinal", cursor)
+      complete = acc.candidates <= limit
+
+      {:ok,
+       %{
+         events: events,
+         next_cursor: if(complete, do: nil, else: last),
+         last_cursor: last,
+         high_watermark: acc.total,
+         complete: complete,
+         gap: cursor > acc.total
+       }}
+    end
+  end
+
+  defp scan_records(id, opts, initial, fun) do
+    reducer = fn line, {number, acc} ->
+      with true <-
+             number < @max_records or {:error, {:session_too_many_records, id, @max_records}},
+           {:ok, record} <- decode_line(line, id, number + 1),
+           do: {:ok, {number + 1, fun.(record, acc)}}
     end
 
     case Alto.Session.LogScan.fold(
@@ -467,25 +476,13 @@ defmodule Alto.Session do
            @max_log_bytes,
            0,
            "",
-           initial,
-           initial,
+           {0, initial},
+           {0, initial},
            reducer,
            complete_only: false
          ) do
-      {:ok, acc, _, _} ->
-        events = Enum.reverse(acc.events)
-        last = Map.get(List.last(events, %{}), "ordinal", cursor)
-        complete = acc.candidates <= limit
-
-        {:ok,
-         %{
-           events: events,
-           next_cursor: if(complete, do: nil, else: last),
-           last_cursor: last,
-           high_watermark: acc.total,
-           complete: complete,
-           gap: cursor > acc.total
-         }}
+      {:ok, {_number, acc}, _, _} ->
+        {:ok, acc}
 
       {:error, :enoent} ->
         {:error, {:session_not_found, id}}
@@ -529,19 +526,6 @@ defmodule Alto.Session do
     {:ok, JSON.encode!(record) <> "\n"}
   rescue
     error -> {:error, {:session_unencodable, Exception.message(error)}}
-  end
-
-  defp decode_lines(contents, id) do
-    contents
-    |> String.split("\n", trim: true)
-    |> Enum.with_index(1)
-    |> Alto.Result.traverse(fn
-      {_line, number} when number > @max_records ->
-        {:error, {:session_too_many_records, id, @max_records}}
-
-      {line, number} ->
-        decode_line(line, id, number)
-    end)
   end
 
   defp decode_line(line, id, number) do
