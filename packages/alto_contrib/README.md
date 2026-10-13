@@ -65,9 +65,10 @@ under `Alto.Contrib.*`. `Alto.Harness.ProviderProfile` and `ProviderStore` becom
 delegated and socket approval functions move to `Alto.Contrib.Approval`; the
 approval contract and classifier stay in core.
 
-TUI catalog, folders and worktree actions become `Alto.TUI.Catalog`, `Folders`
-and `Worktrees`. Run CLI/Mix application commands from this package; run TUI
-commands from `../alto_tui`. The root project provides the runtime library.
+Catalog and folder operations live in `Alto.Contrib.Catalog` and `Folders`;
+TUI worktree actions live in `Alto.TUI.Worktrees`. Run CLI/Mix application
+commands from this package and TUI commands from `../alto_tui`.
+The root project provides the runtime library.
 
 Custom providers return canonical usage fields. Use `Alto.Contrib.Usage.normalize/1`
 for common wire aliases and `from_codex/1` for Codex snapshots; core usage math

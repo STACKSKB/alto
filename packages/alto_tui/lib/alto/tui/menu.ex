@@ -92,7 +92,7 @@ defmodule Alto.TUI.Menu do
     saved = if path == "", do: Map.get(menu, :folders, []), else: []
 
     {found, completion, error} =
-      case Map.get(menu, :complete, &Alto.TUI.Folders.suggest(&1, base)).(path) do
+      case Map.get(menu, :complete, &Alto.Contrib.Folders.suggest(&1, base)).(path) do
         {:ok, %{folders: folders, completion: completion}} ->
           {folders, completion, nil}
 

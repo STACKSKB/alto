@@ -3,7 +3,7 @@ defmodule Alto.TUI.Goal do
   alias Alto.TUI.App
   alias Alto.TUI.Menu
   alias Alto.TUI.State
-  alias Alto.TUI.Catalog
+  alias Alto.Contrib.Catalog
 
   def open(state) do
     task = State.selected_task(state)

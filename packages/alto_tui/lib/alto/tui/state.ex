@@ -1,7 +1,7 @@
 defmodule Alto.TUI.State do
   @moduledoc "State and catalog projection for the Alto terminal client."
 
-  alias Alto.TUI.Catalog
+  alias Alto.Contrib.Catalog
   alias Alto.Contrib.ProviderProfile
   alias Alto.Contrib.ProviderStore
   alias Alto.Session
@@ -427,20 +427,13 @@ defmodule Alto.TUI.State do
         project -> project["root"]
       end
 
-    if is_binary(path) and byte_size(path) <= 4096 and String.trim(path) != "" and
-         not String.contains?(path, ["\n", "\r", <<0>>]) do
-      root = Path.expand(path, base)
-
-      with {:ok, project} <- Catalog.register_project(root, state.catalog_opts),
-           {:ok, projects, tasks} <- Catalog.navigation(state.catalog_opts) do
-        {:ok,
-         %{state | projects: projects, tasks: tasks, selected_project_id: project["id"]}
-         |> close_details_drawer()
-         |> new_task()
-         |> Map.put(:notice, "Workspace: " <> root)}
-      end
-    else
-      {:error, :invalid_workspace_path}
+    with {:ok, project} <- Alto.Contrib.Folders.open(path, base, state.catalog_opts),
+         {:ok, projects, tasks} <- Catalog.navigation(state.catalog_opts) do
+      {:ok,
+       %{state | projects: projects, tasks: tasks, selected_project_id: project["id"]}
+       |> close_details_drawer()
+       |> new_task()
+       |> Map.put(:notice, "Workspace: " <> project["root"])}
     end
   end
 

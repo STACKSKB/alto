@@ -437,7 +437,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     assert state(app).runs == %{}
     task = State.selected_task(state(app))
     assert task["goal"] == %{"objective" => "Fix the rendering regression", "status" => "active"}
-    assert {:ok, catalog} = Alto.TUI.Catalog.read(state(app).catalog_opts)
+    assert {:ok, catalog} = Alto.Contrib.Catalog.read(state(app).catalog_opts)
     assert hd(catalog["tasks"])["goal"] == task["goal"]
 
     goal_action(app, "pause")

@@ -367,6 +367,11 @@ defmodule Alto.TUI.AppTest do
     state = state!(context, credentials_path: context.credentials)
 
     ExRatatui.textarea_insert_str(state.textarea, "draft survives")
+
+    for path <- ["", "  ", "a\nb", "a\tb", <<0>>, <<255>>, String.duplicate("a", 4097), nil] do
+      assert {:error, :invalid_workspace_path} = State.open_workspace(state, path)
+    end
+
     original = state.selected_project_id
     form = folder_form(state)
     assert form.overlay.kind == :workspace_form
@@ -717,7 +722,7 @@ defmodule Alto.TUI.AppTest do
     File.mkdir!(folder)
     {:ok, state} = State.open_workspace(state, folder)
     other = state.selected_project_id
-    {:ok, task} = Alto.TUI.Catalog.create_task(other, "Saved task", state.catalog_opts)
+    {:ok, task} = Alto.Contrib.Catalog.create_task(other, "Saved task", state.catalog_opts)
     state = %{State.put_task(state, task) | dimensions: {150, 42}}
     ExRatatui.textarea_insert_str(state.textarea, "keep draft")
     rows = State.rail_rows(state)
@@ -737,7 +742,7 @@ defmodule Alto.TUI.AppTest do
     assert closed.selected_project_id == original
     assert closed.selected_task_id == nil
     refute Enum.any?(State.rail_rows(closed), &(&1.id in [other, task["id"]]))
-    assert {:ok, _projects, tasks} = Alto.TUI.Catalog.navigation(state.catalog_opts)
+    assert {:ok, _projects, tasks} = Alto.Contrib.Catalog.navigation(state.catalog_opts)
     assert tasks[other] == [task]
     assert File.dir?(folder)
     assert ExRatatui.textarea_get_value(closed.textarea) == "keep draft"
@@ -1513,10 +1518,10 @@ defmodule Alto.TUI.AppTest do
         session_dir: Path.join(context.root, "sessions")
       )
 
-    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.Contrib.Catalog.register_project(context.root, path: context.catalog)
 
     {:ok, _task} =
-      Alto.TUI.Catalog.create_task(project["id"], "custom task",
+      Alto.Contrib.Catalog.create_task(project["id"], "custom task",
         path: context.catalog,
         backend: "custom"
       )
@@ -1644,7 +1649,7 @@ defmodule Alto.TUI.AppTest do
 
   test "failed task history remains visible behind a resume dispatch fence", context do
     session_dir = Path.join(context.root, "sessions")
-    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.Contrib.Catalog.register_project(context.root, path: context.catalog)
     {:ok, id} = Alto.Session.create("failed run", %{}, session_dir: session_dir)
 
     messages = [
@@ -1656,13 +1661,13 @@ defmodule Alto.TUI.AppTest do
     {:ok, _} = Alto.Session.mark_dispatched(id, ["unfinished-tool"], session_dir: session_dir)
 
     {:ok, task} =
-      Alto.TUI.Catalog.create_task(project["id"], "failed run",
+      Alto.Contrib.Catalog.create_task(project["id"], "failed run",
         path: context.catalog,
         conversation_id: id
       )
 
     {:ok, _} =
-      Alto.TUI.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+      Alto.Contrib.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
 
     state = state!(context, session_dir: session_dir)
     assert Enum.any?(State.current_entries(state), &(&1.text == "Important findings survived"))
@@ -1677,7 +1682,7 @@ defmodule Alto.TUI.AppTest do
 
   test "reopening a failed task restores separate and shared child activity", context do
     opts = [session_dir: Path.join(context.root, "sessions")]
-    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.Contrib.Catalog.register_project(context.root, path: context.catalog)
     {:ok, parent} = Alto.Session.create("parent", %{}, opts)
 
     {:ok, _} =
@@ -1740,13 +1745,13 @@ defmodule Alto.TUI.AppTest do
       )
 
     {:ok, task} =
-      Alto.TUI.Catalog.create_task(project["id"], "failed parent",
+      Alto.Contrib.Catalog.create_task(project["id"], "failed parent",
         path: context.catalog,
         conversation_id: parent
       )
 
     {:ok, _} =
-      Alto.TUI.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
+      Alto.Contrib.Catalog.update_task(task["id"], %{"status" => "failed"}, path: context.catalog)
 
     {:ok, _} = Alto.Session.mark_dispatched(parent, ["unsettled"], opts)
     state = state!(context, opts)
@@ -1775,7 +1780,9 @@ defmodule Alto.TUI.AppTest do
     assert state.selected_model == "chosen/model"
 
     {:ok, task} =
-      Alto.TUI.Catalog.create_task(state.selected_project_id, "existing", path: context.catalog)
+      Alto.Contrib.Catalog.create_task(state.selected_project_id, "existing",
+        path: context.catalog
+      )
 
     state = State.put_task(state, task) |> State.new_task() |> State.select_task(task["id"])
     assert state.selected_model == "chosen/model"
@@ -1793,7 +1800,7 @@ defmodule Alto.TUI.AppTest do
     session_dir = Path.join(context.root, "sessions")
 
     assert {:ok, project} =
-             Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
+             Alto.Contrib.Catalog.register_project(context.root, path: context.catalog)
 
     assert {:ok, session_id} =
              Alto.Session.create("durable usage", %{}, session_dir: session_dir)
@@ -1818,7 +1825,7 @@ defmodule Alto.TUI.AppTest do
              )
 
     assert {:ok, _task} =
-             Alto.TUI.Catalog.create_task(project["id"], "durable usage",
+             Alto.Contrib.Catalog.create_task(project["id"], "durable usage",
                path: context.catalog,
                conversation_id: session_id
              )
@@ -1832,13 +1839,13 @@ defmodule Alto.TUI.AppTest do
 
   test "a Codex thread ID collision never hydrates native session history", context do
     session_dir = Path.join(context.root, "sessions")
-    {:ok, project} = Alto.TUI.Catalog.register_project(context.root, path: context.catalog)
+    {:ok, project} = Alto.Contrib.Catalog.register_project(context.root, path: context.catalog)
     {:ok, id} = Alto.Session.create("native secret", %{}, session_dir: session_dir)
     messages = [%{"role" => "assistant", "content" => "native-only history"}]
     {:ok, _snapshot} = Alto.Session.persist_settled(id, messages, 19, session_dir: session_dir)
 
     {:ok, task} =
-      Alto.TUI.Catalog.create_task(project["id"], "Codex task",
+      Alto.Contrib.Catalog.create_task(project["id"], "Codex task",
         path: context.catalog,
         backend: "codex",
         conversation_id: id
@@ -1849,7 +1856,7 @@ defmodule Alto.TUI.AppTest do
     assert State.current_entries(state) == []
 
     {:ok, _task} =
-      Alto.TUI.Catalog.update_task(task["id"], %{"backend" => "alto"}, path: context.catalog)
+      Alto.Contrib.Catalog.update_task(task["id"], %{"backend" => "alto"}, path: context.catalog)
 
     native = state!(context, session_dir: session_dir)
     assert [%{kind: :assistant, text: "native-only history"}] = State.current_entries(native)

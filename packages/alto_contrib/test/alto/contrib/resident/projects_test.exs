@@ -314,8 +314,10 @@ defmodule Alto.Contrib.Resident.ProjectsTest do
   end
 
   test "invalid folders and workspace identities are rejected before admission", ctx do
-    assert {:error, :invalid_workspace_path} = Projects.open(ctx.config, "")
-    assert {:error, :invalid_workspace_path} = Projects.open(ctx.config, "a\nb")
+    for path <- ["", "  ", "a\nb", "a\tb", <<0>>, <<255>>, String.duplicate("a", 4097), nil] do
+      assert {:error, :invalid_workspace_path} = Projects.open(ctx.config, path)
+    end
+
     assert {:error, {:project_not_directory, _}} = Projects.open(ctx.config, "missing")
 
     assert {:error, :unknown_workspace} =

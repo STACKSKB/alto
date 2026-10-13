@@ -48,7 +48,7 @@ defmodule Alto.TUI.Backends.Remote do
 
       local ->
         local =
-          case Alto.TUI.Catalog.navigation(state.catalog_opts) do
+          case Alto.Contrib.Catalog.navigation(state.catalog_opts) do
             {:ok, projects, tasks} -> Map.merge(local, %{projects: projects, tasks: tasks})
             _ -> local
           end

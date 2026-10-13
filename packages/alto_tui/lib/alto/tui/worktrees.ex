@@ -2,7 +2,7 @@ defmodule Alto.TUI.Worktrees do
   @moduledoc "Create retained local worktrees beside the harness catalog."
 
   def create(source, arguments, catalog_opts \\ []) do
-    catalog = Keyword.get(catalog_opts, :path, Alto.TUI.Catalog.default_path(catalog_opts))
+    catalog = Keyword.get(catalog_opts, :path, Alto.Contrib.Catalog.default_path(catalog_opts))
     root = Path.join(Path.dirname(Path.expand(catalog)), "worktrees")
 
     with {:ok, ledger} <-
@@ -29,7 +29,7 @@ defmodule Alto.TUI.Worktrees do
                  manager: manager
                ),
              {:ok, project} <-
-               Alto.TUI.Catalog.register_project(
+               Alto.Contrib.Catalog.register_project(
                  result["cwd"],
                  Keyword.put(catalog_opts, :name, arguments["name"])
                ) do

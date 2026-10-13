@@ -4,7 +4,7 @@ defmodule Alto.TUI.App do
   use ExRatatui.App
 
   alias Alto.Event
-  alias Alto.TUI.Catalog
+  alias Alto.Contrib.Catalog
   alias Alto.Contrib.ProviderProfile
   alias Alto.Contrib.ProviderStore
   alias Alto.TUI.Menu
@@ -554,7 +554,7 @@ defmodule Alto.TUI.App do
           {:noreply, form_result(%{state | overlay: pending.form}, {:submit, result["cwd"]})}
         else
           state =
-            case Alto.TUI.Catalog.navigation(state.catalog_opts) do
+            case Alto.Contrib.Catalog.navigation(state.catalog_opts) do
               {:ok, projects, tasks} -> %{state | projects: projects, tasks: tasks}
               _ -> state
             end
@@ -2149,7 +2149,7 @@ defmodule Alto.TUI.App do
     do: form_result(state, {:submit, Menu.value(form, :path)})
 
   defp form_result(state, {:create, path}) do
-    case Alto.TUI.Folders.create(path, state.overlay.base) do
+    case Alto.Contrib.Folders.create(path, state.overlay.base) do
       {:ok, root} -> form_result(state, {:submit, root})
       {:error, reason} -> put_in(state.overlay.error, Alto.Contrib.Display.error(reason))
     end

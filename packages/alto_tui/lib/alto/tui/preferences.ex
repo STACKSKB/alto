@@ -1,7 +1,7 @@
 defmodule Alto.TUI.Preferences do
   @moduledoc "Remember the provider and model selection independently of task history."
 
-  alias Alto.TUI.Catalog
+  alias Alto.Contrib.Catalog
   alias Alto.Storage
 
   @max_bytes 64_000

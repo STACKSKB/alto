@@ -1,6 +1,6 @@
 defmodule Alto.Harness.FoldersTest do
   use ExUnit.Case, async: true
-  alias Alto.TUI.Folders
+  alias Alto.Contrib.Folders
 
   setup do
     root =

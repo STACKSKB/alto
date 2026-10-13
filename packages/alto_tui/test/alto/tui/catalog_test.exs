@@ -1,7 +1,7 @@
 defmodule Alto.Harness.CatalogTest do
   use ExUnit.Case, async: true
 
-  alias Alto.TUI.Catalog
+  alias Alto.Contrib.Catalog
 
   setup do
     root = Path.join(System.tmp_dir!(), "alto-catalog-#{System.unique_integer([:positive])}")

@@ -66,17 +66,10 @@ defmodule Alto.Contrib.Resident.Projects do
     }
   end
 
-  def open(config, path) when is_binary(path) and byte_size(path) <= 4096 do
-    if String.trim(path) != "" and not String.contains?(path, ["\n", "\r", <<0>>]) do
-      with {:ok, project} <-
-             Catalog.register_project(Path.expand(path, config.workspace), opts(config)),
-           do: {:ok, %{project: project}}
-    else
-      {:error, :invalid_workspace_path}
-    end
+  def open(config, path) do
+    with {:ok, project} <- Alto.Contrib.Folders.open(path, config.workspace, opts(config)),
+         do: {:ok, %{project: project}}
   end
-
-  def open(_, _), do: {:error, :invalid_workspace_path}
 
   def root(_config, nil, default), do: {:ok, default}
 

@@ -15,18 +15,18 @@ defmodule Alto.TUI do
   def prepare_catalog(config, opts \\ []) do
     catalog_opts = Alto.TUI.State.catalog_options(config, opts)
 
-    case Alto.TUI.Catalog.read(catalog_opts) do
+    case Alto.Contrib.Catalog.read(catalog_opts) do
       {:ok, _catalog} ->
         :ok
 
       {:error, reason} ->
-        if Alto.TUI.Catalog.invalid_data?(reason) do
+        if Alto.Contrib.Catalog.invalid_data?(reason) do
           path =
-            Keyword.get(catalog_opts, :path, Alto.TUI.Catalog.default_path(catalog_opts))
+            Keyword.get(catalog_opts, :path, Alto.Contrib.Catalog.default_path(catalog_opts))
             |> Path.expand()
 
           if confirm_catalog_overwrite(path, reason, opts),
-            do: Alto.TUI.Catalog.replace_invalid(catalog_opts),
+            do: Alto.Contrib.Catalog.replace_invalid(catalog_opts),
             else: {:error, {:catalog_overwrite_declined, path}}
         else
           {:error, reason}

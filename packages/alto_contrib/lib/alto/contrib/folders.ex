@@ -1,11 +1,15 @@
 defmodule Alto.Contrib.Folders do
   @moduledoc "Folder creation and bounded suggestions on the host that owns the workspace."
 
-  @doc "Create a typed folder path (including missing parents) on the workspace host."
-  def create(path, base) when is_binary(path) and is_binary(base) do
-    if valid?(path) and String.trim(path) != "" do
-      root = Path.expand(path, base)
+  @doc "Open a typed folder path in the catalog on the workspace host."
+  def open(path, base, opts) do
+    with {:ok, root} <- expand(path, base),
+         do: Alto.Contrib.Catalog.register_project(root, opts)
+  end
 
+  @doc "Create a typed folder path (including missing parents) on the workspace host."
+  def create(path, base) do
+    with {:ok, root} <- expand(path, base) do
       case File.lstat(root) do
         {:ok, _} ->
           {:error, if(File.dir?(root), do: :folder_already_exists, else: :eexist)}
@@ -16,12 +20,14 @@ defmodule Alto.Contrib.Folders do
         {:error, reason} ->
           {:error, reason}
       end
-    else
-      {:error, :invalid_workspace_path}
     end
   end
 
-  def create(_, _), do: {:error, :invalid_workspace_path}
+  defp expand(path, base) do
+    if is_binary(path) and is_binary(base) and valid?(path) and String.trim(path) != "",
+      do: {:ok, Path.expand(path, base)},
+      else: {:error, :invalid_workspace_path}
+  end
 
   @doc "Bounded display suggestions and the common prefix of every matching directory."
   def suggest(path, base) when is_binary(path) and is_binary(base) do

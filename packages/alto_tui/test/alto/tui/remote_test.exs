@@ -175,10 +175,10 @@ defmodule Alto.TUI.RemoteTest do
     ready(terminal)
     current = state(terminal)
     local_root = ctx.config.workspace
-    {:ok, project} = Alto.TUI.Catalog.register_project(local_root, path: ctx.options[:path])
+    {:ok, project} = Alto.Contrib.Catalog.register_project(local_root, path: ctx.options[:path])
 
     {:ok, local_task} =
-      Alto.TUI.Catalog.create_task(project["id"], "Local draft", path: ctx.options[:path])
+      Alto.Contrib.Catalog.create_task(project["id"], "Local draft", path: ctx.options[:path])
 
     next = Remote.ui(:leaving, current, [])
     assert Enum.any?(next.tasks[project["id"]], &(&1["id"] == local_task["id"]))
