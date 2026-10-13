@@ -20,20 +20,8 @@ defmodule Alto.Runner.Execution.Call do
     do: {:error, {:participant_failed, :timeout}}
 
   def run(fun, timeout, cancel_ref) when is_function(fun, 0) do
-    task = start(fun)
-    await(task, System.monotonic_time(:millisecond) + max(timeout, 0), cancel_ref)
-  end
+    %Task{ref: ref} = task = start(fun)
 
-  defp guard_owner(owner) when is_pid(owner) do
-    worker = self()
-    guardian = spawn_link(fn -> owner_guard(owner, worker) end)
-
-    receive do
-      {:alto_owner_guard_ready, ^guardian} -> :ok
-    end
-  end
-
-  defp await(%Task{ref: ref} = task, deadline, cancel_ref) do
     receive do
       {^ref, value} ->
         Process.demonitor(ref, [:flush])
@@ -46,9 +34,18 @@ defmodule Alto.Runner.Execution.Call do
         Task.shutdown(task, :brutal_kill)
         {:error, {:cancelled, reason}}
     after
-      max(deadline - System.monotonic_time(:millisecond), 0) ->
+      timeout ->
         Task.shutdown(task, :brutal_kill)
         {:error, {:participant_failed, :timeout}}
+    end
+  end
+
+  defp guard_owner(owner) when is_pid(owner) do
+    worker = self()
+    guardian = spawn_link(fn -> owner_guard(owner, worker) end)
+
+    receive do
+      {:alto_owner_guard_ready, ^guardian} -> :ok
     end
   end
 

@@ -3,12 +3,15 @@ defmodule Alto.Runner.CallTest do
   alias Alto.Runner.Execution.Call
 
   test "completion removes its monitor and leaves unrelated cancellation messages alone" do
-    other = make_ref()
-    send(self(), {:alto_cancel, other, :unrelated})
-    send(self(), {:alto_cancel, nil, :disabled})
-    assert :value = Call.run(fn -> :value end, 1_000, nil)
-    assert_receive {:alto_cancel, ^other, :unrelated}
-    assert_receive {:alto_cancel, nil, :disabled}
+    for timeout <- [1_000, :infinity] do
+      other = make_ref()
+      send(self(), {:alto_cancel, other, :unrelated})
+      send(self(), {:alto_cancel, nil, :disabled})
+      assert :value = Call.run(fn -> :value end, timeout, nil)
+      assert_receive {:alto_cancel, ^other, :unrelated}
+      assert_receive {:alto_cancel, nil, :disabled}
+    end
+
     refute_receive {:DOWN, _, :process, _, _}
   end
 
@@ -34,7 +37,7 @@ defmodule Alto.Runner.CallTest do
     test "#{mode} terminates the participant before returning", %{mode: mode} do
       owner = self()
       cancel_ref = make_ref()
-      timeout = if mode == :timeout, do: 100, else: 5_000
+      timeout = if mode == :timeout, do: 100, else: :infinity
 
       caller =
         Task.async(fn ->
