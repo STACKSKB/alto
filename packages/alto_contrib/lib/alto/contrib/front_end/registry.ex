@@ -271,74 +271,6 @@ defmodule Alto.Contrib.FrontEnd.Registry do
     end
   end
 
-  def handle_call({:run_result, run_id}, _from, state) do
-    reply_with_run(state, run_id, fn
-      %{result: :running} -> :running
-      %{result: result} -> {:ok, result}
-    end)
-  end
-
-  def handle_call({:command_callback, name}, _from, state) do
-    case Map.fetch(state.commands, name) do
-      {:ok, callback} -> {:reply, {:ok, callback, state.command_timeout}, state}
-      :error -> {:reply, {:error, :unknown_command}, state}
-    end
-  end
-
-  def handle_call({:run_session, run_id}, _from, state) do
-    case Map.fetch(state.runs, run_id) do
-      {:ok, run} -> {:reply, run.session_id, state}
-      :error -> {:reply, nil, state}
-    end
-  end
-
-  def handle_call(:sessions, _from, state) do
-    {:reply, Alto.Session.list(session_dir: state.session_dir), state}
-  end
-
-  def handle_call({:session_events, session_id, limit, cursor, run_id}, _from, state) do
-    {:reply,
-     Alto.Session.events(session_id,
-       session_dir: state.session_dir,
-       limit: limit,
-       cursor: cursor,
-       run_id: run_id
-     ), state}
-  end
-
-  def handle_call({:session_transcript, session_id}, _from, state) do
-    reply =
-      with {:ok, transcript} <-
-             Alto.Session.transcript(session_id, session_dir: state.session_dir),
-           messages = Enum.take(transcript["messages"], -100) do
-        {:ok,
-         %{
-           messages: messages,
-           revision: transcript["revision"],
-           truncated: length(messages) < length(transcript["messages"])
-         }}
-      else
-        {:error, reason} -> {:error, reason}
-      end
-
-    {:reply, reply, state}
-  end
-
-  def handle_call(:runs, _from, state) do
-    summaries =
-      state.runs
-      |> Map.values()
-      |> Enum.sort_by(& &1.start_order, :desc)
-      |> Enum.map(&run_summary(&1, state.pending))
-
-    {:reply, {:ok, summaries}, state}
-  end
-
-  def handle_call(:run_ids, _from, state) do
-    live = for {id, %{result: :running}} <- state.runs, do: id
-    {:reply, live, state}
-  end
-
   def handle_call({:attach, client_pid, run_id, from_seq, domains}, _from, state) do
     cond do
       map_size(state.subscribers) >= state.max_subscribers ->
@@ -378,35 +310,6 @@ defmodule Alto.Contrib.FrontEnd.Registry do
       end
 
     {:reply, :ok, next}
-  end
-
-  def handle_call({:send_message, run_id, opts}, _from, state) do
-    reply_with_run(state, run_id, fn run ->
-      {to, opts} = Keyword.pop(opts, :to)
-
-      cond do
-        to -> Alto.Messaging.send(run.messaging, to, opts)
-        run.result == :running -> Alto.Messaging.send(run.input, opts)
-        true -> Alto.Messaging.duplicate(run.input, opts)
-      end
-    end)
-  end
-
-  def handle_call({:list_agents, run_id}, _from, state) do
-    reply_with_run(state, run_id, fn run ->
-      with {:ok, agents} <- Alto.Messaging.list(run.messaging), do: {:ok, %{agents: agents}}
-    end)
-  end
-
-  def handle_call({:input_status, run_id}, _from, state) do
-    reply_with_run(state, run_id, &{:ok, Alto.Input.request(&1.input, :list)})
-  end
-
-  def handle_call({:cancel, run_id, reason}, _from, state) do
-    reply_with_run(state, run_id, fn run ->
-      Runner.cancel(run.handle, reason)
-      :ok
-    end)
   end
 
   # Approval handles are globally unique operation ids: no scoping
@@ -453,38 +356,112 @@ defmodule Alto.Contrib.FrontEnd.Registry do
     {:reply, reply, state}
   end
 
-  def handle_call({:queue_claim, count, by, max_bytes}, _from, state) do
-    budget = max_bytes || state.max_claim_bytes
+  def handle_call(operation, _from, state), do: {:reply, reply_for(operation, state), state}
 
-    {:reply,
-     queue_op(state, fn -> Alto.Queue.request(state.queue, {:claim, count, by, budget, :all}) end),
-     state}
+  defp reply_for({:run_result, run_id}, state) do
+    with_run(state, run_id, fn
+      %{result: :running} -> :running
+      %{result: result} -> {:ok, result}
+    end)
   end
 
-  def handle_call({:queue_ack, claim_id}, _from, state) do
-    {:reply,
-     queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :ack, []}) end),
-     state}
+  defp reply_for({:command_callback, name}, state) do
+    case Map.fetch(state.commands, name) do
+      {:ok, callback} -> {:ok, callback, state.command_timeout}
+      :error -> {:error, :unknown_command}
+    end
   end
 
-  def handle_call({:queue_release, claim_id}, _from, state) do
-    {:reply,
-     queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :release, []}) end),
-     state}
+  defp reply_for({:run_session, run_id}, state) do
+    case Map.fetch(state.runs, run_id) do
+      {:ok, run} -> run.session_id
+      :error -> nil
+    end
   end
 
-  def handle_call({:ops_list, opts}, _from, state) do
-    {:reply, ops_list_op(state, opts), state}
+  defp reply_for(:sessions, state), do: Alto.Session.list(session_dir: state.session_dir)
+
+  defp reply_for({:session_events, session_id, limit, cursor, run_id}, state) do
+    Alto.Session.events(session_id,
+      session_dir: state.session_dir,
+      limit: limit,
+      cursor: cursor,
+      run_id: run_id
+    )
   end
 
-  defp reply_with_run(state, run_id, fun) do
-    reply =
-      case state.runs[run_id] do
-        nil -> {:error, :unknown_run}
-        run -> fun.(run)
+  defp reply_for({:session_transcript, session_id}, state) do
+    with {:ok, transcript} <- Alto.Session.transcript(session_id, session_dir: state.session_dir) do
+      messages = Enum.take(transcript["messages"], -100)
+
+      {:ok,
+       %{
+         messages: messages,
+         revision: transcript["revision"],
+         truncated: length(messages) < length(transcript["messages"])
+       }}
+    end
+  end
+
+  defp reply_for(:runs, state) do
+    summaries =
+      state.runs
+      |> Map.values()
+      |> Enum.sort_by(& &1.start_order, :desc)
+      |> Enum.map(&run_summary(&1, state.pending))
+
+    {:ok, summaries}
+  end
+
+  defp reply_for(:run_ids, state), do: for({id, %{result: :running}} <- state.runs, do: id)
+
+  defp reply_for({:send_message, run_id, opts}, state) do
+    with_run(state, run_id, fn run ->
+      {to, opts} = Keyword.pop(opts, :to)
+
+      cond do
+        to -> Alto.Messaging.send(run.messaging, to, opts)
+        run.result == :running -> Alto.Messaging.send(run.input, opts)
+        true -> Alto.Messaging.duplicate(run.input, opts)
       end
+    end)
+  end
 
-    {:reply, reply, state}
+  defp reply_for({:list_agents, run_id}, state) do
+    with_run(state, run_id, fn run ->
+      with {:ok, agents} <- Alto.Messaging.list(run.messaging), do: {:ok, %{agents: agents}}
+    end)
+  end
+
+  defp reply_for({:input_status, run_id}, state),
+    do: with_run(state, run_id, &{:ok, Alto.Input.request(&1.input, :list)})
+
+  defp reply_for({:cancel, run_id, reason}, state) do
+    with_run(state, run_id, fn run ->
+      Runner.cancel(run.handle, reason)
+      :ok
+    end)
+  end
+
+  defp reply_for({:queue_claim, count, by, max_bytes}, state) do
+    budget = max_bytes || state.max_claim_bytes
+    queue_op(state, fn -> Alto.Queue.request(state.queue, {:claim, count, by, budget, :all}) end)
+  end
+
+  defp reply_for({:queue_ack, claim_id}, state),
+    do: queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :ack, []}) end)
+
+  defp reply_for({:queue_release, claim_id}, state),
+    do:
+      queue_op(state, fn -> Alto.Queue.request(state.queue, {:settle, claim_id, :release, []}) end)
+
+  defp reply_for({:ops_list, opts}, state), do: ops_list_op(state, opts)
+
+  defp with_run(state, run_id, fun) do
+    case state.runs[run_id] do
+      nil -> {:error, :unknown_run}
+      run -> fun.(run)
+    end
   end
 
   # A dead or crashing queue must not take the registry — and every
