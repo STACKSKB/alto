@@ -330,6 +330,20 @@ defmodule Alto.Contrib.External.MCP.ClientTest do
     Client.stop(client)
   end
 
+  test "normal shutdown settles dispatched calls as unknown and releases their timers", %{
+    root: root,
+    server: server
+  } do
+    {:ok, client} = Client.ensure_started(command: server, cwd: root, env: %{"SLOW" => "1"})
+    task = Task.async(fn -> Client.call_tool(client, "echo", %{}, 5_000) end)
+    assert eventually(fn -> map_size(:sys.get_state(client).pending) == 1 end)
+    [request] = Map.values(:sys.get_state(client).pending)
+
+    assert :ok = Client.stop(client)
+    assert {:unknown, :json_rpc_client_closed} = Task.await(task)
+    assert Process.read_timer(request.timer) == false
+  end
+
   test "a killed client after possible dispatch reports unknown", %{root: root, server: server} do
     {:ok, client} =
       Client.ensure_started(
