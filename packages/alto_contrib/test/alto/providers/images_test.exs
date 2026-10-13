@@ -4,7 +4,7 @@ defmodule Alto.Contrib.Providers.ImagesTest do
 
   defmodule Adapter do
     def run(request) do
-      send(self(), {:wire, JSON.decode!(request.body)})
+      send(self(), {:wire, JSON.decode!(request.body), request})
       response = Req.Response.new(status: 200, headers: [{"content-type", "application/json"}])
       body = Process.get(:image_response)
       {:cont, result} = request.into.({:data, body}, {request, response})
@@ -45,6 +45,8 @@ defmodule Alto.Contrib.Providers.ImagesTest do
 
     opts = [
       model: "image/model",
+      api_key: "image-secret",
+      headers: [{"x-image-project", "sketch"}],
       input_modalities: ["text", "image"],
       options: %{"size" => "1024x1024"},
       req_options: [adapter: Adapter]
@@ -57,12 +59,21 @@ defmodule Alto.Contrib.Providers.ImagesTest do
              %{"type" => "artifact", "name" => "image-2.gif", "data" => ^gif}
            ] = result.message
 
-    assert_receive {:wire, body}
+    assert_receive {:wire, body, wire}
+    assert Req.Request.get_header(wire, "authorization") == ["Bearer image-secret"]
+    assert Req.Request.get_header(wire, "x-image-project") == ["sketch"]
     assert body["size"] == "1024x1024"
     assert body["prompt"] == "edit this"
 
     assert get_in(body, ["input_references", Access.at(0), "image_url", "url"]) ==
              "data:image/png;base64," <> data
+
+    for key <- [nil, "", :invalid] do
+      assert {:ok, _} = Images.stream(request, fn _ -> :ok end, Keyword.put(opts, :api_key, key))
+      assert_receive {:wire, _, wire}
+      assert Req.Request.get_header(wire, "authorization") == []
+      assert Req.Request.get_header(wire, "x-image-project") == ["sketch"]
+    end
 
     assert {:error, :image_metadata_mismatch} =
              Images.Stream.from_response(

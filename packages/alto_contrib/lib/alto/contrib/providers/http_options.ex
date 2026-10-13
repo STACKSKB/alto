@@ -10,6 +10,7 @@ defmodule Alto.Contrib.Providers.HTTPOptions do
       idle_timeout: [type: :pos_integer],
       max_event_bytes: [type: :pos_integer, default: 1_000_000],
       max_stream_bytes: [type: :pos_integer, default: 16_000_000],
+      req_options: [type: :keyword_list, default: []],
       input_modalities: [type: {:list, {:in, ~w(text image audio video file)}}]
     ]
   end
@@ -27,6 +28,18 @@ defmodule Alto.Contrib.Providers.HTTPOptions do
     with {:ok, values} <-
            NimbleOptions.validate(Keyword.take(opts, Keyword.keys(schema)), schema),
          do: {:ok, Map.new(values)}
+  end
+
+  def bearer_headers(opts, headers) do
+    headers = headers ++ [{"user-agent", "alto/0.1.0-dev"}]
+
+    headers =
+      case Keyword.get(opts, :api_key) do
+        key when is_binary(key) and key != "" -> [{"authorization", "Bearer " <> key} | headers]
+        _ -> headers
+      end
+
+    headers ++ Keyword.get(opts, :headers, [])
   end
 
   def request_options(config, headers, extra) do

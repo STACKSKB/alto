@@ -16,7 +16,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
 
   @default_base_url "https://openrouter.ai/api/v1"
   @config_schema HTTPOptions.stream_schema()
-  @models_schema Keyword.take(@config_schema, [:endpoint, :timeout]) ++
+  @models_schema Keyword.take(@config_schema, [:endpoint, :timeout, :req_options]) ++
                    [max_models_response_bytes: [type: :pos_integer, default: 8_000_000]]
 
   @impl true
@@ -322,8 +322,10 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
          reasoning_format: Alto.Contrib.Reasoning.format(opts),
          prompt_cache: Keyword.get(opts, :prompt_cache, true),
          headers:
-           headers(opts, [{"accept", "text/event-stream"}, {"content-type", "application/json"}]),
-         req_options: Keyword.get(opts, :req_options, [])
+           HTTPOptions.bearer_headers(opts, [
+             {"accept", "text/event-stream"},
+             {"content-type", "application/json"}
+           ])
        })}
     end
   end
@@ -335,26 +337,11 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
              @models_schema
            ) do
       {:ok,
-       %{
-         endpoint: config.endpoint,
-         timeout: config.timeout,
+       Map.merge(config, %{
          max_stream_bytes: config.max_models_response_bytes,
          query: Keyword.get(opts, :model_query, []),
-         headers: headers(opts, [{"accept", "application/json"}]),
-         req_options: Keyword.get(opts, :req_options, [])
-       }}
+         headers: HTTPOptions.bearer_headers(opts, [{"accept", "application/json"}])
+       })}
     end
   end
-
-  defp headers(opts, headers) do
-    (headers ++ [{"user-agent", "alto/0.1.0-dev"}])
-    |> maybe_authorize(Keyword.get(opts, :api_key))
-    |> Kernel.++(Keyword.get(opts, :headers, []))
-  end
-
-  defp maybe_authorize(headers, key) when is_binary(key) and key != "" do
-    [{"authorization", "Bearer " <> key} | headers]
-  end
-
-  defp maybe_authorize(headers, _key), do: headers
 end

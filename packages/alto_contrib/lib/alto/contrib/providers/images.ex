@@ -45,22 +45,14 @@ defmodule Alto.Contrib.Providers.Images do
         })
 
       body = if references == [], do: body, else: Map.put(body, "input_references", references)
-      headers = [{"content-type", "application/json"}, {"accept", "text/event-stream"}]
 
       headers =
-        if opts[:api_key],
-          do: [{"authorization", "Bearer " <> opts[:api_key]} | headers],
-          else: headers
+        HTTPOptions.bearer_headers(opts, [
+          {"content-type", "application/json"},
+          {"accept", "text/event-stream"}
+        ])
 
-      config = Map.put(config, :req_options, Keyword.get(opts, :req_options, []))
-
-      StreamEnvelope.post(
-        config,
-        body,
-        headers ++ Keyword.get(opts, :headers, []),
-        __MODULE__.Stream,
-        sink
-      )
+      StreamEnvelope.post(config, body, headers, __MODULE__.Stream, sink)
     end
   end
 

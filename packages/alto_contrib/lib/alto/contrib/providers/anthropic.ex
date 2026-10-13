@@ -127,8 +127,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
          max_tokens: Keyword.get(opts, :max_tokens),
          thinking: Keyword.get(opts, :thinking),
          reasoning_effort: Keyword.get(opts, :reasoning_effort),
-         streaming: Keyword.get(opts, :streaming, true),
-         req_options: Keyword.get(opts, :req_options, [])
+         streaming: Keyword.get(opts, :streaming, true)
        })}
     end
   end
