@@ -1,5 +1,13 @@
 defmodule Alto.Contrib.Workspaces.Git do
-  @moduledoc "Bounded independent local Git clones for isolated child workspaces."
+  @moduledoc """
+  Bounded local Git workspaces: independent clones by default, or linked
+  worktrees with `layout: :worktree`. Both provide separate working files.
+
+  Linked worktrees share objects and refs with the source, which must remain
+  available. They capture a committed ref (HEAD by default), leaving dirty
+  source files untouched, and are detached unless `:branch` names a new branch.
+  Discard removes their registration and files, retaining any named branch.
+  """
 
   @behaviour Alto.Contrib.Workspaces.Backend
 
@@ -25,7 +33,7 @@ defmodule Alto.Contrib.Workspaces.Git do
   @doc false
   def integration_target(repo, opts \\ []) do
     with {:ok, limits} <- limits(opts),
-         {:ok, root, head} <- source_head(repo, limits),
+         {:ok, root, head} <- source_head(repo, %{limits | layout: :worktree}),
          {:ok, config} <- git(root, ["config", "--includes", "--null", "--list"], limits),
          {:ok, stat} <- File.stat(root) do
       {:ok,
@@ -78,8 +86,8 @@ defmodule Alto.Contrib.Workspaces.Git do
   @spec checkout(map(), Path.t(), keyword()) :: :ok | {:error, term()}
   def checkout(snapshot, destination, opts \\ [])
       when is_map(snapshot) and is_binary(destination) do
-    with {:ok, limits} <- limits(opts),
-         {:ok, snapshot} <- validate_snapshot(snapshot) do
+    with {:ok, snapshot} <- validate_snapshot(snapshot),
+         {:ok, limits} <- limits(opts, snapshot) do
       if limits.layout == :worktree,
         do: checkout_linked(snapshot, Path.expand(destination), limits),
         else: checkout_clone(snapshot, destination, limits)
@@ -133,8 +141,8 @@ defmodule Alto.Contrib.Workspaces.Git do
 
   @spec diff(map(), Path.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def diff(snapshot, destination, opts \\ []) when is_map(snapshot) and is_binary(destination) do
-    with {:ok, limits} <- limits(opts),
-         {:ok, snapshot} <- validate_snapshot(snapshot),
+    with {:ok, snapshot} <- validate_snapshot(snapshot),
+         {:ok, limits} <- limits(opts, snapshot),
          root <- Path.expand(destination),
          {:ok, git_dir} <- workspace_metadata(root, snapshot, limits),
          true <- File.dir?(root) or {:error, :wrong_workspace},
@@ -185,6 +193,11 @@ defmodule Alto.Contrib.Workspaces.Git do
     else
       false -> {:unknown, :stale_patch_target}
     end
+  end
+
+  defp limits(opts, snapshot) do
+    layout = if Map.has_key?(snapshot, "common_dir"), do: :worktree, else: :clone
+    with {:ok, limits} <- limits(opts), do: {:ok, %{limits | layout: layout}}
   end
 
   defp limits(opts) do
@@ -522,9 +535,9 @@ defmodule Alto.Contrib.Workspaces.Git do
 
   @doc false
   def discard(snapshot, destination, opts) do
-    with {:ok, limits} <- limits(opts) do
-      if Map.has_key?(snapshot, "common_dir"),
-        do: discard_linked(snapshot, destination, %{limits | layout: :worktree}),
+    with {:ok, limits} <- limits(opts, snapshot) do
+      if limits.layout == :worktree,
+        do: discard_linked(snapshot, destination, limits),
         else: :ok
     end
   end

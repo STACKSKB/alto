@@ -459,12 +459,12 @@ policy = Alto.Subagents.bounded(
 # Use policy as the parent loop's :subagents option.
 ```
 
-For local linked worktrees, select the other built-in backend:
+For local linked worktrees, configure the Git backend’s worktree layout:
 
 ```elixir
 manager = Alto.Contrib.Workspaces.new(
   root: "/private/alto-state/worktrees", ledger: ledger,
-  backend: Alto.Contrib.Workspaces.GitWorktree)
+  backend_options: [layout: :worktree])
 
 # Use this manager in the same bounded subagent policy, or expose a tool:
 tools = [{Alto.Contrib.Tools.CreateWorktree, manager: manager}]
@@ -474,7 +474,10 @@ tools = [{Alto.Contrib.Tools.CreateWorktree, manager: manager}]
   ref: "HEAD", branch: "feature/experiment")
 ```
 
-The linked backend accepts either a main checkout or another linked worktree.
+The prepared snapshot fixes the layout for checkout, patch capture and cleanup.
+Direct callers may override `layout` when preparing a snapshot.
+
+The worktree layout accepts either a main checkout or another linked worktree.
 It captures the chosen commit without copying, stashing, or committing dirty
 source files. It shares Git objects and refs with the source, while keeping its
 own working files, HEAD and index. Checkouts are detached by default; `branch`

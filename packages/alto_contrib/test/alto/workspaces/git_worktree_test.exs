@@ -3,7 +3,6 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
   alias Alto.Contrib.Workspaces
   alias Alto.OperationLog
   alias Alto.Contrib.Workspaces.Git
-  alias Alto.Contrib.Workspaces.GitWorktree
   alias Alto.Contrib.Tools.CreateWorktree
 
   setup do
@@ -19,7 +18,11 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
     ledger = start_supervised!({OperationLog, ledger_opts})
 
     manager =
-      Workspaces.new(root: Path.join(root, "workspaces"), ledger: ledger, backend: GitWorktree)
+      Workspaces.new(
+        root: Path.join(root, "workspaces"),
+        ledger: ledger,
+        backend_options: [layout: :worktree]
+      )
 
     context = %{session_id: "test", cwd: source}
     on_exit(fn -> File.rm_rf!(root) end)
@@ -52,15 +55,16 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
     linked = Path.join(c.root, "linked-source")
     git!(c.source, ["worktree", "add", "--detach", linked, "HEAD"])
     assert {:error, :ordinary_repository_required} = Git.snapshot(linked)
-    assert {:ok, snapshot} = Workspaces.prepare(c.manager, linked)
-    assert {:ok, info} = Workspaces.create(c.manager, snapshot, owner("child"))
+    manager = %{c.manager | backend_options: []}
+    assert {:ok, snapshot} = Workspaces.prepare(manager, linked, layout: :worktree)
+    assert {:ok, info} = Workspaces.create(manager, snapshot, owner("child"))
     File.write!(Path.join(info.workspace["cwd"], "new.txt"), "child\n")
-    assert {:ok, frozen} = Workspaces.freeze(c.manager, info.id, info.revision)
-    assert {:ok, patch} = Workspaces.patch(c.manager, info.id)
+    assert {:ok, frozen} = Workspaces.freeze(manager, info.id, info.revision)
+    assert {:ok, patch} = Workspaces.patch(manager, info.id)
     assert patch =~ "+child"
     assert git!(linked, ["status", "--porcelain"]) == ""
-    assert {:ok, prepared} = Workspaces.prepare_apply(c.manager, info.id, frozen.revision)
-    assert {:ok, applied} = Workspaces.apply(c.manager, prepared)
+    assert {:ok, prepared} = Workspaces.prepare_apply(manager, info.id, frozen.revision)
+    assert {:ok, applied} = Workspaces.apply(manager, prepared)
     assert applied.status == "applied"
     assert File.read!(Path.join(linked, "new.txt")) == "child\n"
     refute File.exists?(Path.join(c.source, "new.txt"))
@@ -95,7 +99,7 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
     File.write!(Path.join(first.workspace["cwd"], "attack.txt"), "not staged\n")
 
     assert {:error, :invalid_git_pointer} =
-             GitWorktree.diff(snapshot.metadata, first.workspace["cwd"])
+             Git.diff(snapshot.metadata, first.workspace["cwd"], layout: :worktree)
 
     assert git!(second.workspace["cwd"], ["status", "--porcelain"]) == ""
     File.write!(pointer, original)
@@ -131,13 +135,20 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
     assert resumed.revision > worked.revision
   end
 
-  test "cleanup cannot bypass the linked backend and can retire failed creation leftovers", c do
+  test "cleanup follows the saved layout and can retire failed creation leftovers", c do
     assert {:ok, snapshot} = Workspaces.prepare(c.manager, c.source)
     assert {:ok, info} = Workspaces.create(c.manager, snapshot, owner("cleanup"))
-    wrong = %{c.manager | backend: Git}
+    clone = %{c.manager | backend_options: []}
 
-    assert {:error, :workspace_backend_mismatch} =
-             Workspaces.discard(wrong, info.id, info.revision, "wrong backend")
+    assert {:error, :stale_workspace} =
+             Workspaces.use(clone, info.id, info.revision, fn _ -> flunk("wrong layout") end)
+
+    assert {:error, :worktree_manager_required} =
+             Alto.Tool.prepare(CreateWorktree, %{"name" => "task"}, c.context, manager: clone)
+
+    assert {:ok, removed} = Workspaces.create(c.manager, snapshot, owner("changed-layout"))
+    assert {:ok, _} = Workspaces.discard(clone, removed.id, removed.revision, "changed layout")
+    refute git!(c.source, ["worktree", "list", "--porcelain"]) =~ removed.workspace["cwd"]
 
     assert {:ok, ^info} = Workspaces.get(c.manager, info.id)
     assert File.exists?(info.workspace["cwd"])
@@ -152,22 +163,42 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
 
     refute File.exists?(info.workspace["cwd"])
 
-    clone = %{c.manager | backend: Git}
     assert {:ok, clone_snapshot} = Workspaces.prepare(clone, c.source)
     assert {:ok, cloned} = Workspaces.create(clone, clone_snapshot, owner("clone"))
     assert {:ok, _} = Workspaces.discard(clone, cloned.id, cloned.revision, "unused clone")
     refute File.exists?(cloned.workspace["cwd"] <> ".git")
   end
 
+  test "snapshot layout governs checkout, patch capture and cleanup", c do
+    for {configured, captured} <- [worktree: :clone, clone: :worktree] do
+      manager = %{c.manager | backend_options: [layout: configured]}
+      assert {:ok, snapshot} = Workspaces.prepare(manager, c.source, layout: captured)
+      assert {:ok, info} = Workspaces.create(manager, snapshot, owner(Atom.to_string(captured)))
+      cwd = info.workspace["cwd"]
+      linked? = git!(c.source, ["worktree", "list", "--porcelain"]) =~ cwd
+      assert linked? == (captured == :worktree)
+      File.write!(Path.join(cwd, "new.txt"), "captured layout\n")
+      assert {:ok, frozen} = Workspaces.freeze(manager, info.id, info.revision)
+      assert {:ok, patch} = Workspaces.patch(manager, info.id)
+      assert patch =~ "+captured layout"
+      assert {:ok, _} = Workspaces.discard(manager, info.id, frozen.revision, "done")
+      refute File.exists?(cwd)
+      refute git!(c.source, ["worktree", "list", "--porcelain"]) =~ cwd
+    end
+  end
+
   test "invalid refs, filters, bounds and symlink paths fail before checkout", c do
     assert {:error, _} = Workspaces.prepare(c.manager, c.source, ref: "--all")
     assert {:error, _} = Workspaces.prepare(c.manager, c.source, branch: "../bad")
-    assert {:error, :checkout_too_large} = GitWorktree.snapshot(c.source, max_checkout_bytes: 1)
+
+    assert {:error, :checkout_too_large} =
+             Git.snapshot(c.source, layout: :worktree, max_checkout_bytes: 1)
+
     symlink = Path.join(c.root, "link")
     File.ln_s!(c.source, symlink)
-    assert {:error, :symlink_unsupported} = GitWorktree.snapshot(symlink)
+    assert {:error, :symlink_unsupported} = Git.snapshot(symlink, layout: :worktree)
     git!(c.source, ["config", "filter.test.clean", "false"])
-    assert {:error, :source_filters_unsupported} = GitWorktree.snapshot(c.source)
+    assert {:error, :source_filters_unsupported} = Git.snapshot(c.source, layout: :worktree)
 
     for name <- ["bad\nname", "bad\rname", "bad" <> <<0>> <> "name"] do
       assert {:error, :invalid_worktree_arguments} =

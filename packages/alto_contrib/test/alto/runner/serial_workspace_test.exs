@@ -120,7 +120,10 @@ defmodule Alto.Runner.SerialWorkspaceTest do
   end
 
   test "linked worktree backend runs children with distinct cwd and freezes their patches", c do
-    manager = %{c.manager | backend: Alto.Contrib.Workspaces.GitWorktree}
+    manager = %{
+      c.manager
+      | backend_options: Keyword.put(c.manager.backend_options, :layout, :worktree)
+    }
 
     agents =
       Enum.map(["left", "right"], fn id ->

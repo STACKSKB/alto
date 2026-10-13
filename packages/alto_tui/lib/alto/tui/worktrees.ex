@@ -16,7 +16,7 @@ defmodule Alto.TUI.Worktrees do
           Alto.Contrib.Workspaces.new(
             root: Path.join(root, "checkouts"),
             ledger: ledger,
-            backend: Alto.Contrib.Workspaces.GitWorktree
+            backend_options: [layout: :worktree]
           )
 
         context = %{

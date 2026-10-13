@@ -22,7 +22,8 @@ defmodule Alto.Contrib.Tools.CreateWorktree do
     with true <-
            not String.contains?(name, ["\n", "\r", <<0>>]) or
              {:error, :invalid_worktree_arguments},
-         %Workspaces{backend: Alto.Contrib.Workspaces.GitWorktree} = manager <- opts[:manager],
+         %Workspaces{backend: Alto.Contrib.Workspaces.Git} = manager <- opts[:manager],
+         true <- manager.backend_options[:layout] == :worktree,
          {:ok, snapshot} <- Workspaces.prepare(manager, context.cwd, snapshot_options(args)) do
       identity = %{root_run_id: context.session_id, path: ["worktree", name]}
       prepared = %{manager: manager, snapshot: snapshot, identity: identity}
