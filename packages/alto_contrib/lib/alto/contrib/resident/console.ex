@@ -125,13 +125,12 @@ defmodule Alto.Contrib.Resident.Console do
   defp do_perform(model, :new, _owner) do
     task = selected(model)
 
-    reset_history(%{
-      model
-      | selected_id: nil,
-        notice: "New task",
-        workspace_id: if(task, do: Map.get(task, :workspace_id), else: model.workspace_id),
-        workspace_root: if(task, do: Map.get(task, :cwd), else: model.workspace_root)
-    })
+    new_task(
+      model,
+      if(task, do: Map.get(task, :workspace_id), else: model.workspace_id),
+      if(task, do: Map.get(task, :cwd), else: model.workspace_root),
+      "New task"
+    )
   end
 
   defp do_perform(model, {:select, id}, _owner) do
@@ -149,13 +148,7 @@ defmodule Alto.Contrib.Resident.Console do
         %{model | notice: "Workspace is no longer available"}
 
       project ->
-        reset_history(%{
-          model
-          | selected_id: nil,
-            workspace_id: id,
-            workspace_root: project["root"],
-            notice: "New task in " <> project["name"]
-        })
+        new_task(model, id, project["root"], "New task in " <> project["name"])
     end
   end
 
@@ -177,21 +170,15 @@ defmodule Alto.Contrib.Resident.Console do
 
     model = %{model | projects: reply["projects"]}
 
-    model =
-      if closing_current? do
-        next = Enum.find(model.projects, &(&1["closed"] != true))
+    notice = "Workspace closed · reopen its folder to return"
 
-        reset_history(%{
-          model
-          | selected_id: nil,
-            workspace_id: next && next["id"],
-            workspace_root: next && next["root"]
-        })
-      else
-        model
-      end
+    if closing_current? do
+      next = Enum.find(model.projects, &(&1["closed"] != true))
 
-    %{model | notice: "Workspace closed · reopen its folder to return"}
+      new_task(model, next && next["id"], next && next["root"], notice)
+    else
+      %{model | notice: notice}
+    end
   end
 
   defp do_perform(model, {action, path}, _owner) when action in [:workspace, :create_workspace] do
@@ -202,14 +189,12 @@ defmodule Alto.Contrib.Resident.Console do
 
     project = reply["project"]
 
-    reset_history(%{
+    model = %{
       model
-      | selected_id: nil,
-        workspace_id: project["id"],
-        workspace_root: project["root"],
-        projects: [project | Enum.reject(model.projects, &(&1["id"] == project["id"]))],
-        notice: "Workspace opened: " <> project["root"]
-    })
+      | projects: [project | Enum.reject(model.projects, &(&1["id"] == project["id"]))]
+    }
+
+    new_task(model, project["id"], project["root"], "Workspace opened: " <> project["root"])
   end
 
   defp do_perform(model, :efforts, _owner) do
@@ -503,7 +488,6 @@ defmodule Alto.Contrib.Resident.Console do
       })
     end)
     |> Map.values()
-    |> Enum.sort_by(&{&1.started_at_ms, &1.id}, :desc)
   end
 
   defp merge_scheduled(stored, scheduled, runs) do
@@ -719,6 +703,16 @@ defmodule Alto.Contrib.Resident.Console do
     do: throw({:console, {:notification_overflow, event["run_id"], event["domain"]}})
 
   defp notification(model, _), do: model
+
+  defp new_task(model, workspace_id, workspace_root, notice) do
+    reset_history(%{
+      model
+      | selected_id: nil,
+        workspace_id: workspace_id,
+        workspace_root: workspace_root,
+        notice: notice
+    })
+  end
 
   defp reset_history(model),
     do: %{

@@ -116,13 +116,14 @@ defmodule Alto.Contrib.Resident.Tasks do
 
     case reconcile_restart(state) do
       :ok ->
+        queued = MapSet.new(queue_records(state.queue), &operation_key/1)
+
         pending =
-          Enum.map(OperationLog.request(state.ledger, {:entries, :all}), & &1.operation_key)
-          |> Enum.filter(fn id ->
-            OperationLog.request(state.ledger, {:status, id}) == {:intended} and
-              find_record(state, id) == {:error, :not_found}
-          end)
-          |> MapSet.new()
+          for %{operation_key: id, status: {:intended}} <-
+                OperationLog.request(state.ledger, {:entries, :all}),
+              not MapSet.member?(queued, id),
+              into: MapSet.new(),
+              do: id
 
         schedule_admissions()
         {:ok, %{state | pending_admissions: pending}}
@@ -878,7 +879,7 @@ defmodule Alto.Contrib.Resident.Tasks do
            Alto.Result.each(OperationLog.request(state.ledger, {:entries, :all}), fn entry ->
              id = entry.operation_key
 
-             case OperationLog.request(state.ledger, {:status, id}) do
+             case entry.status do
                {:dispatched, attempt} ->
                  OperationLog.request(
                    state.ledger,
