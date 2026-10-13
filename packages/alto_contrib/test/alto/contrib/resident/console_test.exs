@@ -249,25 +249,57 @@ defmodule Alto.Contrib.Resident.ConsoleTest do
     opts: opts,
     name: name
   } do
-    Tasks.command(name, "submit", %{
-      "id" => "delayed",
-      "profile" => "chat",
-      "task" => "scheduled message",
-      "delay_ms" => 60_000
-    })
+    for {id, failure} <- [
+          {"dropped", :closed},
+          {"rejected", {:server, "unavailable", "Read failed"}}
+        ] do
+      Tasks.command(name, "submit", %{
+        "id" => id,
+        "profile" => "chat",
+        "task" => "scheduled message",
+        "delay_ms" => 60_000
+      })
 
-    model = Console.perform(Console.new(opts), :connect, self())
-    model = Console.perform(model, {:select, "delayed"}, self())
-    assert model.connection == "connected"
-    assert model.detail =~ "queued"
-    assert model.history == []
-    assert Enum.any?(model.entries, &(&1.text == "scheduled message"))
-    blocked = Console.perform(model, {:submit, "cannot follow yet"}, self())
-    assert blocked.notice =~ "still running"
-    model = Console.perform(model, :cancel, self())
-    assert model.detail =~ "cancelled"
-    refute_receive {:executing, _, _}, 100
-    Console.close(model)
+      model = Console.perform(Console.new(opts), :connect, self())
+      model = Console.perform(model, {:select, id}, self())
+      assert model.connection == "connected"
+      assert model.detail =~ "queued"
+      assert model.history == []
+      assert Enum.any?(model.entries, &(&1.text == "scheduled message"))
+      blocked = Console.perform(model, {:submit, "cannot follow yet"}, self())
+      assert blocked.notice =~ "still running"
+      # Forward the cancellation, then fail its follow-up refresh.
+      client = model.client
+
+      proxy =
+        spawn_link(fn ->
+          receive do
+            {:"$gen_call", from, {:request, command, _timeout}} ->
+              GenServer.reply(from, Client.request(client, command))
+
+              if failure != :closed do
+                receive do
+                  {:"$gen_call", from, {:next, 0}} -> GenServer.reply(from, {:error, :timeout})
+                end
+
+                receive do
+                  {:"$gen_call", from, {:request, %{type: "runs"}, _}} ->
+                    GenServer.reply(from, {:error, failure})
+                end
+              end
+          end
+        end)
+
+      model = Console.perform(%{model | client: %Client{pid: proxy}}, :cancel, self())
+      assert model.notice =~ "Cancellation requested; reconnect"
+      assert model.connection == "disconnected"
+      assert model.selected_id == id
+      Client.close(client)
+      model = Console.perform(model, :connect, self())
+      assert model.detail =~ "cancelled"
+      refute_receive {:executing, _, _}, 100
+      Console.close(model)
+    end
   end
 
   test "restart exposes uncertain work and fences decisions made from stale views", %{

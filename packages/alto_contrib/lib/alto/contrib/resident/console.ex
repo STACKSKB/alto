@@ -233,7 +233,7 @@ defmodule Alto.Contrib.Resident.Console do
 
   defp do_perform(model, {:command, name, payload}, _owner) do
     request(model.client, %{type: "command", name: name, payload: payload})
-    refresh(%{model | notice: "Decision recorded"})
+    refresh_after_success(model, "Decision recorded")
   end
 
   defp do_perform(model, :recover, _owner) do
@@ -251,7 +251,7 @@ defmodule Alto.Contrib.Resident.Console do
             })
 
           task_command(model.client, "recover", payload)
-          refresh(%{model | notice: "Recovery requested"})
+          refresh_after_success(model, "Recovery requested")
         else
           %{model | notice: "No recoverable parent continuation"}
         end
@@ -310,18 +310,8 @@ defmodule Alto.Contrib.Resident.Console do
             else: payload
 
         reply = task_command(model.client, "submit", payload)
-        model = reset_history(%{model | selected_id: reply["task_id"], notice: "Sent"})
-        # A successful submission stays successful even if the subsequent refresh fails.
-        try do
-          refresh(model)
-        catch
-          {:console, reason} ->
-            %{
-              failed(model, :poll, reason)
-              | notice:
-                  "Sent; reconnect to recover progress: #{Alto.Contrib.Display.error(reason)}"
-            }
-        end
+        model = reset_history(%{model | selected_id: reply["task_id"]})
+        refresh_after_success(model, "Sent")
     end
   end
 
@@ -337,7 +327,7 @@ defmodule Alto.Contrib.Resident.Console do
              "waiting_approval"
            ] ->
         task_command(model.client, "cancel", %{"id" => id})
-        refresh(%{model | notice: "Cancellation requested"})
+        refresh_after_success(model, "Cancellation requested")
 
       %{run_id: run, status: status} when not is_nil(run) and status in ["running", "waiting"] ->
         request(model.client, %{type: "cancel", run_id: run, reason: "user"})
@@ -358,7 +348,7 @@ defmodule Alto.Contrib.Resident.Console do
           "note" => note
         })
 
-        refresh(%{model | notice: "Decision recorded"})
+        refresh_after_success(model, "Decision recorded")
 
       _ ->
         %{model | notice: "Select a task requiring operator review"}
@@ -377,7 +367,7 @@ defmodule Alto.Contrib.Resident.Console do
           "decision" => Atom.to_string(decision)
         })
 
-        refresh(%{model | notice: "Decision sent"})
+        refresh_after_success(model, "Decision sent")
 
       _ ->
         live_decision(model, decision)
@@ -415,6 +405,17 @@ defmodule Alto.Contrib.Resident.Console do
           {:error, reason} -> throw({:console, reason})
         end
     end
+  end
+
+  # A confirmed command stays successful when the following read fails.
+  defp refresh_after_success(model, notice) do
+    refresh(%{model | notice: notice})
+  catch
+    {:console, reason} ->
+      disconnect(
+        model,
+        "#{notice}; reconnect to recover progress: #{Alto.Contrib.Display.error(reason)}"
+      )
   end
 
   defp refresh(model) do
@@ -885,20 +886,17 @@ defmodule Alto.Contrib.Resident.Console do
     do: %{model | notice: "Request rejected: #{Alto.Contrib.Display.error(reason)}"}
 
   defp failed(model, action, reason) do
-    close(model)
-
     suffix =
       if match?({:submit, _}, action),
         do: "; send outcome unknown—reconnect and inspect before resending",
         else: "; reconnect to inspect server state"
 
-    %{
-      model
-      | client: nil,
-        tunnel: nil,
-        connection: "disconnected",
-        notice: Alto.Contrib.Display.error(reason) <> suffix
-    }
+    disconnect(model, Alto.Contrib.Display.error(reason) <> suffix)
+  end
+
+  defp disconnect(model, notice) do
+    close(model)
+    %{model | client: nil, tunnel: nil, connection: "disconnected", notice: notice}
   end
 
   defp flag(list, true, text), do: list ++ [text]
