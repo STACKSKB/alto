@@ -74,26 +74,25 @@ defmodule Alto.Runner.Budget.Account do
           :model -> {"model_requests_used", "max_model_requests", :model_request_limit}
         end
 
-      case Retained.update(
-             %{account | deadline: deadline},
-             fn %{packet: packet} ->
-               maximum = min(cap, packet[limit])
+      with {:ok, _} <-
+             Retained.update(
+               %{account | deadline: deadline},
+               fn %{packet: packet} ->
+                 maximum = min(cap, packet[limit])
 
-               cond do
-                 deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
-                   {:error, :run_timeout}
+                 cond do
+                   deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
+                     {:error, :run_timeout}
 
-                 packet[counter] < maximum ->
-                   {:ok, Map.update!(packet, counter, &(&1 + 1))}
+                   packet[counter] < maximum ->
+                     {:ok, Map.update!(packet, counter, &(&1 + 1))}
 
-                 true ->
-                   {:error, {error, maximum}}
+                   true ->
+                     {:error, {error, maximum}}
+                 end
                end
-             end
-           ) do
-        {:ok, _} -> :ok
-        {:error, _} = error -> error
-      end
+             ),
+           do: :ok
     else
       {:error, :invalid_budget_account_limits}
     end

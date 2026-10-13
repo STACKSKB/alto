@@ -39,13 +39,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
 
   @doc "Check typed input using the wire codec without resolving credentials or sending a request."
   def check_input(%Content{} = content, opts) do
-    case anthropic_content(
-           content.blocks,
-           input_modalities(opts)
-         ) do
-      {:ok, _} -> :ok
-      error -> error
-    end
+    with {:ok, _} <- anthropic_content(content.blocks, input_modalities(opts)), do: :ok
   end
 
   @impl true
@@ -198,15 +192,12 @@ defmodule Alto.Contrib.Providers.Anthropic do
   end
 
   defp system_content(messages) do
-    messages
-    |> Alto.Result.traverse(fn
-      %{"content" => content} when is_binary(content) -> {:ok, content}
-      _message -> {:error, :anthropic_system_content_must_be_text}
-    end)
-    |> case do
-      {:ok, contents} -> {:ok, Enum.join(contents, "\n\n")}
-      {:error, _} = error -> error
-    end
+    with {:ok, contents} <-
+           Alto.Result.traverse(messages, fn
+             %{"content" => content} when is_binary(content) -> {:ok, content}
+             _message -> {:error, :anthropic_system_content_must_be_text}
+           end),
+         do: {:ok, Enum.join(contents, "\n\n")}
   end
 
   defp message(%{"role" => "tool"} = message, modalities) do

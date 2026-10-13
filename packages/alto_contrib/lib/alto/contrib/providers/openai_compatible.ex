@@ -54,13 +54,12 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
 
   @doc "Check typed input using the wire codec without resolving credentials or sending a request."
   def check_input(%Content{} = content, opts) do
-    case provider_message(
-           %{"role" => "user", "content" => content.blocks},
-           Alto.InputModalities.configured(opts)
-         ) do
-      {:ok, _} -> :ok
-      error -> error
-    end
+    with {:ok, _} <-
+           provider_message(
+             %{"role" => "user", "content" => content.blocks},
+             Alto.InputModalities.configured(opts)
+           ),
+         do: :ok
   end
 
   @impl true

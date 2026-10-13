@@ -684,8 +684,6 @@ defmodule Alto.Queue do
          live_records: :gb_trees.size(state.records),
          completed_keys: length(state.completed)
        }}
-    else
-      {:error, _} = error -> error
     end
   rescue
     error -> {:error, {:queue_compaction_failed, Exception.message(error)}}

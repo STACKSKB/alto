@@ -86,11 +86,8 @@ defmodule Alto.Persistence.Retained do
   def restore(ledger, %{"key" => key, "generation" => generation} = identity, kind, opts)
       when map_size(identity) == 2 and is_binary(key) and is_binary(generation) do
     with {:ok, cell, _} <- lookup(ledger, key, kind, opts),
-         true <- cell.generation == generation do
+         true <- cell.generation == generation or {:error, :retained_generation_mismatch} do
       {:ok, cell}
-    else
-      false -> {:error, :retained_generation_mismatch}
-      {:error, _} = error -> error
     end
   end
 
@@ -99,11 +96,10 @@ defmodule Alto.Persistence.Retained do
   def read(%__MODULE__{} = cell) do
     with {:ok, entry} <- request(cell.ledger, {:recovery, cell.key}, cell.deadline),
          {:ok, current} <- snapshot(entry, cell.kind),
-         true <- entry.recovery["generation"] == cell.generation do
+         true <-
+           entry.recovery["generation"] == cell.generation or
+             {:error, :retained_generation_mismatch} do
       {:ok, current}
-    else
-      false -> {:error, :retained_generation_mismatch}
-      {:error, _} = error -> error
     end
   end
 
@@ -119,21 +115,20 @@ defmodule Alto.Persistence.Retained do
       )
       when map_size(recovery) == 3 and is_binary(generation) and byte_size(generation) == 32 and
              is_map(initial) and is_integer(revision) and revision >= 1 do
-    with true <- tool == Atom.to_string(kind),
-         true <- String.match?(generation, ~r/\A[0-9a-f]+\z/),
+    with true <- tool == Atom.to_string(kind) or {:error, :invalid_retained_cell},
+         true <-
+           String.match?(generation, ~r/\A[0-9a-f]+\z/) or
+             {:error, :invalid_retained_cell},
          {:ok, state} <- lifecycle(entry, generation) do
       # The kind is an internal domain module, not a model-selected callback.
       kind.snapshot(%{revision: revision, packet: packet, initial: initial, state: state})
-    else
-      false -> {:error, :invalid_retained_cell}
-      {:error, _} = error -> error
     end
   end
 
   def snapshot(_, _), do: {:error, :invalid_retained_cell}
 
   def replace(%__MODULE__{} = cell, snapshot, packet) do
-    with true <- snapshot.state == :active,
+    with true <- snapshot.state == :active or {:error, :retained_closed},
          {:ok, entry} <-
            request(
              cell.ledger,
@@ -141,17 +136,16 @@ defmodule Alto.Persistence.Retained do
              cell.deadline
            ),
          {:ok, current} <- snapshot(entry, cell.kind),
-         true <- entry.recovery["generation"] == cell.generation do
+         true <-
+           entry.recovery["generation"] == cell.generation or
+             {:error, :retained_closed} do
       {:ok, current}
-    else
-      false -> {:error, :retained_closed}
-      {:error, _} = error -> error
     end
   end
 
   def update(%__MODULE__{} = cell, fun) do
     with {:ok, current} <- read(cell),
-         true <- current.state == :active,
+         true <- current.state == :active or {:error, :retained_closed},
          {:ok, packet} <- fun.(current) do
       if packet == current.packet do
         {:ok, current}
@@ -161,14 +155,12 @@ defmodule Alto.Persistence.Retained do
           result -> result
         end
       end
-    else
-      false -> {:error, :retained_closed}
-      {:error, _} = error -> error
     end
   end
 
   def retire(%__MODULE__{} = cell, expected_revision) do
-    with {:ok, current} <- read(cell), true <- current.revision == expected_revision do
+    with {:ok, current} <- read(cell),
+         true <- current.revision == expected_revision or {:error, :stale_revision} do
       if current.state == :retired,
         do: :ok,
         else:
@@ -179,9 +171,6 @@ defmodule Alto.Persistence.Retained do
              %{"generation" => cell.generation}},
             cell.deadline
           )
-    else
-      false -> {:error, :stale_revision}
-      {:error, _} = error -> error
     end
   end
 
