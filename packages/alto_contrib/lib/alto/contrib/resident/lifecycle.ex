@@ -89,26 +89,18 @@ defmodule Alto.Contrib.Resident.Lifecycle do
 
   defp find_plan(ledger, id, task_revision) do
     matches =
-      ledger
-      |> OperationLog.request({:entries, :all})
-      |> Enum.map(& &1.operation_key)
-      |> Enum.filter(&String.starts_with?(&1, id <> ":"))
-      |> collect(fn key ->
-        with {:ok, entry} <- OperationLog.request(ledger, {:recovery, key}) do
-          recovery = entry.recovery
-
-          if entry.tool == @tool and is_map(recovery) and recovery["task"] == id and
-               recovery["task_revision"] == task_revision,
-             do: {:ok, {key, entry}},
-             else: {:ok, nil}
-        end
-      end)
+      for %{
+            operation_key: key,
+            tool: @tool,
+            recovery: %{"task" => ^id, "task_revision" => ^task_revision}
+          } = entry <- OperationLog.request(ledger, {:entries, :all}),
+          String.starts_with?(key, id <> ":"),
+          do: {key, entry}
 
     case matches do
-      {:ok, [{key, entry}]} -> {:ok, key, entry}
-      {:ok, []} -> {:error, :cleanup_plan_not_found}
-      {:ok, _} -> {:error, :ambiguous_cleanup_plan}
-      error -> error
+      [{key, entry}] -> {:ok, key, entry}
+      [] -> {:error, :cleanup_plan_not_found}
+      _ -> {:error, :ambiguous_cleanup_plan}
     end
   end
 
@@ -159,14 +151,9 @@ defmodule Alto.Contrib.Resident.Lifecycle do
           servers |> Map.put("parent", store) |> Map.put("binding", ParentRuns.bindings(name))
       end
 
-    Enum.reduce_while(servers, {:ok, %{}}, fn {role, server}, {:ok, acc} ->
-      case OperationLog.request(server, :identity) do
-        {:ok, identity} ->
-          {:cont, {:ok, Map.put(acc, role, %{server: server, identity: identity})}}
-
-        error ->
-          {:halt, error}
-      end
+    Alto.Result.reduce(servers, %{}, fn {role, server}, acc ->
+      with {:ok, identity} <- OperationLog.request(server, :identity),
+           do: {:ok, Map.put(acc, role, %{server: server, identity: identity})}
     end)
   end
 
@@ -227,8 +214,6 @@ defmodule Alto.Contrib.Resident.Lifecycle do
          {:ok, accounts} <- owned_account(task, cells, stores, opts),
          {:ok, bindings} <- binding_resource(task, stores) do
       {:ok, Enum.map(cells, & &1.cell) ++ accounts ++ bindings}
-    else
-      {:error, _} = error -> error
     end
   end
 
@@ -246,7 +231,7 @@ defmodule Alto.Contrib.Resident.Lifecycle do
              stores["budget"].server,
              task_owned_budget?
            ) do
-      collect(listed, fn %{identity: identity, snapshot: snapshot, parent_data: data} ->
+      Alto.Result.traverse(listed, fn %{identity: identity, snapshot: snapshot, parent_data: data} ->
         if snapshot.phase == :claimed,
           do:
             {:ok,
@@ -309,7 +294,7 @@ defmodule Alto.Contrib.Resident.Lifecycle do
 
   defp execute(ledger, key, entry, stores) do
     with :ok <- OperationLog.request(ledger, {:attempt, key, @attempt}),
-         {:ok, _} <- collect(entry.recovery["resources"], &retire(&1, stores)),
+         :ok <- Alto.Result.each(entry.recovery["resources"], &retire(&1, stores)),
          :ok <-
            OperationLog.request(
              ledger,
@@ -329,11 +314,11 @@ defmodule Alto.Contrib.Resident.Lifecycle do
     # authorizes finishing that original generation, never touching its successor.
     case lookup_resource(resource["role"], server, binding["key"]) do
       {:error, :not_found} ->
-        {:ok, :retired}
+        :ok
 
       {:ok, handle, snapshot} ->
         if Retained.identity(handle)["generation"] != binding["generation"] do
-          {:ok, :retired}
+          :ok
         else
           retire_existing(resource, handle, snapshot)
         end
@@ -355,20 +340,11 @@ defmodule Alto.Contrib.Resident.Lifecycle do
         "binding" -> {Retained, :retire}
       end
 
-    with true <- snapshot.state != :active or snapshot.revision == revision,
-         :ok <- apply(module, method, [handle, snapshot.revision]) do
-      {:ok, :retired}
-    else
-      false -> {:error, :stale_cleanup_resource}
-      {:error, _} = error -> error
-    end
+    if snapshot.state != :active or snapshot.revision == revision,
+      do: apply(module, method, [handle, snapshot.revision]),
+      else: {:error, :stale_cleanup_resource}
   end
 
   defp resource(role, binding, snapshot),
     do: %{"role" => role, "identity" => binding, "revision" => snapshot.revision}
-
-  defp collect(values, fun) do
-    with {:ok, values} <- Alto.Result.traverse(values, fun),
-         do: {:ok, Enum.reject(values, &is_nil/1)}
-  end
 end
