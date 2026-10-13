@@ -7,20 +7,15 @@ defmodule Alto.Contrib.Resident.Tools.ReviewWorkerPatch do
   def approval(_opts \\ []), do: :never
 
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Read a captured descendant worker patch before integrating it. Responses contain " <>
-          "base64 chunks, the full SHA-256 and a next byte cursor. Read all chunks for full review.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          workspace_id: %{type: "string"},
-          cursor: %{type: "integer", minimum: 0}
-        },
-        required: ["workspace_id"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Read a captured descendant worker patch before integrating it. Responses contain " <>
+        "base64 chunks, the full SHA-256 and a next byte cursor. Read all chunks for full review.",
+      %{
+        workspace_id: %{type: "string"},
+        cursor: %{type: "integer", minimum: 0}
+      },
+      ["workspace_id"]
+    )
   end
 
   def run(args, context), do: run(args, context, [])

@@ -7,22 +7,17 @@ defmodule Alto.Contrib.Resident.Tools.ApplyWorkerPatch do
   def approval(_opts \\ []), do: :required
 
   def schema(_opts \\ []) do
-    %{
-      description:
-        "Apply a reviewed worker patch to this team's source checkout. " <>
-          "Use the workspace ID and revision from the worker result. Approval binds the " <>
-          "exact patch and affected files; changed files require a new review. " <>
-          "Inspect the patch with review_worker_patch before requesting application.",
-      parameters: %{
-        type: "object",
-        properties: %{
-          workspace_id: %{type: "string"},
-          revision: %{type: "integer", minimum: 0}
-        },
-        required: ["workspace_id", "revision"],
-        additionalProperties: false
-      }
-    }
+    Alto.Tool.object_schema(
+      "Apply a reviewed worker patch to this team's source checkout. " <>
+        "Use the workspace ID and revision from the worker result. Approval binds the " <>
+        "exact patch and affected files; changed files require a new review. " <>
+        "Inspect the patch with review_worker_patch before requesting application.",
+      %{
+        workspace_id: %{type: "string"},
+        revision: %{type: "integer", minimum: 0}
+      },
+      ["workspace_id", "revision"]
+    )
   end
 
   def prepare(arguments, context), do: prepare(arguments, context, [])
