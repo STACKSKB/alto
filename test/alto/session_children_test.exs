@@ -103,4 +103,25 @@ defmodule Alto.Session.ChildrenTest do
     assert byte_size(header["task"]) == 120
     assert :binary.referenced_byte_size(header["task"]) < 2000
   end
+
+  test "header discovery requires a complete bounded record in a regular file", %{dir: dir} do
+    path = Path.join(dir, "header.jsonl")
+    record = %{"v" => 1, "task" => String.duplicate("x", 32_750)}
+    line = JSON.encode!(record)
+    assert byte_size(line) == 32_767
+
+    File.write!(path, line <> "\nignored trailing data")
+    assert Session.Children.header(path) == record
+
+    for bytes <- ["", line, line <> " \n", "{broken}\n", "[]\n", "{\"v\":2}\n"] do
+      File.write!(path, bytes)
+      assert Session.Children.header(path) == nil
+    end
+
+    File.write!(path, line <> "\n")
+    File.ln_s!(path, path <> ".link")
+
+    for other <- [dir, path <> ".link", path <> ".missing"],
+        do: assert(Session.Children.header(other) == nil)
+  end
 end

@@ -38,19 +38,11 @@ defmodule Alto.Session.Children do
   @doc false
   def header(path) do
     with {:ok, %{type: :regular}} <- File.lstat(path),
-         {:ok, file} <- :file.open(String.to_charlist(path), [:read, :binary, :raw]) do
-      try do
-        with {:ok, bytes} <- :file.read(file, @header_bytes),
-             [line, _] <- String.split(bytes, "\n", parts: 2),
-             {:ok, %{} = record} <- JSON.decode(:binary.copy(line)),
-             1 <- record["v"] do
-          record
-        else
-          _ -> nil
-        end
-      after
-        :file.close(file)
-      end
+         {:ok, bytes} <- Alto.BoundedFile.range(path, 0, @header_bytes),
+         [line, _] <- String.split(bytes, "\n", parts: 2),
+         {:ok, %{} = record} <- JSON.decode(:binary.copy(line)),
+         1 <- record["v"] do
+      record
     else
       _ -> nil
     end
