@@ -47,19 +47,29 @@ defmodule Alto.Contrib.Socket.ClientTest do
     File.rm(path)
   end
 
-  test "request timeout is cleaned up" do
+  test "invalid commands and request timeouts do not consume pending capacity" do
     {path, listener} = socket_fixture()
+    parent = self()
 
     spawn_link(fn ->
       {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, _line} = :gen_tcp.recv(socket, 0, 1_000)
+      {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
+      send(parent, {:request, JSON.decode!(String.trim(line))})
 
       receive do
         :close -> :gen_tcp.close(socket)
       end
     end)
 
-    {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_pending: 1)
+    {:ok, client} =
+      Alto.Contrib.Socket.Client.connect(path, max_pending: 1, max_line_bytes: 100)
+
+    for command <- [%{type: "sessions", value: {:not, :json}}, %{[] => "invalid key"}] do
+      assert {:error, :invalid_command} = Alto.Contrib.Socket.Client.request(client, command)
+    end
+
+    assert {:error, :overflow} =
+             Alto.Contrib.Socket.Client.request(client, %{type: String.duplicate("x", 100)})
 
     assert {:error, :invalid_timeout} =
              Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"}, timeout: -1)
@@ -69,11 +79,47 @@ defmodule Alto.Contrib.Socket.ClientTest do
     assert {:error, :timeout} =
              Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"}, timeout: 20)
 
+    assert_receive {:request, %{"v" => 1, "id" => "c-1", "type" => "sessions"}}
+
     assert {:error, :timeout} =
              Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"}, timeout: 20)
 
     Alto.Contrib.Socket.Client.close(client)
     File.rm(path)
+  end
+
+  test "an expired notification waiter leaves the remaining callers in FIFO order" do
+    {path, listener} = socket_fixture()
+
+    server =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
+
+        receive do
+          :deliver ->
+            send_json(socket, [
+              %{"v" => 1, "type" => "event", "id" => "first"},
+              %{"v" => 1, "type" => "event", "id" => "second"}
+            ])
+        end
+
+        receive do
+          :close -> :gen_tcp.close(socket)
+        end
+      end)
+
+    {:ok, client} = Alto.Contrib.Socket.Client.connect(path)
+    first = :gen_server.send_request(client.pid, {:next, 5_000})
+    expired = :gen_server.send_request(client.pid, {:next, 20})
+    last = :gen_server.send_request(client.pid, {:next, 5_000})
+    assert {:reply, {:error, :timeout}} = :gen_server.receive_response(expired, 1_000)
+
+    send(server, :deliver)
+    assert {:reply, {:ok, %{"id" => "first"}}} = :gen_server.receive_response(first, 1_000)
+    assert {:reply, {:ok, %{"id" => "second"}}} = :gen_server.receive_response(last, 1_000)
+    assert {:error, :timeout} = Alto.Contrib.Socket.Client.next(client, 0)
+    send(server, :close)
+    Alto.Contrib.Socket.Client.close(client)
   end
 
   test "malformed envelopes fail closed with an explicit reason" do

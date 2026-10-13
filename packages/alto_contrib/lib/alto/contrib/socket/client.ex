@@ -39,13 +39,7 @@ defmodule Alto.Contrib.Socket.Client do
 
   def request(%__MODULE__{pid: pid}, command, opts) when is_map(command) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
-
-    if valid_timeout?(timeout),
-      do: GenServer.call(pid, {:request, command, timeout}, timeout + 100),
-      else: {:error, :invalid_timeout}
-  catch
-    :exit, {:timeout, _} -> {:error, :timeout}
-    :exit, _ -> {:error, :closed}
+    call(pid, {:request, command, timeout}, timeout)
   end
 
   def request(pid, command, opts) when is_pid(pid) and is_map(command),
@@ -57,16 +51,18 @@ defmodule Alto.Contrib.Socket.Client do
   @spec next(t(), timeout()) :: {:ok, map()} | {:error, term()}
   def next(client, timeout \\ @default_timeout)
 
-  def next(%__MODULE__{pid: pid}, timeout) do
+  def next(%__MODULE__{pid: pid}, timeout), do: call(pid, {:next, timeout}, timeout)
+
+  def next(pid, timeout) when is_pid(pid), do: next(%__MODULE__{pid: pid}, timeout)
+
+  defp call(pid, message, timeout) do
     if valid_timeout?(timeout),
-      do: GenServer.call(pid, {:next, timeout}, timeout + 100),
+      do: GenServer.call(pid, message, timeout + 100),
       else: {:error, :invalid_timeout}
   catch
     :exit, {:timeout, _} -> {:error, :timeout}
     :exit, _ -> {:error, :closed}
   end
-
-  def next(pid, timeout) when is_pid(pid), do: next(%__MODULE__{pid: pid}, timeout)
 
   @doc "Close the client socket."
   @spec close(t()) :: :ok
@@ -134,12 +130,12 @@ defmodule Alto.Contrib.Socket.Client do
     else
       id = "c-#{state.next_id}"
 
-      case build_envelope(command, id) do
+      case encode_command(command, id, state.max_line_bytes) do
         {:error, reason} ->
           {:reply, {:error, reason}, state}
 
-        {:ok, envelope} ->
-          send_request(envelope, id, from, timeout, state)
+        {:ok, line} ->
+          send_request(line, id, from, timeout, state)
       end
     end
   end
@@ -169,21 +165,15 @@ defmodule Alto.Contrib.Socket.Client do
     end
   end
 
-  defp send_request(envelope, id, from, timeout, state) do
-    case encode_line(envelope, state.max_line_bytes) do
-      {:ok, line} ->
-        case :gen_tcp.send(state.socket, line) do
-          :ok ->
-            timer = Process.send_after(self(), {:request_timeout, id}, timeout)
-            pending = Map.put(state.pending, id, {from, timer})
-            {:noreply, %{state | pending: pending, next_id: state.next_id + 1}}
-
-          {:error, reason} ->
-            {:reply, {:error, {:send, reason}}, state}
-        end
+  defp send_request(line, id, from, timeout, state) do
+    case :gen_tcp.send(state.socket, line) do
+      :ok ->
+        timer = Process.send_after(self(), {:request_timeout, id}, timeout)
+        pending = Map.put(state.pending, id, {from, timer})
+        {:noreply, %{state | pending: pending, next_id: state.next_id + 1}}
 
       {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        {:reply, {:error, {:send, reason}}, state}
     end
   end
 
@@ -196,19 +186,16 @@ defmodule Alto.Contrib.Socket.Client do
 
     case consume_lines(state.buffer, state.max_line_bytes, []) do
       {:ok, buffer, lines} ->
-        case Enum.reduce_while(lines, {:ok, %{state | buffer: buffer}}, fn line, {:ok, acc} ->
-               case handle_line(line, acc) do
-                 {:ok, next} -> {:cont, {:ok, next}}
-                 {:error, reason} -> {:halt, {:closed, close_state(acc, reason)}}
-               end
-             end) do
-          {:ok, next} ->
-            :inet.setopts(socket, active: :once)
-            {:noreply, next}
+        next =
+          Enum.reduce_while(lines, %{state | buffer: buffer}, fn line, acc ->
+            case handle_line(line, acc) do
+              {:ok, next} -> {:cont, next}
+              {:error, reason} -> {:halt, close_state(acc, reason)}
+            end
+          end)
 
-          {:closed, next} ->
-            {:noreply, next}
-        end
+        if is_nil(next.closed), do: :inet.setopts(socket, active: :once)
+        {:noreply, next}
 
       {:error, :line_too_large} ->
         {:noreply, close_state(state, :line_too_large)}
@@ -358,19 +345,12 @@ defmodule Alto.Contrib.Socket.Client do
     end
   end
 
-  defp encode_line(map, max) do
-    line = JSON.encode!(map) <> "\n"
+  defp encode_command(command, id, max) do
+    line = command |> stringify_keys() |> Map.merge(%{"v" => 1, "id" => id}) |> JSON.encode!()
+    line = line <> "\n"
     if byte_size(line) <= max, do: {:ok, line}, else: {:error, :overflow}
   rescue
     _ -> {:error, :invalid_command}
-  end
-
-  defp build_envelope(command, id) do
-    try do
-      {:ok, command |> stringify_keys() |> Map.merge(%{"v" => 1, "id" => id})}
-    rescue
-      _ -> {:error, :invalid_command}
-    end
   end
 
   defp stringify_keys(map), do: Map.new(map, fn {k, v} -> {stringify_key(k), v} end)
@@ -381,14 +361,10 @@ defmodule Alto.Contrib.Socket.Client do
   defp valid_bound?(value), do: is_integer(value) and value > 0
   defp valid_timeout?(value), do: is_integer(value) and value in 0..4_294_967_295
 
-  defp remove_waiter(queue, from), do: remove_waiter(queue, from, :queue.new(), false)
-  defp remove_waiter(queue, _from, acc, true), do: {true, acc |> :queue.join(queue)}
-
-  defp remove_waiter(queue, from, acc, found) do
-    case :queue.out(queue) do
-      {{:value, {^from, _timer}}, rest} -> {true, :queue.join(acc, rest)}
-      {{:value, item}, rest} -> remove_waiter(rest, from, :queue.in(item, acc), found)
-      {:empty, _} -> {false, acc}
+  defp remove_waiter(queue, from) do
+    case List.keytake(:queue.to_list(queue), from, 0) do
+      {_, remaining} -> {true, :queue.from_list(remaining)}
+      nil -> {false, queue}
     end
   end
 end
