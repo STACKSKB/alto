@@ -104,47 +104,35 @@ defmodule Alto.Contrib.CacheWarmer.Server do
 
   def handle_info({ref, result}, %{worker: %{task: %{ref: ref}} = worker} = state) do
     Process.demonitor(ref, [:flush])
-    state = %{state | worker: nil}
 
-    case result do
-      {:ok, %{usage: usage, cache_hit: hit, output: output}} ->
-        notify(state, :cache_warm_finished, %{
-          usage: usage,
-          cache_hit: hit,
-          outcome: if(output, do: :unexpected_output, else: :ok)
-        })
+    data =
+      case result do
+        {:ok, %{usage: usage, cache_hit: hit, output: output}} ->
+          %{usage: usage, cache_hit: hit, outcome: if(output, do: :unexpected_output, else: :ok)}
 
-        if hit and not output do
-          candidate = %{
-            state.candidate
-            | started: worker.started,
-              due: worker.started + state.candidate.plan.ttl_ms - state.refresh_margin_ms
-          }
+        {:error, {:invalid_cache_warm_response, usage}} ->
+          %{usage: usage, usage_unknown: true, outcome: :invalid_response}
 
-          {:noreply, schedule(%{state | candidate: candidate})}
-        else
-          {:noreply, %{state | candidate: nil}}
-        end
+        _ ->
+          %{usage: nil, usage_unknown: true, outcome: :error}
+      end
 
-      {:error, {:invalid_cache_warm_response, usage}} ->
-        notify(state, :cache_warm_finished, %{
-          usage: usage,
-          usage_unknown: true,
-          outcome: :invalid_response
-        })
+    notify(state, :cache_warm_finished, data)
 
-        {:noreply, %{state | candidate: nil}}
+    candidate =
+      if data.outcome == :ok and data.cache_hit do
+        %{
+          state.candidate
+          | started: worker.started,
+            due: worker.started + state.candidate.plan.ttl_ms - state.refresh_margin_ms
+        }
+      end
 
-      _ ->
-        notify(state, :cache_warm_finished, %{usage: nil, usage_unknown: true, outcome: :error})
-        {:noreply, %{state | candidate: nil}}
-    end
+    {:noreply, schedule(%{state | worker: nil, candidate: candidate})}
   end
 
-  def handle_info({:DOWN, ref, :process, _, _}, %{worker: %{task: %{ref: ref}}} = state) do
-    notify(state, :cache_warm_finished, %{usage: nil, usage_unknown: true, outcome: :error})
-    {:noreply, %{state | worker: nil, candidate: nil}}
-  end
+  def handle_info({:DOWN, ref, :process, _, _}, %{worker: %{task: %{ref: ref}}} = state),
+    do: handle_info({ref, :worker_failed}, state)
 
   def handle_info({:DOWN, ref, :process, _, _}, state)
       when ref == state.owner_ref or ref == state.execution_ref,

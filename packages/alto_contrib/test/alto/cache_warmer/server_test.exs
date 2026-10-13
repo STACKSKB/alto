@@ -110,22 +110,47 @@ defmodule Alto.Contrib.CacheWarmer.ServerTest do
   end
 
   test "stops a candidate on miss or error and reports usage separately", ctx do
-    for outcome <- [:miss, :error] do
+    for outcome <- [:miss, :error, :invalid, :output, :crash] do
       :atomics.put(ctx.clock, 1, 0)
       pid = start(ctx.args)
       begin(pid)
       advance(pid, ctx.clock, 9_000)
       assert_receive {:refresh, worker, _, _}
 
-      if outcome == :miss,
-        do: reply(worker, false),
-        else: send(worker, {:reply, {:error, :offline}})
+      case outcome do
+        :miss ->
+          reply(worker, false)
+
+        :error ->
+          send(worker, {:reply, {:error, :offline}})
+
+        :invalid ->
+          send(worker, {:reply, {:error, {:invalid_cache_warm_response, %{input_tokens: 100}}}})
+
+        :output ->
+          send(
+            worker,
+            {:reply, {:ok, %{usage: %{input_tokens: 100}, cache_hit: true, output: true}}}
+          )
+
+        :crash ->
+          Process.exit(:sys.get_state(pid).worker.task.pid, :kill)
+      end
 
       assert_receive {:event, %{type: :cache_warm_finished, data: data}}
 
-      if outcome == :miss,
+      if outcome in [:miss, :invalid, :output],
         do: assert(data.usage.input_tokens == 100),
         else: assert(data.usage_unknown)
+
+      assert data.outcome ==
+               %{
+                 miss: :ok,
+                 error: :error,
+                 invalid: :invalid_response,
+                 output: :unexpected_output,
+                 crash: :error
+               }[outcome]
 
       advance(pid, ctx.clock, 18_000)
       refute_receive {:refresh, _, _, _}, 10
