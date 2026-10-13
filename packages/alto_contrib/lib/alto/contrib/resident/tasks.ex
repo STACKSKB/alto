@@ -536,7 +536,6 @@ defmodule Alto.Contrib.Resident.Tasks do
         Runs.pull(registry, self(), 100)
 
         receive do
-          {:alto_notification, {:result, ^run, _}} -> await_run(registry, run, session)
           {:alto_notification, _} -> await_run(registry, run, session)
         after
           100 -> await_run(registry, run, session)
@@ -560,17 +559,11 @@ defmodule Alto.Contrib.Resident.Tasks do
        do: {:checkpoint, packet}
 
   defp task_outcome(
-         %Alto.Runner.Result{status: :cancelled, checkpoint: %{"kind" => "parent"}} = value,
+         %Alto.Runner.Result{status: status, checkpoint: %{"kind" => "parent"}, reason: reason},
          run,
          session
-       ),
-       do: task_outcome(%{value | checkpoint: nil}, run, session)
-
-  defp task_outcome(
-         %Alto.Runner.Result{checkpoint: %{"kind" => "parent"}, reason: reason},
-         run,
-         session
-       ),
+       )
+       when status != :cancelled,
        do: parked(:parent_continuation, reason, run, session)
 
   defp task_outcome(%Alto.Runner.Result{} = value, run, session) do
