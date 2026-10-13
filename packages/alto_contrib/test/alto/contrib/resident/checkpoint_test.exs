@@ -84,7 +84,7 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
     %{name: name, config: config, dir: dir}
   end
 
-  test "suspended work frees its worker, survives restart, and resumes the exact prepared value",
+  test "suspended work and its approval survive restart and full queues with the exact prepared value",
        %{name: name, config: config, dir: dir} do
     submit(name, "approval", "guarded")
     task = wait_for(name, "approval", "waiting_approval")
@@ -96,6 +96,7 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
     assert File.read!(Path.join(dir, "first")) == "11"
     stop_supervised!(Service)
     File.write!(Path.join(dir, "input"), "changed")
+    config = %{config | scheduling: Keyword.put(config.scheduling, :max_pending, 1)}
     start_supervised!({Service, name: name, config: config})
     recovered = wait_for(name, "approval", "waiting_approval")
     assert recovered["approval"] == task["approval"]
@@ -109,6 +110,14 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
              })
 
     assert {:ok, _} =
+             Tasks.command(name, "submit", %{
+               "id" => "blocker",
+               "profile" => "safe",
+               "task" => "wait",
+               "delay_ms" => 60_000
+             })
+
+    assert {:ok, %{"status" => "awaiting_admission"}} =
              Tasks.command(name, "decide", %{
                "id" => "approval",
                "revision" => task["revision"],
@@ -121,6 +130,12 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
                "revision" => task["revision"],
                "decision" => "approve"
              })
+
+    stop_supervised!(Service)
+    start_supervised!({Service, name: name, config: config})
+    wait_for(name, "approval", "awaiting_admission")
+    refute File.exists?(Path.join(dir, "approved"))
+    assert {:ok, _} = Tasks.command(name, "cancel", %{"id" => "blocker"})
 
     done = wait_for(name, "approval", "completed")
     assert done["session_id"] == session

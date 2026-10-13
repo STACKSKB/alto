@@ -295,33 +295,15 @@ defmodule Alto.Contrib.Resident.Tasks do
     note = Map.get(payload, "note")
     evidence = %{"note" => note}
 
-    reply =
-      with true <- not is_nil(resolution) and is_binary(note) and byte_size(note) in 1..4_096,
-           :ok <- may_reconcile(state, id),
-           :ok <- parent_retry_check(state, id, resolution, payload),
-           {:ok, recovered} <-
-             OperationLog.request(state.ledger, {:reconcile, id, revision, resolution, evidence}),
-           admission when admission in [:ok, {:error, :queue_full}] <-
-             restore_if_retry(state, id, resolution, recovered) do
-        {:accepted, recovered.revision, admission}
-      else
-        false -> {:error, :invalid_resolution}
-        {:error, _} = error -> error
-      end
-
-    case reply do
-      {:accepted, revision, {:error, :queue_full}} ->
-        pending = MapSet.put(state.pending_admissions, id)
-
-        {:reply,
-         {:ok, %{"task_id" => id, "revision" => revision, "status" => "awaiting_admission"}},
-         %{state | pending_admissions: pending}}
-
-      {:accepted, revision, :ok} ->
-        {:reply, {:ok, %{"task_id" => id, "revision" => revision}}, state}
-
-      error ->
-        {:reply, error, state}
+    with true <- not is_nil(resolution) and is_binary(note) and byte_size(note) in 1..4_096,
+         :ok <- may_reconcile(state, id),
+         :ok <- parent_retry_check(state, id, resolution, payload),
+         {:ok, recovered} <-
+           OperationLog.request(state.ledger, {:reconcile, id, revision, resolution, evidence}) do
+      admission_reply(state, id, resolution, recovered)
+    else
+      false -> {:reply, {:error, :invalid_resolution}, state}
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
@@ -331,39 +313,22 @@ defmodule Alto.Contrib.Resident.Tasks do
         state
       )
       when is_binary(id) and is_integer(revision) and decision in ["approve", "deny"] do
-    reply =
-      with {:ok, current} <- OperationLog.request(state.ledger, {:recovery, id}),
-           :ok <-
-             checkpoint_upgrade_check(
-               current.checkpoint,
-               state.config,
-               get_in(current.recovery, [:payload, "profile"])
-             ),
-           {:ok, recovered} <-
-             OperationLog.request(
-               state.ledger,
-               {:resume_checkpoint, id, revision, %{"decision" => decision}}
-             ),
-           admission when admission in [:ok, {:error, :queue_full}] <-
-             restore_if_retry(state, id, :retry_permitted, recovered) do
-        {:accepted, recovered.revision, admission}
-      else
-        {:error, _} = error -> error
-        _ -> {:error, :task_still_running}
-      end
-
-    case reply do
-      {:accepted, revision, admission} ->
-        pending =
-          if admission == {:error, :queue_full},
-            do: MapSet.put(state.pending_admissions, id),
-            else: state.pending_admissions
-
-        {:reply, {:ok, %{"task_id" => id, "revision" => revision}},
-         %{state | pending_admissions: pending}}
-
-      error ->
-        {:reply, error, state}
+    with {:ok, current} <- OperationLog.request(state.ledger, {:recovery, id}),
+         :ok <-
+           checkpoint_upgrade_check(
+             current.checkpoint,
+             state.config,
+             get_in(current.recovery, [:payload, "profile"])
+           ),
+         {:ok, recovered} <-
+           OperationLog.request(
+             state.ledger,
+             {:resume_checkpoint, id, revision, %{"decision" => decision}}
+           ) do
+      admission_reply(state, id, :retry_permitted, recovered)
+    else
+      {:error, _} = error -> {:reply, error, state}
+      _ -> {:reply, {:error, :task_still_running}, state}
     end
   end
 
@@ -852,6 +817,23 @@ defmodule Alto.Contrib.Resident.Tasks do
 
       {:error, :not_found} ->
         :ok
+    end
+  end
+
+  # The decision is already durable. A full queue delays admission, not acceptance.
+  defp admission_reply(state, id, resolution, recovered) do
+    reply = %{"task_id" => id, "revision" => recovered.revision}
+
+    case restore_if_retry(state, id, resolution, recovered) do
+      :ok ->
+        {:reply, {:ok, reply}, state}
+
+      {:error, :queue_full} ->
+        {:reply, {:ok, Map.put(reply, "status", "awaiting_admission")},
+         %{state | pending_admissions: MapSet.put(state.pending_admissions, id)}}
+
+      error ->
+        {:reply, error, state}
     end
   end
 
