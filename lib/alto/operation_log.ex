@@ -159,22 +159,15 @@ defmodule Alto.OperationLog do
   defp scrub_command(command), do: command
 
   defp commit(state, command) do
-    case transition(state, command) do
-      {:ok, _next, :noop} ->
-        {:reply, :ok, state}
-
-      {:ok, next, response} ->
-        case append(state, command) do
-          :ok -> {:reply, response(response, command, next), next}
-          {:error, reason} -> {:reply, {:error, reason}, state}
-        end
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    with {:ok, next, reply} <- transition(state, command),
+         :ok <- if(reply == :noop, do: :ok, else: append(state, command)) do
+      {:reply, response(reply, command, next), next}
+    else
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
-  defp response(:ok, _, _), do: :ok
+  defp response(reply, _, _) when reply in [:ok, :noop], do: :ok
 
   defp response(:view, command, state) do
     op = elem(command, 1)
