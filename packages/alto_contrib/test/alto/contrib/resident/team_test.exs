@@ -38,26 +38,17 @@ defmodule Alto.Contrib.Resident.TeamTest do
     end
   end
 
-  defmodule InvalidProfileLead do
-    @behaviour Alto.Provider
-    def describe(_), do: %{}
-
-    def stream(_request, _sink, _opts),
-      do:
-        {:ok,
-         %{message: ~s({"agents":[{"id":"x","profile":"missing","task":"x"}]}), tool_calls: []}}
-  end
-
   defmodule PlanProvider do
     @behaviour Alto.Provider
     def describe(_), do: %{}
     def stream(_request, _sink, opts), do: {:ok, %{message: opts[:plan], tool_calls: []}}
   end
 
-  test "invalid assignments reject the whole plan without dispatching valid siblings" do
+  test "invalid assignments reject the whole plan without dispatching valid siblings", %{dir: dir} do
     child = %{"id" => "valid", "profile" => "cheap", "task" => "inspect"}
 
     invalid = [
+      [%{child | "profile" => "missing"}],
       [child, %{child | "profile" => "missing", "id" => "other"}],
       [child, child],
       [Map.put(child, "tools", ["write_file"])],
@@ -73,7 +64,9 @@ defmodule Alto.Contrib.Resident.TeamTest do
                      workers: %{"cheap" => [provider: {CheapProvider, test_pid: self()}]},
                      max_children: 2
                    ),
-                 provider: {PlanProvider, plan: JSON.encode!(%{agents: agents})}
+                 provider: {PlanProvider, plan: JSON.encode!(%{agents: agents})},
+                 session: :new,
+                 session_dir: dir
                )
     end
 
@@ -176,20 +169,5 @@ defmodule Alto.Contrib.Resident.TeamTest do
     assert_receive {:worker_request, _}, 2_000
     assert_receive {:lead_request, planning}, 2_000
     assert JSON.decode!(List.last(planning.messages)["content"])["stage"] == "planning"
-  end
-
-  test "unknown profile fails before any child dispatch", %{dir: dir} do
-    assert %Alto.Runner.Result{status: :error, reason: :invalid_team_plan} =
-             Alto.run("original task",
-               loop:
-                 Alto.Contrib.Resident.Team.loop(
-                   workers: %{cheap: [provider: {CheapProvider, test_pid: self()}]}
-                 ),
-               provider: InvalidProfileLead,
-               session: :new,
-               session_dir: dir
-             )
-
-    refute_receive {:worker_request, _}, 100
   end
 end

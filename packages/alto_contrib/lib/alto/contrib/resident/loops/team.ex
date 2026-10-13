@@ -16,8 +16,7 @@ defmodule Alto.Contrib.Resident.Loops.Team do
   @impl true
   def handle_event(%Event{type: :model_completed, data: data}, %{phase: :planning} = state, spec) do
     with [] <- Map.get(data, :tool_calls, []),
-         {:ok, plan} <- decode_plan(Map.get(data, :message)),
-         {:ok, agents} <- translate(plan, spec.driver_options) do
+         {:ok, agents} <- plan_agents(Map.get(data, :message), spec.driver_options) do
       {:continue, %{state | phase: :children}, [{:spawn_agents, %{agents: agents}}]}
     else
       _ -> {{:error, :invalid_team_plan}, state, []}
@@ -71,42 +70,21 @@ defmodule Alto.Contrib.Resident.Loops.Team do
     end
   end
 
-  defp decode_plan(message) when is_binary(message) and byte_size(message) <= 1_000_000 do
-    case JSON.decode(message) do
-      {:ok, %{"agents" => agents} = plan} when map_size(plan) == 1 and is_list(agents) ->
-        {:ok, agents}
-
-      _ ->
-        {:error, :invalid_plan}
-    end
-  end
-
-  defp decode_plan(_), do: {:error, :invalid_plan}
-
-  defp translate(agents, opts) do
-    max = Keyword.fetch!(opts, :max_children)
-    workers = Keyword.fetch!(opts, :workers)
-
-    if length(agents) in 1..max do
-      Enum.reduce_while(agents, {:ok, []}, fn agent, {:ok, acc} ->
-        case translate_one(agent, workers) do
-          {:ok, child} ->
-            if Enum.any?(acc, &(&1.id == child.id)),
-              do: {:halt, {:error, :duplicate_id}},
-              else: {:cont, {:ok, [child | acc]}}
-
-          error ->
-            {:halt, error}
-        end
-      end)
-      |> case do
-        {:ok, children} -> {:ok, Enum.reverse(children)}
-        error -> error
-      end
+  defp plan_agents(message, opts) when is_binary(message) and byte_size(message) <= 1_000_000 do
+    with {:ok, %{"agents" => agents} = plan} when map_size(plan) == 1 and is_list(agents) <-
+           JSON.decode(message),
+         max <- Keyword.fetch!(opts, :max_children),
+         workers <- Keyword.fetch!(opts, :workers),
+         true <- length(agents) in 1..max,
+         {:ok, children} <- Alto.Result.traverse(agents, &translate_one(&1, workers)),
+         true <- Enum.uniq_by(children, & &1.id) == children do
+      {:ok, children}
     else
-      {:error, :invalid_child_count}
+      _ -> {:error, :invalid_team_plan}
     end
   end
+
+  defp plan_agents(_, _), do: {:error, :invalid_team_plan}
 
   defp translate_one(%{"id" => id, "profile" => profile, "task" => task} = agent, workers)
        when map_size(agent) == 3 and is_binary(id) and byte_size(id) in 1..100 and
