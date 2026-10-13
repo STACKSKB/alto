@@ -34,7 +34,7 @@ defmodule Alto.Runner.ToolBatch do
 
   defp collect(tasks, caps, results) do
     status = Alto.Runner.Execution.check(caps)
-    results = harvest(tasks, results)
+    results = harvest(tasks, results, status)
 
     case status do
       {kind, reason} when kind in [:cancelled, :error] ->
@@ -42,17 +42,6 @@ defmodule Alto.Runner.ToolBatch do
         {kind, reason, ordered(tasks, results, {:unknown, fallback})}
 
       :ok ->
-        results =
-          Enum.reduce(tasks, results, fn {task, deadline}, acc ->
-            if not Map.has_key?(acc, task.ref) and
-                 System.monotonic_time(:millisecond) >= deadline do
-              Task.shutdown(task, :brutal_kill)
-              Map.put(acc, task.ref, {:unknown, :timeout})
-            else
-              acc
-            end
-          end)
-
         if map_size(results) == length(tasks) do
           {:ok, ordered(tasks, results, nil)}
         else
@@ -68,15 +57,25 @@ defmodule Alto.Runner.ToolBatch do
   # Cancellation is received selectively, so completed task messages can be
   # sitting earlier in the coordinator mailbox.  Preserve those decided
   # outcomes before assigning an unknown fallback to work still in flight.
-  defp harvest(tasks, results) do
-    Enum.reduce(tasks, results, fn {task, _deadline}, acc ->
+  defp harvest(tasks, results, status) do
+    Enum.reduce(tasks, results, fn {task, deadline}, acc ->
       if Map.has_key?(acc, task.ref) do
         acc
       else
         case Task.yield(task, 0) do
-          {:ok, value} -> Map.put(acc, task.ref, value)
-          {:exit, reason} -> Map.put(acc, task.ref, {:unknown, reason})
-          nil -> acc
+          {:ok, value} ->
+            Map.put(acc, task.ref, value)
+
+          {:exit, reason} ->
+            Map.put(acc, task.ref, {:unknown, reason})
+
+          nil ->
+            if status == :ok and System.monotonic_time(:millisecond) >= deadline do
+              Task.shutdown(task, :brutal_kill)
+              Map.put(acc, task.ref, {:unknown, :timeout})
+            else
+              acc
+            end
         end
       end
     end)
