@@ -142,31 +142,7 @@ defmodule Alto.TUI.Backends.Remote do
         _
       ) do
     if data(state).connection == pid and Menu.value(form, :path) == path do
-      form =
-        case reply do
-          {:ok, result} ->
-            Map.merge(form, %{
-              suggestions: result.folders,
-              completion: result.completion,
-              suggestion_index: nil,
-              completion_pending?: false,
-              error: nil
-            })
-
-          {:error, reason} ->
-            Map.merge(form, %{
-              suggestions: [],
-              completion: nil,
-              completion_pending?: false,
-              error: Alto.Contrib.Display.error(reason)
-            })
-        end
-
-      form =
-        if form[:tab_pending?] and is_binary(form[:completion]),
-          do: Menu.complete_folder(form, form.completion),
-          else: form
-
+      form = Menu.folder_result(form, reply)
       {:noreply, %{state | overlay: form, leader?: false}}
     else
       {:noreply, state, render?: false}

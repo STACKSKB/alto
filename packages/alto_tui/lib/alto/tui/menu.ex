@@ -88,11 +88,20 @@ defmodule Alto.TUI.Menu do
 
   @doc "Refresh the inline folder list after an edit or completion."
   def refresh_folder(%{kind: :workspace_form, base: base} = menu) do
-    path = value(menu, :path)
-    saved = if path == "", do: Map.get(menu, :folders, []), else: []
+    result =
+      Map.get(menu, :complete, &Alto.Contrib.Folders.suggest(&1, base)).(value(menu, :path))
+
+    folder_result(Map.put(menu, :tab_pending?, false), result)
+  end
+
+  def refresh_folder(menu), do: menu
+
+  @doc "Apply a local or asynchronous folder result and finish any pending Tab completion."
+  def folder_result(menu, result) do
+    saved = if value(menu, :path) == "", do: Map.get(menu, :folders, []), else: []
 
     {found, completion, error} =
-      case Map.get(menu, :complete, &Alto.Contrib.Folders.suggest(&1, base)).(path) do
+      case result do
         {:ok, %{folders: folders, completion: completion}} ->
           {folders, completion, nil}
 
@@ -103,17 +112,20 @@ defmodule Alto.TUI.Menu do
           {[], nil, "Could not list folders: " <> Alto.Contrib.Display.error(reason)}
       end
 
-    Map.merge(menu, %{
-      suggestions: Enum.take(Enum.uniq(saved ++ found), 50),
-      suggestion_index: nil,
-      completion: if(completion == :pending, do: nil, else: completion),
-      completion_pending?: completion == :pending,
-      tab_pending?: false,
-      error: error
-    })
-  end
+    next =
+      Map.merge(menu, %{
+        suggestions: Enum.take(Enum.uniq(saved ++ found), 50),
+        suggestion_index: nil,
+        completion: if(completion == :pending, do: nil, else: completion),
+        completion_pending?: completion == :pending,
+        tab_pending?: false,
+        error: error
+      })
 
-  def refresh_folder(menu), do: menu
+    if menu[:tab_pending?] and is_binary(next.completion),
+      do: complete_folder(next, next.completion),
+      else: next
+  end
 
   def folder_selection(menu),
     do: if(menu[:suggestion_index] != nil, do: Enum.at(menu.suggestions, menu.suggestion_index))

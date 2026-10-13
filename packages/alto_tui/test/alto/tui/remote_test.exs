@@ -144,6 +144,9 @@ defmodule Alto.TUI.RemoteTest do
       %{runtime | user_state: Remote.ui(:workspace_form, runtime.user_state, [])}
     end)
 
+    eventually(fn -> state(terminal).overlay.completion_pending? == false end)
+    assert (root <> "/") in state(terminal).overlay.suggestions
+
     Runtime.inject_event(terminal, %Paste{content: Path.join(root, "Folder A")})
     Runtime.inject_event(terminal, %Key{code: "tab", kind: "press"})
 
