@@ -100,29 +100,12 @@ defmodule Alto.Contrib.Resident.CLI do
     end
   end
 
-  defp dispatch(["watch", run], opts) do
-    with {:ok, client} <- connect(opts) do
-      try do
-        with {:ok, _} <-
-               Client.request(client, %{
-                 "type" => "attach",
-                 "run_id" => run,
-                 "from_seq" => Keyword.get(opts, :from_seq, 1)
-               }),
-             do: watch(client)
-      after
-        Client.close(client)
-      end
-    end
-  end
-
   defp dispatch(args, opts) do
     with {:ok, command} <- command(args, opts),
          {:ok, client} <- connect(opts) do
       try do
-        case Client.request(client, command) do
-          {:ok, reply} -> print(reply)
-          {:error, reason} -> {:error, reason}
+        with {:ok, reply} <- Client.request(client, command) do
+          if command["type"] == "attach", do: watch(client), else: print(reply)
         end
       after
         Client.close(client)
@@ -131,56 +114,45 @@ defmodule Alto.Contrib.Resident.CLI do
   end
 
   @wire_commands %{
-    "tasks" => {"tasks.list", [], false},
-    "workspaces" => {"workspaces.list", [], true},
-    "workspace" => {"workspaces.get", ["id"], false},
-    "workspace-patch" => {"workspaces.patch", ["id"], true},
-    "team-batches" => {"children.list", [], true},
-    "team-batch" => {"children.get", ["key"], false},
-    "mailbox" => {"mailbox.list", ["root"], true},
-    "mailbox-compact" => {"mailbox.compact", [], false},
-    "mailbox-get" => {"mailbox.get", ["root", "key"], false},
-    "mailbox-cancel" => {"mailbox.cancel", ["root", "key"], false},
-    "task" => {"tasks.get", ["id"], false},
-    "task-cancel" => {"tasks.cancel", ["id"], false},
-    "workspace-discard" =>
-      {"workspaces.discard", ["id"], [:revision, :note],
-       :workspace_discard_requires_revision_and_note},
+    "status" => {:sessions, [], []},
+    "start" => {:start_run, [:config, :task], []},
+    "follow" => {:start_run, [:resume, :config, :task], []},
+    "history" => {:session_events, [:session_id], [cursor: 0]},
+    "watch" => {:attach, [:run_id], [from_seq: 1]},
+    "cancel" => {:cancel, [:run_id], [reason: "user"]},
+    "tasks" => {"tasks.list", [], []},
+    "workspaces" => {"workspaces.list", [], [cursor: 0]},
+    "workspace" => {"workspaces.get", [:id], []},
+    "workspace-patch" => {"workspaces.patch", [:id], [cursor: 0]},
+    "team-batches" => {"children.list", [], [cursor: 0]},
+    "team-batch" => {"children.get", [:key], []},
+    "team-result" =>
+      {"children.result", [:key, :child], [generation: nil, revision: nil, cursor: 0]},
+    "mailbox" => {"mailbox.list", [:root], [cursor: 0]},
+    "mailbox-compact" => {"mailbox.compact", [], []},
+    "mailbox-get" => {"mailbox.get", [:root, :key], []},
+    "mailbox-cancel" => {"mailbox.cancel", [:root, :key], []},
+    "task" => {"tasks.get", [:id], []},
+    "task-cancel" => {"tasks.cancel", [:id], []},
+    "workspace-discard" => {"workspaces.discard", [:id], [revision: nil, note: nil]},
     "team-child-approval" =>
-      {"children.approval", ["key", "child"], [:generation, :revision],
-       :team_child_approval_requires_generation_and_revision},
-    "task-decide" =>
-      {"tasks.decide", ["id", "decision"], [:revision], {:invalid_task_decide, :revision}},
+      {"children.approval", [:key, :child], [generation: nil, revision: nil]},
+    "task-decide" => {"tasks.decide", [:id, :decision], [revision: nil]},
     "task-child-decide" =>
-      {"tasks.child_decide", ["id", "child", "decision"],
-       [:revision, :generation, :batch_revision, :attempt, :suspension, :key],
-       :invalid_task_child_decide},
-    "task-cleanup" => {"tasks.cleanup", ["id"], [:revision], :task_cleanup_requires_revision},
+      {"tasks.child_decide", [:id, :child, :decision],
+       [
+         revision: nil,
+         generation: nil,
+         batch_revision: nil,
+         attempt: nil,
+         suspension: nil,
+         key: nil
+       ]},
+    "task-cleanup" => {"tasks.cleanup", [:id], [revision: nil]},
+    "task-reconcile" => {"tasks.reconcile", [:id, :resolution], [revision: nil, note: nil]},
     "task-recover" =>
-      {"tasks.recover", ["id", "key"], [:revision, :generation, :continuation_revision],
-       :invalid_parent_recovery_request}
+      {"tasks.recover", [:id, :key], [revision: nil, generation: nil, continuation_revision: nil]}
   }
-  @positive_keys ~w(revision batch_revision continuation_revision)
-
-  defp command(["status"], _), do: {:ok, %{"type" => "sessions"}}
-
-  defp command(["start", profile, task], _),
-    do: {:ok, %{"type" => "start_run", "config" => profile, "task" => task}}
-
-  defp command(["follow", session, profile, task], _),
-    do: {:ok, %{"type" => "start_run", "config" => profile, "task" => task, "resume" => session}}
-
-  defp command(["history", session], opts),
-    do:
-      {:ok,
-       %{
-         "type" => "session_events",
-         "session_id" => session,
-         "cursor" => Keyword.get(opts, :cursor, 0)
-       }}
-
-  defp command(["cancel", run], _),
-    do: {:ok, %{"type" => "cancel", "run_id" => run, "reason" => "user"}}
 
   defp command(["schedule", profile, task], opts) do
     payload = %{"profile" => profile, "task" => task}
@@ -188,61 +160,6 @@ defmodule Alto.Contrib.Resident.CLI do
     payload = maybe_put(payload, "delay_ms", Keyword.get(opts, :delay_ms))
     {:ok, command_wire("tasks.submit", payload)}
   end
-
-  defp command(["team-result", key, child], opts) do
-    generation = Keyword.get(opts, :generation)
-    revision = Keyword.get(opts, :revision)
-    cursor = Keyword.get(opts, :cursor, 0)
-
-    cond do
-      not nonempty?(generation) or not positive?(revision) ->
-        {:error, :team_result_requires_generation_and_revision}
-
-      not (is_integer(cursor) and cursor >= 0) ->
-        {:error, {:invalid_team_result, :cursor}}
-
-      true ->
-        {:ok,
-         command_wire("children.result", %{
-           "key" => key,
-           "child" => child,
-           "generation" => generation,
-           "revision" => revision,
-           "cursor" => cursor
-         })}
-    end
-  end
-
-  defp command(["task-reconcile", id, resolution], opts)
-       when resolution in ["committed", "failed", "retry"] do
-    revision = Keyword.get(opts, :revision)
-    note = Keyword.get(opts, :note)
-
-    cond do
-      not positive?(revision) ->
-        {:error, {:invalid_task_reconcile, :revision}}
-
-      not nonempty?(note) ->
-        {:error, {:invalid_task_reconcile, :note}}
-
-      true ->
-        {:ok,
-         command_wire("tasks.reconcile", %{
-           "id" => id,
-           "resolution" => resolution,
-           "revision" => revision,
-           "note" => note
-         })}
-    end
-  end
-
-  defp command(["task-decide", _id, decision], _opts)
-       when decision not in ["approve", "deny"],
-       do: {:error, {:invalid_task_decide, :decision}}
-
-  defp command(["task-child-decide", _task, _child, decision], _opts)
-       when decision not in ["approve", "deny"],
-       do: {:error, {:invalid_task_child_decide, :decision}}
 
   defp command([decision, request], _) when decision in ["approve", "deny"],
     do:
@@ -255,21 +172,19 @@ defmodule Alto.Contrib.Resident.CLI do
 
   defp command([name | args], opts) do
     case Map.get(@wire_commands, name) do
-      {wire, keys, cursor?} when length(args) == length(keys) ->
-        payload = Map.new(Enum.zip(keys, args))
+      {wire, keys, defaults} when length(args) == length(keys) ->
+        fields =
+          Enum.zip(keys, args) ++
+            Enum.map(defaults, fn {key, default} ->
+              {key, Keyword.get(opts, key, default)}
+            end)
 
-        payload =
-          if cursor?,
-            do: Map.put(payload, "cursor", Keyword.get(opts, :cursor, 0)),
-            else: payload
+        case Enum.find(fields, fn {key, value} -> not valid_argument?(key, value) end) do
+          nil ->
+            {:ok, command_wire(wire, Map.new(fields, fn {k, v} -> {Atom.to_string(k), v} end))}
 
-        {:ok, command_wire(wire, payload)}
-
-      {wire, keys, required, error} when length(args) == length(keys) ->
-        if name == "task-recover" and not Enum.all?(args, &nonempty?/1) do
-          {:error, error}
-        else
-          checked_wire(wire, Map.new(Enum.zip(keys, args)), opts, required, error)
+          {key, _} ->
+            {:error, {:invalid_argument, key}}
         end
 
       _ ->
@@ -279,25 +194,23 @@ defmodule Alto.Contrib.Resident.CLI do
 
   defp command(_, _), do: {:error, :invalid_command}
 
-  defp checked_wire(wire, base, opts, keys, error) do
-    values = Map.new(keys, fn key -> {Atom.to_string(key), Keyword.get(opts, key)} end)
+  defp valid_argument?(key, value)
+       when key in [:revision, :batch_revision, :continuation_revision, :from_seq],
+       do: is_integer(value) and value > 0
 
-    valid? =
-      Enum.all?(values, fn {key, value} ->
-        if key in @positive_keys, do: positive?(value), else: nonempty?(value)
-      end)
+  defp valid_argument?(:cursor, value), do: is_integer(value) and value >= 0
+  defp valid_argument?(:decision, value), do: value in ["approve", "deny"]
+  defp valid_argument?(:resolution, value), do: value in ["committed", "failed", "retry"]
+  defp valid_argument?(_key, value), do: is_binary(value) and String.trim(value) != ""
 
-    if valid?, do: {:ok, command_wire(wire, Map.merge(base, values))}, else: {:error, error}
-  end
+  defp command_wire(type, payload) when is_atom(type),
+    do: Map.put(payload, "type", Atom.to_string(type))
 
   defp command_wire(name, payload),
     do: %{"type" => "command", "name" => name, "payload" => payload}
 
   defp maybe_put(payload, _key, nil), do: payload
   defp maybe_put(payload, key, value), do: Map.put(payload, key, value)
-
-  defp positive?(value), do: is_integer(value) and value > 0
-  defp nonempty?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp connect(opts) do
     path = Keyword.get(opts, :socket, Path.join(Config.default_state_dir(), "service.sock"))

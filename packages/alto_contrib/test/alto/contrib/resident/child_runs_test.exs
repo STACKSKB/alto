@@ -2,7 +2,7 @@ defmodule Alto.Contrib.Resident.ChildRunsTest do
   use ExUnit.Case, async: true
 
   alias Alto.Subagents.Continuation
-  alias Alto.Contrib.Resident.{CLI, ChildRuns, Config}
+  alias Alto.Contrib.Resident.{ChildRuns, Config}
 
   setup do
     dir = Path.join(System.tmp_dir!(), "zek-child-runs-#{System.unique_integer([:positive])}")
@@ -208,27 +208,6 @@ defmodule Alto.Contrib.Resident.ChildRunsTest do
         ] do
       assert_raise ArgumentError, fn -> config(dir, options) end
     end
-  end
-
-  test "CLI requires generation and revision for result export" do
-    assert {:error, :team_result_requires_generation_and_revision} ==
-             CLI.run(["team-result", "key", "child"])
-
-    assert {:error, :team_result_requires_generation_and_revision} ==
-             CLI.run(["team-result", "key", "child", "--generation", "", "--revision", "1"])
-
-    assert {:error, {:invalid_team_result, :cursor}} ==
-             CLI.run([
-               "team-result",
-               "key",
-               "child",
-               "--generation",
-               "generation",
-               "--revision",
-               "1",
-               "--cursor",
-               "-1"
-             ])
   end
 
   defp collect_result_pages(_command, _args, nil, chunks), do: chunks

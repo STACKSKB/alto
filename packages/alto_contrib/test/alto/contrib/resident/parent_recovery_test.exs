@@ -4,7 +4,7 @@ defmodule Alto.Contrib.Resident.ParentRecoveryTest do
   alias Alto.{Event, OperationLog, Queue}
   alias Alto.Runner.Budget.Account
   alias Alto.Subagents.Continuation
-  alias Alto.Contrib.Resident.{CLI, Config, ParentRuns, Service, Tasks}
+  alias Alto.Contrib.Resident.{Config, ParentRuns, Service, Tasks}
 
   defmodule ParentLoop do
     @behaviour Alto.Loop
@@ -516,18 +516,5 @@ defmodule Alto.Contrib.Resident.ParentRecoveryTest do
                binding,
                name
              )
-  end
-
-  test "task-recover CLI rejects absent and nonpositive fences" do
-    base = ["task-recover", "task-1", "parent:key"]
-    assert {:error, :invalid_parent_recovery_request} = CLI.run(base)
-
-    for bad <- [
-          base ++ ["--revision", "0", "--generation", "abc", "--continuation-revision", "1"],
-          base ++ ["--revision", "1", "--generation", "", "--continuation-revision", "1"],
-          base ++ ["--revision", "1", "--generation", "abc", "--continuation-revision", "0"]
-        ] do
-      assert {:error, :invalid_parent_recovery_request} = CLI.run(bad)
-    end
   end
 end

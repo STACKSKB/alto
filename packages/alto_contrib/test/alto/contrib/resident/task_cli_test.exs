@@ -52,11 +52,164 @@ defmodule Alto.Contrib.Resident.TaskCLITest do
   end
 
   test "reconcile requires a positive revision and explanatory note" do
-    assert {:error, {:invalid_task_reconcile, :revision}} =
+    assert {:error, {:invalid_argument, :revision}} =
              CLI.run(["task-reconcile", "id", "retry", "--revision", "0", "--note", "why"])
 
-    assert {:error, {:invalid_task_reconcile, :note}} =
+    assert {:error, {:invalid_argument, :note}} =
              CLI.run(["task-reconcile", "id", "retry", "--revision", "1", "--note", "  "])
+  end
+
+  test "commands and watches send their fields and close after success or rejection", %{
+    socket: service_socket
+  } do
+    socket = Path.join(Path.dirname(service_socket), "cli-probe.sock")
+
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, packet: :line, ip: {:local, socket}])
+
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    for {args, expected, rejected?} <- [
+          {["team-result", "batch", "child", "--generation", "gen", "--revision", "2"],
+           %{
+             "type" => "command",
+             "name" => "children.result",
+             "payload" => %{
+               "key" => "batch",
+               "child" => "child",
+               "generation" => "gen",
+               "revision" => 2,
+               "cursor" => 0
+             }
+           }, false},
+          {["task-reconcile", "task", "retry", "--revision", "3", "--note", "checked"],
+           %{
+             "type" => "command",
+             "name" => "tasks.reconcile",
+             "payload" => %{
+               "id" => "task",
+               "resolution" => "retry",
+               "revision" => 3,
+               "note" => "checked"
+             }
+           }, true},
+          {["watch", "run", "--from-seq", "7"],
+           %{"type" => "attach", "run_id" => "run", "from_seq" => 7}, false},
+          {["watch", "run"], %{"type" => "attach", "run_id" => "run", "from_seq" => 1}, true}
+        ] do
+      server =
+        Task.async(fn ->
+          {:ok, connection} = :gen_tcp.accept(listener, 5_000)
+          {:ok, line} = :gen_tcp.recv(connection, 0, 5_000)
+          request = JSON.decode!(line)
+
+          reply =
+            if rejected?,
+              do: %{"type" => "error", "code" => "stale", "detail" => "changed"},
+              else: %{"type" => "ok"}
+
+          :ok =
+            :gen_tcp.send(
+              connection,
+              JSON.encode!(Map.merge(reply, %{"v" => 1, "id" => request["id"]})) <> "\n"
+            )
+
+          if expected["type"] == "attach" and not rejected? do
+            :ok =
+              :gen_tcp.send(
+                connection,
+                ~s({"v":1,"id":"event","type":"result","output":"finished"}\n)
+              )
+          end
+
+          assert {:error, :closed} = :gen_tcp.recv(connection, 0, 5_000)
+          :gen_tcp.close(connection)
+          Map.drop(request, ["v", "id"])
+        end)
+
+      output =
+        capture_io(fn ->
+          if rejected?,
+            do:
+              assert(
+                {:error, {:server, "stale", "changed"}} = CLI.run(args ++ ["--socket", socket])
+              ),
+            else: assert(:ok = CLI.run(args ++ ["--socket", socket]))
+        end)
+
+      assert Task.await(server, 15_000) == expected
+
+      if expected["type"] == "attach" and not rejected?,
+        do: assert(JSON.decode!(output)["output"] == "finished")
+
+      if rejected?, do: assert(output == "")
+    end
+  end
+
+  test "invalid choices, cursors, identifiers and arities fail before connecting" do
+    for {args, field} <- [
+          {["task-decide", "id", "maybe", "--revision", "1"], :decision},
+          {["task-child-decide", "id", "child", "maybe"], :decision},
+          {["task-reconcile", "id", "maybe"], :resolution},
+          {["workspaces", "--cursor", "-1"], :cursor},
+          {["history", "session", "--cursor", "-1"], :cursor},
+          {["watch", "run", "--from-seq", "0"], :from_seq},
+          {["watch", ""], :run_id},
+          {["task", "  "], :id},
+          {["task-recover", "id", ""], :key},
+          {["team-result", "key", "child"], :generation},
+          {["team-result", "key", "child", "--generation", "", "--revision", "1"], :generation},
+          {[
+             "team-result",
+             "key",
+             "child",
+             "--generation",
+             "gen",
+             "--revision",
+             "1",
+             "--cursor",
+             "-1"
+           ], :cursor},
+          {["task-recover", "id", "key"], :revision},
+          {[
+             "task-recover",
+             "id",
+             "key",
+             "--revision",
+             "0",
+             "--generation",
+             "gen",
+             "--continuation-revision",
+             "1"
+           ], :revision},
+          {[
+             "task-recover",
+             "id",
+             "key",
+             "--revision",
+             "1",
+             "--generation",
+             "",
+             "--continuation-revision",
+             "1"
+           ], :generation},
+          {[
+             "task-recover",
+             "id",
+             "key",
+             "--revision",
+             "1",
+             "--generation",
+             "gen",
+             "--continuation-revision",
+             "0"
+           ], :continuation_revision}
+        ] do
+      assert {:error, {:invalid_argument, ^field}} = CLI.run(args)
+    end
+
+    for args <- [["task"], ["tasks", "extra"], ["team-result", "key"], ["unknown"]],
+        do: assert({:error, :invalid_command} = CLI.run(args))
   end
 
   test "malformed scheduling options are rejected" do
