@@ -230,31 +230,25 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
 
   defp replayable_tool_arguments(message), do: message
 
-  defp openai_media(%{"type" => "image", "media_type" => media_type, "data" => data}) do
-    {:ok,
-     %{"type" => "image_url", "image_url" => %{"url" => "data:#{media_type};base64,#{data}"}}}
-  end
+  defp openai_media(%{"media_type" => media, "data" => data} = block),
+    do: encode_media(block["name"], media, data)
 
-  defp openai_media(%{"type" => "file", "name" => name, "media_type" => media, "data" => data}) do
-    encode_file(name, media, data)
-  end
-
-  defp encode_file(_name, "image/" <> _ = media, data),
+  defp encode_media(_name, "image/" <> _ = media, data),
     do: {:ok, %{"type" => "image_url", "image_url" => %{"url" => "data:#{media};base64,#{data}"}}}
 
-  defp encode_file(_name, media, data)
+  defp encode_media(_name, media, data)
        when media in ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"] do
     format = if media in ["audio/mpeg", "audio/mp3"], do: "mp3", else: "wav"
     {:ok, %{"type" => "input_audio", "input_audio" => %{"data" => data, "format" => format}}}
   end
 
-  defp encode_file(_name, "audio/" <> _ = media, _data),
+  defp encode_media(_name, "audio/" <> _ = media, _data),
     do: {:error, {:unsupported_audio_format, media}}
 
-  defp encode_file(_name, "video/" <> _ = media, _data),
+  defp encode_media(_name, "video/" <> _ = media, _data),
     do: {:error, {:unsupported_video_format, media}}
 
-  defp encode_file(name, media, data) do
+  defp encode_media(name, media, data) do
     {:ok,
      %{
        "type" => "file",
