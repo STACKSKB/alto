@@ -199,17 +199,13 @@ defmodule Alto.Contrib.Protocol do
       when is_binary(type) and is_binary(id) and id != "" ->
         decode_object(type, id, object)
 
-      {:ok, _other} ->
-        {:error, :invalid}
-
-      {:error, _error} ->
+      _ ->
         {:error, :invalid}
     end
   end
 
-  defp decode_object("auth", id, object) when is_map(object), do: {:ok, {:auth, id, [object]}}
-
-  defp decode_object("input", id, object) when is_map(object), do: {:ok, {:input, id, [object]}}
+  defp decode_object(type, id, object) when type in ["auth", "input"],
+    do: {:ok, {String.to_atom(type), id, [object]}}
 
   defp decode_object(type, id, object) do
     case @command_specs do
@@ -242,7 +238,9 @@ defmodule Alto.Contrib.Protocol do
   defp validate_field("steer", :delivery), do: {:ok, :steer}
   defp validate_field("follow_up", :delivery), do: {:ok, :follow_up}
 
-  defp validate_field(value, :content) when is_binary(value) and value != "", do: {:ok, value}
+  defp validate_field(value, type)
+       when type in [:content, :nonempty_binary] and is_binary(value) and value != "",
+       do: {:ok, value}
 
   defp validate_field([_ | _] = blocks, :content) do
     case Alto.Content.normalize(Alto.Content.new(blocks), 16_000_000) do
@@ -268,9 +266,6 @@ defmodule Alto.Contrib.Protocol do
       {:error, :invalid}
     end
   end
-
-  defp validate_field(value, :nonempty_binary) when is_binary(value) and value != "",
-    do: {:ok, value}
 
   defp validate_field(value, :map) when is_map(value), do: {:ok, value}
   defp validate_field("approve", :decision), do: {:ok, :approve}
