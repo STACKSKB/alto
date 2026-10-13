@@ -135,30 +135,16 @@ defmodule Alto.Runner.Budget.Account do
   defp valid_packet(_, _), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
-    opts =
-      if Keyword.keyword?(opts),
-        do:
-          Keyword.update(opts, :max_model_requests, nil, fn
-            :infinity -> @max
-            limit -> limit
-          end),
-        else: opts
-
-    keys = if Keyword.keyword?(opts), do: Keyword.keys(opts), else: []
-
-    if Keyword.keyword?(opts) and
-         Enum.sort(keys -- [:deadline]) == [:max_effects, :max_model_requests] and
-         (not Keyword.has_key?(opts, :deadline) or
-            Keyword.get(opts, :deadline) == :infinity or is_integer(Keyword.get(opts, :deadline))) and
-         Enum.all?(Keyword.take(opts, [:max_effects, :max_model_requests]), fn {_, value} ->
-           valid_cap?(value)
-         end),
-       do:
-         {:ok,
-          opts
-          |> Keyword.take([:max_effects, :max_model_requests])
-          |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)},
-       else: {:error, :invalid_budget_account_limits}
+    with true <- Keyword.keyword?(opts),
+         {deadline, caps} <- Keyword.pop_first(opts, :deadline, :infinity),
+         true <- deadline == :infinity or is_integer(deadline),
+         [{:max_effects, effects}, {:max_model_requests, models}] <- Enum.sort(caps),
+         models <- if(models == :infinity, do: @max, else: models),
+         true <- valid_cap?(effects) and valid_cap?(models) do
+      {:ok, %{"max_effects" => effects, "max_model_requests" => models}}
+    else
+      _ -> {:error, :invalid_budget_account_limits}
+    end
   end
 
   defp valid_cap?(value), do: is_integer(value) and value >= 1 and value <= @max
