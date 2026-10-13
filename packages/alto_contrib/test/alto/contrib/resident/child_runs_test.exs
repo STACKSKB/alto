@@ -55,10 +55,11 @@ defmodule Alto.Contrib.Resident.ChildRunsTest do
              &to_string(elem(packet["children"][&1], 0))
            ) == ["completed", "dispatched", "planned"]
 
-    assert {:ok, %{state: "active", counts: counts}} =
+    assert {:ok, %{state: "active", counts: counts, children: children}} =
              commands["children.get"].(%{"key" => "partial"})
 
     assert counts == %{"completed" => 1, "dispatched" => 1, "planned" => 1}
+    refute JSON.encode!(children) =~ "blob"
 
     assert {:error, {:child_result_pending, "dispatched"}} =
              commands["children.result"].(%{
@@ -188,6 +189,19 @@ defmodule Alto.Contrib.Resident.ChildRunsTest do
     assert current.request == request
     assert current.state == :suspended
     assert {:ok, ^after_decision} = Continuation.read(batch)
+
+    inspect_batch = ChildRuns.commands(name)["children.get"]
+
+    assert {:ok, %{children: [%{"state" => "suspended"}, decided]}} =
+             inspect_batch.(%{"key" => batch.key})
+
+    assert decided["state"] == "decided"
+    assert decided["decision"] == "deny"
+    assert decided["suspension"] == sibling.identity["suspension"]
+
+    assert {:ok, _} = Continuation.claim_child(batch, sibling.identity, :deny)
+    assert {:ok, %{children: [_, resuming]}} = inspect_batch.(%{"key" => batch.key})
+    assert resuming == %{decided | "state" => "resuming"}
   end
 
   test "retention full protects an active batch", %{dir: dir, name: name} do

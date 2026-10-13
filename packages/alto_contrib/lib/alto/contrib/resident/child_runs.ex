@@ -152,27 +152,17 @@ defmodule Alto.Contrib.Resident.ChildRuns do
   defp child_view(id, child) do
     base = %{"id" => id, "state" => to_string(elem(child, 0)), "suspension" => nil}
 
-    case child do
-      {:planned} ->
+    case Tuple.to_list(child) do
+      [:planned] ->
         base
 
-      {:dispatched, attempt} ->
+      [state, attempt | _] when state in [:dispatched, :completed] ->
         Map.put(base, "attempt", attempt)
 
-      {:completed, attempt, _} ->
-        Map.put(base, "attempt", attempt)
-
-      {:suspended, attempt, token, _} ->
+      [:suspended, attempt, token, _] ->
         Map.merge(base, %{"attempt" => attempt, "suspension" => token})
 
-      {:decided, attempt, token, _, decision} ->
-        Map.merge(base, %{
-          "attempt" => attempt,
-          "suspension" => token,
-          "decision" => to_string(decision)
-        })
-
-      {:resuming, attempt, token, _, decision, _} ->
+      [state, attempt, token, _, decision | _] when state in [:decided, :resuming] ->
         Map.merge(base, %{
           "attempt" => attempt,
           "suspension" => token,
