@@ -9,14 +9,15 @@ defmodule Alto.Contrib.Socket.SSH do
 
   use GenServer
 
-  @default_timeout 5_000
-  @default_diagnostics 4_096
-  @default_keepalive_interval 15
-  @default_keepalive_count 3
-  @max_timeout 600_000
-  @max_diagnostics 1_048_576
-  @max_keepalive_interval 86_400
-  @max_keepalive_count 100
+  @options NimbleOptions.new!(
+             owner: [type: :pid],
+             port: [type: {:or, [nil, {:in, 1..65_535}]}],
+             timeout: [type: {:in, 0..600_000}, default: 5_000],
+             ssh: [type: {:custom, __MODULE__, :validate_executable, []}],
+             max_diagnostics: [type: {:in, 0..1_048_576}, default: 4_096],
+             keepalive_interval: [type: {:in, 0..86_400}, default: 15],
+             keepalive_count: [type: {:in, 1..100}, default: 3]
+           )
 
   defstruct [:pid, :path]
 
@@ -27,11 +28,11 @@ defmodule Alto.Contrib.Socket.SSH do
   def open(host, remote_socket, opts \\ []) do
     with :ok <- validate_host(host),
          :ok <- validate_remote_socket(remote_socket),
-         :ok <- validate_options(opts),
+         {:ok, opts} <- validate_options(opts),
          {:ok, ssh} <- resolve_ssh(opts),
          {:ok, dir, local_path} <- make_socket_dir(),
          {:ok, pid} <- start_link_process(host, remote_socket, local_path, opts, dir, ssh),
-         result <- await_listener(pid, local_path, Keyword.get(opts, :timeout, @default_timeout)) do
+         result <- await_listener(pid, local_path, opts[:timeout]) do
       case result do
         :ok ->
           {:ok, %__MODULE__{pid: pid, path: local_path}}
@@ -59,7 +60,7 @@ defmodule Alto.Contrib.Socket.SSH do
   defp start_link_process(host, remote, local, opts, dir, ssh) do
     GenServer.start(
       __MODULE__,
-      {host, remote, local, opts, dir, ssh, Keyword.get(opts, :owner, self())}
+      {host, remote, local, opts, dir, ssh, opts[:owner]}
     )
   end
 
@@ -82,7 +83,7 @@ defmodule Alto.Contrib.Socket.SSH do
          dir: dir,
          diagnostics: <<>>,
          exit_status: nil,
-         max_diagnostics: Keyword.get(opts, :max_diagnostics, @default_diagnostics)
+         max_diagnostics: opts[:max_diagnostics]
        }}
     rescue
       error in [ArgumentError] ->
@@ -92,8 +93,8 @@ defmodule Alto.Contrib.Socket.SSH do
   end
 
   defp ssh_args(host, remote, local, opts) do
-    interval = Keyword.get(opts, :keepalive_interval, @default_keepalive_interval)
-    count = Keyword.get(opts, :keepalive_count, @default_keepalive_count)
+    interval = opts[:keepalive_interval]
+    count = opts[:keepalive_count]
 
     [
       "-N",
@@ -116,70 +117,22 @@ defmodule Alto.Contrib.Socket.SSH do
   end
 
   defp maybe_port(opts) do
-    case Keyword.get(opts, :port) do
-      nil -> nil
-      port when is_integer(port) and port in 1..65_535 -> ["-p", Integer.to_string(port)]
-      _ -> nil
-    end
+    if port = opts[:port], do: ["-p", Integer.to_string(port)]
   end
 
   defp validate_options(opts) do
-    if not Keyword.keyword?(opts),
-      do: {:error, :invalid_options},
-      else: validate_keyword_options(opts)
+    if Keyword.keyword?(opts),
+      do: NimbleOptions.validate(Keyword.put_new(opts, :owner, self()), @options),
+      else: {:error, :invalid_options}
   end
 
-  defp validate_keyword_options(opts) do
-    allowed = [
-      :owner,
-      :port,
-      :timeout,
-      :ssh,
-      :max_diagnostics,
-      :keepalive_interval,
-      :keepalive_count
-    ]
+  @doc false
+  def validate_executable(nil), do: {:ok, nil}
 
-    if Enum.any?(Keyword.keys(opts), &(&1 not in allowed)),
-      do: {:error, :invalid_options},
-      else: do_validate_options(opts)
-  end
+  def validate_executable(path) when is_binary(path) and byte_size(path) in 1..4_096,
+    do: {:ok, path}
 
-  defp do_validate_options(opts) do
-    owner = Keyword.get(opts, :owner, self())
-    port = Keyword.get(opts, :port)
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    ssh = Keyword.get(opts, :ssh)
-    max_diagnostics = Keyword.get(opts, :max_diagnostics, @default_diagnostics)
-    interval = Keyword.get(opts, :keepalive_interval, @default_keepalive_interval)
-    count = Keyword.get(opts, :keepalive_count, @default_keepalive_count)
-
-    cond do
-      not is_pid(owner) ->
-        {:error, :invalid_owner}
-
-      not (is_nil(port) or (is_integer(port) and port in 1..65_535)) ->
-        {:error, :invalid_port}
-
-      not (is_integer(timeout) and timeout in 0..@max_timeout) ->
-        {:error, :invalid_timeout}
-
-      not (is_nil(ssh) or (is_binary(ssh) and byte_size(ssh) > 0 and byte_size(ssh) <= 4_096)) ->
-        {:error, :invalid_ssh}
-
-      not (is_integer(max_diagnostics) and max_diagnostics in 0..@max_diagnostics) ->
-        {:error, :invalid_max_diagnostics}
-
-      not (is_integer(interval) and interval in 0..@max_keepalive_interval) ->
-        {:error, :invalid_keepalive_interval}
-
-      not (is_integer(count) and count in 1..@max_keepalive_count) ->
-        {:error, :invalid_keepalive_count}
-
-      true ->
-        :ok
-    end
-  end
+  def validate_executable(_), do: {:error, "expected an executable path of 1 to 4096 bytes"}
 
   defp resolve_ssh(opts) do
     case Keyword.get(opts, :ssh) || System.find_executable("ssh") do
@@ -191,12 +144,10 @@ defmodule Alto.Contrib.Socket.SSH do
     end
   end
 
-  defp await_listener(pid, path, timeout) when is_integer(timeout) and timeout >= 0 do
+  defp await_listener(pid, path, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     await_until(pid, path, deadline)
   end
-
-  defp await_listener(_pid, _path, _timeout), do: {:error, :invalid_timeout}
 
   defp await_until(pid, path, deadline) do
     cond do

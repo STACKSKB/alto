@@ -17,23 +17,38 @@ defmodule Alto.Contrib.Socket.SSHTest do
     assert {:error, :invalid_remote_socket} =
              Alto.Contrib.Socket.SSH.open("host", "/tmp/a:b", ssh: "/missing")
 
-    assert {:error, :invalid_port} =
-             Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", port: 0, ssh: "/missing")
+    for {key, value} <- [
+          owner: nil,
+          port: 0,
+          port: 65_536,
+          port: 1.0,
+          timeout: -1,
+          timeout: 600_001,
+          max_diagnostics: 1_048_577,
+          keepalive_interval: -1,
+          keepalive_interval: 86_401,
+          keepalive_count: 0,
+          keepalive_count: 101,
+          ssh: "",
+          ssh: String.duplicate("x", 4_097)
+        ] do
+      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
+               Alto.Contrib.Socket.SSH.open(
+                 "host",
+                 "/tmp/remote",
+                 Keyword.put([ssh: "/missing"], key, value)
+               )
+    end
 
-    assert {:error, :invalid_timeout} =
-             Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", timeout: -1, ssh: "/missing")
+    for opts <- [[unexpected: true], [port: 22, port: 0]] do
+      assert {:error, %NimbleOptions.ValidationError{}} =
+               Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", [ssh: "/missing"] ++ opts)
+    end
 
-    assert {:error, :invalid_max_diagnostics} =
-             Alto.Contrib.Socket.SSH.open("host", "/tmp/remote",
-               max_diagnostics: 1_048_577,
-               ssh: "/missing"
-             )
-
-    assert {:error, :invalid_options} =
-             Alto.Contrib.Socket.SSH.open("host", "/tmp/remote",
-               unexpected: true,
-               ssh: "/missing"
-             )
+    for opts <- [nil, %{}, [:timeout], [{"timeout", 0}]] do
+      assert {:error, :invalid_options} =
+               Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", opts)
+    end
   end
 
   test "startup timeout closes ssh and removes its socket directory" do
@@ -69,7 +84,11 @@ defmodule Alto.Contrib.Socket.SSHTest do
     assert File.exists?(local)
     assert {:ok, %{mode: mode}} = File.stat(Path.dirname(local))
     assert Bitwise.band(mode, 0o777) == 0o700
-    assert File.read!(Path.join(Path.dirname(fake), "args")) =~ "-L\n#{local}:/run/alto.sock"
+    args = File.read!(Path.join(Path.dirname(fake), "args"))
+    assert args =~ "-L\n#{local}:/run/alto.sock"
+    assert args =~ "-p\n2222"
+    assert args =~ "ServerAliveInterval=15"
+    assert args =~ "ServerAliveCountMax=3"
     assert :ok = Alto.Contrib.Socket.SSH.close(tunnel)
     refute File.exists?(Path.dirname(local))
     eventually(fn -> refute os_process_alive?(child_pid) end)
