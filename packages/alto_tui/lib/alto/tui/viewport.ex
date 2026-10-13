@@ -82,15 +82,50 @@ defmodule Alto.TUI.Viewport do
   end
 
   defp wrap(text, width) do
-    marker =
-      Enum.find_value(0xE000..0xF8FF, fn n ->
-        char = <<n::utf8>>
-        if not String.contains?(text, char), do: char
-      end)
-
+    marker = marker(text)
+    source = text <> "\n" <> marker
     height = min(256, length(String.split(text, "\n")) + div(2 * byte_size(text), width) + 3)
     terminal = test_terminal(:wrap, width, height)
-    wrap_page(terminal, text <> "\n" <> marker, marker, width, height, 0, [])
+
+    render_pages(
+      height,
+      fn offset ->
+        :ok = ExRatatui.draw(terminal, [])
+
+        :ok =
+          ExRatatui.draw(terminal, [
+            {%Paragraph{text: source, wrap: true, scroll: {offset, 0}},
+             %Rect{width: width, height: height}}
+          ])
+
+        terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
+      end,
+      &(&1 == marker),
+      fn rows -> Enum.map(rows, &Alto.TUI.Selection.buffer_row_text(&1, width)) end
+    )
+  end
+
+  @doc false
+  def marker(source) do
+    Enum.find_value(0xE000..0xF8FF, fn point ->
+      char = <<point::utf8>>
+      if not String.contains?(source, char), do: char
+    end)
+  end
+
+  @doc false
+  def render_pages(height, render, end_row?, transform) do
+    Stream.iterate(0, &(&1 + height))
+    |> Enum.reduce_while([], fn offset, pages ->
+      rows = render.(offset)
+      stop = Enum.find_index(rows, end_row?)
+      pages = [transform.(Enum.take(rows, stop || length(rows))) | pages]
+
+      # Native scroll offsets are unsigned 16-bit values.
+      if stop != nil or offset + height > 65_535,
+        do: {:halt, pages |> Enum.reverse() |> Enum.concat()},
+        else: {:cont, pages}
+    end)
   end
 
   @doc false
@@ -112,36 +147,6 @@ defmodule Alto.TUI.Viewport do
         terminal = ExRatatui.init_test_terminal(width, height)
         Process.put(key, {width, height, terminal})
         terminal
-    end
-  end
-
-  defp flatten_rows(pages, width) do
-    pages
-    |> Enum.reverse()
-    |> List.flatten()
-    |> Enum.map(&Alto.TUI.Selection.buffer_row_text(&1, width))
-  end
-
-  defp wrap_page(terminal, text, marker, width, height, offset, pages) do
-    :ok = ExRatatui.draw(terminal, [])
-
-    :ok =
-      ExRatatui.draw(terminal, [
-        {%Paragraph{text: text, wrap: true, scroll: {offset, 0}},
-         %Rect{width: width, height: height}}
-      ])
-
-    lines = terminal |> ExRatatui.get_buffer_content() |> String.split("\n")
-
-    case Enum.find_index(lines, &(&1 == marker)) do
-      nil when offset < 65_024 ->
-        wrap_page(terminal, text, marker, width, height, offset + height, [lines | pages])
-
-      nil ->
-        Enum.reverse([lines | pages]) |> List.flatten()
-
-      count ->
-        flatten_rows([Enum.take(lines, count) | pages], width)
     end
   end
 end

@@ -24,7 +24,9 @@ defmodule Alto.TUI.ViewportTest do
   test "cached chunks match native wrapping across boundaries, blanks and wide glyphs" do
     text =
       Enum.map_join(1..310, "\n", fn n ->
-        if rem(n, 7) == 0, do: "", else: "#{n} α é 猫 👩‍💻 " <> String.duplicate("word ", rem(n, 12))
+        if rem(n, 7) == 0,
+          do: "",
+          else: "#{n} α é 猫 👩‍💻 \uE000 " <> String.duplicate("word ", rem(n, 12))
       end)
 
     for width <- [17, 40], offset <- [0, 126, 255, 380] do

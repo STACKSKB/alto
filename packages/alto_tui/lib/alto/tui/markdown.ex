@@ -221,17 +221,28 @@ defmodule Alto.TUI.Markdown do
   defp native_plain(block, width), do: measure_native_plain(block, width)
 
   defp measure_native_plain(block, width) do
-    marker = marker(block)
-    source = content_source(block) <> "\n\n" <> marker
+    source = content_source(block)
+    marker = Alto.TUI.Viewport.marker(source)
+    source = source <> "\n\n" <> marker
     estimate = length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4
     height = min(max(div(32_768, width), 1), max(estimate, 1))
     # Keep a spare column: native rendering of a wide glyph at the right edge
     # can otherwise erase the first character of the following row.
     terminal = Alto.TUI.Viewport.test_terminal(:markdown_metrics, width + 1, height)
-    measure_pages(terminal, block, source, marker, width, height, 0, 0, [])
+
+    Alto.TUI.Viewport.render_pages(
+      height,
+      &measure_page(terminal, block, source, width, height, &1),
+      &String.contains?(&1, marker),
+      & &1
+    )
+    |> Enum.reverse()
+    |> Enum.drop_while(&(String.trim(&1) == ""))
+    |> Enum.reverse()
+    |> Enum.map(&(Alto.TUI.Selection.buffer_row_text(&1, width) |> String.trim_trailing()))
   end
 
-  defp measure_pages(terminal, block, source, marker, width, height, offset, last, pages) do
+  defp measure_page(terminal, block, source, width, height, offset) do
     :ok = ExRatatui.draw(terminal, [])
 
     :ok =
@@ -239,27 +250,7 @@ defmodule Alto.TUI.Markdown do
         {native_widget(block, source, offset), %Rect{width: width, height: height}}
       ])
 
-    lines = ExRatatui.get_buffer_content(terminal) |> String.split("\n")
-    marker_row = Enum.find_index(lines, &String.contains?(&1, marker))
-    body = if marker_row, do: Enum.take(lines, marker_row), else: lines
-
-    last =
-      Enum.with_index(body, offset)
-      |> Enum.reduce(last, fn {line, n}, acc ->
-        if String.trim(line) == "", do: acc, else: n + 1
-      end)
-
-    pages = [body | pages]
-
-    if marker_row != nil or offset >= 65_000 do
-      pages
-      |> Enum.reverse()
-      |> List.flatten()
-      |> Enum.take(last)
-      |> Enum.map(&(Alto.TUI.Selection.buffer_row_text(&1, width) |> String.trim_trailing()))
-    else
-      measure_pages(terminal, block, source, marker, width, height, offset + height, last, pages)
-    end
+    ExRatatui.get_buffer_content(terminal) |> String.split("\n")
   end
 
   defp block_window({:code, language, _} = block, width, offset, height) do
@@ -491,15 +482,19 @@ defmodule Alto.TUI.Markdown do
   defp materialize({:code, _language, ""}, _width), do: [Line.new([])]
 
   defp materialize(content, width) do
-    marker = marker(content)
-    source = content_source(content) <> "\n\n" <> marker
+    source = content_source(content)
+    marker = Alto.TUI.Viewport.marker(source)
+    source = source <> "\n\n" <> marker
     height = min(64, length(String.split(source, "\n")) + div(2 * byte_size(source), width) + 4)
     session = CellSession.new(width + 1, height)
 
     try do
-      native_pages(session, content, source, marker, width, height, 0, [])
-      |> Enum.reverse()
-      |> List.flatten()
+      Alto.TUI.Viewport.render_pages(
+        height,
+        &native_page(session, content, source, width, height, &1),
+        fn row -> Enum.any?(row, &(&1.symbol == marker)) end,
+        &styled_rows/1
+      )
       |> Enum.reverse()
       |> Enum.drop_while(&blank?/1)
       |> Enum.reverse()
@@ -508,28 +503,14 @@ defmodule Alto.TUI.Markdown do
     end
   end
 
-  defp native_pages(session, content, source, marker, width, height, offset, acc) do
+  defp native_page(session, content, source, width, height, offset) do
     :ok = CellSession.draw(session, [])
     widget = native_widget(content, source, offset)
     :ok = CellSession.draw(session, [{widget, %Rect{width: width, height: height}}])
 
-    cells =
-      CellSession.take_cells(session).cells
-      |> Enum.chunk_every(width + 1)
-      |> Enum.map(&Enum.take(&1, width))
-
-    case Enum.find_index(cells, fn row -> Enum.any?(row, &(&1.symbol == marker)) end) do
-      nil when offset < 65_000 ->
-        native_pages(session, content, source, marker, width, height, offset + height, [
-          styled_rows(cells) | acc
-        ])
-
-      nil ->
-        [styled_rows(cells) | acc]
-
-      row ->
-        [styled_rows(Enum.take(cells, row)) | acc]
-    end
+    CellSession.take_cells(session).cells
+    |> Enum.chunk_every(width + 1)
+    |> Enum.map(&Enum.take(&1, width))
   end
 
   defp native_widget({:markdown, _}, source, offset),
@@ -547,15 +528,6 @@ defmodule Alto.TUI.Markdown do
   # would otherwise collapse long line-oriented output into one visual row.
   defp content_source({:markdown, source}), do: String.replace(source, "\n", "  \n")
   defp content_source({:code, _language, source}), do: String.replace(source, "\t", "    ")
-
-  defp marker(content) do
-    source = content_source(content)
-
-    Enum.find_value(0xE000..0xF8FF, fn point ->
-      char = <<point::utf8>>
-      if not String.contains?(source, char), do: char
-    end)
-  end
 
   defp styled_rows(rows) do
     glyphs = rows |> List.flatten() |> Enum.map(& &1.symbol)

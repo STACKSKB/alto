@@ -187,7 +187,7 @@ defmodule Alto.TUI.MarkdownTest do
   end
 
   test "native block paging keeps all lines in order" do
-    source = Enum.map_join(1..150, "\n", &"- Item #{&1}")
+    source = Enum.map_join(1..150, "\n", &"- Item #{&1} \uE000")
     rows = Markdown.plain(source, 40) |> String.split("\n")
     items = Enum.filter(rows, &String.contains?(&1, "Item"))
     assert length(items) == 150
