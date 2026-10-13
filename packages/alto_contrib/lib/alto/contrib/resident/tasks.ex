@@ -195,9 +195,7 @@ defmodule Alto.Contrib.Resident.Tasks do
 
   def handle_call({"recover", %{"id" => id, "revision" => revision} = payload}, from, state)
       when is_binary(id) and is_integer(revision) do
-    with :ok <- may_reconcile(state, id),
-         {:ok, recovered} <- OperationLog.request(state.ledger, {:recovery, id}),
-         true <- recovered.revision == revision,
+    with {:ok, recovered} <- parked_task(state, id, revision),
          profile = get_in(recovered.recovery, [:payload, "profile"]),
          :ok <-
            Alto.Contrib.Resident.ParentRuns.recoverable(
@@ -221,7 +219,6 @@ defmodule Alto.Contrib.Resident.Tasks do
         state
       )
     else
-      false -> {:reply, {:error, :stale_revision}, state}
       {:error, _} = error -> {:reply, error, state}
     end
   end
@@ -255,9 +252,7 @@ defmodule Alto.Contrib.Resident.Tasks do
 
   def handle_call({"child_decide", %{"id" => id, "revision" => revision} = request}, from, state)
       when is_binary(id) and is_integer(revision) and revision > 0 do
-    with :ok <- may_reconcile(state, id),
-         {:ok, recovered} <- OperationLog.request(state.ledger, {:recovery, id}),
-         true <- recovered.revision == revision,
+    with {:ok, recovered} <- parked_task(state, id, revision),
          {:ok, parent_request} <-
            Alto.Contrib.Resident.ParentRuns.decide_child(
              state.config,
@@ -273,7 +268,6 @@ defmodule Alto.Contrib.Resident.Tasks do
         state
       )
     else
-      false -> {:reply, {:error, :stale_revision}, state}
       {:error, _} = error -> {:reply, error, state}
     end
   end
@@ -296,8 +290,8 @@ defmodule Alto.Contrib.Resident.Tasks do
     evidence = %{"note" => note}
 
     with true <- not is_nil(resolution) and is_binary(note) and byte_size(note) in 1..4_096,
-         :ok <- may_reconcile(state, id),
-         :ok <- parent_retry_check(state, id, resolution, payload),
+         {:ok, current} <- parked_task(state, id, revision),
+         :ok <- parent_retry_check(current, resolution, payload),
          {:ok, recovered} <-
            OperationLog.request(state.ledger, {:reconcile, id, revision, resolution, evidence}) do
       admission_reply(state, id, resolution, recovered)
@@ -940,29 +934,27 @@ defmodule Alto.Contrib.Resident.Tasks do
     |> Map.put("task_preview", true)
   end
 
-  defp may_reconcile(state, id) do
-    case {state.active[id], OperationLog.request(state.ledger, {:status, id})} do
-      {nil, {:decided, class, _}} when class in [:unknown, :requires_operator] -> :ok
-      _ -> {:error, :task_not_parked}
-    end
-  end
-
-  defp parent_retry_check(state, id, :retry_permitted, payload) do
-    {:ok, recovered} = OperationLog.request(state.ledger, {:recovery, id})
-
-    case get_in(recovered.recovery, [:payload, "parent_store"]) do
-      nil ->
-        :ok
+  defp parked_task(state, id, revision) do
+    case {state.active[id], OperationLog.request(state.ledger, {:recovery, id})} do
+      {nil, {:ok, %{status: {:decided, class, _}} = recovered}}
+      when class in [:unknown, :requires_operator] ->
+        if recovered.revision == revision,
+          do: {:ok, recovered},
+          else: {:error, :stale_revision}
 
       _ ->
-        if(Map.get(payload, :parent_recovery) == true,
-          do: :ok,
-          else: {:error, :use_parent_recovery}
-        )
+        {:error, :task_not_parked}
     end
   end
 
-  defp parent_retry_check(_, _, _, _), do: :ok
+  defp parent_retry_check(recovered, :retry_permitted, payload) do
+    if not is_nil(get_in(recovered.recovery, [:payload, "parent_store"])) and
+         Map.get(payload, :parent_recovery) != true,
+       do: {:error, :use_parent_recovery},
+       else: :ok
+  end
+
+  defp parent_retry_check(_, _, _), do: :ok
 
   defp find_record(state, id) do
     case Enum.find(queue_records(state.queue), &(operation_key(&1) == id)) do
