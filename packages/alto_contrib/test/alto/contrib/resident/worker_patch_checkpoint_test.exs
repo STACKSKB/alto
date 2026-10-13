@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Resident.WorkerPatchCheckpointTest do
   use ExUnit.Case, async: false
+  import Alto.TestSupport.Git, only: [git!: 2]
   alias Alto.Contrib.Resident.{Config, Service, Tasks, Workspaces}
 
   defmodule Writer do
@@ -98,10 +99,6 @@ defmodule Alto.Contrib.Resident.WorkerPatchCheckpointTest do
     git!(source, ["add", "."])
 
     git!(source, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "base"
@@ -184,11 +181,6 @@ defmodule Alto.Contrib.Resident.WorkerPatchCheckpointTest do
           Alto.OperationLog.request(m.ledger, {:entries, :all}) |> Enum.map(& &1.operation_key) do
       assert {:ok, %{status: "applied"}} = Alto.Contrib.Workspaces.get(m, id)
     end
-  end
-
-  defp git!(cwd, args) do
-    {output, 0} = System.cmd("git", args, cd: cwd, stderr_to_stdout: true)
-    output
   end
 
   defp decide(name, task) do

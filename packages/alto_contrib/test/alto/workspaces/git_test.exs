@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Workspaces.GitTest do
   use ExUnit.Case, async: false
+  import Alto.TestSupport.Git, only: [git!: 2]
 
   alias Alto.Contrib.Workspaces.Git
 
@@ -14,10 +15,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(repo, ["add", "README.md"])
 
     git!(repo, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "--quiet",
       "-m",
@@ -41,10 +38,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(c.repo, ["add", "."])
 
     git!(c.repo, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "large inventory"
@@ -85,10 +78,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(nested, ["add", "nested.txt"])
 
     git!(nested, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "--quiet",
       "-m",
@@ -116,10 +105,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(repo, ["add", "link.txt"])
 
     git!(repo, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "link"
@@ -171,10 +156,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(
       nested,
       [
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
         "commit",
         "--quiet",
         "-m",
@@ -187,10 +168,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(
       repo,
       [
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
         "commit",
         "--quiet",
         "-m",
@@ -221,10 +198,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(repo, ["add", ".gitattributes", "global.txt"])
 
     git!(repo, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "attributes"
@@ -298,10 +271,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     git!(repo, ["add", ".gitignore"])
 
     git!(repo, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "ignore cache"
@@ -320,13 +289,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     assert {:ok, patch} = Git.diff(snapshot, destination, max_checkout_bytes: 1_000)
     assert patch =~ "+child change"
     refute patch =~ "cache"
-  end
-
-  defp git!(cwd, args) do
-    case System.cmd("git", args, cd: cwd, stderr_to_stdout: true) do
-      {output, 0} -> output
-      {output, status} -> flunk("git failed #{status}: #{output}")
-    end
   end
 
   defp git_output(cwd, args) do

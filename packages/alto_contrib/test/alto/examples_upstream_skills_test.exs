@@ -1,5 +1,6 @@
 defmodule Alto.Examples.UpstreamSkillsTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
   Code.require_file("../../../../examples/upstream_skills/lib/upstream_skills.ex", __DIR__)
 
   setup do
@@ -138,27 +139,5 @@ defmodule Alto.Examples.UpstreamSkillsTest do
 
     assert {:error, :unsupported_repository_entries} =
              UpstreamSkills.load(checkout, linked_commit, ["example"])
-  end
-
-  defp git!(cwd, args) do
-    {output, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "-C",
-          cwd | args
-        ],
-        stderr_to_stdout: true
-      )
-
-    output
   end
 end

@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Resident.WorkerPatchToolsTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
 
   alias Alto.Event
   alias Alto.Contrib.Resident.{Config, Workspaces}
@@ -32,8 +33,6 @@ defmodule Alto.Contrib.Resident.WorkerPatchToolsTest do
     File.mkdir_p!(source)
     File.write!(Path.join(source, "tracked.txt"), "base\n")
     git!(source, ["init", "-q"])
-    git!(source, ["config", "user.email", "test@example.test"])
-    git!(source, ["config", "user.name", "Worker Patch Test"])
     git!(source, ["add", "tracked.txt"])
     git!(source, ["commit", "-qm", "base"])
     name = make_ref()
@@ -51,7 +50,6 @@ defmodule Alto.Contrib.Resident.WorkerPatchToolsTest do
     %{source: source, config: config, name: name}
   end
 
-  defp git!(cwd, args), do: elem(System.cmd("git", args, cd: cwd, stderr_to_stdout: true), 0)
   defp manager(c, n), do: Workspaces.manager(c.state_dir, n)
 
   defp context(source, identity),

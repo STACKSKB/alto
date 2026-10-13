@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Workspaces.GitPatchTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
 
   alias Alto.Contrib.Workspaces.GitPatch
 
@@ -7,8 +8,6 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
     dir = Path.join(System.tmp_dir!(), "alto-git-patch-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     git!(dir, ["init", "-q"])
-    git!(dir, ["config", "user.email", "test@example.test"])
-    git!(dir, ["config", "user.name", "GitPatch Test"])
     File.write!(Path.join(dir, "a.txt"), "a\n")
     File.write!(Path.join(dir, "b.txt"), "b\n")
     File.write!(Path.join(dir, "old name.txt"), "rename me\n")
@@ -17,11 +16,6 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
     git!(dir, ["commit", "-qm", "base"])
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}
-  end
-
-  defp git!(cwd, args) do
-    {out, 0} = System.cmd("git", args, cd: cwd, stderr_to_stdout: true)
-    out
   end
 
   defp patch_for(repo, mutate) do

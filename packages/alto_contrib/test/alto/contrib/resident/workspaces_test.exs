@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Resident.WorkspacesTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
 
   alias Alto.{Event}
   alias Alto.Contrib.Resident.{Config, Workspaces}
@@ -34,8 +35,6 @@ defmodule Alto.Contrib.Resident.WorkspacesTest do
     File.mkdir_p!(source)
     File.write!(Path.join(source, "tracked.txt"), "base\n")
     git!(source, ["init", "-q"])
-    git!(source, ["config", "user.email", "test@example.test"])
-    git!(source, ["config", "user.name", "Alto.Contrib.Resident Test"])
     git!(source, ["add", "tracked.txt"])
     git!(source, ["commit", "-qm", "base"])
     name = make_ref()
@@ -51,11 +50,6 @@ defmodule Alto.Contrib.Resident.WorkspacesTest do
     start_supervised!(Workspaces.child(config, name))
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, source: source, config: config, name: name}
-  end
-
-  defp git!(cwd, args) do
-    {output, 0} = System.cmd("git", args, cd: cwd, stderr_to_stdout: true)
-    output
   end
 
   defp manager(config, name), do: Workspaces.manager(config.state_dir, name)

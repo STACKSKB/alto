@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
   alias Alto.Contrib.Workspaces
   alias Alto.OperationLog
   alias Alto.Contrib.Workspaces.Git
@@ -10,8 +11,6 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
     source = Path.join(root, "source")
     File.mkdir_p!(source)
     git!(source, ["init", "-q"])
-    git!(source, ["config", "user.name", "Alto Test"])
-    git!(source, ["config", "user.email", "alto@example.test"])
     File.write!(Path.join(source, "tracked.txt"), "base\n")
     commit!(source)
     ledger_opts = [id: "linked", name: nil, dir: Path.join(root, "ledger")]
@@ -229,10 +228,5 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
   defp commit!(source) do
     git!(source, ["add", "--all"])
     git!(source, ["commit", "-qm", "change"])
-  end
-
-  defp git!(cwd, args) do
-    {out, 0} = System.cmd("git", args, cd: cwd, stderr_to_stdout: true)
-    out
   end
 end

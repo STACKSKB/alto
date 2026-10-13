@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.Workspaces.ApplyTest do
   use ExUnit.Case, async: true
+  import Alto.TestSupport.Git, only: [git!: 2]
   alias Alto.OperationLog
   alias Alto.Contrib.Workspaces
 
@@ -13,10 +14,6 @@ defmodule Alto.Contrib.Workspaces.ApplyTest do
     git!(source, ["add", "."])
 
     git!(source, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
       "commit",
       "-qm",
       "base"
@@ -28,11 +25,6 @@ defmodule Alto.Contrib.Workspaces.ApplyTest do
     {:ok, snapshot} = Workspaces.prepare(manager, source)
     on_exit(fn -> File.rm_rf!(root) end)
     %{manager: manager, snapshot: snapshot, source: source, opts: opts}
-  end
-
-  defp git!(cwd, args) do
-    {out, 0} = System.cmd("git", args, cd: cwd, stderr_to_stdout: true)
-    out
   end
 
   defp frozen(m, s, name, contents) do

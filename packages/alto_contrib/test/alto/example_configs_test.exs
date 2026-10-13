@@ -1,5 +1,6 @@
 defmodule Alto.Contrib.ExampleConfigsTest do
   use ExUnit.Case, async: false
+  import Alto.TestSupport.Git, only: [git!: 2]
   alias Alto.Contrib.{Config, ProviderProfile}
   alias Alto.Contrib.Providers.OpenAICompatible
 
@@ -359,27 +360,5 @@ defmodule Alto.Contrib.ExampleConfigsTest do
     after
       0 -> Enum.reverse(acc)
     end
-  end
-
-  defp git!(cwd, args) do
-    {output, 0} =
-      System.cmd(
-        "git",
-        [
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "-C",
-          cwd | args
-        ],
-        stderr_to_stdout: true
-      )
-
-    output
   end
 end
