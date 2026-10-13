@@ -101,17 +101,6 @@ defmodule Alto.TUI.Backends.Codex do
       when status != :ready,
       do: {:state, ensure_codex(state, true)}
 
-  def ui({:select, :codex_login}, state, _options), do: start_codex_login(state)
-  def ui({:select, :codex_refresh}, state, _options), do: refresh_codex(state)
-  def ui({:select, :codex_reconnect}, state, _options), do: reconnect_codex(state)
-  def ui({:select, :codex_logout}, state, _options), do: logout_codex(state)
-  def ui({:select, {:codex_open_url, url}}, state, _options), do: open_codex_url(state, url)
-  def ui({:select, {:codex_cancel_login, id}}, state, _options), do: cancel_codex_login(state, id)
-
-  def ui({:select, value}, %{overlay: %{kind: :codex_error}} = state, _options)
-      when is_binary(value),
-      do: %{state | selected_model: value, overlay: nil}
-
   def ui(_event, _state, _options), do: :pass
 
   @impl true
@@ -467,8 +456,8 @@ defmodule Alto.TUI.Backends.Codex do
           CodexBackend.account_label(account) <>
             "\nOAuth credentials and refresh remain owned by Codex App Server and are shared with local Codex clients.",
           [
-            %{label: "Refresh models and quota", value: :codex_refresh},
-            %{label: "Sign out of ChatGPT (also signs out Codex CLI)", value: :codex_logout}
+            %{label: "Refresh models and quota", action: &refresh_codex/1},
+            %{label: "Sign out of ChatGPT (also signs out Codex CLI)", action: &logout_codex/1}
           ]
         }
       else
@@ -479,7 +468,7 @@ defmodule Alto.TUI.Backends.Codex do
               "Sign in through the official managed ChatGPT OAuth flow. Alto never receives the token."
 
         {message,
-         [%{label: "Sign in with ChatGPT subscription…", value: :codex_login}] ++
+         [%{label: "Sign in with ChatGPT subscription…", action: &start_codex_login/1}] ++
            alternative_backends(state)}
       end
 
@@ -492,8 +481,8 @@ defmodule Alto.TUI.Backends.Codex do
         url
 
     list_overlay(:codex_account, "ChatGPT sign-in", message, [
-      %{label: "Open sign-in page again", value: {:codex_open_url, url}},
-      %{label: "Cancel sign-in", value: {:codex_cancel_login, login_id}}
+      %{label: "Open sign-in page again", action: &open_codex_url(&1, url)},
+      %{label: "Cancel sign-in", action: &cancel_codex_login(&1, login_id)}
     ])
   end
 
@@ -502,7 +491,7 @@ defmodule Alto.TUI.Backends.Codex do
 
     items =
       [
-        %{label: "Retry Codex connection", value: :codex_reconnect}
+        %{label: "Retry Codex connection", action: &reconnect_codex/1}
       ] ++ alternative_backends(state)
 
     codex = %{data(state) | status: {:error, reason}}

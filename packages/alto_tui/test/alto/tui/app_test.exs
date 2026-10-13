@@ -1471,7 +1471,8 @@ defmodule Alto.TUI.AppTest do
         end
       )
 
-    pending = Codex.ui({:select, :codex_login}, state, [])
+    account = App.open_overlay(state, :provider)
+    {:noreply, pending} = App.handle_event(%Key{code: "enter"}, account)
     assert pending.backend_state[Codex].status == {:authenticating, :pending}
     assert_receive {:codex_login_requested, ^client}
 
@@ -1491,11 +1492,12 @@ defmodule Alto.TUI.AppTest do
     assert authenticating.backend_state[Codex].status == {:authenticating, login}
     assert authenticating.overlay.kind == :codex_account
 
-    cancelled = Codex.ui({:select, {:codex_cancel_login, "login-1"}}, authenticating, [])
+    {:noreply, cancel_selected} = App.handle_event(%Key{code: "down"}, authenticating)
+    {:noreply, cancelled} = App.handle_event(%Key{code: "enter"}, cancel_selected)
     assert cancelled.backend_state[Codex].status == :ready
     assert_receive {:codex_login_cancelled, %{"loginId" => "login-1"}}
 
-    pending = Codex.ui({:select, :codex_login}, cancelled, [])
+    {:noreply, pending} = App.handle_event(%Key{code: "enter"}, cancelled)
     assert_receive {:codex_login_requested, ^client}
     send(client, {:finish_login, {:error, :oauth_failed}})
     assert_receive {:codex_login_started, {:error, :oauth_failed}}
