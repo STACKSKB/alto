@@ -72,7 +72,7 @@ defmodule Alto.Runner.Execution.Children do
     {status, outcomes} =
       run_batch(specs, concurrency, &dispatch_subagent(&1, run, journal), run)
 
-    case durable_call(fn -> finish_child_journal(journal, outcomes) end, run) do
+    case call(fn -> finish_child_journal(journal, outcomes) end, run) do
       :ok ->
         {:ok, status, outcomes, journal, run}
 
@@ -153,7 +153,7 @@ defmodule Alto.Runner.Execution.Children do
     }
 
     with {:ok, journal} <-
-           durable_call(
+           call(
              fn ->
                Continuation.open(
                  run.continuation_store,
@@ -179,7 +179,7 @@ defmodule Alto.Runner.Execution.Children do
   defp dispatch_subagent(spec, run, nil), do: start_subagent(spec, run)
 
   defp dispatch_subagent(spec, run, journal) do
-    with {:ok, ticket} <- durable_call(fn -> Continuation.dispatch(journal, spec.id) end, run) do
+    with {:ok, ticket} <- call(fn -> Continuation.dispatch(journal, spec.id) end, run) do
       case start_subagent(Map.put(spec, :subagent_ticket, ticket), run) do
         {:ok, _} = started ->
           started
@@ -426,17 +426,9 @@ defmodule Alto.Runner.Execution.Children do
   end
 
   defp resolve_provider(resolve, run) do
-    case Alto.Runner.Execution.Call.run(
-           resolve,
-           Budget.timeout(run.budget, 30_000),
-           run.cancel_ref
-         ) do
+    case call(resolve, run, 30_000) do
       {:ok, provider} ->
         {:ok, Alto.Runner.Execution.Setup.normalize_provider(provider)}
-
-      {:error, {:cancelled, reason}} ->
-        send(self(), {:alto_cancel, run.cancel_ref, reason})
-        {:error, {:cancelled, reason}}
 
       {:error, _} = error ->
         error
@@ -448,7 +440,7 @@ defmodule Alto.Runner.Execution.Children do
 
   @doc "Resume only explicitly decided retained children using current inherited parent capabilities."
   def resume_decided(journal, run) do
-    with {:ok, entries} <- durable_call(fn -> Continuation.suspended(journal) end, run) do
+    with {:ok, entries} <- call(fn -> Continuation.suspended(journal) end, run) do
       decided = Enum.filter(entries, &(&1.state == :decided))
 
       {status, _outcomes} =
@@ -639,8 +631,8 @@ defmodule Alto.Runner.Execution.Children do
   defp child_agent_identity(%{root_run_id: id, path: path}, child),
     do: %{root_run_id: id, path: path ++ [child]}
 
-  defp durable_call(fun, run) do
-    case Alto.Runner.Execution.Call.run(fun, Budget.remaining(run.budget), run.cancel_ref) do
+  defp call(fun, run, timeout \\ :infinity) do
+    case Alto.Runner.Execution.Call.run(fun, Budget.timeout(run.budget, timeout), run.cancel_ref) do
       {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})
         {:error, {:cancelled, reason}}

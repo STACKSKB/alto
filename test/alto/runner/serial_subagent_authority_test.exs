@@ -6,31 +6,13 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
   defmodule ParentLoop do
     @behaviour Alto.Loop
     @impl true
-    def init(%{spawn: spawn}, _),
-      do: {:continue, %{}, [{:spawn_agents, %{agents: [spawn]}}]}
+    def init(%{spawn: spawn}, context), do: init(%{spawns: [spawn]}, context)
+    def init(%{spawns: spawns}, _), do: {:continue, %{}, [{:spawn_agents, %{agents: spawns}}]}
 
     @impl true
     def handle_event(%Event{type: :subagents_completed, data: %{results: [data]}}, state, _),
       do: {{:stop, data}, state, []}
 
-    def handle_event(_, state, _), do: {:continue, state, []}
-
-    @impl true
-    def resolve_child_provider(key, spec) do
-      case Keyword.fetch!(spec.driver_options, :child_providers) do
-        %{^key => provider} -> {:ok, provider}
-        _ -> {:error, :unknown_profile}
-      end
-    end
-  end
-
-  defmodule BatchParentLoop do
-    @behaviour Alto.Loop
-    @impl true
-    def init(%{spawns: spawns}, _),
-      do: {:continue, %{}, [{:spawn_agents, %{agents: spawns}}]}
-
-    @impl true
     def handle_event(%Event{type: :subagents_completed, data: data}, state, _),
       do: {{:stop, {:completed, data}}, state, []}
 
@@ -194,8 +176,8 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
              Task.await(task, 3000)
   end
 
-  defp parent_loop(depth, driver \\ ParentLoop, opts \\ []),
-    do: Alto.loop(driver, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
+  defp parent_loop(opts \\ []),
+    do: Alto.loop(ParentLoop, opts ++ [subagents: Alto.Subagents.bounded(max_depth: 1)])
 
   test "host child loop supports providerless children and explicit specs take precedence" do
     loop =
@@ -250,7 +232,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
                _result =
                Alto.run(
                  %{spawn: request},
-                 loop: parent_loop(1),
+                 loop: parent_loop(),
                  tools: parent_tools
                )
     end
@@ -263,7 +245,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     }
 
     assert %Alto.Runner.Result{status: :ok} =
-             result = Alto.run(%{spawn: request}, loop: parent_loop(1), tools: [SafeTool])
+             result = Alto.run(%{spawn: request}, loop: parent_loop(), tools: [SafeTool])
 
     assert result.output.output.value == :safe
   end
@@ -274,7 +256,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     {:ok, handle} =
       Alto.start(
         %{spawn: %{id: "child", task: "block"}},
-        loop: parent_loop(1),
+        loop: parent_loop(),
         provider: {BlockingProvider, owner: owner}
       )
 
@@ -293,7 +275,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
              result =
              Alto.run(
                %{spawn: %{id: "child", task: %{spawn: grandchild}, loop: child_loop}},
-               loop: parent_loop(1),
+               loop: parent_loop(),
                provider: {MarkProvider, owner: owner}
              )
 
@@ -308,7 +290,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
                %{
                  spawn: %{id: "child", task: %{name: :unknown_tool}, loop: Alto.loop(NativeLoop)}
                },
-               loop: parent_loop(1),
+               loop: parent_loop(),
                tools: [UnknownTool]
              )
 
@@ -335,7 +317,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
 
     assert %Alto.Runner.Result{status: :ok} =
              single =
-             Alto.run(%{spawn: one}, loop: parent_loop(1, ParentLoop, child_providers: providers))
+             Alto.run(%{spawn: one}, loop: parent_loop(child_providers: providers))
 
     assert single.usage.input_tokens == 2
     assert single.usage.output_tokens == 3
@@ -343,7 +325,7 @@ defmodule Alto.Runner.SerialSubagentAuthorityTest do
     assert %Alto.Runner.Result{status: :ok} =
              batch =
              Alto.run(%{spawns: [one, two]},
-               loop: parent_loop(1, BatchParentLoop, child_providers: providers)
+               loop: parent_loop(child_providers: providers)
              )
 
     assert batch.usage.input_tokens == 7
