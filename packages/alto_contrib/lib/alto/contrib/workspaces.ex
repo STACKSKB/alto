@@ -127,7 +127,7 @@ defmodule Alto.Contrib.Workspaces do
             tool: "workspace",
             checkpoint: %{version: 2, id: ^id, status: _, workspace: workspace} = info
           } = entry} <- OperationLog.request(manager.ledger, {:recovery, id}),
-         true <- is_map(workspace) do
+         true <- is_map(workspace) and is_binary(workspace["source"]) do
       case entry.status do
         {:checkpointed, _, _} ->
           {:ok, Map.put(info, :revision, entry.revision)}
@@ -439,7 +439,6 @@ defmodule Alto.Contrib.Workspaces do
   defp expect(manager, id, revision, check_backend? \\ true) do
     with {:ok, info} <- get(manager, id),
          true <- info.revision == revision,
-         true <- is_binary(info.workspace["source"]),
          true <- info.workspace["cwd"] == Path.join([manager.root, id, "checkout"]),
          true <-
            not check_backend? or

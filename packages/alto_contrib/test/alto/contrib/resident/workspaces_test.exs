@@ -164,7 +164,7 @@ defmodule Alto.Contrib.Resident.WorkspacesTest do
     assert spec.subagents.workspaces == m
   end
 
-  test "legacy workspace checkpoints fail closed under the refactored resource contract", %{
+  test "invalid workspace checkpoints fail closed without changing retained files", %{
     config: c,
     name: n,
     source: source
@@ -203,34 +203,62 @@ defmodule Alto.Contrib.Resident.WorkspacesTest do
          }}
       )
 
-    {:ok, before} = Alto.OperationLog.request(m.ledger, {:recovery, id})
-    commands = Workspaces.commands(c, n)
+    {:ok, original} = Alto.OperationLog.request(m.ledger, {:recovery, id})
 
-    assert {:error, :invalid_workspace_record} =
-             commands["workspaces.get"].(%{"id" => id})
+    packets = [
+      original.checkpoint
+      | for(
+          invalid <- [
+            workspace,
+            Map.put(workspace, "source", nil),
+            Map.put(workspace, "source", 42)
+          ],
+          do: %{
+            version: 2,
+            id: id,
+            status: "frozen",
+            workspace: invalid
+          }
+        )
+    ]
 
-    assert {:ok, %{workspaces: []}} =
-             commands["workspaces.list"].(%{})
+    for packet <- packets do
+      {:ok, current} = Alto.OperationLog.request(m.ledger, {:recovery, id})
 
-    assert {:error, :invalid_workspace_record} = commands["workspaces.patch"].(%{"id" => id})
+      {:ok, before} =
+        Alto.OperationLog.request(
+          m.ledger,
+          {:checkpoint_update, id, current.revision, packet}
+        )
 
-    assert {:error, :invalid_workspace_record} =
-             commands["workspaces.discard"].(%{
-               "id" => id,
-               "revision" => before.revision,
-               "note" => "old format"
-             })
+      commands = Workspaces.commands(c, n)
 
-    context = %{
-      session_id: "legacy-review",
-      cwd: source,
-      agent_identity: %{root_run_id: "legacy", path: []}
-    }
+      assert {:error, :invalid_workspace_record} =
+               commands["workspaces.get"].(%{"id" => id})
 
-    assert {:error, :invalid_workspace_record} =
-             Workspaces.for_descendant(context, id, manager: m)
+      assert {:ok, %{workspaces: []}} =
+               commands["workspaces.list"].(%{})
 
-    assert {:ok, ^before} = Alto.OperationLog.request(m.ledger, {:recovery, id})
-    assert File.read!(patch_path) == patch
+      assert {:error, :invalid_workspace_record} = commands["workspaces.patch"].(%{"id" => id})
+
+      assert {:error, :invalid_workspace_record} =
+               commands["workspaces.discard"].(%{
+                 "id" => id,
+                 "revision" => before.revision,
+                 "note" => "old format"
+               })
+
+      context = %{
+        session_id: "legacy-review",
+        cwd: source,
+        agent_identity: %{root_run_id: "legacy", path: []}
+      }
+
+      assert {:error, :invalid_workspace_record} =
+               Workspaces.for_descendant(context, id, manager: m)
+
+      assert {:ok, ^before} = Alto.OperationLog.request(m.ledger, {:recovery, id})
+      assert File.read!(patch_path) == patch
+    end
   end
 end
