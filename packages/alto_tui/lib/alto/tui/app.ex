@@ -1445,13 +1445,13 @@ defmodule Alto.TUI.App do
 
   defp overlay_items(state, :provider) do
     setup = [
-      %{label: "＋ Add OpenAI-compatible provider…", value: {:configure_provider, nil}}
+      %{label: "＋ Add OpenAI-compatible provider…", action: &open_provider_form(&1, nil)}
     ]
 
     configure =
       case State.selected_profile(state) do
         %{provider: {Alto.Contrib.Providers.OpenAICompatible, _}} = profile ->
-          [%{label: "⚙ Configure #{profile.label}…", value: {:configure_provider, profile.id}}]
+          [%{label: "⚙ Configure #{profile.label}…", action: &open_provider_form(&1, profile.id)}]
 
         _other ->
           []
@@ -1485,11 +1485,14 @@ defmodule Alto.TUI.App do
 
   defp overlay_items(state, :project) do
     items =
-      [%{label: "Open another folder…", value: :new_workspace}] ++
+      [%{label: "Open another folder…", action: &open_workspace_form/1}] ++
         if(state.selected_project_id,
           do: [
-            %{label: "Create worktree…", value: :new_worktree},
-            %{label: "Close workspace · ^G X", value: :close_workspace}
+            %{label: "Create worktree…", action: &open_worktree_form/1},
+            %{
+              label: "Close workspace · ^G X",
+              action: &State.close_workspace(&1, &1.selected_project_id)
+            }
           ],
           else: []
         ) ++
@@ -1507,7 +1510,7 @@ defmodule Alto.TUI.App do
       |> Map.get(state.selected_project_id, [])
       |> Enum.map(&%{label: &1["status"] <> " · " <> &1["title"], value: &1["id"]})
 
-    {:ok, "tasks · type to filter", [%{label: "+ New task", value: :new_task} | items],
+    {:ok, "tasks · type to filter", [%{label: "+ New task", action: &State.new_task/1} | items],
      state.selected_task_id}
   end
 
@@ -1556,18 +1559,6 @@ defmodule Alto.TUI.App do
       %{value: {:select_backend, backend}} ->
         select_backend(state, backend)
 
-      %{value: {:folder, path}} ->
-        %{state | overlay: Menu.complete_folder(overlay.return_form, path)}
-
-      %{value: :new_workspace} ->
-        open_workspace_form(state)
-
-      %{value: :new_worktree} ->
-        open_worktree_form(state)
-
-      %{value: :close_workspace} ->
-        State.close_workspace(state, state.selected_project_id)
-
       %{value: {:agent, id}} ->
         next = %{
           state
@@ -1580,18 +1571,6 @@ defmodule Alto.TUI.App do
         if State.details_pane_visible?(next),
           do: %{next | focus: :details},
           else: State.open_details_drawer(next)
-
-      %{value: :new_task} ->
-        State.new_task(state)
-
-      %{value: {:configure_provider, profile_id}} ->
-        open_provider_form(state, profile_id)
-
-      %{value: {:retry_models, profile_id}} ->
-        retry_models(state, profile_id)
-
-      %{value: {:enter_model, profile_id}} ->
-        open_model_form(state, profile_id)
 
       %{value: value} ->
         selected =
@@ -1974,7 +1953,7 @@ defmodule Alto.TUI.App do
         [
           %{
             label: "Configure #{profile.label} credentials…",
-            value: {:configure_provider, profile_id}
+            action: &open_provider_form(&1, profile_id)
           }
         ]
       else
@@ -1984,8 +1963,8 @@ defmodule Alto.TUI.App do
     items =
       configure ++
         [
-          %{label: "Retry model catalog", value: {:retry_models, profile_id}},
-          %{label: "Enter an exact model ID…", value: {:enter_model, profile_id}}
+          %{label: "Retry model catalog", action: &retry_models(&1, profile_id)},
+          %{label: "Enter an exact model ID…", action: &open_model_form(&1, profile_id)}
         ]
 
     message = human_error(reason)
@@ -2133,7 +2112,12 @@ defmodule Alto.TUI.App do
       |> Menu.refresh_folder()
 
     items =
-      Enum.map(refreshed.suggestions, &%{label: &1, value: {:folder, &1}})
+      Enum.map(refreshed.suggestions, fn path ->
+        %{
+          label: path,
+          action: &%{&1 | overlay: Menu.complete_folder(&1.overlay.return_form, path)}
+        }
+      end)
 
     %{
       state

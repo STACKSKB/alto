@@ -298,7 +298,7 @@ defmodule Alto.TUI.AppTest do
     ExRatatui.textarea_insert_str(state.textarea, "keep this draft")
     {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
     {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
-    index = Enum.find_index(state.overlay.items, &(&1.value == :new_worktree))
+    index = Enum.find_index(state.overlay.items, &(&1.label == "Create worktree…"))
 
     {:noreply, form} =
       App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
@@ -345,7 +345,7 @@ defmodule Alto.TUI.AppTest do
     state = state!(context, credentials_path: context.credentials)
     {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
     {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
-    index = Enum.find_index(state.overlay.items, &(&1.value == :new_worktree))
+    index = Enum.find_index(state.overlay.items, &(&1.label == "Create worktree…"))
 
     {:noreply, form} =
       App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
@@ -769,7 +769,7 @@ defmodule Alto.TUI.AppTest do
     state = %{state | runs: %{"background" => %{task_id: "running", status: :running}}}
     {:noreply, gear} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
     {:noreply, menu} = App.handle_event(%Key{code: "w"}, gear)
-    index = Enum.find_index(menu.overlay.items, &(&1.value == :close_workspace))
+    index = Enum.find_index(menu.overlay.items, &(&1.label == "Close workspace · ^G X"))
 
     {:noreply, closed} =
       App.handle_event(%Key{code: "enter"}, %{menu | overlay: %{menu.overlay | index: index}})
@@ -1393,7 +1393,9 @@ defmodule Alto.TUI.AppTest do
 
     {:noreply, state} = App.handle_event(%Key{code: "f3"}, state)
     # Add-provider action is exposed by the provider picker.
-    index = Enum.find_index(state.overlay.items, &(&1.value == {:configure_provider, nil}))
+    index =
+      Enum.find_index(state.overlay.items, &(&1.label == "＋ Add OpenAI-compatible provider…"))
+
     state = put_in(state.overlay.index, index)
     {:noreply, state} = App.handle_event(%Key{code: "enter"}, state)
     assert state.overlay.kind == :provider_form
@@ -2233,8 +2235,16 @@ defmodule Alto.TUI.AppTest do
     assert failed.overlay.message =~ "API key is missing"
     assert failed.overlay.message =~ "[REDACTED]"
     refute failed.overlay.message =~ "should-not-render"
-    assert Enum.any?(failed.overlay.items, &(&1.value == {:retry_models, "broken"}))
     assert ExRatatui.textarea_get_value(failed.textarea) == "Hi"
+
+    {:noreply, retrying} = App.handle_event(%Key{code: "enter"}, failed)
+    assert retrying.overlay.kind == :model
+    assert_receive {:alto_models_loaded, "broken", {:error, _}}
+
+    {:noreply, selected} = App.handle_event(%Key{code: "down"}, failed)
+    {:noreply, manual} = App.handle_event(%Key{code: "enter"}, selected)
+    assert manual.overlay.kind == :model_form
+    assert manual.selected_provider_id == "broken"
   end
 
   test "editing a configured provider preserves its options and model catalog", context do
@@ -2256,7 +2266,7 @@ defmodule Alto.TUI.AppTest do
     app = start_app!(context, config: config, credentials_path: context.credentials)
     Runtime.inject_event(app, %Key{code: "f3", kind: "press"})
     menu = user_state(app).overlay
-    assert Enum.any?(menu.items, &(&1.value == {:configure_provider, "local"}))
+    assert Enum.any?(menu.items, &String.starts_with?(&1.label, "⚙ Configure "))
     Runtime.inject_event(app, %Key{code: "up", kind: "press"})
     Runtime.inject_event(app, %Key{code: "enter", kind: "press"})
     form = user_state(app).overlay
@@ -2301,7 +2311,7 @@ defmodule Alto.TUI.AppTest do
 
     configure = fn state ->
       state = App.open_overlay(state, :provider)
-      index = Enum.find_index(state.overlay.items, &(&1.value == {:configure_provider, "local"}))
+      index = Enum.find_index(state.overlay.items, &String.starts_with?(&1.label, "⚙ Configure "))
 
       {:noreply, state} =
         App.handle_event(%Key{code: "enter"}, put_in(state.overlay.index, index))
@@ -2538,7 +2548,7 @@ defmodule Alto.TUI.AppTest do
     {:noreply, state} = App.handle_event(%Key{code: "w"}, state)
     # Filtering uses the same command picker as all other gear commands.
     {:noreply, state} = App.handle_event(%Key{code: "o"}, state)
-    index = Enum.find_index(state.overlay.items, &(&1.value == :new_workspace))
+    index = Enum.find_index(state.overlay.items, &(&1.label == "Open another folder…"))
 
     {:noreply, form} =
       App.handle_event(%Key{code: "enter"}, %{state | overlay: %{state.overlay | index: index}})
