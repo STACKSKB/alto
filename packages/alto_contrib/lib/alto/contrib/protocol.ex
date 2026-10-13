@@ -80,24 +80,12 @@ defmodule Alto.Contrib.Protocol do
   }
 
   @type command_kind ::
-          :attach
-          | :start_run
-          | :send_message
-          | :list_agents
-          | :sessions
-          | :runs
-          | :session_transcript
-          | :session_events
-          | :cancel
-          | :approval_response
-          | :queue_claim
-          | :queue_ack
-          | :queue_release
-          | :ops_list
-          | :reload
-          | :auth
-          | :input
-          | :command
+          unquote(
+            @command_specs
+            |> Enum.map(fn {_name, {kind, _fields}} -> kind end)
+            |> Kernel.++([:auth, :input])
+            |> Enum.reduce(&{:|, [], [&1, &2]})
+          )
   @type command :: {command_kind(), String.t(), [term()]}
 
   @doc "The protocol version this codec speaks."
