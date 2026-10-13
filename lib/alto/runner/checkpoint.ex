@@ -509,13 +509,8 @@ defmodule Alto.Runner.Checkpoint do
        run.spec.driver_options, run.spec.middleware,
        {run.spec.subagents, Map.get(run, :child_limits)}, tools, run.model_tools, run.cwd,
        Map.get(run, :session_history, :completed),
-       Map.get(run, :max_conversation_bytes, 128_000_000)}
-
-    data =
-      case Map.get(run, :conversation_retained_turns, :infinity) do
-        :infinity -> data
-        limit -> {data, {:conversation_retained_turns, limit}}
-      end
+       Map.get(run, :max_conversation_bytes, 128_000_000),
+       Map.get(run, :conversation_retained_turns, :infinity)}
 
     {:ok,
      :crypto.hash(:sha256, :erlang.term_to_binary(fingerprint_data(data), [:deterministic]))
@@ -548,13 +543,6 @@ defmodule Alto.Runner.Checkpoint do
         |> Map.new(fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
   end
 
-  defp fingerprint_data(%{admit: admit, workspaces: manager} = policy) when is_function(admit, 2),
-    do:
-      policy
-      |> Map.put(:workspaces, stable_resource(manager))
-      |> Map.to_list()
-      |> fingerprint_data()
-
   defp fingerprint_data(value) when is_map(value),
     do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
 
@@ -578,8 +566,6 @@ defmodule Alto.Runner.Checkpoint do
     end
   end
 
-  defp stable_resource(nil), do: nil
-
   defp stable_resource(%module{} = resource) do
     case Alto.Resource.identity(resource) do
       {:ok, identity} -> {module, module_md5(module), identity}
@@ -587,23 +573,6 @@ defmodule Alto.Runner.Checkpoint do
       other -> throw({__MODULE__, :durable_identity_unavailable, other})
     end
   end
-
-  defp stable_resource(value) when is_pid(value) or is_atom(value) or is_tuple(value) do
-    result =
-      try do
-        OperationLog.request(value, :identity, 100)
-      catch
-        :exit, reason -> {:error, reason}
-      end
-
-    case result do
-      {:ok, identity} -> identity
-      {:error, reason} -> throw({__MODULE__, :durable_identity_unavailable, reason})
-      other -> throw({__MODULE__, :durable_identity_unavailable, other})
-    end
-  end
-
-  defp stable_resource(value), do: fingerprint_data(value)
 
   defp module_md5(module) when is_atom(module) do
     if Code.ensure_loaded?(module), do: module.module_info(:md5), else: :unavailable
