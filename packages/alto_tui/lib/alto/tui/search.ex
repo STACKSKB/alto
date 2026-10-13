@@ -129,11 +129,12 @@ defmodule Alto.TUI.Search do
     end
   end
 
-  defp source(%{kind: kind, text: text})
-       when kind in [:assistant, :codex_assistant, :reasoning] and is_binary(text),
-       do: text
-
-  defp source(entry), do: Transcript.text(entry, expanded: true)
+  defp source(entry),
+    do:
+      if(Transcript.markdown?(entry),
+        do: entry.text,
+        else: Transcript.text(entry, expanded: true)
+      )
 
   def index(state, matches), do: min(state.search.index, max(length(matches) - 1, 0))
 
@@ -180,7 +181,7 @@ defmodule Alto.TUI.Search do
 
       {positions, _} =
         Enum.map_reduce(Enum.zip(document.groups, entries), 0, fn {lines, entry}, row ->
-          assistant? = entry[:kind] in [:assistant, :codex_assistant, :reasoning]
+          assistant? = Transcript.markdown?(entry)
           body = if assistant?, do: Enum.drop(lines, 1), else: lines
           mapping = source_rows(body, source(entry), row + if(assistant?, do: 1, else: 0))
           text = Enum.map_join(body, "\n", &line_text/1)

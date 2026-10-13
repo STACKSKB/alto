@@ -36,27 +36,15 @@ defmodule Alto.TUI.Transcript do
 
       markdown =
         missing
-        |> Enum.filter(
-          &(&1[:kind] in [:assistant, :codex_assistant, :reasoning] and is_binary(&1[:text]))
-        )
+        |> Enum.filter(&markdown?/1)
         |> Enum.map(& &1.text)
         |> Alto.TUI.Markdown.layouts(width)
 
       build = fn entry ->
         plan =
-          cond do
-            entry[:kind] in [:assistant, :codex_assistant, :reasoning] and
-                is_binary(entry[:text]) ->
-              {:markdown, Map.fetch!(markdown, entry.text)}
-
-            to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
-                is_binary(entry[:text]) ->
-              # Preserve the full-render path for non-atom roles, including styles.
-              {:styled, cached_rows(entry, width, "alto", opts)}
-
-            true ->
-              {:literal, Alto.TUI.Viewport.rows(text(entry, opts), width)}
-          end
+          if markdown?(entry),
+            do: {:markdown, Map.fetch!(markdown, entry.text)},
+            else: {:literal, Alto.TUI.Viewport.rows(text(entry, opts), width)}
 
         {entry, plan}
       end
@@ -72,7 +60,6 @@ defmodule Alto.TUI.Transcript do
           count =
             case plan do
               {:markdown, layout} -> layout.rows + 1
-              {:styled, lines} -> length(lines)
               {:literal, rows} -> tuple_size(rows)
             end
 
@@ -90,9 +77,6 @@ defmodule Alto.TUI.Transcript do
         {:literal, rows} ->
           rows |> Tuple.to_list() |> Enum.map(&literal_line/1)
 
-        {:styled, rows} ->
-          rows
-
         {:markdown, layout} ->
           body = Alto.TUI.Markdown.plain_rows(layout)
 
@@ -109,9 +93,6 @@ defmodule Alto.TUI.Transcript do
       case plan do
         {:literal, rows} ->
           for row <- start..(start + count - 1), do: rows |> elem(row) |> literal_line()
-
-        {:styled, rows} ->
-          Enum.slice(rows, start, count)
 
         {:markdown, layout} ->
           body =
@@ -146,8 +127,7 @@ defmodule Alto.TUI.Transcript do
   end
 
   defp tail_rows(entry, width, assistant, height) do
-    if to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
-         is_binary(entry[:text]) do
+    if markdown?(entry) do
       cached(:entries, {entry, width, assistant, {:tail, height}}, 512, fn ->
         [
           assistant_label(entry, assistant)
@@ -159,6 +139,12 @@ defmodule Alto.TUI.Transcript do
       cached_rows(entry, width, assistant, [])
     end
   end
+
+  @doc false
+  def markdown?(entry),
+    do:
+      to_string(entry[:kind]) in ["assistant", "codex_assistant", "reasoning"] and
+        is_binary(entry[:text])
 
   defp assistant_label(entry, assistant) do
     label =
@@ -183,9 +169,7 @@ defmodule Alto.TUI.Transcript do
     do: Alto.TUI.Cache.fetch({__MODULE__, kind}, id, limit, build)
 
   defp entry_rows(entry, width, assistant, opts) do
-    kind = to_string(entry[:kind] || "message")
-
-    if kind in ["assistant", "codex_assistant", "reasoning"] and is_binary(entry[:text]) do
+    if markdown?(entry) do
       [assistant_label(entry, assistant) | Alto.TUI.Markdown.render(entry.text, width).lines]
     else
       Alto.TUI.Viewport.rows(text(entry, opts), width)

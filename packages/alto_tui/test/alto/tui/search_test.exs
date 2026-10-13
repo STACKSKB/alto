@@ -106,18 +106,21 @@ defmodule Alto.TUI.SearchTest do
   test "styled Markdown is highlighted across spans and assistant labels are not search hits", %{
     state: state
   } do
-    state =
-      state
-      |> State.put_entries(nil, [%{kind: :assistant, text: "**Alto** and `alto`"}])
-      |> Search.open()
-      |> Search.paste("alto")
+    for role <- ["assistant", "codex_assistant", "reasoning"],
+        kind <- [role, String.to_existing_atom(role), String.to_charlist(role)] do
+      state =
+        state
+        |> State.put_entries(nil, [%{kind: kind, text: "**Alto** and `alto`"}])
+        |> Search.open()
+        |> Search.paste("alto")
 
-    data = Search.projection(state, 40)
-    assert length(data.matches) == 2
-    assert Enum.all?(data.matches, &(&1.row > 0 and &1.ranges != []))
-    text = Search.highlighted(state, 40)
-    refute Enum.any?(hd(text.lines).spans, &(&1.style && &1.style.bg == :light_cyan))
-    assert length(Search.find([%{kind: :assistant, text: "unrelated"}], "alto")) == 0
+      data = Search.projection(state, 40)
+      assert length(data.matches) == 2
+      assert Enum.all?(data.matches, &(&1.row > 0 and &1.ranges != []))
+      text = Search.highlighted(state, 40)
+      refute Enum.any?(hd(text.lines).spans, &(&1.style && &1.style.bg == :light_cyan))
+      assert length(Search.find([%{kind: kind, text: "unrelated"}], "alto")) == 0
+    end
   end
 
   test "Ctrl+F protects the draft, shows controls without context, and routes keyboard and mouse results",
