@@ -1,5 +1,6 @@
 defmodule Alto.TUI.RemoteTest do
   use ExUnit.Case, async: false
+  import Alto.TUI.TestSupport, only: [eventually: 1]
   alias Alto.Contrib.Resident.{Config, Service, Tasks}
   alias Alto.TUI.{App, Backends.Remote, State}
   alias ExRatatui.Event.{Key, Paste}
@@ -249,18 +250,5 @@ defmodule Alto.TUI.RemoteTest do
     ref = Process.monitor(pid)
     Runtime.inject_event(pid, %Key{code: "c", modifiers: ["ctrl"], kind: "press"})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
-  end
-
-  defp eventually(fun, attempts \\ 250)
-  defp eventually(_fun, 0), do: flunk("remote terminal did not reach expected state")
-
-  defp eventually(fun, attempts) do
-    if fun.(),
-      do: :ok,
-      else:
-        (
-          Process.sleep(20)
-          eventually(fun, attempts - 1)
-        )
   end
 end

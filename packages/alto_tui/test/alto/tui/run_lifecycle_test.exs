@@ -1,5 +1,6 @@
 defmodule Alto.TUI.RunLifecycleTest do
   use ExUnit.Case, async: false
+  import Alto.TUI.TestSupport, only: [eventually: 1]
 
   alias Alto.TUI.App
   alias Alto.TUI.State
@@ -636,18 +637,4 @@ defmodule Alto.TUI.RunLifecycleTest do
     ExRatatui.textarea_set_value(state(app).textarea, message)
     key(app, "enter")
   end
-
-  defp eventually(fun, remaining \\ 250)
-
-  defp eventually(fun, remaining) when remaining > 0 do
-    if fun.(),
-      do: :ok,
-      else:
-        (
-          Process.sleep(20)
-          eventually(fun, remaining - 1)
-        )
-  end
-
-  defp eventually(_, 0), do: flunk("TUI did not reach expected state")
 end

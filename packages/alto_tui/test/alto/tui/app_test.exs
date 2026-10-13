@@ -2532,18 +2532,7 @@ defmodule Alto.TUI.AppTest do
     |> elem(0)
   end
 
-  defp eventually(fun, attempts \\ 100)
-
-  defp eventually(fun, attempts) when attempts > 0 do
-    if fun.() do
-      :ok
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
-  end
-
-  defp eventually(_fun, 0), do: flunk("condition did not become true")
+  defp eventually(fun), do: Alto.TUI.TestSupport.eventually(fun, 100)
 
   defp folder_form(state) do
     {:noreply, state} = App.handle_event(%Key{code: "g", modifiers: ["ctrl"]}, state)
