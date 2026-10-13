@@ -137,7 +137,9 @@ defmodule Alto.OperationLog do
 
   @impl true
   def handle_call(request, _from, state) do
-    if command?(request), do: commit(state, scrub_command(request)), else: read(request, state)
+    if command?(request),
+      do: commit(state, scrub_command(request)),
+      else: {:reply, read(request, state), state}
   end
 
   defp command?(request) when is_tuple(request) and tuple_size(request) > 0,
@@ -179,38 +181,29 @@ defmodule Alto.OperationLog do
     {:ok, recovery_view(op, Map.fetch!(state.ops, op))}
   end
 
-  defp read({:status, op}, state), do: {:reply, read_status(state, op), state}
+  defp read({:status, op}, state), do: read_status(state, op)
 
   defp read({:attempts, op}, state),
-    do: {:reply, length(Map.get(state.ops, op, %{attempts: []}).attempts), state}
+    do: length(Map.get(state.ops, op, %{attempts: []}).attempts)
 
   defp read({:entries, filter}, state) when filter in [:all, :open, :parked] do
-    entries =
-      state.order
-      |> Enum.map(&recovery_view(&1, Map.fetch!(state.ops, &1)))
-      |> Enum.filter(&entry_matches?(&1, filter))
-
-    {:reply, entries, state}
+    state.order
+    |> Enum.map(&recovery_view(&1, Map.fetch!(state.ops, &1)))
+    |> Enum.filter(&entry_matches?(&1, filter))
   end
 
   defp read({:recovery, op}, state) do
-    result =
-      case Map.fetch(state.ops, op) do
-        {:ok, entry} -> {:ok, recovery_view(op, entry)}
-        :error -> {:error, :not_found}
-      end
-
-    {:reply, result, state}
+    case Map.fetch(state.ops, op) do
+      {:ok, entry} -> {:ok, recovery_view(op, entry)}
+      :error -> {:error, :not_found}
+    end
   end
 
   defp read(:identity, state),
     do:
-      {:reply,
-       {:ok,
-        %{"kind" => "alto_operation_log", "id" => state.id, "dir" => Path.expand(state.dir)}},
-       state}
+      {:ok, %{"kind" => "alto_operation_log", "id" => state.id, "dir" => Path.expand(state.dir)}}
 
-  defp read(_, state), do: {:reply, {:error, :invalid_request}, state}
+  defp read(_, _state), do: {:error, :invalid_request}
 
   ## Internals
 

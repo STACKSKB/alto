@@ -56,10 +56,7 @@ defmodule Alto.Runner.Execution do
            try do
              run_with_input(task, Keyword.put(opts, :async_agents, agents), scheduler)
            after
-             if Process.alive?(agents) do
-               Alto.Runner.Agents.close(agents)
-               GenServer.stop(agents)
-             end
+             if Process.alive?(agents), do: GenServer.stop(agents)
            end
          end) do
       {:error, reason} -> Result.error(reason)

@@ -11,10 +11,7 @@ defmodule Alto.Runner.Agents do
     try do
       await_batch(pid, check)
     after
-      if Process.alive?(pid) do
-        GenServer.call(pid, {:close, :parent_finished}, :infinity)
-        GenServer.stop(pid)
-      end
+      if Process.alive?(pid), do: GenServer.stop(pid)
     end
   end
 
@@ -239,12 +236,15 @@ defmodule Alto.Runner.Agents do
        |> dispatch()}
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner: ref} = state),
-    do: {:stop, :normal, stop_children(state)}
+    do: {:stop, :normal, state}
 
   def handle_info({:DOWN, ref, :process, _, reason}, state),
     do: handle_info({ref, {:error, {:run_process_failed, {:child_start_failed, reason}}}}, state)
 
   def handle_info(_, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state), do: stop_children(state)
 
   defp started(entry, {:ok, handle}, runner) do
     case runner.subscribe(handle, self()) do

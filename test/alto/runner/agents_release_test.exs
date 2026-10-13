@@ -44,7 +44,7 @@ defmodule Alto.Runner.AgentsReleaseTest do
     refute Process.alive?(host_pid)
   end
 
-  test "cancellation drains the child result and releases its host" do
+  test "cancellation and scheduler failure both release the child host" do
     owner = self()
     outcome = %Result{Result.empty() | status: :cancelled, reason: :operator}
 
@@ -65,25 +65,35 @@ defmodule Alto.Runner.AgentsReleaseTest do
       {:ok, %Handle{runner: Alto.Runner.Serial, state: host}}
     end
 
-    batch =
-      Task.async(fn ->
-        check = fn ->
-          receive do
-            :cancel -> {:cancelled, :operator}
-          after
-            0 -> :continue
+    for {signal, expected} <- [
+          {:cancel, {{:cancelled, :operator}, [{"child", outcome}]}},
+          {:fail, :scheduler_failed}
+        ] do
+      batch =
+        Task.async(fn ->
+          check = fn ->
+            receive do
+              :cancel -> {:cancelled, :operator}
+              :fail -> exit(:scheduler_failed)
+            after
+              0 -> :continue
+            end
           end
-        end
 
-        Agents.batch([%{id: "child"}], 1, start, check)
-      end)
+          try do
+            Agents.batch([%{id: "child"}], 1, start, check)
+          catch
+            :exit, reason -> reason
+          end
+        end)
 
-    assert_receive {:child_host, host_pid}, 2_000
-    assert_receive :child_running, 2_000
-    send(batch.pid, :cancel)
+      assert_receive {:child_host, host_pid}, 2_000
+      assert_receive :child_running, 2_000
+      send(batch.pid, signal)
 
-    assert {{:cancelled, :operator}, [{"child", ^outcome}]} = Task.await(batch, 7_000)
-    refute Process.alive?(host_pid)
+      assert Task.await(batch, 7_000) == expected
+      refute Process.alive?(host_pid)
+    end
   end
 
   test "subscription failure releases the terminated child host" do
