@@ -56,6 +56,11 @@ defmodule Alto.Contrib.ExampleConfigsTest do
     %{root: root, cwd: cwd, session_dir: Path.join(root, "sessions")}
   end
 
+  test "the coding profile opts into background compaction" do
+    assert {:ok, options} = Config.load(Path.join(@repository, "alto.agentic.exs"))
+    assert options[:compaction][:mode] == :background
+  end
+
   test "each independently loaded example needs a model and completes a native HTTP tool round trip",
        ctx do
     System.delete_env("ALTO_MODEL")

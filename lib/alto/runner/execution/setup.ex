@@ -11,7 +11,7 @@ defmodule Alto.Runner.Execution.Setup do
   @option_fields ~w(agent_prepare agent_models child_provider_resolver input messaging async_agents
                     agent_scheduler execution_owner checkpoint_version subagent_ticket child_profile
                     child_resume parent_expires_at_ms continuation_store cancel_ref session
-                    session_dir retry_policy tool_presenter)a
+                    session_dir retry_policy tool_presenter background_compactor)a
 
   def open(task, opts) do
     %{} = spec = Keyword.get(opts, :loop, Alto.default_loop())
@@ -242,6 +242,7 @@ defmodule Alto.Runner.Execution.Setup do
 
   @compaction_schema [
     strategy: [type: :any, required: true],
+    mode: [type: {:in, [:blocking, :background]}, default: :blocking],
     max_compactions: [type: :pos_integer, default: 1],
     keep_recent_messages: [type: :pos_integer, default: 10],
     keep_initial_messages: [type: :non_neg_integer, default: 0],

@@ -583,6 +583,44 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert {:ok, ^data} = Session.decode_term(encoded)
   end
 
+  test "the handoff reducer publishes an artifact from a background snapshot", %{dir: dir} do
+    alias Alto.Runner.Execution.{BackgroundCompactor, Setup}
+    alias Alto.Runner.Execution.Transcript
+
+    opts = [
+      provider: {HandoffProvider, []},
+      session: Session.generate_id(),
+      session_dir: dir,
+      compaction: [
+        strategy: Alto.Contrib.Context.Reducers.Handoff,
+        mode: :background,
+        keep_recent_messages: 1,
+        max_handoff_bytes: 400
+      ]
+    ]
+
+    BackgroundCompactor.scope(opts, fn options ->
+      {:ok, run} = Setup.open(String.duplicate("earlier work", 300), options)
+      {:ok, run} = Transcript.append(run, %{"role" => "user", "content" => "Continue."})
+      run = Transcript.start_background(run)
+      tail = %{"role" => "user", "content" => "A correction arriving during compaction."}
+      {:ok, run} = Transcript.append(run, tail)
+      assert {:ok, reduced} = Transcript.reduce(run)
+      assert hd(reduced.messages_rev) == tail
+      assert reduced.model_requests == 1
+      assert reduced.compaction_count == 1
+      assert :ok = Alto.Context.Transcript.validate(Enum.reverse(reduced.messages_rev))
+
+      assert %Event{data: %{artifact_path: path}} =
+               Enum.find(
+                 Alto.EventBuffer.to_list(reduced.event_buffer),
+                 &(&1.type == :context_compacted)
+               )
+
+      assert JSON.decode!(File.read!(path))["next_step"] == "Return the final answer."
+    end)
+  end
+
   test "compaction stays off unless enabled", %{dir: dir} do
     test_pid = self()
 

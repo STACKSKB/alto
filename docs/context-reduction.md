@@ -23,6 +23,29 @@ ineffective, a request still fitting the hard window can proceed. A hard
 context-window failure attempts reduction too, but never sends an oversized
 request. Transcript byte overflow remains an independent trigger.
 
+Set `compaction: [mode: :background, ...]` to perform soft-threshold reduction
+in parallel with ordinary model and tool work. The default is `:blocking`;
+`alto.agentic.exs` opts into `:background`. Both modes use the configured reducer,
+retention policy and compaction allowance. Configure `compact_at` early enough
+to leave capacity for work arriving while the reducer runs.
+
+Background mode snapshots the current conversation and permits only one pending
+reduction per execution. Before a subsequent model request, a ready result replaces
+that snapshot and retains every appended message verbatim and in order, including
+tool calls, replies and user steering. A changed snapshot prefix is rejected.
+Provider requests already in progress keep their original context. Hard model
+limits, transcript overflow and manual reduction wait for an existing worker;
+when none is pending they use blocking reduction. Oversized requests are never
+dispatched. Failed reductions leave history intact and soft pressure remains
+advisory.
+
+Foreground and background provider calls share the run deadline, global request
+budget and local `max_steps` allowance. Background usage is added as deltas so it
+cannot overwrite concurrent foreground accounting. Ready results are collected
+at termination; unfinished workers are cancelled without delaying completion.
+Checkpoints cancel unfinished workers and save the current transcript and counts;
+restoration can start a fresh reduction. No worker process identity is persisted.
+
 Trusted loops can emit `{:compact_context, options}` for manual reduction.
 Independent hosts can call `Alto.Runner.Execution.Transcript.reduce/2` directly.
 The optional `required_headroom` specifies how many transcript bytes must fit
@@ -71,6 +94,8 @@ The handoff reducer publishes one immutable JSON artifact containing `design`,
 `pointers`, `handoff`, and `next_step`. Its path appears in the replacement context
 and the `context_compacted` event's `artifact_path` field. Publication is atomic;
 concurrent attempts at the same session/artifact ID cannot overwrite each other.
+Background attempts use unique artifact IDs so retrying a cancelled attempt
+cannot collide with an artifact published before cancellation.
 
 Use `Alto.Context.Estimator` with a configured tokenizer and provider/model
 framing costs when available. The default byte estimator remains conservative;

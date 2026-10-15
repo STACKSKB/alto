@@ -10,18 +10,21 @@ defmodule Alto.Runner.Execution.Model do
   alias Alto.Usage
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
+  alias Alto.Runner.Execution.BackgroundCompactor
 
   @doc "Dispatch a model request and return its outcome with updated run accounting."
   def request(_request, %{provider: nil} = run, _sink),
     do: {{:error, :provider_required}, run}
 
-  def request(_request, %{model_requests: count, max_steps: limit} = run, _sink)
-      when is_integer(limit) and count >= limit,
-      do: {{:error, {:model_step_limit, limit}}, run}
-
   def request(request, run, sink) do
+    case BackgroundCompactor.reserve_model(run) do
+      {:ok, step} -> dispatch(request, run, sink, step)
+      {:error, reason} -> {{:error, reason}, run}
+    end
+  end
+
+  defp dispatch(request, run, sink, step) do
     {provider, opts} = run.provider
-    step = run.model_requests + 1
     Alto.Events.notify(run.event_sink, Event.live(:model_started, %{step: step}))
     attempts = :ets.new(__MODULE__, [:set, :public])
 
@@ -36,7 +39,7 @@ defmodule Alto.Runner.Execution.Model do
           Usage.merge(acc, Usage.normalize(data.usage))
         end)
 
-      run = %{run | model_requests: step, usage: Usage.merge(run.usage, usage)}
+      run = %{run | model_requests: run.model_requests + 1, usage: Usage.merge(run.usage, usage)}
 
       run =
         Map.put(
@@ -254,6 +257,7 @@ defmodule Alto.Runner.Execution.Model do
           })
 
         if caps[:accounting_table], do: :ets.insert(caps.accounting_table, {attempt, evidence})
+        BackgroundCompactor.account(caps, evidence)
         diagnostic(caps, :provider_attempt_finished, evidence)
 
         decision =

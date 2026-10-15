@@ -263,7 +263,10 @@ Use `project_instructions: nil` to disable this input.
 context admission, middleware, and subagents. `Alto.chat_loop/1` disables tool
 execution; `Alto.rule_loop/1` runs deterministic tool steps; `Alto.loop/2` accepts
 a custom loop. Context reduction is opt-in and configured separately through
-`compaction`. See [loops](loop-contract.md), [tool batches](tool-batches.md),
+`compaction`. Set `compaction: [mode: :background, ...]` to reduce context in
+parallel at the soft pressure threshold; the coding profile enables this mode.
+Other profiles retain blocking reduction unless they opt in. See
+[loops](loop-contract.md), [tool batches](tool-batches.md),
 [context reduction](context-reduction.md), and [subagents](subagents.md).
 
 | Setting | Scope |

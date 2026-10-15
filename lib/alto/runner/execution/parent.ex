@@ -46,6 +46,8 @@ defmodule Alto.Runner.Execution.Parent do
   end
 
   def start(data, rest, terminal, run, complete) do
+    run = Alto.Runner.Execution.Transcript.finish(run)
+
     with true <- run.agent_depth == 0 and not is_nil(run.continuation_store),
          true <- match?(%Alto.Persistence.Retained{kind: Budget.Account}, run.budget.account),
          {:ok, specs, concurrency} <- Children.validate_batch(data, run),

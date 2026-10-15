@@ -170,6 +170,7 @@ Alto.default_config()
   max_event_bytes: 16_000_000,
   compaction: [
     strategy: {Alto.Contrib.Context.Reducers.Handoff, []},
+    mode: :background,
     max_compactions: 8,
     keep_recent_messages: 12,
     keep_initial_messages: 1,

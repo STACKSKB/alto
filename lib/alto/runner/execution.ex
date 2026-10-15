@@ -24,6 +24,7 @@ defmodule Alto.Runner.Execution do
   alias Alto.Runner.Execution.Events
   alias Alto.Runner.Execution.Model
   alias Alto.Runner.Execution.Operation
+  alias Alto.Runner.Execution.BackgroundCompactor
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
   alias Alto.Runner.Execution.Session, as: RunSession
   alias Alto.Event
@@ -102,6 +103,10 @@ defmodule Alto.Runner.Execution do
   end
 
   defp run_with_options(task, opts) do
+    BackgroundCompactor.scope(opts, &run_with_compactor(task, &1))
+  end
+
+  defp run_with_compactor(task, opts) do
     opts =
       case Keyword.get(opts, :checkpoint) do
         {%{"session_id" => session}, _decision} -> Keyword.put(opts, :session, session)
@@ -196,6 +201,8 @@ defmodule Alto.Runner.Execution do
   end
 
   defp suspend(run, reason, capture) do
+    run = RunTranscript.finish(run)
+
     case History.persist(run, allow_pending: true) do
       {:ok, next} ->
         case checkpoint_call(fn -> capture.(next) end, next) do
@@ -599,16 +606,22 @@ defmodule Alto.Runner.Execution do
   end
 
   defp prepare_model_context(effect_request, run) do
+    run = RunTranscript.poll(run)
+
     with {:ok, request} <- model_request(effect_request, run) do
       checked = check_context(request, run)
 
       case checked do
         {:ok, %{context_pressure: true} = request} ->
-          compact_model_context(
-            effect_request,
-            run,
-            {:ok, Map.delete(request, :context_pressure)}
-          )
+          if BackgroundCompactor.enabled?(run) do
+            {:ok, Map.delete(request, :context_pressure), RunTranscript.start_background(run)}
+          else
+            compact_model_context(
+              effect_request,
+              run,
+              {:ok, Map.delete(request, :context_pressure)}
+            )
+          end
 
         {:error, {:context_limit, _}} ->
           compact_model_context(effect_request, run, checked)
@@ -1451,6 +1464,7 @@ defmodule Alto.Runner.Execution do
   defp runtime_context(run), do: Map.take(run, [:session_id, :cwd, :agent_identity])
 
   defp result(run, output, disposition, reason \\ nil) do
+    run = RunTranscript.finish(run)
     run = merge_async(run, if(disposition == :checkpoint, do: :collect, else: :close))
     messages = Enum.reverse(run.messages_rev)
     history_digest = Map.get(run, :history_digest)

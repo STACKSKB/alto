@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add optional background context compaction with snapshot and tail preservation,
+  shared request budgets, and blocking recovery at hard limits. Enable it in
+  `alto.agentic.exs`.
 - Highlight complete code-block rectangles and render only visible transcript
   rows; retain absolute search/selection coordinates while scrolling.
 - Store conversation history incrementally with shared message objects and
