@@ -3,11 +3,15 @@ defmodule Alto.Contrib.Socket.ClientTest do
 
   test "correlates replies while retaining and delivering notifications" do
     {path, listener} = socket_fixture()
+    hello = %{"v" => 1, "type" => "hello", "id" => "s-1", "text" => String.duplicate("猫", 5_000)}
+    encoded = JSON.encode!(hello)
 
     server =
       spawn_link(fn ->
         {:ok, socket} = :gen_tcp.accept(listener)
-        send_json(socket, %{"v" => 1, "type" => "hello", "id" => "s-1"})
+        <<prefix::binary-size(100), rest::binary>> = encoded
+        :ok = :gen_tcp.send(socket, prefix)
+        :ok = :gen_tcp.send(socket, [rest, "\r\n\n"])
         {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
         request = JSON.decode!(String.trim(line))
         send_json(socket, %{"v" => 1, "type" => "event", "id" => "s-2", "run_id" => "run-1"})
@@ -18,8 +22,10 @@ defmodule Alto.Contrib.Socket.ClientTest do
         end
       end)
 
-    {:ok, client} = Alto.Contrib.Socket.Client.connect(path)
-    assert {:ok, %{"type" => "hello"}} = Alto.Contrib.Socket.Client.next(client)
+    {:ok, client} =
+      Alto.Contrib.Socket.Client.connect(path, max_line_bytes: byte_size(encoded) + 1)
+
+    assert {:ok, ^hello} = Alto.Contrib.Socket.Client.next(client)
 
     assert {:ok, %{"type" => "ok", "run_id" => "run-1"}} =
              Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"})
@@ -33,18 +39,20 @@ defmodule Alto.Contrib.Socket.ClientTest do
   end
 
   test "closes on an oversized NDJSON line" do
-    {path, listener} = socket_fixture()
+    for ending <- ["", "\n"] do
+      {path, listener} = socket_fixture()
 
-    spawn_link(fn ->
-      {:ok, socket} = :gen_tcp.accept(listener)
-      :gen_tcp.send(socket, String.duplicate("x", 20) <> "\n")
-      :gen_tcp.close(socket)
-    end)
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
+        :gen_tcp.send(socket, String.duplicate("x", 9) <> ending)
+        :gen_tcp.close(socket)
+      end)
 
-    {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_line_bytes: 8)
-    assert {:error, :line_too_large} = Alto.Contrib.Socket.Client.next(client, 500)
-    Alto.Contrib.Socket.Client.close(client)
-    File.rm(path)
+      {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_line_bytes: 8)
+      assert {:error, :line_too_large} = Alto.Contrib.Socket.Client.next(client, 500)
+      Alto.Contrib.Socket.Client.close(client)
+      File.rm(path)
+    end
   end
 
   test "invalid commands and request timeouts do not consume pending capacity" do
@@ -137,6 +145,7 @@ defmodule Alto.Contrib.Socket.ClientTest do
 
   test "event count overflow is explicit rather than silently dropping" do
     {path, listener} = socket_fixture()
+    parent = self()
 
     spawn(fn ->
       {:ok, socket} = :gen_tcp.accept(listener)
@@ -147,13 +156,12 @@ defmodule Alto.Contrib.Socket.ClientTest do
         %{"v" => 1, "type" => "event", "id" => "e-3"}
       ])
 
-      receive do
-        :close -> :gen_tcp.close(socket)
-      end
+      send(parent, {:overflow_closed, :gen_tcp.recv(socket, 0, 1_000)})
     end)
 
     {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_events: 1)
-    assert eventually_overflow(client)
+    assert_receive {:overflow_closed, {:error, :closed}}, 1_500
+    assert {:error, :event_buffer_overflow} = Alto.Contrib.Socket.Client.next(client)
     Alto.Contrib.Socket.Client.close(client)
   end
 

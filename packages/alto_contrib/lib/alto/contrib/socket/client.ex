@@ -91,7 +91,13 @@ defmodule Alto.Contrib.Socket.Client do
            :gen_tcp.connect(
              {:local, path},
              0,
-             [:binary, {:active, false}],
+             [
+               :binary,
+               active: false,
+               packet: :line,
+               packet_size: max_line_bytes + 1,
+               buffer: max_line_bytes + 1
+             ],
              timeout
            ) do
       :ok = :inet.setopts(socket, active: :once)
@@ -107,7 +113,6 @@ defmodule Alto.Contrib.Socket.Client do
          max_event_bytes: max_event_bytes,
          event_bytes: 0,
          closed: nil,
-         buffer: <<>>,
          events: :queue.new(),
          event_count: 0,
          waiters: :queue.new(),
@@ -181,29 +186,28 @@ defmodule Alto.Contrib.Socket.Client do
   def handle_info({:tcp, _, _}, %{closed: reason} = state) when not is_nil(reason),
     do: {:noreply, state}
 
-  def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
-    state = %{state | buffer: state.buffer <> data}
+  def handle_info({:tcp, socket, line}, %{socket: socket} = state) do
+    # Line mode can return a bounded fragment for an oversized line.
+    result =
+      if byte_size(line) <= state.max_line_bytes + 1 and String.ends_with?(line, "\n"),
+        do: handle_line(line |> String.trim_trailing("\n") |> String.trim_trailing("\r"), state),
+        else: {:error, :line_too_large}
 
-    case consume_lines(state.buffer, state.max_line_bytes, []) do
-      {:ok, buffer, lines} ->
-        next =
-          Enum.reduce_while(lines, %{state | buffer: buffer}, fn line, acc ->
-            case handle_line(line, acc) do
-              {:ok, next} -> {:cont, next}
-              {:error, reason} -> {:halt, close_state(acc, reason)}
-            end
-          end)
-
-        if is_nil(next.closed), do: :inet.setopts(socket, active: :once)
+    case result do
+      {:ok, next} ->
+        :inet.setopts(socket, active: :once)
         {:noreply, next}
 
-      {:error, :line_too_large} ->
-        {:noreply, close_state(state, :line_too_large)}
+      {:error, reason} ->
+        {:noreply, close_state(state, reason)}
     end
   end
 
   def handle_info({:tcp_closed, socket}, %{socket: socket} = state),
     do: {:noreply, close_state(state, :closed)}
+
+  def handle_info({:tcp_error, socket, :emsgsize}, %{socket: socket} = state),
+    do: {:noreply, close_state(state, :line_too_large)}
 
   def handle_info({:tcp_error, socket, reason}, %{socket: socket} = state),
     do: {:noreply, close_state(state, {:socket, reason})}
@@ -263,8 +267,7 @@ defmodule Alto.Contrib.Socket.Client do
         waiters: :queue.new(),
         events: :queue.new(),
         event_count: 0,
-        event_bytes: 0,
-        buffer: <<>>
+        event_bytes: 0
     }
   end
 
@@ -326,22 +329,6 @@ defmodule Alto.Contrib.Socket.Client do
 
       {:empty, _} ->
         {:error, :event_buffer_overflow}
-    end
-  end
-
-  defp consume_lines(buffer, max, lines) do
-    case :binary.split(buffer, "\n") do
-      [line, rest] when byte_size(line) <= max ->
-        consume_lines(rest, max, [String.trim_trailing(line, "\r") | lines])
-
-      [line, _rest] when byte_size(line) > max ->
-        {:error, :line_too_large}
-
-      [incomplete] when byte_size(incomplete) <= max ->
-        {:ok, incomplete, Enum.reverse(lines)}
-
-      [_incomplete] ->
-        {:error, :line_too_large}
     end
   end
 
