@@ -71,9 +71,9 @@ defmodule Alto.Contrib.Resident.Lifecycle do
   @doc "Deny task id reuse while its cleanup, owned budget, or selected parent store retains state."
   def available?(config, name, %{"id" => id, "profile" => profile}) do
     with {:ok, opts} <- Config.resolve(config, profile),
-         :ok <- unreserved_budget(ParentRuns.budgets(name), id),
+         :ok <- unreserved_cell(ParentRuns.budgets(name), "task:" <> id, Account),
          :ok <- unreserved_cleanup(ledger(name), id),
-         :ok <- unreserved_binding(ParentRuns.bindings(name), id),
+         :ok <- unreserved_cell(ParentRuns.bindings(name), id, ParentRuns),
          :ok <- unreserved_parent(Keyword.get(opts, :continuation_store), id, name) do
       :ok
     end
@@ -106,23 +106,15 @@ defmodule Alto.Contrib.Resident.Lifecycle do
 
   defp unreserved_cleanup(ledger, id) do
     if Enum.any?(
-         Enum.map(OperationLog.request(ledger, {:entries, :all}), & &1.operation_key),
-         &String.starts_with?(&1, id <> ":")
+         OperationLog.request(ledger, {:entries, :all}),
+         &String.starts_with?(&1.operation_key, id <> ":")
        ),
        do: {:error, :task_id_retained},
        else: :ok
   end
 
-  defp unreserved_budget(server, id) do
-    case Account.lookup(server, "task:" <> id) do
-      {:error, :not_found} -> :ok
-      {:ok, _, _} -> {:error, :task_id_retained}
-      error -> error
-    end
-  end
-
-  defp unreserved_binding(server, id) do
-    case Retained.lookup(server, id, ParentRuns) do
+  defp unreserved_cell(server, key, kind) do
+    case Retained.lookup(server, key, kind) do
       {:error, :not_found} -> :ok
       {:ok, _, _} -> {:error, :task_id_retained}
       error -> error
