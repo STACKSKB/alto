@@ -59,14 +59,20 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
     end
   end
 
-  def request(
-        config,
-        headers,
-        options,
-        initial,
-        consume,
-        on_error \\ fn reason, _, _ -> {:error, reason} end
-      ) do
+  def request(config, headers, options) do
+    with {:ok, chunks} <-
+           request(config, headers, options, [], fn chunks, data -> {:ok, [data | chunks]} end),
+         do: {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+  end
+
+  defp request(
+         config,
+         headers,
+         options,
+         initial,
+         consume,
+         on_error \\ fn reason, _, _ -> {:error, reason} end
+       ) do
     initial = %{
       value: initial,
       bytes: 0,

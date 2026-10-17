@@ -65,15 +65,9 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   @impl true
   def list_models(opts) do
     with {:ok, config} <- models_config(opts),
-         {:ok, chunks} <-
-           StreamEnvelope.request(
-             config,
-             config.headers,
-             [method: :get, params: config.query],
-             [],
-             fn chunks, data -> {:ok, [data | chunks]} end
-           ) do
-      models_result(chunks)
+         {:ok, body} <-
+           StreamEnvelope.request(config, config.headers, method: :get, params: config.query) do
+      models_result(body)
     end
   rescue
     error -> {:error, {:provider_exception, error, __STACKTRACE__}}
@@ -255,9 +249,8 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
      }}
   end
 
-  defp models_result(chunks) do
-    with body <- chunks |> Enum.reverse() |> IO.iodata_to_binary(),
-         {:ok, decoded} <- JSON.decode(body),
+  defp models_result(body) do
+    with {:ok, decoded} <- JSON.decode(body),
          %{"data" => data} when is_list(data) <- decoded,
          models when models != [] <- normalize_models(data) do
       {:ok, models}
@@ -270,9 +263,9 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
   end
 
   defp normalize_models(data) do
-    Enum.flat_map(data, fn
-      %{"id" => id} = model when is_binary(id) and id != "" ->
-        normalized = %{
+    for %{"id" => id} = model <- data, is_binary(id) and id != "" do
+      Map.reject(
+        %{
           id: id,
           name: string_value(model["name"], id),
           supported_parameters: string_list(model["supported_parameters"]),
@@ -283,13 +276,10 @@ defmodule Alto.Contrib.Providers.OpenAICompatible do
             ),
           context_length: positive_value(model["context_length"]),
           input_modalities: Alto.Contrib.Providers.ModelMetadata.input_modalities(model)
-        }
-
-        [Map.reject(normalized, fn {_key, value} -> is_nil(value) end)]
-
-      _other ->
-        []
-    end)
+        },
+        fn {_key, value} -> is_nil(value) end
+      )
+    end
   end
 
   defp string_value(value, _default) when is_binary(value) and value != "", do: value

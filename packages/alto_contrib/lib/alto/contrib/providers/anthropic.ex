@@ -85,13 +85,10 @@ defmodule Alto.Contrib.Providers.Anthropic do
 
     # A zero-token success deliberately ends with max_tokens. Keep that special
     # case out of the ordinary generation decoder, which rejects truncation.
-    with {:ok, chunks} <-
-           StreamEnvelope.request(
-             config,
-             headers(config),
-             [method: :post, body: JSON.encode!(body)],
-             [],
-             fn chunks, data -> {:ok, [data | chunks]} end
+    with {:ok, response} <-
+           StreamEnvelope.request(config, headers(config),
+             method: :post,
+             body: JSON.encode!(body)
            ),
          {:ok,
           %{
@@ -99,7 +96,7 @@ defmodule Alto.Contrib.Providers.Anthropic do
             "stop_reason" => "max_tokens",
             "usage" => %{"output_tokens" => 0} = raw_usage
           }} <-
-           JSON.decode(chunks |> Enum.reverse() |> IO.iodata_to_binary()) do
+           JSON.decode(response) do
       usage = Alto.Contrib.Usage.normalize(raw_usage)
       {:ok, %{usage: usage, cache_hit: usage.cached_input_tokens > 0, output: false}}
     else
