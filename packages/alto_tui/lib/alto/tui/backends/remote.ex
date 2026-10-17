@@ -369,7 +369,7 @@ defmodule Alto.TUI.Backends.Remote do
     backend = state.selected_backend |> Atom.to_string()
 
     tasks =
-      Enum.map(model.tasks, fn task ->
+      Enum.group_by(model.tasks, &(&1.workspace_id || model.workspace_id), fn task ->
         %{
           "id" => task.id,
           "project_id" => task.workspace_id || model.workspace_id,
@@ -379,7 +379,6 @@ defmodule Alto.TUI.Backends.Remote do
           "conversation_id" => task.session_id
         }
       end)
-      |> Enum.group_by(& &1["project_id"])
 
     task = Enum.find(model.tasks, &(&1.id == model.selected_id))
     workspace = (task && task.workspace_id) || model.workspace_id
@@ -394,7 +393,6 @@ defmodule Alto.TUI.Backends.Remote do
     }
 
     state = State.put_entries(state, model.selected_id, model.entries)
-    task = selected_task(state)
     if task, do: State.put_usage(state, task.id, Alto.Usage.normalize(task.usage)), else: state
   end
 

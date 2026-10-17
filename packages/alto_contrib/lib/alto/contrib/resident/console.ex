@@ -567,12 +567,7 @@ defmodule Alto.Contrib.Resident.Console do
   defp load_history(%{client: nil} = model), do: model
 
   defp load_history(model) do
-    session =
-      case selected(model) do
-        nil -> nil
-        task -> task.session_id
-      end
-
+    session = get_in(selected(model), [:session_id])
     model = if model.history_session_id == session, do: model, else: reset_history(model)
 
     if is_nil(session),
@@ -812,11 +807,7 @@ defmodule Alto.Contrib.Resident.Console do
   end
 
   defp live_approvals(model) do
-    run =
-      case selected(model) do
-        nil -> nil
-        task -> task.run_id
-      end
+    run = get_in(selected(model), [:run_id])
 
     model.approvals
     |> Map.values()
