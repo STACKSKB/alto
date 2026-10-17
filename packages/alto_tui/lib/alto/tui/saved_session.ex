@@ -162,35 +162,29 @@ defmodule Alto.TUI.SavedSession do
   defp activity(state, record, _id) do
     key = to_string(record["run_id"])
 
-    case Map.fetch(state["runs"], key) do
-      {:ok, agent} ->
-        agent =
-          if record["type"] == "completed" do
-            status = record["status"] || "unknown"
+    update_in(state["runs"], fn runs ->
+      Map.replace_lazy(runs, key, fn agent ->
+        if record["type"] == "completed" do
+          status = record["status"] || "unknown"
 
-            %{
-              agent
-              | "status" => status,
-                "phase" => status,
-                "result" =>
-                  Subagents.tail(
-                    Subagents.saved_value(record["output"]) <>
-                      "\n" <> Subagents.saved_value(record["reason"])
-                  )
-            }
-          else
-            %{
-              agent
-              | "activity" =>
-                  Subagents.tail(agent["activity"] <> Subagents.saved_activity(record))
-            }
-          end
-
-        %{state | "runs" => Map.put(state["runs"], key, agent)}
-
-      :error ->
-        state
-    end
+          %{
+            agent
+            | "status" => status,
+              "phase" => status,
+              "result" =>
+                Subagents.tail(
+                  Subagents.saved_value(record["output"]) <>
+                    "\n" <> Subagents.saved_value(record["reason"])
+                )
+          }
+        else
+          %{
+            agent
+            | "activity" => Subagents.tail(agent["activity"] <> Subagents.saved_activity(record))
+          }
+        end
+      end)
+    end)
   end
 
   defp stringify(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)

@@ -14,18 +14,14 @@ defmodule Alto.TUI.Window do
       []
     else
       rows =
-        Enum.reduce(plan.parts, %{}, fn {item, layout, first, count}, acc ->
-          start = max(offset, first)
-          stop = min(last, first + count)
-
-          if stop > start do
-            render.(item, layout, start - first, stop - start)
-            |> Enum.with_index(start)
-            |> Enum.reduce(acc, fn {row, n}, acc -> Map.put(acc, n, row) end)
-          else
-            acc
-          end
-        end)
+        for {item, layout, first, count} <- plan.parts,
+            start = max(offset, first),
+            stop = min(last, first + count),
+            stop > start,
+            {row, n} <-
+              Enum.with_index(render.(item, layout, start - first, stop - start), start),
+            into: %{},
+            do: {n, row}
 
       Enum.map(offset..(last - 1), &Map.get(rows, &1, Line.new([])))
     end
