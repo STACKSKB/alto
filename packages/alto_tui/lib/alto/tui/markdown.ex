@@ -13,15 +13,8 @@ defmodule Alto.TUI.Markdown do
   @window_rows 64
 
   def render(source, width) do
-    width = max(width, 1)
-
-    groups =
-      source
-      |> String.split("\n")
-      |> blocks([])
-      |> Enum.map(&cached_block(&1, width))
-
-    Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten())
+    plan = layout(source, width)
+    Text.new(window(plan, 0, plan.rows))
   end
 
   @doc "Render the final visible blocks without materializing earlier Markdown."

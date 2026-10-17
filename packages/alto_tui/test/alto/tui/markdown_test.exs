@@ -107,26 +107,21 @@ defmodule Alto.TUI.MarkdownTest do
     for source <- ["```elixir\n  :ok\n\n  :done\n```", "```\n```"], width <- [11, 40] do
       code = Markdown.render(source, width)
       full = Markdown.render(source <> "\n\nAfter", width)
-      plan = Markdown.layout(source <> "\n\nAfter", width)
+      session = CellSession.new(width, length(full.lines))
 
-      for lines <- [full.lines, Markdown.window(plan, 0, plan.rows)] do
-        session = CellSession.new(width, length(lines))
+      try do
+        :ok =
+          CellSession.draw(session, [
+            {%Paragraph{text: full}, %Rect{width: width, height: length(full.lines)}}
+          ])
 
-        try do
-          :ok =
-            CellSession.draw(session, [
-              {%Paragraph{text: Text.new(lines)}, %Rect{width: width, height: length(lines)}}
-            ])
-
-          rows = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
-          code_rows = Enum.take(rows, length(code.lines))
-          background = hd(hd(code_rows)).bg
-          assert Enum.all?(List.flatten(code_rows), &(&1.bg == background))
-          assert Enum.all?(List.last(rows), &(&1.bg != background))
-          assert plain(Text.new(lines)) == plain(full)
-        after
-          CellSession.close(session)
-        end
+        rows = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
+        code_rows = Enum.take(rows, length(code.lines))
+        background = hd(hd(code_rows)).bg
+        assert Enum.all?(List.flatten(code_rows), &(&1.bg == background))
+        assert Enum.all?(List.last(rows), &(&1.bg != background))
+      after
+        CellSession.close(session)
       end
     end
   end
