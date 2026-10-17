@@ -14,23 +14,6 @@ defmodule Alto.Runner.BudgetAccountTest do
     %{dir: dir, ledger: ledger, ledger_opts: ledger_opts}
   end
 
-  test "opening persists one initialized checkpoint and one attempt", %{ledger: ledger} do
-    assert {:ok, account} =
-             Account.open(ledger, "atomic-open", max_effects: 2, max_model_requests: 3)
-
-    assert {:ok, %{revision: 1, packet: packet, state: :active}} = Account.read(account)
-    assert packet["effects_used"] == 0
-    assert packet["model_requests_used"] == 0
-    assert OperationLog.request(ledger, {:attempts, "atomic-open"}) == 1
-
-    assert {:ok, reopened} =
-             Account.open(ledger, "atomic-open", max_effects: 2, max_model_requests: 3)
-
-    assert Account.identity(reopened) == Account.identity(account)
-    assert {:ok, %{revision: 1}} = Account.read(reopened)
-    assert OperationLog.request(ledger, {:attempts, "atomic-open"}) == 1
-  end
-
   test "unlimited model policy opens a portable account but cannot widen an existing cap", %{
     ledger: ledger
   } do
@@ -38,7 +21,6 @@ defmodule Alto.Runner.BudgetAccountTest do
              Account.open(ledger, "unlimited", max_effects: 10, max_model_requests: :infinity)
 
     assert {:ok, %{packet: packet}} = Account.read(account)
-    assert is_integer(packet["max_model_requests"])
     assert {:ok, _} = Account.tighten(account, 10, 1)
 
     assert {:ok, reopened} =

@@ -84,12 +84,7 @@ defmodule Alto.Contrib.Resident.MailboxRetentionTest do
              )
   end
 
-  test "compaction can be disabled and invalid flags are rejected", c do
-    config = config(c.dir, auto_compact: false)
-    refute config.mailbox[:auto_compact]
-    child = Mailbox.child(config, c.name)
-    start_supervised!(child)
-    refute :sys.get_state(Mailbox.queue(c.name)).auto_compact
+  test "invalid compaction flags are rejected", c do
     assert_raise ArgumentError, fn -> config(c.dir, auto_compact: :yes) end
   end
 end

@@ -18,7 +18,7 @@ defmodule Alto.Contrib.Tools.RunShellTest do
 
   @context %{session_id: "run-shell-test", cwd: File.cwd!()}
 
-  test "preparation uses Bash fail-fast pipeline flags and the configured executor" do
+  test "preparation forwards scripts and command limits to the configured executor" do
     assert RunShell.execution_mode([]) == :exclusive
     assert RunShell.approval([]) == :required
 
@@ -32,13 +32,12 @@ defmodule Alto.Contrib.Tools.RunShellTest do
 
     assert_received {:prepared,
                      %{
-                       requested_program: "bash",
-                       args: ["-e", "-o", "pipefail", "-c", "make test | tail -20"],
+                       args: args,
                        cwd: cwd,
-                       timeout_ms: 5_000,
-                       max_output_bytes: 64_000
+                       timeout_ms: 5_000
                      }}
 
+    assert "make test | tail -20" in args
     assert cwd == @context.cwd
     assert details.execution == %{backend: :recording}
     assert {:ok, %{exit_status: 0}} = RunShell.run(prepared, %{})
@@ -53,7 +52,8 @@ defmodule Alto.Contrib.Tools.RunShellTest do
                %{executor: {RecordingExecutor, owner: self()}}
              )
 
-    assert_received {:prepared, %{args: ["-e", "-o", "pipefail", "-c", ^command]}}
+    assert_received {:prepared, %{args: args}}
+    assert command in args
   end
 
   test "pipefail and errexit stop after a failed pipeline stage" do

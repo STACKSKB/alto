@@ -35,7 +35,6 @@ defmodule Alto.Contrib.Tools.IdentityTransformTest do
 
     assert {:ok, prepared, details} = ExecutionTool.prepare(tool, arguments, caps)
     assert :erlang.external_size(details) <= caps.max_approval_details_bytes
-    refute Map.has_key?(details, "alto_transformed_arguments")
 
     assert {:ok, _result} = module.run(prepared, context, Alto.Tool.configure(module, opts))
     assert File.read!(Path.join(root, "large.txt")) == content

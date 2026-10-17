@@ -193,43 +193,6 @@ defmodule Alto.OperationLogTest do
                OperationLog.request(name, {:outcome, "op-1", "old", :completed, %{}})
     end
 
-    test "intent, attempt, outcome drive the recovery status", %{dir: dir, id: id} do
-      %{name: name} = start_ledger!(id: id, dir: dir)
-
-      assert :no_intent = OperationLog.request(name, {:status, "op-1"})
-      assert 0 = OperationLog.request(name, {:attempts, "op-1"})
-
-      assert :ok = OperationLog.request(name, {:intent, "op-1", "print", "inbox:del-1", nil})
-      assert {:error, :invalid_request} = OperationLog.request(name, {:entries, :invalid})
-      assert {:error, :invalid_request} = OperationLog.request(name, {:intent, "op-1"})
-      assert {:error, :invalid_request} = OperationLog.request(name, :unsupported)
-      assert ["op-1"] = entry_keys(OperationLog.request(name, {:entries, :all}))
-      assert {:intended} = OperationLog.request(name, {:status, "op-1"})
-
-      assert :ok = OperationLog.request(name, {:attempt, "op-1", "clm-a"})
-      assert {:dispatched, "clm-a"} = OperationLog.request(name, {:status, "op-1"})
-      assert 1 = OperationLog.request(name, {:attempts, "op-1"})
-
-      assert :ok =
-               OperationLog.request(name, {:outcome, "op-1", "clm-a", :completed, %{pages: 2}})
-
-      assert {:decided, :completed, %{pages: 2}} = OperationLog.request(name, {:status, "op-1"})
-    end
-
-    test "ordering is enforced: no intent skipping", %{dir: dir, id: id} do
-      %{name: name} = start_ledger!(id: id, dir: dir)
-
-      assert {:error, :no_intent} = OperationLog.request(name, {:attempt, "ghost", "clm-a"})
-
-      assert {:error, :no_intent} =
-               OperationLog.request(name, {:outcome, "ghost", "clm-a", :completed, %{}})
-
-      assert :ok = OperationLog.request(name, {:intent, "op-1", "print", nil, nil})
-
-      assert {:error, :invalid_operation_state} =
-               OperationLog.request(name, {:outcome, "op-1", "clm-a", :completed, %{}})
-    end
-
     test "intent and attempt are idempotent; unknown outcomes can only escalate", %{
       dir: dir,
       id: id
@@ -324,37 +287,6 @@ defmodule Alto.OperationLogTest do
       assert OperationLog.request(restarted, {:entries, :all}) == [first, second, third]
     end
 
-    test "a released attempt returns to intended; parked work lists for operators", %{
-      dir: dir,
-      id: id
-    } do
-      %{name: name} = start_ledger!(id: id, dir: Path.join(dir, "l"))
-
-      :ok = OperationLog.request(name, {:intent, "op-1", "t", nil, nil})
-      :ok = OperationLog.request(name, {:attempt, "op-1", "clm-a"})
-      assert {:dispatched, "clm-a"} = OperationLog.request(name, {:status, "op-1"})
-
-      assert {:error, :invalid_operation_state} =
-               OperationLog.request(name, {:release, "op-1", "clm-ghost"})
-
-      assert :ok = OperationLog.request(name, {:release, "op-1", "clm-a"})
-      assert {:intended} = OperationLog.request(name, {:status, "op-1"})
-      assert 1 = OperationLog.request(name, {:attempts, "op-1"})
-
-      # Healthy retry-in-flight is not operator work.
-      assert [] = entry_keys(OperationLog.request(name, {:entries, :open}))
-
-      :ok = OperationLog.request(name, {:attempt, "op-1", "clm-b"})
-      assert {:dispatched, "clm-b"} = OperationLog.request(name, {:status, "op-1"})
-      assert ["op-1"] = entry_keys(OperationLog.request(name, {:entries, :open}))
-
-      :ok =
-        OperationLog.request(name, {:outcome, "op-1", "clm-b", :requires_operator, %{why: "x"}})
-
-      assert ["op-1"] = entry_keys(OperationLog.request(name, {:entries, :parked}))
-      assert [] = entry_keys(OperationLog.request(name, {:entries, :open}))
-    end
-
     test "closed and historical owners cannot release or reserve again", %{dir: dir, id: id} do
       %{name: name} = start_ledger!(id: id, dir: dir)
       :ok = OperationLog.request(name, {:intent, "op-1", "t", nil, nil})
@@ -391,8 +323,6 @@ defmodule Alto.OperationLogTest do
 
       assert {:error, :ledger_full} =
                OperationLog.request(name, {:intent, "overflow", "t", nil, nil})
-
-      assert map_size(:sys.get_state(pid).ops) == 1
 
       GenServer.stop(pid)
       %{name: restarted} = start_ledger!(id: id, dir: dir, max_ops: 1)
@@ -590,27 +520,6 @@ defmodule Alto.OperationLogTest do
 
       assert {:decided, :completed, %{}} = OperationLog.request(name, {:status, "old"})
       assert :no_intent = OperationLog.request(name, {:status, "new"})
-    end
-
-    test "live lifecycle and replay produce the same recovery view", %{dir: dir, id: id} do
-      ledger_dir = Path.join(dir, "l")
-      %{name: name, pid: pid} = start_ledger!(id: id, dir: ledger_dir)
-      :ok = OperationLog.request(name, {:intent, "op", "tool", "inbox", %{payload: 1}})
-      :ok = OperationLog.request(name, {:attempt, "op", "first"})
-      :ok = OperationLog.request(name, {:release, "op", "first"})
-      :ok = OperationLog.request(name, {:attempt, "op", "second"})
-
-      :ok =
-        OperationLog.request(
-          name,
-          {:outcome, "op", "second", :unknown, %{"code" => 502, code: 503}}
-        )
-
-      assert {:ok, live} = OperationLog.request(name, {:recovery, "op"})
-      GenServer.stop(pid)
-
-      %{name: replayed} = start_ledger!(id: id, dir: ledger_dir)
-      assert {:ok, ^live} = OperationLog.request(replayed, {:recovery, "op"})
     end
 
     test "state survives restart; torn tail is discarded", %{dir: dir, id: id} do

@@ -112,8 +112,9 @@ defmodule Alto.TUI.MarkdownTest do
 
           rows = CellSession.take_cells(session).cells |> Enum.chunk_every(width)
           code_rows = Enum.take(rows, length(code.lines))
-          assert Enum.all?(List.flatten(code_rows), &(&1.bg == {:rgb, 43, 48, 59}))
-          assert Enum.all?(List.last(rows), &(&1.bg != {:rgb, 43, 48, 59}))
+          background = hd(hd(code_rows)).bg
+          assert Enum.all?(List.flatten(code_rows), &(&1.bg == background))
+          assert Enum.all?(List.last(rows), &(&1.bg != background))
           assert plain(Text.new(lines)) == plain(full)
         after
           CellSession.close(session)

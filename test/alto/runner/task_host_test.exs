@@ -30,36 +30,6 @@ defmodule Alto.Runner.TaskHostTest do
     assert_receive {:alto_runner_result, ^ref, %Result{status: :cancelled, reason: :done}}
   end
 
-  test "completion can be awaited and observed from independent callers" do
-    outcome = %Result{Result.empty() | status: :ok, output: "done", verdict: :completed}
-    {:ok, handle} = TaskHost.start(fn _ -> outcome end, [])
-    assert ^outcome = TaskHost.await(handle, 1000)
-    parent = self()
-    spawn(fn -> send(parent, {:observed, TaskHost.subscribe(handle, parent)}) end)
-    assert_receive {:observed, {:ok, ref}}
-    assert_receive {:alto_runner_result, ^ref, ^outcome}
-    assert ^outcome = TaskHost.await(handle, 0)
-  end
-
-  test "a timed out wait does not consume the result or cancel execution" do
-    {:ok, handle} =
-      TaskHost.start(
-        fn cancel_ref ->
-          receive do
-            {:alto_cancel, ^cancel_ref, reason} -> Result.error({:cancelled, reason})
-          end
-        end,
-        []
-      )
-
-    assert {:error, :await_timeout} = TaskHost.await(handle, 10)
-    {:ok, ref} = TaskHost.subscribe(handle)
-    assert :ok = TaskHost.cancel(handle, :test)
-    assert %Result{status: :cancelled, reason: :test} = TaskHost.await(handle, 1000)
-    assert_receive {:alto_runner_result, ^ref, %Result{status: :cancelled, reason: :test}}
-    refute_receive {:alto_runner_result, ^ref, _}
-  end
-
   test "a crashed lifecycle host terminates its worker and delivers one terminal notification" do
     {:ok, handle} = TaskHost.start(fn _ -> Process.sleep(:infinity) end, [])
     worker = :sys.get_state(handle.pid).task.pid

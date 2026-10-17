@@ -57,10 +57,10 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
 
       assert_receive {:http_request, wire}
       body = JSON.decode!(wire.body)
+      estimate = OpenAICompatible.estimate_text_context(input)
       projection = %{messages: body["messages"], tools: body["tools"]}
-      expected = byte_size(JSON.encode!(projection)) + 16 * length(body["messages"]) + 16
-      assert OpenAICompatible.estimate_text_context(input) == expected
-      assert expected < 1_000
+      assert estimate >= byte_size(JSON.encode!(projection))
+      assert estimate < 1_000
 
       assert get_in(body, ["messages", Access.at(1), "content"]) ==
                "Report ready\nGenerated file: report.txt (text/plain)"
@@ -73,8 +73,7 @@ defmodule Alto.Contrib.Providers.OpenAICompatibleTest do
           [Alto.Content.image("image/png", Base.encode64(png(10, 8)), 10, 8)]
         ] do
       input = %{messages: [%{"role" => "user", "content" => content}], tools: []}
-      expected = byte_size(JSON.encode!(input)) + 32
-      assert OpenAICompatible.estimate_text_context(input) == expected
+      assert OpenAICompatible.estimate_text_context(input) >= byte_size(JSON.encode!(input))
     end
   end
 

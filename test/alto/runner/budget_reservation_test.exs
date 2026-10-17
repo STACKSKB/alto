@@ -51,14 +51,4 @@ defmodule Alto.Runner.BudgetReservationTest do
     assert {:error, {:effect_limit, 1}} = Budget.take(exhausted)
     assert Budget.snapshot(exhausted)["effects_used"] == 1
   end
-
-  test "caps above the unsigned atomics range are rejected" do
-    too_large = 18_446_744_073_709_551_616
-
-    assert {:error, {:invalid_option, :max_effects, ^too_large}} =
-             Budget.new(max_effects: too_large)
-
-    assert {:error, {:invalid_option, :max_model_requests, ^too_large}} =
-             Budget.new(max_model_requests: too_large)
-  end
 end

@@ -1,93 +1,60 @@
 defmodule Alto.Runner.BudgetSnapshotTest do
   use ExUnit.Case, async: true
-
   alias Alto.Runner.Budget
 
-  test "unlimited model counts remain portable and cannot widen a saved finite budget" do
-    opts = [max_model_requests: :infinity, run_timeout: 10_000]
-    assert {:ok, budget} = Budget.new(opts)
-    for _ <- 1..300, do: assert(:ok = Budget.take_model(budget))
-    snapshot = Budget.snapshot(budget)
-    assert is_integer(snapshot["max_model_requests"])
-    assert {:ok, restored} = Budget.restore(opts, snapshot)
-    assert Budget.snapshot(restored)["model_requests_used"] == 300
-    assert :ok = Budget.take_model(restored)
-    {:ok, finite} = Budget.new(max_model_requests: 1)
-    :ok = Budget.take_model(finite)
-    assert {:ok, limited} = Budget.restore(opts, Budget.snapshot(finite))
-    assert {:error, {:model_request_limit, 1}} = Budget.take_model(limited)
-  end
-
-  test "snapshot and restore preserve shared counters" do
-    {:ok, budget} = Budget.new(max_effects: 5, max_model_requests: 3, run_timeout: 10_000)
+  test "local restoration retains consumption and cannot widen saved or requested limits" do
+    {:ok, budget} = Budget.new(max_effects: 3, max_model_requests: 1, run_timeout: 10_000)
     assert :ok = Budget.take(budget)
     assert :ok = Budget.take_model(budget)
+    saved = Budget.snapshot(budget)
 
-    snapshot = Budget.snapshot(budget)
-    assert snapshot["effects_used"] == 1
-    assert snapshot["model_requests_used"] == 1
+    assert {:ok, restored} =
+             Budget.restore(
+               [max_effects: 1, max_model_requests: :infinity, run_timeout: 5_000],
+               saved
+             )
 
-    {:ok, restored} =
-      Budget.restore([max_effects: 5, max_model_requests: 3, run_timeout: 10_000], snapshot)
+    assert {:error, {:effect_limit, 1}} = Budget.take(restored)
+    assert {:error, {:model_request_limit, 1}} = Budget.take_model(restored)
+    assert Budget.remaining(restored) <= 5_000
 
-    assert Budget.snapshot(restored)["effects_used"] == 1
-    assert Budget.snapshot(restored)["model_requests_used"] == 1
+    assert {:ok, expired} = Budget.restore([], Map.put(saved, "remaining_ms", 0))
+    assert {:error, :run_timeout} = Budget.check(expired)
+    assert {:error, :run_timeout} = Budget.take(expired)
+    assert {:error, :run_timeout} = Budget.take_model(expired)
   end
 
-  test "restore never widens caps or remaining time" do
-    snapshot = %{
-      "effects_used" => 0,
-      "model_requests_used" => 0,
-      "max_effects" => 100,
-      "max_model_requests" => 100,
-      "remaining_ms" => 10_000
-    }
-
-    {:ok, restored} =
-      Budget.restore([max_effects: 2, max_model_requests: 3, run_timeout: 100], snapshot)
-
-    actual = Budget.snapshot(restored)
-    assert actual["max_effects"] == 2
-    assert actual["max_model_requests"] == 3
-    assert actual["remaining_ms"] <= 100
+  test "unlimited local model counters survive portable snapshots" do
+    opts = [max_model_requests: :infinity]
+    {:ok, budget} = Budget.new(opts)
+    for _ <- 1..300, do: assert(:ok = Budget.take_model(budget))
+    saved = budget |> Budget.snapshot() |> JSON.encode!() |> JSON.decode!()
+    assert {:ok, restored} = Budget.restore(opts, saved)
+    assert Budget.snapshot(restored)["model_requests_used"] == 300
+    assert :ok = Budget.take_model(restored)
   end
 
-  test "exhausted time remains exhausted" do
-    snapshot = %{
-      "effects_used" => 0,
-      "model_requests_used" => 0,
-      "max_effects" => 1,
-      "max_model_requests" => 1,
-      "remaining_ms" => 0
-    }
+  test "malformed snapshots fail before creating usable counters" do
+    {:ok, budget} = Budget.new([])
+    saved = Budget.snapshot(budget)
 
-    {:ok, restored} = Budget.restore([], snapshot)
-    assert {:error, :run_timeout} = Budget.check(restored)
-    assert {:error, :run_timeout} = Budget.take(restored)
-  end
+    for key <- Map.keys(saved) do
+      assert {:error, :invalid_snapshot} = Budget.restore([], Map.delete(saved, key))
 
-  test "restore rejects malformed snapshots" do
-    base = %{
-      "effects_used" => 0,
-      "model_requests_used" => 0,
-      "max_effects" => 1,
-      "max_model_requests" => 1,
-      "remaining_ms" => 0
-    }
-
-    for key <- Map.keys(base) do
-      assert {:error, :invalid_snapshot} = Budget.restore([], Map.delete(base, key))
-      assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, key, "0"))
+      for invalid <- ["0", -1] do
+        assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(saved, key, invalid))
+      end
     end
 
     for key <- ["effects_used", "model_requests_used", "max_effects", "max_model_requests"] do
       assert {:error, :invalid_snapshot} =
-               Budget.restore([], Map.put(base, key, 18_446_744_073_709_551_616))
+               Budget.restore([], Map.put(saved, key, 18_446_744_073_709_551_616))
     end
 
-    assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "extra", 1))
-    assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "effects_used", -1))
-    assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "max_effects", 0))
-    assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(base, "remaining_ms", -1))
+    for key <- ["max_effects", "max_model_requests"] do
+      assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(saved, key, 0))
+    end
+
+    assert {:error, :invalid_snapshot} = Budget.restore([], Map.put(saved, "extra", 1))
   end
 end

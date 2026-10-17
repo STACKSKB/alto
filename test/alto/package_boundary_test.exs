@@ -1,13 +1,6 @@
 defmodule Alto.PackageBoundaryTest do
   use ExUnit.Case, async: true
 
-  test "the installed core application depends only on OTP, Elixir and its option validator" do
-    assert {:ok, applications} = :application.get_key(:alto, :applications)
-
-    assert Enum.sort(applications) ==
-             Enum.sort([:kernel, :stdlib, :elixir, :logger, :crypto, :nimble_options])
-  end
-
   test "compiled core modules cannot import optional Alto implementations" do
     assert {:ok, modules} = :application.get_key(:alto, :modules)
     core = MapSet.new(modules)

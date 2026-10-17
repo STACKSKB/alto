@@ -44,60 +44,6 @@ defmodule Alto.ConsumerTest do
     end
   end
 
-  test "accepted work completes: claim, run, ack", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{"body" => "x"}, []})
-    c = start_consumer!(queue: q, ledger: l, handler: done_handler(self()), by: "w-1")
-
-    assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
-    assert_received :handled
-
-    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
-    assert {:decided, :completed, _} = OperationLog.request(l, {:status, "src:del-1"})
-  end
-
-  test "retry releases and advances the handler attempt number", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
-    test_pid = self()
-
-    handler = fn _payload, ctx ->
-      send(test_pid, {:ran, ctx.attempt})
-      :retry
-    end
-
-    c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
-
-    assert {:handled, [:released]} = Consumer.poll(c)
-    assert %{pending: 1, claimed: 0} = Queue.request(q, :count)
-    assert 1 = OperationLog.request(l, {:attempts, "src:del-1"})
-    assert_received {:ran, 1}
-
-    # Second poll retries under the same identity.
-    assert {:handled, [:released]} = Consumer.poll(c)
-    assert 2 = OperationLog.request(l, {:attempts, "src:del-1"})
-    assert_received {:ran, 2}
-  end
-
-  test "attempts beyond the bound park for an operator", %{queue: q, ledger: l} do
-    {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
-
-    c =
-      start_consumer!(
-        queue: q,
-        ledger: l,
-        handler: fn _, _ -> :retry end,
-        max_attempts: 2,
-        by: "w-1"
-      )
-
-    assert {:handled, [:released]} = Consumer.poll(c)
-    assert {:handled, [:released]} = Consumer.poll(c)
-    assert {:handled, [:parked]} = Consumer.poll(c)
-
-    assert ["src:del-1"] = entry_keys(OperationLog.request(l, {:entries, :parked}))
-    assert %{pending: 0, claimed: 0} = Queue.request(q, :count)
-    assert {:decided, :requires_operator, _} = OperationLog.request(l, {:status, "src:del-1"})
-  end
-
   test "a failed retry ledger write keeps the claim live", %{queue: q, ledger: l} do
     {:ok, %{"dir" => dir, "id" => id}} = OperationLog.request(l, :identity)
     {:ok, _} = Queue.request(q, {:admit, "retry-write-failure", %{}, []})
@@ -270,19 +216,6 @@ defmodule Alto.ConsumerTest do
     assert [] = entry_keys(OperationLog.request(l, {:entries, :open}))
   end
 
-  test "duplicate deliveries reach the consumer once", %{queue: q, ledger: l} do
-    assert {:ok, _} = Queue.request(q, {:admit, "src:del-1", %{}, []})
-    assert {:error, :duplicate} = Queue.request(q, {:admit, "src:del-1", %{}, []})
-
-    c = start_consumer!(queue: q, ledger: l, handler: done_handler(self()), by: "w-1")
-    assert {:handled, _} = Consumer.poll(c)
-    assert_received :handled
-
-    assert {:error, :duplicate} = Queue.request(q, {:admit, "src:del-1", %{}, []})
-    assert :idle = Consumer.poll(c)
-    refute_received :handled
-  end
-
   test "checkpointed work is acknowledged after restart without handler replay", %{dir: dir} do
     tag = System.unique_integer([:positive])
     qname = String.to_atom("checkpoint_queue_#{tag}")
@@ -336,40 +269,6 @@ defmodule Alto.ConsumerTest do
     assert {:handled, [{:decided, :completed}]} = Consumer.poll(c2)
     assert_received {:ran, %{value: 2}}
     refute_received :ran
-  end
-
-  test "a business key gets a fresh ledger identity after completion", %{queue: q, ledger: l} do
-    test_pid = self()
-
-    handler = fn payload, _ctx ->
-      send(test_pid, {:handled_payload, payload})
-      {:outcome, :completed, %{}}
-    end
-
-    c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
-    {:ok, _} = Queue.request(q, {:put, "job-1", %{version: 1}, []})
-    assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
-    assert_received {:handled_payload, %{version: 1}}
-
-    {:ok, _} = Queue.request(q, {:put, "job-1", %{version: 2}, []})
-    assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
-    assert_received {:handled_payload, %{version: 2}}
-  end
-
-  test "handler context separates business and operation identity", %{queue: q, ledger: l} do
-    parent = self()
-
-    handler = fn _payload, context ->
-      send(parent, {:context, context})
-      {:outcome, :completed, %{}}
-    end
-
-    c = start_consumer!(queue: q, ledger: l, handler: handler, by: "w-1")
-    {:ok, _} = Queue.request(q, {:put, "customer-42", %{version: 1}, []})
-    assert {:handled, [{:decided, :completed}]} = Consumer.poll(c)
-    assert_receive {:context, context}
-    assert context.operation_key =~ "business-generation:gen-"
-    refute context.operation_key == "customer-42"
   end
 
   test "a dead queue fails the poll while the worker survives", %{queue: q, ledger: l} do

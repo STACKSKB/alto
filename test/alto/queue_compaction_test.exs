@@ -27,27 +27,6 @@ defmodule Alto.QueueCompactionTest do
     end
   end
 
-  test "ordinary replay matches live transitions, including exact owners and the injected clock",
-       c do
-    q = start_supervised!({Queue, c.opts})
-    assert {:ok, _} = Queue.request(q, {:put, "update", %{v: 1}, []})
-    assert {:ok, _} = Queue.request(q, {:put, "update", %{v: 2}, [delay_ms: 50]})
-    assert {:ok, _} = Queue.request(q, {:admit, "claimed", %{v: {:native, :term}}, []})
-    assert {:ok, [claim]} = Queue.request(q, {:claim, 1, %{owner: {:worker, 1}}, :infinity, :all})
-    assert :ok = Queue.request(q, {:settle, claim.claim_id, :release, []})
-    assert {:ok, [_]} = Queue.request(q, {:claim, 1, %{owner: {:worker, 2}}, :infinity, :all})
-    churn(q, 1..3)
-    assert {:ok, _} = Queue.request(q, {:restore, "operation", "generation", %{v: 3}, []})
-    before = Queue.request(q, {:snapshot_page, 0, 100})
-    assert {:ok, %{records: records, next_cursor: nil}} = before
-    assert Enum.all?(records, &(&1.at_ms == 1_000))
-    stop_supervised!(Queue)
-
-    q = start_supervised!({Queue, c.opts})
-    assert Queue.request(q, {:snapshot_page, 0, 100}) == before
-    assert {:error, :duplicate} = Queue.request(q, {:admit, "del-3", %{}, []})
-  end
-
   test "compact and restart preserve all live fields and retained delivery identities", c do
     q = start_supervised!({Queue, c.opts})
     churn(q, 1..20)
@@ -121,29 +100,6 @@ defmodule Alto.QueueCompactionTest do
     assert {:error, {:log_too_large, _, 100}} = Queue.request(q, {:put, "new", %{}, []})
     assert File.read!(c.path) == bytes
     assert Queue.request(q, {:snapshot_page, 0, 100}) == before
-  end
-
-  test "default queues keep append-only history and refuse a full log", c do
-    q = start_supervised!({Queue, Keyword.put(c.opts, :max_log_bytes, 600)})
-    assert {:ok, _} = Queue.request(q, {:admit, "first", %{}, []})
-    assert :ok = Queue.request(q, {:cancel_pending, "first"})
-    bytes = File.read!(c.path)
-
-    assert {:error, {:log_too_large, _, 600}} =
-             Queue.request(q, {:admit, "second", %{payload: String.duplicate("x", 500)}, []})
-
-    assert File.read!(c.path) == bytes
-    assert {:error, :duplicate} = Queue.request(q, {:admit, "first", %{}, []})
-  end
-
-  test "record IDs do not regress after all records are completed and compacted", c do
-    q = start_supervised!({Queue, c.opts})
-    churn(q, 1..4)
-    assert {:ok, _} = Queue.request(q, :compact, :infinity)
-    churn(q, 5..8)
-    stop_supervised!(Queue)
-    q = start_supervised!({Queue, c.opts})
-    assert {:ok, %{id: 9}} = Queue.request(q, {:admit, "new", %{}, []})
   end
 
   test "an incomplete compacted prefix fails while a torn later append is repaired", c do

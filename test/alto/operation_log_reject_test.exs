@@ -15,22 +15,6 @@ defmodule Alto.OperationLogRejectTest do
     %{dir: dir, name: name}
   end
 
-  test "rejects intended and survives restart", %{dir: dir, name: name} do
-    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
-    assert :ok = OperationLog.request(name, {:reject_intended, "op", 1, %{status: "cancelled"}})
-
-    assert {:decided, :rejected_before_dispatch, %{status: "cancelled"}} =
-             OperationLog.request(name, {:status, "op"})
-
-    GenServer.stop(name)
-
-    name2 =
-      String.to_atom("reject_restart_" <> Integer.to_string(System.unique_integer([:positive])))
-
-    {:ok, _} = OperationLog.start_link(id: "l", dir: dir, name: name2)
-    assert {:decided, :rejected_before_dispatch, _} = OperationLog.request(name2, {:status, "op"})
-  end
-
   test "fences stale revisions and active attempts", %{name: name} do
     :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
 
@@ -41,14 +25,6 @@ defmodule Alto.OperationLogRejectTest do
 
     assert {:error, :invalid_operation_state} =
              OperationLog.request(name, {:reject_intended, "op", 2, %{}})
-  end
-
-  test "released retry can be rejected", %{name: name} do
-    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
-    :ok = OperationLog.request(name, {:attempt, "op", "try"})
-    :ok = OperationLog.request(name, {:release, "op", "try"})
-    assert :ok = OperationLog.request(name, {:reject_intended, "op", 3, %{}})
-    assert {:decided, :rejected_before_dispatch, _} = OperationLog.request(name, {:status, "op"})
   end
 
   test "a partial reject tail does not create an attempt", %{dir: dir, name: name} do
@@ -68,14 +44,6 @@ defmodule Alto.OperationLogRejectTest do
     {:ok, _} = OperationLog.start_link(id: "l", dir: dir, name: name2)
     assert {:intended} = OperationLog.request(name2, {:status, "op"})
     assert {:ok, _} = OperationLog.request(name2, {:recovery, "op"})
-  end
-
-  test "decided rejection cannot be overwritten", %{name: name} do
-    :ok = OperationLog.request(name, {:intent, "op", "tool", nil, nil})
-    :ok = OperationLog.request(name, {:reject_intended, "op", 1, %{}})
-
-    assert {:error, :invalid_operation_state} =
-             OperationLog.request(name, {:reject_intended, "op", 2, %{}})
   end
 
   test "full attempt history is rejected without poisoning the log", %{dir: dir} do

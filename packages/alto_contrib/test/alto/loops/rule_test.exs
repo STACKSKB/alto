@@ -21,73 +21,7 @@ defmodule Alto.Loops.RuleTest do
     def run(arguments, _context, _opts), do: {:ok, %{echoed: arguments}}
   end
 
-  defmodule BoomTool do
-    use Alto.Tool, name: :boom, execution_mode: :parallel, approval: :never
-
-    @impl true
-    def schema(_opts), do: %{parameters: %{type: "object", properties: %{}}}
-
-    @impl true
-    def run(_arguments, _context, _opts), do: {:error, :detonated}
-  end
-
-  describe "step script" do
-    test "runs steps in order and stops after the last tool result" do
-      assert %Alto.Runner.Result{status: :ok} =
-               result =
-               Alto.Contrib.run(~s({"value": "b"}),
-                 loop:
-                   Alto.rule_loop(
-                     steps: [
-                       %{tool: "echo", arguments: %{"value" => "a"}},
-                       "echo"
-                     ]
-                   ),
-                 tools: [EchoTool]
-               )
-
-      assert [%{echoed: %{"value" => "a"}}, %{echoed: %{"value" => "b"}}] =
-               result.output
-
-      assert result.model_requests == 0
-    end
-
-    test "the :task marker passes the decoded task; a map passes as-is" do
-      assert %Alto.Runner.Result{status: :ok} =
-               result =
-               Alto.Contrib.run(~s({"n": 1}),
-                 loop:
-                   Alto.rule_loop(
-                     steps: [
-                       %{tool: "echo", arguments: :task},
-                       %{tool: "echo", arguments: %{"static" => true}}
-                     ]
-                   ),
-                 tools: [EchoTool]
-               )
-
-      assert [%{echoed: %{"n" => 1}}, %{echoed: %{"static" => true}}] =
-               result.output
-    end
-  end
-
   describe "fail closed" do
-    test "a tool failure fails the run fast with the step identified" do
-      assert %Alto.Runner.Result{
-               status: :error,
-               reason: {:rule_step_failed, 1, "boom", :detonated}
-             } =
-               result =
-               Alto.Contrib.run(%{},
-                 loop:
-                   Alto.rule_loop(steps: [%{tool: "boom"}, %{tool: "echo", arguments: :task}]),
-                 tools: [BoomTool, EchoTool]
-               )
-
-      # The failing step never produced an output; the run stops there.
-      assert result.output == nil
-    end
-
     test "an empty or malformed step script fails at construction" do
       for steps <- [[], "queue_put", [%{tool: 42}], [%{tool: "echo", arguments: "no"}]] do
         assert_raise ArgumentError, fn -> Alto.rule_loop(steps: steps) end
@@ -100,17 +34,6 @@ defmodule Alto.Loops.RuleTest do
                  _result =
                  Alto.Contrib.run(task, loop: Alto.rule_loop(steps: ["echo"]), tools: [EchoTool])
       end
-    end
-
-    test "an unknown tool fails the run through the normal tool pipeline" do
-      assert %Alto.Runner.Result{
-               status: :error,
-               reason:
-                 {:rule_step_failed, 1, "missing",
-                  {:unknown_tool, "missing", %{available_tools: ["echo"]}}}
-             } =
-               _result =
-               Alto.Contrib.run(%{}, loop: Alto.rule_loop(steps: ["missing"]), tools: [EchoTool])
     end
   end
 

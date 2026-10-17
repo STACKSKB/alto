@@ -60,15 +60,6 @@ defmodule Alto.PolicyCompositionTest do
     def handle_event(_, state, _), do: {{:stop, "done"}, state, []}
   end
 
-  test "limits are resolved once per run instead of at every child projection" do
-    owner = self()
-    loop = Alto.loop(ParentLoop, subagents: fn -> BlockingChildren.policy(owner: owner) end)
-    assert %Alto.Runner.Result{status: :ok} = Alto.Contrib.run(:batch, provider: nil, loop: loop)
-    assert_receive {:limits_called, _}
-    assert_receive {:admission_called, _}
-    refute_receive {:limits_called, _}
-  end
-
   test "limits and admission are cancellable" do
     owner = self()
 

@@ -152,12 +152,6 @@ defmodule Alto.Contrib.Resident.WorkspacesTest do
              })
   end
 
-  test "Team.loop preserves trusted workspace policy", %{config: c, name: n} do
-    m = manager(c, n)
-    spec = Alto.Contrib.Resident.Team.loop(workers: %{"local" => []}, workspaces: m)
-    assert spec.subagents.workspaces == m
-  end
-
   test "invalid workspace checkpoints fail closed without changing retained files", %{
     config: c,
     name: n,

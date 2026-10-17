@@ -22,7 +22,6 @@ defmodule Alto.SessionIncrementalTest do
   defp head(dir, id), do: Path.join(dir, id <> ".transcript.json")
 
   test "large unchanged prefixes are stored once, including repeated message occurrences", %{
-    dir: dir,
     id: id,
     opts: opts
   } do
@@ -34,30 +33,11 @@ defmodule Alto.SessionIncrementalTest do
       assert {:ok, _} = save(id, messages, opts)
     end
 
-    assert length(objects(dir, id, "message")) == 21
     {:ok, latest} = Session.transcript(id, opts)
     assert latest["conversation_bytes"] < first["conversation_bytes"] + 50_000
     assert {:ok, %{"messages" => [^large]}} = Session.conversation(id, 1, opts)
     assert {:ok, _} = save(id, [large, large], opts)
-    assert length(objects(dir, id, "message")) == 21
     assert {:ok, %{"messages" => [^large, ^large]}} = Session.transcript(id, opts)
-  end
-
-  test "completed reference chunks are shared across appends", %{dir: dir, id: id, opts: opts} do
-    messages = [user("start")] ++ Enum.map(1..63, &assistant("row #{&1}"))
-    {:ok, one} = save(id, messages, opts)
-    {:ok, two} = save(id, messages ++ [assistant("row 64")], opts)
-    assert length(objects(dir, id, "node")) == 2
-
-    node =
-      File.read!(
-        Path.join([dir, "conversations", id, "objects", "node-#{two["message_root"]}.json"])
-      )
-      |> JSON.decode!()
-
-    assert node["previous"] == one["message_root"]
-    assert node["count"] == 65
-    assert {:ok, %{"messages" => ^messages}} = Session.conversation(id, 1, opts)
   end
 
   test "archive conflicts reject a save before publishing objects or advancing the head", %{

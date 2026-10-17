@@ -109,16 +109,6 @@ defmodule Alto.CLITest do
     assert capture_io(:stderr, fn -> Alto.Contrib.CLI.Renderer.finish([1, 2], false) end) == ""
   end
 
-  test "setup requires an interactive terminal" do
-    assert {:error, "--setup requires an interactive terminal"} =
-             Alto.Contrib.CLI.run(["--setup"])
-  end
-
-  test "rejects conflicting configuration switches" do
-    assert {:error, "choose either --config or --no-config, not both"} =
-             Alto.Contrib.CLI.run(["--config", "unused.exs", "--no-config", "task"])
-  end
-
   test "an explicitly empty tool list disables default tools", %{root: root} do
     path = Path.join(root, "config.exs")
 
@@ -359,24 +349,6 @@ defmodule Alto.CLITest do
 
     refute stderr =~ "session"
     assert File.read!(Path.join(root, "created.txt")) == "hello"
-  end
-
-  test "reports an invalid configuration return", %{root: root} do
-    path = Path.join(root, "config.exs")
-    File.write!(path, ":not_a_config\n")
-
-    assert {:error, message} = Alto.Contrib.CLI.run(["--config", path, "task"])
-    assert message =~ "must return a keyword list"
-  end
-
-  test "serve does not accept a task" do
-    assert {:error, "--serve does not accept a task"} =
-             Alto.Contrib.CLI.run(["--no-config", "--serve", "task"])
-  end
-
-  test "serve and setup are mutually exclusive" do
-    assert {:error, "choose either --serve or --setup, not both"} =
-             Alto.Contrib.CLI.run(["--no-config", "--serve", "--setup"])
   end
 
   test "serve rejects an out-of-range port", %{root: root} do

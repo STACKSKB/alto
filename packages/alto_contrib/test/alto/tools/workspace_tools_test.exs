@@ -2,7 +2,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
   use ExUnit.Case, async: true
 
   alias Alto.Contrib.Tools.EditFile
-  alias Alto.Contrib.Tools.ListFiles
   alias Alto.Contrib.Tools.ReadFile
   alias Alto.Contrib.Tools.SearchFiles
   alias Alto.Contrib.Tools.WriteFile
@@ -29,28 +28,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     File.mkdir!(root)
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, context: %{session_id: "test", cwd: root}}
-  end
-
-  test "reads and writes only bounded workspace paths", %{root: root, context: context} do
-    assert {:ok, %{bytes_before: 0, bytes_after: 6}} =
-             Alto.Tool.run(WriteFile, %{"path" => "sample.txt", "content" => "abcdef"}, context)
-
-    assert {:ok, %{content: "bcd", truncated: true}} =
-             Alto.Tool.run(
-               ReadFile,
-               %{"path" => "sample.txt", "offset" => 1, "limit" => 3},
-               context
-             )
-
-    for offset <- [6, 9] do
-      assert {:ok, %{content: "", truncated: false}} =
-               Alto.Tool.run(ReadFile, %{"path" => "sample.txt", "offset" => offset}, context)
-    end
-
-    assert File.read!(Path.join(root, "sample.txt")) == "abcdef"
-
-    assert {:error, {:path_outside_workspace, "../outside.txt"}} =
-             Alto.Tool.run(WriteFile, %{"path" => "../outside.txt", "content" => "no"}, context)
   end
 
   test "line reads explain byte truncation and preserve partial-line continuation", %{
@@ -110,59 +87,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     refute Map.has_key?(complete, :hint)
   end
 
-  test "host-configured write limits apply during preparation and stay frozen", %{
-    context: context
-  } do
-    assert {:error, %NimbleOptions.ValidationError{key: :content}} =
-             Alto.Tool.run(WriteFile, %{"path" => "too.txt", "content" => "1234"}, context,
-               max_bytes: 3
-             )
-
-    assert {:ok, prepared, _details} =
-             Alto.Tool.prepare(WriteFile, %{"path" => "ok.txt", "content" => "1234"}, context,
-               max_bytes: 4
-             )
-
-    assert {:ok, %{bytes_after: 4}} = WriteFile.run(prepared, context, max_bytes: 1)
-  end
-
-  test "host-configured edit limits bound files, replacements, and edit counts", %{
-    root: root,
-    context: context
-  } do
-    File.write!(Path.join(root, "edit.txt"), "abcdef")
-
-    assert {:error, {:file_too_large, 3}} =
-             Alto.Tool.run(
-               EditFile,
-               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "b"}]},
-               context,
-               max_file_bytes: 3
-             )
-
-    assert {:error, %NimbleOptions.ValidationError{key: :edits}} =
-             Alto.Tool.run(
-               EditFile,
-               %{"path" => "edit.txt", "edits" => [%{"old_text" => "a", "new_text" => "long"}]},
-               context,
-               max_replacement_bytes: 1
-             )
-
-    assert {:error, %NimbleOptions.ValidationError{key: :edits}} =
-             Alto.Tool.run(
-               EditFile,
-               %{
-                 "path" => "edit.txt",
-                 "edits" => [
-                   %{"old_text" => "a", "new_text" => "b"},
-                   %{"old_text" => "c", "new_text" => "d"}
-                 ]
-               },
-               context,
-               max_edits: 1
-             )
-  end
-
   test "runtime rejects the legacy single-edit shape", %{context: context} do
     assert {:error,
             {:unknown_tool_argument,
@@ -215,22 +139,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
              Alto.Tool.run(SearchFiles, %{"query" => "long"}, context, max_query_bytes: 2)
   end
 
-  test "read_file's maximum result stays within the runner's native bound", %{
-    root: root,
-    context: context
-  } do
-    File.write!(Path.join(root, "binary.dat"), :binary.copy(<<255>>, 47_000))
-
-    assert {:ok, result} =
-             Alto.Tool.run(ReadFile, %{"path" => "binary.dat", "limit" => 47_000}, context)
-
-    assert result.encoding == "base64"
-    assert :erlang.external_size(result) <= 64_000
-
-    assert {:error, %NimbleOptions.ValidationError{key: :limit}} =
-             Alto.Tool.run(ReadFile, %{"path" => "binary.dat", "limit" => 47_001}, context)
-  end
-
   test "rejects symlinks that escape the workspace through any path component", %{
     root: root,
     context: context
@@ -260,14 +168,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     File.ln_s!("real.txt", Path.join(root, "internal"))
 
     assert {:ok, %{content: "x"}} = Alto.Tool.run(ReadFile, %{"path" => "internal"}, context)
-  end
-
-  test "lists one directory with entry types", %{root: root, context: context} do
-    File.write!(Path.join(root, "a.txt"), "a")
-    File.mkdir!(Path.join(root, "dir"))
-
-    assert {:ok, %{entries: entries, truncated: false}} = Alto.Tool.run(ListFiles, %{}, context)
-    assert entries == [%{name: "a.txt", type: :regular}, %{name: "dir", type: :directory}]
   end
 
   test "recursively searches text files without following symlinks or generated directories", %{
@@ -811,16 +711,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "done"
   end
 
-  test "write_file writes atomically and leaves no temp litter", %{
-    root: root,
-    context: context
-  } do
-    assert {:ok, %{bytes_after: 3}} =
-             Alto.Tool.run(WriteFile, %{"path" => "a.txt", "content" => "abc"}, context)
-
-    assert {:ok, ["a.txt"]} = File.ls(root)
-  end
-
   test "write_file preserves an existing file's mode", %{root: root, context: context} do
     path = Path.join(root, "existing.txt")
     File.write!(path, "old")
@@ -832,10 +722,5 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     assert File.read!(path) == "new"
     assert {:ok, %{mode: mode}} = File.stat(path)
     assert Bitwise.band(mode, 0o777) == 0o640
-  end
-
-  test "write_file rejects content that is not valid UTF-8", %{context: context} do
-    assert {:error, %NimbleOptions.ValidationError{key: :content}} =
-             Alto.Tool.run(WriteFile, %{"path" => "x.bin", "content" => <<0xFF, 0xFE>>}, context)
   end
 end

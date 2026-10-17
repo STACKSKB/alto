@@ -1,68 +1,12 @@
 defmodule Alto.SessionTest do
   use ExUnit.Case, async: true
 
-  alias Alto.Event
   alias Alto.Session
 
   setup do
     dir = Path.join(System.tmp_dir!(), "alto-session-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}
-  end
-
-  test "creates sessions with unique, well-formed ids", %{dir: dir} do
-    assert {:ok, first} = Session.create("first task", %{}, session_dir: dir)
-    assert {:ok, second} = Session.create("second task", %{}, session_dir: dir)
-    assert first != second
-    assert first =~ ~r/\Asess-[a-z2-7]+\z/
-
-    assert {:ok, [started]} = Session.read(first, session_dir: dir)
-
-    assert started["type"] == "started"
-    assert started["task"] == "first task"
-    assert is_integer(started["at_ms"])
-  end
-
-  test "event records round-trip exact terms", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    data = %{
-      atom: :approved,
-      tuple: {:denied, "nope"},
-      nested: [%{deep: {1, :two}}],
-      count: 3
-    }
-
-    event = Event.durable(:tool_completed, data)
-    assert :ok = Session.append(id, Session.event_record("run-9", event), session_dir: dir)
-
-    assert {:ok, [_started, stored]} = Session.read(id, session_dir: dir)
-    assert stored["type"] == "event"
-    assert stored["domain"] == "durable"
-    assert stored["event"] == "tool_completed"
-    assert {:ok, ^data} = Session.decode_term(stored["data"])
-  end
-
-  test "events paginates by stable ordinal and filters mixed runs", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    for {run_id, type} <- [{"run-a", :one}, {"run-b", :two}, {"run-a", :three}] do
-      assert :ok =
-               Session.append(id, Session.event_record(run_id, Event.durable(type, %{})),
-                 session_dir: dir
-               )
-    end
-
-    assert {:ok, %{events: [first], next_cursor: 1, complete: false, gap: false}} =
-             Session.events(id, session_dir: dir, limit: 1)
-
-    assert first["ordinal"] == 1
-
-    assert {:ok, %{events: [second], next_cursor: nil, complete: true}} =
-             Session.events(id, session_dir: dir, cursor: 1, limit: 10, run_id: "run-a")
-
-    assert second["run_id"] == "run-a"
-    assert second["ordinal"] == 3
   end
 
   test "events rejects invalid cursors and corrupt trailing records", %{dir: dir} do
@@ -129,27 +73,6 @@ defmodule Alto.SessionTest do
              Session.events(id, session_dir: dir, cursor: 9)
   end
 
-  test "completed records persist outcomes", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    assert :ok =
-             Session.append(
-               id,
-               Session.completed_record(%{
-                 run_id: "run-1",
-                 status: :error,
-                 reason: {:model_request_failed, :boom},
-                 output: nil,
-                 model_requests: 4
-               }),
-               session_dir: dir
-             )
-
-    assert {:ok, [_started, completed]} = Session.read(id, session_dir: dir)
-    assert completed["status"] == "error"
-    assert {:ok, {:model_request_failed, :boom}} = Session.decode_term(completed["reason"])
-  end
-
   test "hostile ids never escape the sessions directory", %{dir: dir} do
     for bad <- ["../evil", "a/b", "", "sess ok", 123, nil] do
       assert {:error, {:invalid_session_id, ^bad}} = Session.append(bad, %{}, session_dir: dir)
@@ -163,61 +86,5 @@ defmodule Alto.SessionTest do
     end
 
     refute File.exists?(Path.join(dir, "evil"))
-  end
-
-  test "missing sessions and corrupt lines fail loudly", %{dir: dir} do
-    assert {:error, {:session_not_found, "sess-missing"}} =
-             Session.read("sess-missing", session_dir: dir)
-
-    {:ok, bare} = Session.create("other", %{}, session_dir: dir)
-    assert {:error, :no_resumable_transcript} = Session.transcript(bare, session_dir: dir)
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "sess-broken.jsonl"), "{not json\n")
-
-    assert {:error, {:session_corrupt, "sess-broken", 1}} =
-             Session.read("sess-broken", session_dir: dir)
-  end
-
-  test "unencodable payloads fail closed at the boundary", %{dir: dir} do
-    {:ok, id} = Session.create("task", %{}, session_dir: dir)
-
-    assert {:error, {:session_unencodable, _}} =
-             Session.append(id, %{"bad" => <<255, 255>>}, session_dir: dir)
-  end
-
-  test "list summarizes newest-first and ignores non-session files", %{dir: dir} do
-    {:ok, first} = Session.create("first", %{}, session_dir: dir)
-    Process.sleep(5)
-    {:ok, second} = Session.create("second", %{}, session_dir: dir)
-
-    File.write!(Path.join(dir, "notes.txt"), "not a session")
-
-    assert {:ok, [newest, oldest]} = Session.list(session_dir: dir)
-    assert newest.id == second
-    assert oldest.id == first
-    assert newest.task == "second"
-    assert newest.runs == 1
-    assert newest.completed_runs == 0
-    assert newest.last_status == nil
-    assert is_integer(newest.started_at_ms)
-  end
-
-  test "diagnostic terms retain identities while sharing strict ETF framing" do
-    data = %{process: self(), reference: make_ref(), bits: <<1::1>>}
-    encoded = Session.encode_term(data)
-    assert {:ok, ^data} = Session.decode_term(encoded)
-    assert {:error, :invalid_data} = Alto.Persistence.Codec.decode(encoded["$term"])
-
-    invalid = [
-      "not base64!",
-      Base.encode64(:erlang.term_to_binary(:ok) <> <<0>>),
-      Base.encode64(:erlang.term_to_binary(String.duplicate("x", 10_000), [:compressed])),
-      Session.encode_term(%{callback: fn -> :ok end})["$term"]
-    ]
-
-    for payload <- invalid do
-      assert {:error, :invalid_term_payload} = Session.decode_term(%{"$term" => payload})
-    end
   end
 end

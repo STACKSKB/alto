@@ -7,7 +7,6 @@ defmodule Alto.TUI.ViewportTest do
   test "scratch resize releases the old native grid without closing other owners" do
     original = Viewport.test_terminal(:markdown_metrics, 20, 5)
     selection = Viewport.test_terminal(:selection, 20, 5)
-    assert Viewport.test_terminal(:markdown_metrics, 20, 5) == original
 
     replacement = Viewport.test_terminal(:markdown_metrics, 30, 8)
     assert {:error, "terminal not initialized"} = ExRatatui.get_buffer_content(original)

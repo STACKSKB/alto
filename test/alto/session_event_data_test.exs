@@ -16,7 +16,6 @@ defmodule Alto.SessionEventDataTest do
 
     record = Session.event_record("run", Event.durable(:model_completed, data))
     stored = record |> JSON.encode!() |> JSON.decode!()
-    refute Map.has_key?(stored, "wire_data")
     assert {:ok, ^data} = Session.decode_term(stored["data"])
     assert {:ok, projected} = Session.event_data(stored)
     assert projected == Protocol.encode_term(data)

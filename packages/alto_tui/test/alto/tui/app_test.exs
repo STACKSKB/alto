@@ -1935,6 +1935,37 @@ defmodule Alto.TUI.AppTest do
     assert ExRatatui.textarea_get_value(clicked.textarea) == "draft with a long line"
   end
 
+  test "failed actions show their cause in a side panel without execution stack frames",
+       context do
+    reason =
+      {:participant_failed,
+       {%RuntimeError{message: "File change failed"},
+        [
+          {Alto.Runner.Execution, :prepare_tool_job, 5,
+           [file: ~c"lib/alto/runner/execution.ex", line: 1258]}
+        ]}}
+
+    state =
+      state!(context)
+      |> State.append_entry(nil, %{kind: :error, text: App.human_error(reason)})
+
+    for focus <- [:composer, :details] do
+      state = %{state | focus: focus, details_visible?: true, rail_visible?: false}
+      layout = View.layout(state, 120, 36)
+      assert layout.details.width < 120
+      widgets = View.widgets(state, %{width: 120, height: 36})
+      {panel, _} = Enum.find(widgets, fn {_, rect} -> rect == layout.details end)
+      assert panel.text =~ "Action failed: File change failed"
+      terminal = ExRatatui.init_test_terminal(120, 36)
+      assert :ok = ExRatatui.draw(terminal, widgets)
+      screen = ExRatatui.get_buffer_content(terminal)
+      assert screen =~ "File change failed"
+
+      for internal <- ["Alto.Runner", "Prepare tool job", "1258", "• 116"],
+          do: refute(screen =~ internal)
+    end
+  end
+
   test "focus traversal skips panes collapsed by the responsive layout", context do
     state = state!(context)
     state = %{state | dimensions: {80, 24}, focus: :transcript, details_visible?: true}

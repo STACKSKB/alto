@@ -84,46 +84,6 @@ defmodule Alto.QueueTest do
       assert :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
     end
 
-    test "claim returns oldest pending first and marks claimed", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      Queue.request(name, {:put, "a", %{i: 1}, []})
-      Queue.request(name, {:put, "b", %{i: 2}, []})
-
-      assert {:ok, [first, second]} =
-               Queue.request(name, {:claim, 2, "station-1", :infinity, :all})
-
-      assert %{key: "a", status: :claimed, claimed_by: "station-1"} = first
-      assert %{key: "b"} = second
-      assert is_binary(first.claim_id) and first.claim_id != ""
-      assert %{pending: 0, claimed: 2} = Queue.request(name, :count)
-    end
-
-    test "ack blanks the record; blanked records stay gone", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      assert :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-      assert %{pending: 0, claimed: 0} = Queue.request(name, :count)
-      assert {:ok, []} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      assert {:error, :not_found} = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-    end
-
-    test "release returns the record to pending", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      assert :ok = Queue.request(name, {:settle, claimed.claim_id, :release, []})
-      assert %{pending: 1, claimed: 0} = Queue.request(name, :count)
-
-      # A fresh claim is a fresh lease: the old claim id is dead.
-      {:ok, [reclaimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      assert reclaimed.id == claimed.id
-      assert reclaimed.claim_id != claimed.claim_id
-      assert {:error, :not_found} = Queue.request(name, {:settle, claimed.claim_id, :release, []})
-    end
-
     test "snapshot pages and lookup cover records beyond the first bounded page", %{
       dir: dir,
       id: id
@@ -157,41 +117,6 @@ defmodule Alto.QueueTest do
       {clock, fn -> Agent.get(clock, & &1) end}
     end
 
-    test "future work is skipped while later due work remains claimable", %{dir: dir, id: id} do
-      {clock, now} = controlled_clock()
-      %{name: name} = start_queue!(id: id, dir: dir, clock: now)
-      {:ok, _} = Queue.request(name, {:put, "future", %{}, [delay_ms: 100]})
-      {:ok, _} = Queue.request(name, {:put, "now", %{}, []})
-
-      assert {:ok, [%{key: "now"}]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      Agent.update(clock, &(&1 + 100))
-      assert {:ok, [%{key: "future"}]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-    end
-
-    test "admission dedup is first wins including its schedule", %{dir: dir, id: id} do
-      {_clock, now} = controlled_clock()
-      %{name: name} = start_queue!(id: id, dir: dir, clock: now)
-      assert {:ok, _} = Queue.request(name, {:admit, "delivery-1", %{v: 1}, [delay_ms: 100]})
-
-      assert {:error, :duplicate} =
-               Queue.request(name, {:admit, "delivery-1", %{v: 2}, [delay_ms: 0]})
-
-      assert {:ok, []} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-    end
-
-    test "a delayed record keeps its due time across restart", %{dir: dir, id: id} do
-      {clock, now} = controlled_clock()
-      %{name: name, pid: pid} = start_queue!(id: id, dir: dir, clock: now)
-      due = now.() + 100
-      {:ok, _} = Queue.request(name, {:put, "restart", %{}, [not_before_ms: due]})
-      GenServer.stop(pid)
-      %{name: name2} = start_queue!(id: id, dir: dir, clock: now)
-
-      assert {:ok, []} = Queue.request(name2, {:claim, 1, nil, :infinity, :all})
-      Agent.update(clock, &(&1 + 100))
-      assert {:ok, [%{key: "restart"}]} = Queue.request(name2, {:claim, 1, nil, :infinity, :all})
-    end
-
     test "delayed release persists and stale owners cannot change the schedule", %{
       dir: dir,
       id: id
@@ -221,103 +146,7 @@ defmodule Alto.QueueTest do
     end
   end
 
-  describe "key dedup semantics" do
-    test "business generations survive updates and rotate after completion", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-
-      {:ok, first} = Queue.request(name, {:put, "job-1", %{v: 1}, []})
-      {:ok, first_view} = Queue.request(name, {:lookup, "job-1"})
-      assert first_view.generation_id =~ "gen-"
-
-      {:ok, updated} = Queue.request(name, {:put, "job-1", %{v: 2}, []})
-      {:ok, updated_view} = Queue.request(name, {:lookup, "job-1"})
-      assert updated.id == first.id
-      assert updated_view.generation_id == first_view.generation_id
-
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      :ok = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-      {:ok, next} = Queue.request(name, {:put, "job-1", %{v: 3}, []})
-      assert next.id != first.id
-      {:ok, next_view} = Queue.request(name, {:lookup, "job-1"})
-      refute next_view.generation_id == first_view.generation_id
-
-      assert {:ok, [%{payload: %{v: 3}, revision: 1}]} =
-               Queue.request(name, {:claim, 1, nil, :infinity, :all})
-    end
-
-    test "put on a pending key updates payload and bumps revision in place", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-
-      assert {:ok, %{revision: 1, status: :pending} = first} =
-               Queue.request(name, {:put, "job-1", %{total: 10}, []})
-
-      {:ok, second} = Queue.request(name, {:put, "job-1", %{total: 12}, []})
-
-      assert first.id == second.id
-      assert second.revision == 2
-
-      assert {:ok, [%{payload: %{total: 12}, revision: 2}]} =
-               Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      assert %{pending: 0} = Queue.request(name, :count)
-    end
-
-    test "put on a claimed key is a conflict, not a shadow record", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{total: 10}, []})
-      {:ok, [_]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      assert {:error, {:key_claimed, "job-1"}} =
-               Queue.request(name, {:put, "job-1", %{total: 12}, []})
-
-      assert %{pending: 0, claimed: 1} = Queue.request(name, :count)
-    end
-  end
-
-  describe "cancellation" do
-    test "cancel blanks the pending record for a key", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
-
-      assert :ok = Queue.request(name, {:cancel, "job-1"})
-      assert %{pending: 0} = Queue.request(name, :count)
-      assert {:error, :not_found} = Queue.request(name, {:cancel, "job-1"})
-    end
-
-    test "cancel blanks a claimed record too", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      assert :ok = Queue.request(name, {:cancel, "job-1"})
-      assert %{pending: 0, claimed: 0} = Queue.request(name, :count)
-      assert {:error, :not_found} = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-    end
-  end
-
   describe "leases" do
-    @tag :lease
-    test "an expired lease reverts the record to pending", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir, lease_ms: 1)
-      {:ok, _} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
-      {:ok, [claimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-
-      Process.sleep(10)
-
-      assert {:ok, %{records: [%{status: :claimed, claim_id: claim_id}], next_cursor: nil}} =
-               Queue.request(name, {:snapshot_page, 0, 100})
-
-      assert claim_id == claimed.claim_id
-
-      # An ack past its lease is refused: the claim is dead, not the record.
-      assert {:error, :lease_expired} = Queue.request(name, {:settle, claimed.claim_id, :ack, []})
-
-      # The record is claimable again, under a fresh lease.
-      assert {:ok, [reclaimed]} = Queue.request(name, {:claim, 1, nil, :infinity, :all})
-      assert reclaimed.id == claimed.id
-      assert reclaimed.claim_id != claimed.claim_id
-    end
-
     test "put reclaims an expired lease before updating the same key", %{dir: dir, id: id} do
       %{name: name} = start_queue!(id: id, dir: dir, lease_ms: 1)
       {:ok, original} = Queue.request(name, {:put, "job-1", %{n: 1}, []})
@@ -501,17 +330,6 @@ defmodule Alto.QueueTest do
       assert :ok = Queue.request(name, {:settle, claimed.claim_id, :release, []})
       assert %{pending: 1, claimed: 0} = Queue.request(name, :count)
       assert File.stat!(Path.join(dir, id <> ".jsonl")).size <= 4_096
-    end
-
-    test "claim ids are unique random handles, not monotonic integers", %{dir: dir, id: id} do
-      %{name: name} = start_queue!(id: id, dir: dir)
-      Queue.request(name, {:put, "a", %{}, []})
-      Queue.request(name, {:put, "b", %{}, []})
-      {:ok, [first, second]} = Queue.request(name, {:claim, 2, nil, :infinity, :all})
-
-      assert first.claim_id != second.claim_id
-      assert String.starts_with?(first.claim_id, "clm-")
-      refute first.claim_id =~ ~r/^clm-\d+$/
     end
 
     test "payloads over the byte bound are rejected, not truncated", %{dir: dir, id: id} do

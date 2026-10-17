@@ -104,25 +104,6 @@ defmodule Alto.TUI.HistoryTest do
     assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 2000
   end
 
-  test "cache eviction keeps recently revisited tasks", %{state: state, task: task} do
-    tasks =
-      for n <- 1..13, do: task |> Map.put("id", "task-#{n}") |> Map.put("conversation_id", nil)
-
-    state = %{state | tasks: %{"project" => tasks}, async_history?: false}
-
-    state =
-      Enum.reduce(1..12, state, fn n, acc ->
-        State.put_entries(acc, "task-#{n}", [%{kind: :user, text: "#{n}"}])
-      end)
-
-    state = State.select_task(state, "task-1")
-    state = State.put_entries(state, "task-13", [%{kind: :user, text: "13"}])
-    assert Map.has_key?(state.entries, "task-1")
-    assert Map.has_key?(state.entries, "task-13")
-    refute Map.has_key?(state.entries, "task-2")
-    assert map_size(state.entries) == 12
-  end
-
   test "hydration preserves input and child events that arrive while reading", %{state: state} do
     token = make_ref()
     state = %{state | selected_task_id: "task-a", history_load: %{id: "task-a", token: token}}

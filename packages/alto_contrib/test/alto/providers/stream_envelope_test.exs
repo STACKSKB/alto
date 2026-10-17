@@ -87,12 +87,22 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
     assert {:error, {:http_error, 503, "oops"}} = run(:catalog, ["oops"], [], 503)
   end
 
-  test "raw JSON provider errors have the same classification" do
+  test "the HTTP boundary rejects invalid endpoints, failed responses and malformed streams" do
     for provider <- [Anthropic, OpenAICompatible] do
+      assert {:error, %NimbleOptions.ValidationError{key: :endpoint}} =
+               run(provider, [], endpoint: "file:///tmp/model")
+
       assert {:error, {:provider_error, %{"code" => 502}}} =
                run(provider, [~s({"error":{"code":502}})])
 
       assert {:error, {:invalid_provider_response, _}} = run(provider, ["invalid json"])
+
+      for payload <- ["not-json PRIVATE-BODY", "{\"private\":", "\"\\uZZZZ PRIVATE-BODY\""] do
+        assert {:error, reason} = run(provider, ["data: " <> payload <> "\n\n"])
+        refute inspect(reason) =~ "PRIVATE-BODY"
+        refute match?({:provider_exception, _, _}, reason)
+        refute_received {:event, %Alto.Event{type: :model_delta}}
+      end
     end
   end
 

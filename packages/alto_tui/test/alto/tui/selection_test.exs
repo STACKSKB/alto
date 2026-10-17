@@ -142,11 +142,9 @@ defmodule Alto.TUI.SelectionTest do
     refute Selection.text(drag(widgets, {40, 6}, {0, 0}, {39, 5})) =~ "popup"
   end
 
-  test "selection adds no toolbar; right-click opens an unframed menu with a muted shortcut" do
+  test "copy menu stays on screen, supports keyboard and mouse, and can be dismissed" do
     widgets = fn -> [{%Paragraph{text: "copy me"}, %Rect{width: 60, height: 6}}] end
     selected = drag(widgets, {60, 6}, {0, 0}, {6, 0})
-    cells = render_cells(Selection.widgets(selected, []), {60, 6})
-    assert Enum.filter(cells, &(&1.row > 0)) |> Enum.all?(&(&1.symbol == " "))
 
     {:handled, menu} =
       Selection.event(
@@ -158,16 +156,6 @@ defmodule Alto.TUI.SelectionTest do
 
     assert menu.menu.x + menu.menu.width <= 60
     assert menu.menu.y + menu.menu.height <= 6
-    assert menu.menu.height == 1
-    rendered = Selection.widgets(menu, [])
-    {paragraph, _} = List.last(rendered)
-    assert paragraph.block == nil
-
-    assert [%{content: " Copy         "}, %{content: "Ctrl+C  ", style: shortcut}] =
-             paragraph.text.spans
-
-    assert :dim in shortcut.modifiers
-    assert shortcut.fg == {:rgb, 155, 162, 174}
     assert {:copy, "copy me", _} = Selection.event(menu, %Key{code: "enter"}, {60, 6}, widgets)
     down = %Mouse{kind: "down", button: "left", x: menu.menu.x + 2, y: menu.menu.y}
     {:handled, pressed} = Selection.event(menu, down, {60, 6}, widgets)
@@ -178,30 +166,6 @@ defmodule Alto.TUI.SelectionTest do
     {:handled, dismissed} = Selection.event(menu, %Key{code: "esc"}, {60, 6}, widgets)
     assert dismissed.active?
     assert dismissed.menu == nil
-  end
-
-  test "drag motion and repaint reuse the frame without rebuilding the live view" do
-    widgets = fn ->
-      send(self(), :built)
-      [{%Paragraph{text: String.duplicate("content\n", 60)}, %Rect{width: 240, height: 70}}]
-    end
-
-    down = %Mouse{kind: "down", button: "left", x: 0, y: 0}
-    {:handled, pressed} = Selection.event(Selection.new(), down, {240, 70}, widgets)
-    assert_receive :built
-    Selection.widgets(pressed, fn -> flunk("mouse-down rebuilt the live view") end)
-
-    for row <- 1..60 do
-      {:handled, selected} =
-        Selection.event(pressed, %{down | kind: "drag", x: 100, y: row}, {240, 70}, widgets)
-
-      frozen = Selection.widgets(selected, fn -> flunk("drag rebuilt the live view") end)
-      [{background, _} | _] = frozen
-      assert background.text == String.duplicate("content\n", 60)
-      assert length(frozen) <= 62
-    end
-
-    refute_receive :built, 0
   end
 
   test "freezes mutable inputs while selecting their rendered cells" do

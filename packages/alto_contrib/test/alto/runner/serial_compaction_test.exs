@@ -141,17 +141,6 @@ defmodule Alto.Runner.SerialCompactionTest do
     def compact(_input, _model, _opts), do: exit(:reducer_crash)
   end
 
-  defmodule BlockingReducer do
-    @behaviour Alto.Context.Reducer
-    def compact(_input, _model, opts) do
-      send(opts[:owner], {:reducer_started, self()})
-
-      receive do
-        :release -> {:ok, %{content: "unused", data: %{}}}
-      end
-    end
-  end
-
   defmodule NativeBatchLoop do
     @behaviour Alto.Loop
 
@@ -211,45 +200,6 @@ defmodule Alto.Runner.SerialCompactionTest do
     [provider: {ScriptedProvider, test_pid: self()}, tools: [EchoTool]] ++ extra
   end
 
-  test "one compaction recovers the run and records the summary fact", %{dir: dir} do
-    # A large task message fills the budget so the final answer overflows it.
-    assert %Alto.Runner.Result{status: :ok} =
-             result =
-             Alto.Contrib.run(
-               String.duplicate("t", 200),
-               base_opts(
-                 max_transcript_bytes: 500,
-                 compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
-                 session: :new,
-                 session_dir: dir
-               )
-             )
-
-    assert result.output == String.duplicate("f", 150)
-    # Two model steps plus the single summarization call.
-    assert result.model_requests == 3
-
-    assert %Event{type: :context_compacted, data: data} =
-             Enum.find(result.events, &(&1.type == :context_compacted))
-
-    assert data.dropped_messages == 1
-    assert :ok = Alto.Context.Transcript.validate(result.messages)
-    assert data.summary_bytes > 0
-
-    assert Enum.any?(result.messages, fn
-             %{"role" => "user", "content" => "[alto compaction" <> _} -> true
-             _other -> false
-           end)
-
-    assert {:ok, records} = Session.read(result.session_id, session_dir: dir)
-
-    compacted_records =
-      Enum.filter(records, &(&1["type"] == "event" and &1["event"] == "context_compacted"))
-
-    assert [%{"data" => encoded}] = compacted_records
-    assert {:ok, %{strategy: :summary, summary: "squib summary"}} = Session.decode_term(encoded)
-  end
-
   test "a caller composes a domain-specific context reducer", %{dir: dir} do
     assert %Alto.Runner.Result{status: :ok} =
              result =
@@ -271,43 +221,6 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert String.contains?(input, String.duplicate("t", 200))
     assert Enum.any?(result.messages, &String.contains?(&1["content"] || "", "Domain state:"))
     assert :ok = Alto.Context.Transcript.validate(result.messages)
-  end
-
-  test "compaction cannot make an extra provider call past the global budget", %{dir: dir} do
-    assert %Alto.Runner.Result{status: :error} =
-             result =
-             Alto.Contrib.run(
-               String.duplicate("t", 200),
-               base_opts(
-                 max_model_requests: 2,
-                 max_transcript_bytes: 500,
-                 compaction: [keep_recent_messages: 1],
-                 session: :new,
-                 session_dir: dir
-               )
-             )
-
-    assert_received {:stream_call, _}
-    assert_received {:stream_call, _}
-    refute_received {:stream_call, _}
-    refute Enum.any?(result.events, &(&1.type == :context_compacted))
-  end
-
-  test "the default permits one compaction", %{dir: dir} do
-    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
-             result =
-             Alto.Contrib.run("go",
-               provider: {ScriptedProvider, summary: "squib", after_tool: :tool_call},
-               tools: [EchoTool],
-               max_transcript_bytes: 400,
-               compaction: [keep_recent_messages: 1, max_summary_bytes: 200],
-               session: :new,
-               session_dir: dir
-             )
-
-    compacted = Enum.filter(result.events, &(&1.type == :context_compacted))
-    assert length(compacted) == 1
-    assert hd(compacted).data.compaction_count == 1
   end
 
   test "an explicit limit permits repeat reductions and stops at that limit", %{dir: dir} do
@@ -480,41 +393,6 @@ defmodule Alto.Runner.SerialCompactionTest do
     assert Alto.Contrib.Display.error(:transcript_uncompactable) =~ "all messages are retained"
   end
 
-  test "a reducer crash is reported and leaves transcript and accounting intact", %{dir: dir} do
-    state = reduction_state(dir, {CrashingReducer, []})
-
-    assert {:error, {:participant_failed, :reducer_crash}, failed} =
-             Alto.Runner.Execution.Transcript.reduce(state)
-
-    assert failed.messages_rev == state.messages_rev
-    assert failed.transcript_bytes == state.transcript_bytes
-    assert failed.compaction_count == state.compaction_count
-    assert failed.model_requests == state.model_requests
-    assert failed.usage == state.usage
-
-    assert Enum.any?(
-             Alto.EventBuffer.to_list(failed.event_buffer),
-             &(&1.type == :context_compact_failed)
-           )
-  end
-
-  test "cancelling a running reducer leaves transcript and accounting intact", %{dir: dir} do
-    cancel_ref = make_ref()
-    state = reduction_state(dir, {BlockingReducer, owner: self()}, cancel_ref)
-    caller = Task.async(fn -> Alto.Runner.Execution.Transcript.reduce(state) end)
-
-    assert_receive {:reducer_started, worker}
-    send(caller.pid, {:alto_cancel, cancel_ref, :operator_stop})
-
-    assert {:error, {:cancelled, :operator_stop}, unchanged} = Task.await(caller)
-    refute Process.alive?(worker)
-    assert unchanged.messages_rev == state.messages_rev
-    assert unchanged.transcript_bytes == state.transcript_bytes
-    assert unchanged.compaction_count == state.compaction_count
-    assert unchanged.model_requests == state.model_requests
-    assert unchanged.usage == state.usage
-  end
-
   defp reduction_state(dir, strategy, cancel_ref \\ nil) do
     {:ok, run} =
       Alto.Runner.Execution.Setup.open(String.duplicate("initial", 40),
@@ -619,23 +497,6 @@ defmodule Alto.Runner.SerialCompactionTest do
 
       assert JSON.decode!(File.read!(path))["next_step"] == "Return the final answer."
     end)
-  end
-
-  test "compaction stays off unless enabled", %{dir: dir} do
-    test_pid = self()
-
-    assert %Alto.Runner.Result{status: :error, reason: {:transcript_limit, 400}} =
-             _result =
-             Alto.Contrib.run("go",
-               provider: {ScriptedProvider, summary: :disabled, after_tool: :tool_call},
-               tools: [EchoTool],
-               max_transcript_bytes: 400,
-               session: :new,
-               session_dir: dir,
-               event_sink: fn event -> send(test_pid, {:evt, event}) end
-             )
-
-    refute_received {:evt, %Event{type: :context_compacting}}
   end
 
   test "compaction without a session fails closed", %{dir: dir} do

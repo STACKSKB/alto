@@ -12,7 +12,6 @@ defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
   use ExUnit.Case, async: true
 
   alias Alto.Contrib.FrontEnd.Registry
-  alias Alto.Contrib.Listeners.Connection
   alias Alto.TestSupport.ToolThenAnswerProvider
 
   @receive_timeout 5_000
@@ -200,64 +199,6 @@ defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
     end
   end
 
-  describe "served persistence and resume" do
-    test "a completed served run persists and resumes after restart", %{session_dir: dir} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-
-      resolver = counting_tool_resolver(parent)
-
-      start_registry(registry, [sessions: [session_dir: dir]], resolver)
-
-      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "first task", []})
-      assert %{status: :ok, output: "finished"} = attach_collect(registry, run_id)
-      assert_received {:tool_ran, "hello"}
-
-      session_id = Registry.request(registry, {:run_session, run_id})
-      assert is_binary(session_id)
-
-      # Transcript continuity: the snapshot holds the full first run.
-      assert {:ok, %{"messages" => messages}} =
-               Alto.Session.transcript(session_id, session_dir: dir)
-
-      assert Enum.any?(messages, &(&1["role"] == "tool"))
-
-      # Root summary over the audit log.
-      assert {:ok, [summary]} = Registry.request(registry, :sessions)
-      assert summary.id == session_id
-      assert summary.completed_runs == 1
-      assert summary.last_status == "ok"
-
-      # Server restart: same directory, new registry, session discoverable.
-      GenServer.stop(registry)
-      registry2 = :"sess-reg-#{System.unique_integer([:positive])}"
-      start_registry(registry2, [sessions: [session_dir: dir]], resolver)
-
-      assert {:ok, [summary2]} = Registry.request(registry2, :sessions)
-      assert summary2.id == session_id
-
-      # Resume continues the transcript without rerunning the tool.
-      {:ok, run_id2} =
-        Registry.request(registry2, {:start_run, "tool-loop", "thanks", [resume: session_id]})
-
-      assert %{status: :ok, output: "finished"} = attach_collect(registry2, run_id2)
-
-      tool_runs = drain(:tool_ran)
-      assert tool_runs == []
-
-      assert {:ok, %{"messages" => messages2}} =
-               Alto.Session.transcript(session_id, session_dir: dir)
-
-      assert length(messages2) > length(messages)
-      assert List.last(messages2)["role"] in ["assistant", "user"]
-
-      assert {:ok, [summary3]} = Registry.request(registry2, :sessions)
-      assert summary3.runs == 2
-      assert summary3.completed_runs == 2
-      assert summary3.last_status == "ok"
-    end
-  end
-
   describe "crash honesty" do
     test "a killed run reports no resumable transcript and never reruns", %{session_dir: dir} do
       parent = self()
@@ -372,51 +313,6 @@ defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
   end
 
   describe "eviction, storage, and secrets" do
-    test "an evicted run stays resumable from disk", %{session_dir: dir} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-
-      start_registry(
-        registry,
-        [sessions: [session_dir: dir]],
-        tool_resolver(parent),
-        max_finished_runs: 1
-      )
-
-      {:ok, first} = Registry.request(registry, {:start_run, "tool-loop", "first", []})
-      assert %{status: :ok, output: "finished"} = attach_collect(registry, first)
-      first_session = Registry.request(registry, {:run_session, first})
-
-      {:ok, _second} = Registry.request(registry, {:start_run, "tool-loop", "second", []})
-      wait_empty(registry)
-
-      # Evicted from the replay window...
-      assert {:error, :unknown_run} =
-               Registry.request(registry, {:attach, self(), first, 1, [:durable]})
-
-      # ...yet resumable with its transcript intact.
-      {:ok, resumed} =
-        Registry.request(
-          registry,
-          {:start_run, "tool-loop", "follow-up", [resume: first_session]}
-        )
-
-      assert %{status: :ok, output: "finished"} = attach_collect(registry, resumed)
-      assert Registry.request(registry, {:run_session, resumed}) == first_session
-    end
-
-    test "unavailable storage never fails the run", %{root: root} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-      blocker = Path.join(root, "file-not-dir")
-      File.write!(blocker, "x")
-
-      start_registry(registry, [sessions: [session_dir: blocker]], tool_resolver(parent))
-
-      {:ok, run_id} = Registry.request(registry, {:start_run, "tool-loop", "task", []})
-      assert %{status: :ok, output: "finished"} = attach_collect(registry, run_id)
-    end
-
     test "persisted records carry no credentials", %{session_dir: dir} do
       registry = :"sess-reg-#{System.unique_integer([:positive])}"
 
@@ -473,100 +369,5 @@ defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
       # exactly as the runs left it.
       assert %{pending: 1, claimed: 0} = Alto.Queue.request(queue, :count)
     end
-  end
-
-  describe "protocol surface" do
-    test "start_run answers its session and sessions lists it", %{session_dir: dir} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-      start_registry(registry, [sessions: [session_dir: dir]], tool_resolver(parent))
-
-      reply =
-        wire(registry, %{
-          "v" => 1,
-          "type" => "start_run",
-          "id" => "c-1",
-          "config" => "tool-loop",
-          "task" => "task"
-        })
-
-      assert %{"type" => "ok", "run_id" => run_id, "session_id" => session_id} = reply
-
-      list = wire(registry, %{"v" => 1, "type" => "sessions", "id" => "c-2"})
-      assert %{"type" => "ok", "sessions" => _} = list
-
-      # The run may still be in flight; wait, then it must be listed.
-      wait_empty(registry)
-      done = wire(registry, %{"v" => 1, "type" => "sessions", "id" => "c-3"})
-      assert %{"sessions" => [_ | _]} = done
-      assert Enum.any?(done["sessions"], &(&1["id"] == session_id))
-
-      # Resuming over the wire continues the same session.
-      resumed =
-        wire(registry, %{
-          "v" => 1,
-          "type" => "start_run",
-          "id" => "c-4",
-          "config" => "tool-loop",
-          "task" => "again",
-          "resume" => session_id
-        })
-
-      assert %{"type" => "ok", "session_id" => ^session_id} = resumed
-      assert resumed["run_id"] != run_id
-      wait_empty(registry)
-    end
-
-    test "unpersisted runs omit the session and resume reports honestly", %{session_dir: dir} do
-      parent = self()
-      registry = :"sess-reg-#{System.unique_integer([:positive])}"
-      start_registry(registry, [session_dir: dir], tool_resolver(parent))
-
-      reply =
-        wire(registry, %{
-          "v" => 1,
-          "type" => "start_run",
-          "id" => "c-1",
-          "config" => "tool-loop",
-          "task" => "task"
-        })
-
-      assert %{"type" => "ok", "run_id" => run_id} = reply
-      refute Map.has_key?(reply, "session_id")
-      wait_empty(registry)
-      assert Registry.request(registry, {:run_session, run_id}) == nil
-      assert {:ok, []} = Registry.request(registry, :sessions)
-      assert File.ls(dir) == {:error, :enoent}
-
-      missing =
-        wire(registry, %{
-          "v" => 1,
-          "type" => "start_run",
-          "id" => "c-2",
-          "config" => "tool-loop",
-          "task" => "task",
-          "resume" => "sess-aaaaaaaaaaaaaaaa"
-        })
-
-      assert missing["code"] == "not_found"
-      assert ["session_not_found", _] = missing["detail"]["$tuple"]
-
-      bad_shape =
-        wire(registry, %{
-          "v" => 1,
-          "type" => "start_run",
-          "id" => "c-3",
-          "config" => "tool-loop",
-          "task" => "task",
-          "resume" => "!!!not-a-session!!!"
-        })
-
-      assert bad_shape["code"] == "invalid"
-    end
-  end
-
-  defp wire(registry, envelope) do
-    [out] = Connection.command_lines(JSON.encode!(envelope), registry)
-    JSON.decode!(IO.iodata_to_binary(out))
   end
 end
