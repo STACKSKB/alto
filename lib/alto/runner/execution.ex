@@ -1371,21 +1371,15 @@ defmodule Alto.Runner.Execution do
 
   defp normalize_session_opt(other), do: {:error, {:invalid_session_option, other}}
 
+  defp tool_summary(%{tool_presenter: nil}, name, _arguments), do: to_string(name || "tool")
+
   defp tool_summary(run, name, arguments) do
-    present(
-      run,
-      fn -> run.tool_presenter.(name, arguments) end,
-      to_string(name || "tool"),
-      500
-    )
-  end
+    callback = fn -> run.tool_presenter.(name, arguments) end
+    fallback = to_string(name || "tool")
 
-  defp present(%{tool_presenter: nil}, _callback, fallback, _limit), do: fallback
-
-  defp present(run, callback, fallback, limit) do
     case Call.run(callback, Budget.timeout(run.budget, run.tool_timeout), run.cancel_ref) do
       text when is_binary(text) ->
-        Alto.Text.prefix(text, limit)
+        Alto.Text.prefix(text, 500)
 
       {:error, {:cancelled, reason}} ->
         send(self(), {:alto_cancel, run.cancel_ref, reason})

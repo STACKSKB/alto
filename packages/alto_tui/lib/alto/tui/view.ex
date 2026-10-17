@@ -918,19 +918,15 @@ defmodule Alto.TUI.View do
     }
   end
 
-  defp popup_rect(width, height), do: popup_rect(width, height, 62, 62)
-
   defp overlay_rect(%{kind: :workspace_form}, width, height) do
     w = min(max(width - 4, 1), 88)
     h = min(max(height, 1), 18)
     %Rect{x: max(div(width - w, 2), 0), y: max(div(height - h, 2), 0), width: w, height: h}
   end
 
-  defp overlay_rect(_overlay, width, height), do: popup_rect(width, height)
-
-  defp popup_rect(width, height, width_percent, height_percent) do
-    popup_width = div(width * width_percent, 100)
-    popup_height = div(height * height_percent, 100)
+  defp overlay_rect(_overlay, width, height) do
+    popup_width = div(width * 62, 100)
+    popup_height = div(height * 62, 100)
 
     %Rect{
       x: div(width - popup_width, 2),

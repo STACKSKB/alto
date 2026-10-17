@@ -234,12 +234,13 @@ defmodule Alto.Contrib.Workspaces do
            get(manager, id),
          true <- workspace["patch_path"] == Path.join([manager.root, id, "patch.diff"]),
          :ok <- safe_path(workspace["patch_path"]),
-         {:ok, patch} <- read_bounded(workspace["patch_path"], 1_000_000),
+         {:ok, patch} <- BoundedFile.read(workspace["patch_path"], 1_000_000),
          true <- hash(patch) == workspace["patch_sha256"] do
       {:ok, patch}
     else
       false -> {:error, :workspace_patch_changed}
       {:ok, _} -> {:error, :workspace_not_frozen}
+      {:error, {:too_large, _, _}} -> {:error, :workspace_patch_too_large}
       {:error, _} = error -> error
     end
   end
@@ -530,13 +531,6 @@ defmodule Alto.Contrib.Workspaces do
   end
 
   defp json_map(_), do: {:error, :invalid_workspace_snapshot}
-
-  defp read_bounded(path, max) do
-    case BoundedFile.read(path, max) do
-      {:error, {:too_large, _, _}} -> {:error, :workspace_patch_too_large}
-      result -> result
-    end
-  end
 
   defp fingerprint(manager),
     do:
