@@ -254,7 +254,7 @@ defmodule Alto.Session do
   def list(opts \\ []) do
     case File.ls(dir(opts)) do
       {:ok, entries} ->
-        summaries =
+        recent =
           entries
           |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
           |> Enum.map(&Path.rootname/1)
@@ -262,14 +262,8 @@ defmodule Alto.Session do
           |> Enum.map(fn id -> {id, mtime(dir(opts), id)} end)
           |> Enum.sort_by(&elem(&1, 1), :desc)
           |> Enum.take(@max_list_entries)
-          |> Enum.flat_map(fn {id, _mtime} ->
-            case summarize(id, opts) do
-              {:ok, summary} -> [summary]
-              {:error, _reason} -> []
-            end
-          end)
 
-        {:ok, summaries}
+        {:ok, for({id, _} <- recent, {:ok, summary} <- [summarize(id, opts)], do: summary)}
 
       {:error, :enoent} ->
         {:ok, []}

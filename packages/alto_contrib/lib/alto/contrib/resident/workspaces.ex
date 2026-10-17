@@ -40,13 +40,7 @@ defmodule Alto.Contrib.Resident.Workspaces do
       keys = Enum.map(OperationLog.request(manager.ledger, {:entries, :all}), & &1.operation_key)
       page = Enum.slice(keys, cursor, 10)
 
-      resources =
-        Enum.flat_map(page, fn id ->
-          case Workspaces.get(manager, id) do
-            {:ok, info} -> [info]
-            _ -> []
-          end
-        end)
+      resources = for id <- page, {:ok, info} <- [Workspaces.get(manager, id)], do: info
 
       next = cursor + length(page)
       {:ok, %{workspaces: resources, next_cursor: if(next < length(keys), do: next)}}

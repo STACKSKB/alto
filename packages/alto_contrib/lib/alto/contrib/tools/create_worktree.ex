@@ -52,8 +52,8 @@ defmodule Alto.Contrib.Tools.CreateWorktree do
   end
 
   defp snapshot_options(args) do
-    Enum.flat_map([ref: "ref", branch: "branch"], fn {key, field} ->
-      if Map.has_key?(args, field), do: [{key, args[field]}], else: []
-    end)
+    for {key, field} <- [ref: "ref", branch: "branch"],
+        {:ok, value} <- [Map.fetch(args, field)],
+        do: {key, value}
   end
 end
