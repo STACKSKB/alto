@@ -13,9 +13,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
     initial = %{
       sse: SSE.new(config.max_event_bytes),
       completion: decoder.new(),
-      events: 0,
-      last_event_ms: nil,
-      diagnostics: limits
+      diagnostics: Map.merge(limits, %{events: 0, last_event_ms: nil})
     }
 
     on_error = fn reason, state, diagnostics ->
@@ -40,26 +38,19 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
              on_error
            ) do
       case finish(state, decoder, sink) do
-        {:ok, completion, final_events} ->
+        {:ok, state} ->
           diagnostics =
             Map.merge(
-              Map.get(accounting(completion, decoder), :diagnostics, %{}),
-              Map.merge(state.diagnostics, %{
-                events: state.events + final_events,
-                last_event_ms:
-                  if(final_events > 0,
-                    do: state.diagnostics.last_byte_ms,
-                    else: state.last_event_ms
-                  )
-              })
+              Map.get(accounting(state.completion, decoder), :diagnostics, %{}),
+              state.diagnostics
             )
 
-          case decoder.result(completion) do
+          case decoder.result(state.completion) do
             {:ok, result} ->
               {:ok, Map.put(result, :diagnostics, diagnostics)}
 
             {:error, reason} ->
-              on_error.(reason, %{state | completion: completion}, diagnostics)
+              on_error.(reason, state, diagnostics)
           end
 
         {:error, reason} ->
@@ -177,16 +168,19 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
     end
   end
 
-  defp diagnostics(state, status),
-    do: %{
+  defp diagnostics(state, status) do
+    progress = if is_map(state.value), do: Map.get(state.value, :diagnostics, %{}), else: %{}
+
+    %{
       response_bytes: state.bytes,
       accepted_bytes: state.accepted_bytes,
       first_byte_ms: state.first_byte_ms,
       last_byte_ms: state.last_byte_ms,
-      last_event_ms: if(is_map(state.value), do: Map.get(state.value, :last_event_ms)),
-      events: if(is_map(state.value), do: Map.get(state.value, :events, 0), else: 0),
+      last_event_ms: Map.get(progress, :last_event_ms),
+      events: Map.get(progress, :events, 0),
       http_status: status || state.http_status
     }
+  end
 
   defp attach_diagnostics(%{sse: _} = value, state, status) do
     evidence = diagnostics(state, status)
@@ -205,51 +199,47 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
   defp consume(state, data, decoder, sink) do
     with {:ok, sse, payloads} <- SSE.feed(state.sse, data) do
-      last_event_ms =
-        if payloads == [], do: state.last_event_ms, else: state.diagnostics.last_byte_ms
-
-      diagnostics =
-        Map.merge(state.diagnostics, %{
-          events: state.events + length(payloads),
-          last_event_ms: last_event_ms,
-          accepted_bytes: state.diagnostics.response_bytes
-        })
-
-      progress_sink = fn
-        %Alto.Event{type: :provider_accounting, data: evidence} = event ->
-          sink.(%{
-            event
-            | data:
-                Map.update(
-                  evidence,
-                  :diagnostics,
-                  diagnostics,
-                  &Map.merge(&1, diagnostics)
-                )
-          })
-
-        event ->
-          sink.(event)
-      end
-
-      # A heartbeat or incomplete frame can advance byte arrival without changing
-      # decoder accounting. Publish this evidence before any host callback blocks.
-      emit_accounting(state.completion, decoder, progress_sink)
-      completion = consume_payloads(payloads, state.completion, decoder, progress_sink)
-
-      next = %{
-        state
-        | sse: sse,
-          completion: completion,
-          events: state.events + length(payloads),
-          last_event_ms: last_event_ms,
-          diagnostics: diagnostics
-      }
-
-      if completion.error, do: {:error, completion.error, next}, else: {:ok, next}
+      next = apply_payloads(%{state | sse: sse}, payloads, decoder, sink)
+      if next.completion.error, do: {:error, next.completion.error, next}, else: {:ok, next}
     else
       {:error, reason} -> {:error, reason, state}
     end
+  end
+
+  defp apply_payloads(state, payloads, decoder, sink) do
+    last_event_ms =
+      if payloads == [], do: state.diagnostics.last_event_ms, else: state.diagnostics.last_byte_ms
+
+    diagnostics =
+      Map.merge(state.diagnostics, %{
+        events: state.diagnostics.events + length(payloads),
+        last_event_ms: last_event_ms,
+        accepted_bytes: state.diagnostics.response_bytes
+      })
+
+    progress_sink = fn
+      %Alto.Event{type: :provider_accounting, data: evidence} = event ->
+        sink.(%{
+          event
+          | data:
+              Map.update(
+                evidence,
+                :diagnostics,
+                diagnostics,
+                &Map.merge(&1, diagnostics)
+              )
+        })
+
+      event ->
+        sink.(event)
+    end
+
+    # A heartbeat or incomplete frame can advance byte arrival without changing
+    # decoder accounting. Publish this evidence before any host callback blocks.
+    emit_accounting(state.completion, decoder, progress_sink)
+    completion = consume_payloads(payloads, state.completion, decoder, progress_sink)
+
+    %{state | completion: completion, diagnostics: diagnostics}
   end
 
   defp consume_payloads(payloads, completion, decoder, sink) do
@@ -277,15 +267,18 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
   defp finish(state, decoder, sink) do
     case SSE.finish(state.sse) do
+      {:ok, []} ->
+        {:ok, state}
+
       {:ok, payloads} ->
-        {:ok, consume_payloads(payloads, state.completion, decoder, sink), length(payloads)}
+        {:ok, apply_payloads(state, payloads, decoder, sink)}
 
       {:raw, raw} ->
         case JSON.decode(raw) do
           {:ok, response} ->
             with {:ok, completion} <- decoder.from_response(response, sink) do
               emit_accounting(completion, decoder, sink)
-              {:ok, completion, 0}
+              {:ok, %{state | completion: completion}}
             end
 
           {:error, error} ->
