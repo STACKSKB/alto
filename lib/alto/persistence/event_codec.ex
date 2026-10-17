@@ -29,7 +29,7 @@ defmodule Alto.Persistence.EventCodec do
     opts = Keyword.put_new(opts, :max_bytes, @default_max_bytes)
 
     with {:ok, node} <- body(envelope, opts),
-         term <- exact(node, opts, 0),
+         term <- read(node, {:exact, opts}, 0),
          validate = Keyword.get(opts, :validate, &Codec.valid?(&1, opts)),
          true <- validate.(term) do
       {:ok, term}
@@ -42,7 +42,7 @@ defmodule Alto.Persistence.EventCodec do
 
   @spec project(term(), keyword()) :: {:ok, term()} | {:error, :invalid_event_data}
   def project(envelope, opts \\ []) do
-    with {:ok, node} <- body(envelope, opts), do: {:ok, projected(node, 0)}
+    with {:ok, node} <- body(envelope, opts), do: {:ok, read(node, :project, 0)}
   rescue
     _ -> {:error, :invalid_event_data}
   end
@@ -101,65 +101,53 @@ defmodule Alto.Persistence.EventCodec do
     ["key", encode_value(key), wire_key]
   end
 
-  defp exact(_, _, depth) when depth > @max_depth, do: raise(ArgumentError, "event depth")
+  defp read(_, _, depth) when depth > @max_depth, do: raise(ArgumentError, "event depth")
 
-  defp exact(value, _, _)
+  defp read(value, _, _)
        when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value),
        do: value
 
-  defp exact(["atom", name], _, _) when is_binary(name), do: String.to_existing_atom(name)
-  defp exact(["binary", encoded], _, _), do: Base.decode64!(encoded)
-  defp exact(["map", pairs], opts, depth), do: exact_map(pairs, opts, depth)
+  defp read(["atom", name], :project, _) when is_binary(name), do: name
 
-  defp exact(["struct", name, pairs], opts, depth),
-    do: Map.put(exact_map(pairs, opts, depth), :__struct__, String.to_existing_atom(name))
+  defp read(["atom", name], {:exact, _}, _) when is_binary(name),
+    do: String.to_existing_atom(name)
 
-  defp exact(["tuple", items], opts, depth),
-    do: items |> Enum.map(&exact(&1, opts, depth + 1)) |> List.to_tuple()
+  defp read(["binary", encoded], _, _), do: Base.decode64!(encoded)
+  defp read(["map", pairs], mode, depth), do: read_map(pairs, mode, depth)
 
-  defp exact(["list", items], opts, depth), do: Enum.map(items, &exact(&1, opts, depth + 1))
-  defp exact(["key", node, _], opts, depth), do: exact(node, opts, depth + 1)
+  defp read(["struct", name, pairs], :project, depth) when is_binary(name),
+    do: read_map(pairs, :project, depth)
 
-  defp exact(["opaque", encoded, _], opts, _) do
+  defp read(["struct", name, pairs], {:exact, _} = mode, depth),
+    do: Map.put(read_map(pairs, mode, depth), :__struct__, String.to_existing_atom(name))
+
+  defp read(["tuple", items], mode, depth) do
+    items = Enum.map(items, &read(&1, mode, depth + 1))
+    if mode == :project, do: %{"$tuple" => items}, else: List.to_tuple(items)
+  end
+
+  defp read(["list", items], mode, depth), do: Enum.map(items, &read(&1, mode, depth + 1))
+  defp read(["key", node, _], {:exact, _} = mode, depth), do: read(node, mode, depth + 1)
+
+  defp read(["opaque", encoded, projection], :project, _) when is_binary(encoded),
+    do: projection
+
+  defp read(["opaque", encoded, _], {:exact, opts}, _) do
     {:ok, term} = Codec.decode(encoded, Keyword.put_new(opts, :max_bytes, @default_max_bytes))
     term
   end
 
-  defp exact_map(pairs, opts, depth),
+  defp read_map(pairs, mode, depth),
     do:
       Map.new(pairs, fn [key, value] ->
-        {exact(key, opts, depth + 1), exact(value, opts, depth + 1)}
+        {read_key(key, mode, depth + 1), read(value, mode, depth + 1)}
       end)
 
-  defp projected(_, depth) when depth > @max_depth, do: raise(ArgumentError, "event depth")
+  defp read_key(key, {:exact, _} = mode, depth), do: read(key, mode, depth)
+  defp read_key(["key", _, wire], :project, _) when is_binary(wire), do: wire
 
-  defp projected(value, _)
-       when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value),
-       do: value
-
-  defp projected(["atom", name], _) when is_binary(name), do: name
-  defp projected(["binary", encoded], _), do: Base.decode64!(encoded)
-  defp projected(["map", pairs], depth), do: projected_map(pairs, depth)
-
-  defp projected(["struct", name, pairs], depth) when is_binary(name),
-    do: projected_map(pairs, depth)
-
-  defp projected(["tuple", items], depth),
-    do: %{"$tuple" => Enum.map(items, &projected(&1, depth + 1))}
-
-  defp projected(["list", items], depth), do: Enum.map(items, &projected(&1, depth + 1))
-  defp projected(["opaque", encoded, projection], _) when is_binary(encoded), do: projection
-
-  defp projected_map(pairs, depth),
-    do:
-      Map.new(pairs, fn [key, value] ->
-        {projected_key(key, depth + 1), projected(value, depth + 1)}
-      end)
-
-  defp projected_key(["key", _, wire], _) when is_binary(wire), do: wire
-
-  defp projected_key(key, depth) do
-    case projected(key, depth) do
+  defp read_key(key, :project, depth) do
+    case read(key, :project, depth) do
       value when is_binary(value) -> value
       value when is_integer(value) -> Integer.to_string(value)
       value when is_boolean(value) or is_nil(value) -> Atom.to_string(value)
