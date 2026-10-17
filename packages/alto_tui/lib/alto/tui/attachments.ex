@@ -176,7 +176,7 @@ defmodule Alto.TUI.Attachments do
   def open_upload(state) do
     menu =
       Menu.form(:attachment_upload, "attach a file", [{:path, "Path", "", []}],
-        buttons: ["[ Attach ]", "[ Cancel ]"],
+        actions: [submit: "[ Attach ]", cancel: "[ Cancel ]"],
         on_action: &upload_action/2,
         hint: "Enter attach · Esc cancel",
         intro: "Local file path · images, text, PDFs and binary files"

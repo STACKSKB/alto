@@ -271,8 +271,7 @@ defmodule Alto.TUI.Backends.Remote do
         base: (data(state).model && data(state).model.workspace_base) || "/",
         complete: complete,
         folders: Enum.map(state.projects, &(&1["root"] <> "/")),
-        buttons: ["Open", "Create", "Cancel"],
-        actions: [:submit, :create, :cancel],
+        actions: [submit: "Open", create: "Create", cancel: "Cancel"],
         on_action: fn s, event ->
           case event do
             :cancel -> %{s | overlay: nil}
@@ -291,8 +290,12 @@ defmodule Alto.TUI.Backends.Remote do
         :remote_reconcile,
         "Review uncertain effects",
         [{:note, "Evidence / reason", "", []}],
-        buttons: ["Committed", "Failed", "Permit retry", "Cancel"],
-        actions: [:committed, :failed, :retry, :cancel],
+        actions: [
+          committed: "Committed",
+          failed: "Failed",
+          retry: "Permit retry",
+          cancel: "Cancel"
+        ],
         on_action: fn s, event ->
           if event == :cancel,
             do: %{s | overlay: nil},
@@ -335,8 +338,7 @@ defmodule Alto.TUI.Backends.Remote do
           {:attempt, "Attempt", "", []},
           {:suspension, "Suspension nonce", "", []}
         ],
-        buttons: ["Approve", "Deny", "Cancel"],
-        actions: [:approve, :deny, :cancel],
+        actions: [approve: "Approve", deny: "Deny", cancel: "Cancel"],
         on_action: fn s, event ->
           task = selected_task(s)
 

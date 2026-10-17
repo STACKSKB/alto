@@ -37,6 +37,10 @@ defmodule Alto.TUI.AttachmentsTest do
     assert Enum.map_join(state.attachments, &File.read!(&1.path)) == text
     {:noreply, menu} = App.handle_event(%Key{code: "f7"}, state)
     assert menu.overlay.kind == :attachments
+    {:noreply, upload} = App.handle_event(%Key{code: "enter"}, menu)
+    assert upload.overlay.kind == :attachment_upload
+    {:noreply, menu} = App.handle_event(%Key{code: "esc"}, upload)
+    assert menu.overlay.kind == :attachments
     attachment = hd(state.attachments)
     editor = Attachments.edit(menu, attachment)
     terminal = ExRatatui.init_test_terminal(120, 36)

@@ -8,29 +8,23 @@ defmodule Alto.TUI.Goal do
   def open(state) do
     task = State.selected_task(state)
     goal = task && task["goal"]
-    actions = [{"[ Save goal ]", :save}]
 
     actions =
       if goal do
         toggle =
-          if goal["status"] == "active", do: {"[ Pause ]", :pause}, else: {"[ Resume ]", :resume}
+          if goal["status"] == "active", do: {:pause, "[ Pause ]"}, else: {:resume, "[ Resume ]"}
 
-        actions ++
-          [toggle] ++
-          if(goal["status"] == "completed", do: [], else: [{"[ Complete ]", :complete}]) ++
-          [{"[ Clear goal ]", :clear}]
+        [toggle] ++
+          if(goal["status"] == "completed", do: [], else: [complete: "[ Complete ]"]) ++
+          [clear: "[ Clear goal ]"]
       else
-        actions
+        []
       end
-
-    actions = actions ++ [{"[ Cancel ]", :cancel}]
-    {buttons, actions} = Enum.unzip(actions)
 
     overlay =
       Menu.form(:goal, "task goal", [{:objective, "Objective", goal && goal["objective"], []}],
         on_action: &action/2,
-        buttons: buttons,
-        actions: actions,
+        actions: [save: "[ Save goal ]"] ++ actions ++ [cancel: "[ Cancel ]"],
         intro:
           if(goal,
             do: "Status: #{goal["status"]} · changes apply to the next run",

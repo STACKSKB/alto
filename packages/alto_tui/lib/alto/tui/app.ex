@@ -2017,7 +2017,7 @@ defmodule Alto.TUI.App do
             on_action: &form_result/2,
             intro: "Credentials are saved privately outside the workspace.",
             hint: "Tab/↑↓ fields · Enter next/save · ^S save · Esc",
-            buttons: ["[ Save provider ]", "[ Cancel ]"],
+            actions: [submit: "[ Save provider ]", cancel: "[ Cancel ]"],
             field_index: if(new?, do: 0, else: 3),
             after_save:
               if(state.overlay && state.overlay.kind == :model_error, do: :model, else: nil)
@@ -2046,8 +2046,12 @@ defmodule Alto.TUI.App do
             on_action: &form_result/2,
             intro: "Relative paths start from: #{base}",
             hint: "↑↓ choose · Tab complete · Ctrl+O choose · Ctrl+N create · Esc cancel",
-            buttons: ["[ Open folder ]", "[ Cancel ]", "[ Choose folder ]", "[ Create folder ]"],
-            actions: [:submit, :cancel, :choose, :create]
+            actions: [
+              submit: "[ Open folder ]",
+              cancel: "[ Cancel ]",
+              choose: "[ Choose folder ]",
+              create: "[ Create folder ]"
+            ]
           ),
         leader?: false
     }
@@ -2074,7 +2078,7 @@ defmodule Alto.TUI.App do
             on_action: &form_result/2,
             intro: "#{project["root"]} · committed files only",
             hint: "Tab next · Ctrl+S create · Esc cancel",
-            buttons: ["[ Create & open ]", "[ Cancel ]"],
+            actions: [submit: "[ Create & open ]", cancel: "[ Cancel ]"],
             source: project["root"]
           )
     }
@@ -2092,7 +2096,7 @@ defmodule Alto.TUI.App do
             on_action: &form_result/2,
             intro: "Use the provider's exact model identifier.",
             hint: "Enter use · Esc",
-            buttons: ["[ Use model ]", "[ Cancel ]"],
+            actions: [submit: "[ Use model ]", cancel: "[ Cancel ]"],
             profile_id: profile_id
           )
     }

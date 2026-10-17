@@ -34,20 +34,20 @@ defmodule Alto.TUI.Menu do
       end)
 
     on_action = Keyword.fetch!(opts, :on_action)
-    actions = Enum.zip(opts[:buttons], opts[:actions] || [:submit, :cancel])
 
     items =
       fields ++
-        Enum.map(actions, fn {label, action} ->
+        Enum.map(Keyword.fetch!(opts, :actions), fn {action, label} ->
           %{label: label, action: &on_action.(&1, action)}
         end)
 
     new(kind, title, items)
-    |> Map.merge(Map.new(Keyword.drop(opts, [:buttons, :actions, :field_index, :on_action])))
+    |> Map.merge(Map.new(Keyword.drop(opts, [:actions, :field_index, :on_action])))
     |> Map.merge(%{
       editor?: true,
       index: opts[:field_index] || 0,
       error: nil,
+      cancel: &on_action.(&1, :cancel),
       submit: &on_action.(&1, :submit)
     })
     |> refresh_folder()
@@ -192,6 +192,7 @@ defmodule Alto.TUI.Menu do
     end
   end
 
+  def key(%{cancel: cancel}, %Key{code: "esc"}), do: {:action, cancel}
   def key(_menu, %Key{code: "esc"}), do: :cancel
   def key(%{submit: submit}, %Key{code: "s", modifiers: ["ctrl"]}), do: {:action, submit}
 
