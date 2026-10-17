@@ -109,6 +109,6 @@ explicit checkpoint version checks still apply.
 Restart with the updated binary before using transcript references or ledger
 deltas; older binaries cannot interpret those new representations.
 
-Packets captured before the runner refactor are deliberately rejected rather
-than guessed into the new format. Reconcile any suspended operations before
-upgrading; completed session transcripts remain resumable. See [execution hosts](runners.md).
+Unsupported checkpoint formats fail restoration without executing pending tools
+or replaying completed effects. Resident approval decisions report that failure
+through the ordinary task outcome; there is no checkpoint migration path.

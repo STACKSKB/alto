@@ -38,7 +38,7 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
     end
   end
 
-  setup do
+  setup context do
     dir =
       Path.join(
         System.tmp_dir!(),
@@ -54,6 +54,7 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
         loop: Alto.rule_loop(steps: steps),
         tools: [First, Guarded],
         approval: :suspend,
+        session_history: Map.get(context, :session_history, :completed),
         checkpoint_version: "test-v1"
       )
     end
@@ -275,47 +276,58 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
   defp wait_for(name, id, status),
     do: Alto.Test.ResidentTask.await(name, id, status, 150, 20)
 
-  test "old approval packets remain retained and require upgrade reconciliation", %{
-    name: name,
-    config: config,
-    dir: dir
-  } do
-    submit(name, "legacy", "guarded")
-    wait_for(name, "legacy", "waiting_approval")
-    ledger = Service.component(name, :ledger)
-    {:ok, current} = Alto.OperationLog.request(ledger, {:recovery, "legacy"})
-    legacy = Map.delete(current.checkpoint, "continuation_format")
+  for decision <- ["approve", "deny"] do
+    @tag decision: decision, session_history: :settled
+    test "#{decision} rejects unsupported checkpoints without replaying completed effects", %{
+      name: name,
+      config: config,
+      dir: dir,
+      decision: decision
+    } do
+      submit(name, "unsupported", "guarded")
+      task = wait_for(name, "unsupported", "waiting_approval")
+      session_opts = [session_dir: Path.join(config.state_dir, "sessions")]
+      {:ok, transcript} = Alto.Session.transcript(task["session_id"], session_opts)
+      ledger = Service.component(name, :ledger)
+      {:ok, current} = Alto.OperationLog.request(ledger, {:recovery, "unsupported"})
+      packet = Map.put(current.checkpoint, "continuation_format", 0)
 
-    {:ok, saved} =
-      Alto.OperationLog.request(ledger, {:checkpoint_update, "legacy", current.revision, legacy})
+      {:ok, saved} =
+        Alto.OperationLog.request(
+          ledger,
+          {:checkpoint_update, "unsupported", current.revision, packet}
+        )
 
-    stop_supervised!(Service)
-    start_supervised!({Service, name: name, config: config})
-    {:ok, %{"task" => task}} = Tasks.command(name, "get", %{"id" => "legacy"})
-    assert task["status"] == "waiting_approval"
-    assert task["upgrade_required"] == "pre_refactor_checkpoint"
+      stop_supervised!(Service)
+      start_supervised!({Service, name: name, config: config})
 
-    for decision <- ["approve", "deny"] do
-      assert {:error, :checkpoint_upgrade_required} =
+      assert {:ok, _} =
                Tasks.command(name, "decide", %{
-                 "id" => "legacy",
-                 "revision" => task["revision"],
+                 "id" => "unsupported",
+                 "revision" => saved.revision,
                  "decision" => decision
                })
-    end
 
-    assert {:ok, ^saved} = Alto.OperationLog.request(ledger, {:recovery, "legacy"})
-    refute File.exists?(Path.join(dir, "approved"))
-    assert File.read!(Path.join(dir, "prepared")) == "1"
-    model = Console.perform(Console.new(socket: Config.socket_path(config)), :connect, self())
-    model = Console.perform(model, {:select, "legacy"}, self())
-    assert model.detail =~ "previous version"
-    refute model.detail =~ "Ctrl+A approve"
-    denied = Console.perform(model, :approve, self())
-    assert denied.notice =~ "previous version"
-    Console.close(denied)
-    assert {:ok, _} = Tasks.command(name, "cancel", %{"id" => "legacy"})
-    wait_for(name, "legacy", "cancelled")
-    refute File.exists?(Path.join(dir, "approved"))
+      failed = wait_for(name, "unsupported", "failed")
+      assert failed["evidence"]["reason"] == ":checkpoint_mismatch"
+      assert {:ok, ^transcript} = Alto.Session.transcript(task["session_id"], session_opts)
+
+      assert {:ok, %{checkpoint: ^packet}} =
+               Alto.OperationLog.request(ledger, {:recovery, "unsupported"})
+
+      assert {:error, :stale_revision} =
+               Tasks.command(name, "decide", %{
+                 "id" => "unsupported",
+                 "revision" => saved.revision,
+                 "decision" => "approve"
+               })
+
+      stop_supervised!(Service)
+      start_supervised!({Service, name: name, config: config})
+      wait_for(name, "unsupported", "failed")
+      assert File.read!(Path.join(dir, "first")) == "1"
+      assert File.read!(Path.join(dir, "prepared")) == "1"
+      refute File.exists?(Path.join(dir, "approved"))
+    end
   end
 end
