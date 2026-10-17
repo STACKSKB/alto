@@ -208,15 +208,13 @@ defmodule Alto.TUI.State do
   end
 
   @doc "Whether a native task has accepted input waiting for delivery."
-  def input_pending?(%__MODULE__{} = state, task_id), do: pending_input(state, task_id) != []
+  def input_pending?(%__MODULE__{} = state, task_id),
+    do: input_request(state, task_id, {:pending, [:steer, :follow_up]}) == true
 
-  defp pending_input(state, task_id) do
-    case Map.get(state.inputs, task_id) do
-      nil -> []
-      input -> Alto.Input.request(input, :list)
-    end
+  defp input_request(state, task_id, operation) do
+    if input = state.inputs[task_id], do: Alto.Input.request(input, operation)
   catch
-    :exit, _ -> []
+    :exit, _ -> nil
   end
 
   def model_metadata(state) do
@@ -455,7 +453,7 @@ defmodule Alto.TUI.State do
   end
 
   defp pending_entries(state) do
-    Enum.map(pending_input(state, state.selected_task_id), fn entry ->
+    Enum.map(input_request(state, state.selected_task_id, :list) || [], fn entry ->
       label = if entry.mode == :steer, do: "Steering message: ", else: "Queued message: "
       %{kind: :system, text: label <> entry.text}
     end)

@@ -731,7 +731,7 @@ defmodule Alto.TUI.App do
   defp one_follow_up_available(_input, :steer), do: :ok
 
   defp one_follow_up_available(input, :follow_up) do
-    if Enum.any?(Alto.Input.request(input, :list), &(&1.mode == :follow_up)),
+    if Alto.Input.request(input, {:pending, [:follow_up]}),
       do: {:error, :follow_up_pending},
       else: :ok
   end
