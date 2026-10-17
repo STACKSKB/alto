@@ -8,13 +8,8 @@ defmodule Alto.TUI.AttachmentsTest do
   alias Alto.TUI.View
   alias ExRatatui.Event.{Key, Mouse, Paste}
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-tui-attachments-#{System.unique_integer([:positive])}")
-
-    File.mkdir!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     {:ok, state} =
       State.new(
         [

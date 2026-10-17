@@ -4,9 +4,8 @@ defmodule Alto.TUI.SavedSessionTest do
   alias Alto.Event
   alias Alto.TUI.SavedSession
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-projection-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     opts = [session_dir: dir]
     id = Session.generate_id()
 

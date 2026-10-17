@@ -6,10 +6,8 @@ defmodule Alto.TUI.SearchTest do
   alias Alto.TUI.View
   alias ExRatatui.Event.{Key, Paste, Resize}
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-search-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     {:ok, state} =
       State.new(Alto.Test.TUI.config(),
         project: root,
@@ -17,7 +15,6 @@ defmodule Alto.TUI.SearchTest do
         credentials_path: Path.join(root, "credentials.json")
       )
 
-    on_exit(fn -> File.rm_rf!(root) end)
     %{state: state, root: root}
   end
 

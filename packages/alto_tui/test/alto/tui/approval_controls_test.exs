@@ -14,12 +14,8 @@ defmodule Alto.TUI.ApprovalControlsTest do
     def stream(_request, _sink, _opts), do: {:error, :not_used}
   end
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-approval-controls-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(root)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     config =
       Alto.Test.TUI.config(
         provider_profiles: [
@@ -34,7 +30,6 @@ defmodule Alto.TUI.ApprovalControlsTest do
         tui: [approval_auto_open: true]
       )
 
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, catalog: Path.join(root, "catalog.json"), config: config}
   end
 

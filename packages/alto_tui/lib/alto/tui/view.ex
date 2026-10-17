@@ -712,7 +712,10 @@ defmodule Alto.TUI.View do
 
     [
       {%List{
-         items: Enum.slice(suggestions, offset, rect.height),
+         items:
+           suggestions
+           |> Enum.slice(offset, rect.height)
+           |> Enum.map(&(String.trim_trailing(Path.basename(&1), "/") <> "/ · " <> &1)),
          selected: if(index != nil, do: index - offset),
          highlight_symbol: "› ",
          highlight_style: style(fg: :black, bg: @accent),

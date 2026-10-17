@@ -110,9 +110,8 @@ defmodule Alto.TUI.AppTest do
     end
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-tui-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     catalog = Path.join(root, "catalog.json")
     codex_server = Path.join(root, "codex_app_server.exs")
 
@@ -198,8 +197,6 @@ defmodule Alto.TUI.AppTest do
         tui: [type_to_compose: true],
         sessions: true
       )
-
-    on_exit(fn -> File.rm_rf!(root) end)
 
     %{
       root: root,
@@ -424,7 +421,8 @@ defmodule Alto.TUI.AppTest do
 
     {%ExRatatui.Widgets.List{}, suggestions} =
       Enum.find(widgets, fn {widget, _} ->
-        match?(%ExRatatui.Widgets.List{}, widget) and widget.items == typed.overlay.suggestions
+        match?(%ExRatatui.Widgets.List{}, widget) and
+          Enum.any?(widget.items, &String.starts_with?(&1, "alpha/"))
       end)
 
     assert suggestions.y > input.y
@@ -470,7 +468,8 @@ defmodule Alto.TUI.AppTest do
 
     {%ExRatatui.Widgets.List{}, list} =
       Enum.find(widgets, fn {widget, _} ->
-        match?(%ExRatatui.Widgets.List{}, widget) and expected in widget.items
+        match?(%ExRatatui.Widgets.List{}, widget) and
+          Enum.any?(widget.items, &String.ends_with?(&1, expected))
       end)
 
     x = list.x + 1

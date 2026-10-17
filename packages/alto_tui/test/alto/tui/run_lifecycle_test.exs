@@ -44,15 +44,8 @@ defmodule Alto.TUI.RunLifecycleTest do
     def run(args, _context, _opts), do: {:ok, args}
   end
 
-  setup do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-tui-lifecycle-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
-      )
-
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root}
   end
 

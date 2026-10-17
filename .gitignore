@@ -2,6 +2,7 @@
 /cover/
 /tmp/
 /packages/alto_contrib/tmp/
+/packages/alto_tui/tmp/
 /deps/
 **/deps/
 **/_build/
