@@ -38,13 +38,11 @@ defmodule Mix.Tasks.Alto.Operations do
 
     case Alto.OperationLog.start_link(Keyword.take(opts, [:id, :dir]) ++ [name: nil]) do
       {:ok, ledger} ->
-        try do
+        Alto.Runner.Execution.Call.with_server(ledger, fn ledger ->
           execute(ledger, args, opts)
           |> inspect(pretty: true, limit: :infinity)
           |> Mix.shell().info()
-        after
-          GenServer.stop(ledger)
-        end
+        end)
 
       {:error, reason} ->
         Mix.raise("Cannot open ledger: #{inspect(reason)}")

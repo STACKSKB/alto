@@ -11,7 +11,7 @@ defmodule Alto.TUI.Worktrees do
              name: nil,
              dir: Path.join(root, "ledger")
            ) do
-      try do
+      Alto.Runner.Execution.Call.with_server(ledger, fn ledger ->
         manager =
           Alto.Contrib.Workspaces.new(
             root: Path.join(root, "checkouts"),
@@ -35,9 +35,7 @@ defmodule Alto.TUI.Worktrees do
                ) do
           {:ok, Map.put(result, "project", project)}
         end
-      after
-        GenServer.stop(ledger)
-      end
+      end)
     end
   end
 end
