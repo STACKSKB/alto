@@ -122,7 +122,9 @@ defmodule Alto.Session.Conversation.Store do
   end
 
   def disk_bytes(id, opts) do
-    with {:ok, files} <- files(id, opts), do: file_bytes(files)
+    with {:ok, revisions} <- revision_files(id, opts),
+         {:ok, objects} <- object_files(id, opts),
+         do: file_bytes(revisions ++ objects)
   end
 
   # Prepared under the session lock, then applied only after the new atomic
@@ -230,10 +232,7 @@ defmodule Alto.Session.Conversation.Store do
   defp matching_files(path, pattern) do
     case File.ls(path) do
       {:ok, names} ->
-        {:ok,
-         names
-         |> Enum.filter(&Regex.match?(pattern, &1))
-         |> Enum.map(&Path.join(path, &1))}
+        {:ok, for(name <- names, Regex.match?(pattern, name), do: Path.join(path, name))}
 
       {:error, :enoent} ->
         {:ok, []}
@@ -241,12 +240,6 @@ defmodule Alto.Session.Conversation.Store do
       {:error, reason} ->
         {:error, {:conversation_read_failed, reason}}
     end
-  end
-
-  defp files(id, opts) do
-    with {:ok, revisions} <- revision_files(id, opts),
-         {:ok, objects} <- object_files(id, opts),
-         do: {:ok, revisions ++ objects}
   end
 
   defp file_bytes(files) do
