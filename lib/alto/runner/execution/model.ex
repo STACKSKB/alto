@@ -10,14 +10,14 @@ defmodule Alto.Runner.Execution.Model do
   alias Alto.Usage
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Call
-  alias Alto.Runner.Execution.BackgroundCompactor
+  alias Alto.Runner.Execution.Compactor
 
   @doc "Dispatch a model request and return its outcome with updated run accounting."
   def request(_request, %{provider: nil} = run, _sink),
     do: {{:error, :provider_required}, run}
 
   def request(request, run, sink) do
-    case BackgroundCompactor.reserve_model(run) do
+    case Compactor.reserve_model(run) do
       {:ok, step} -> dispatch(request, run, sink, step)
       {:error, reason} -> {{:error, reason}, run}
     end
@@ -257,7 +257,7 @@ defmodule Alto.Runner.Execution.Model do
           })
 
         if caps[:accounting_table], do: :ets.insert(caps.accounting_table, {attempt, evidence})
-        BackgroundCompactor.account(caps, evidence)
+        Compactor.account(caps, evidence)
         diagnostic(caps, :provider_attempt_finished, evidence)
 
         decision =

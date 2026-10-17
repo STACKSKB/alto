@@ -462,7 +462,7 @@ defmodule Alto.Runner.SerialCompactionTest do
   end
 
   test "the handoff reducer publishes an artifact from a background snapshot", %{dir: dir} do
-    alias Alto.Runner.Execution.{BackgroundCompactor, Setup}
+    alias Alto.Runner.Execution.{Compactor, Setup}
     alias Alto.Runner.Execution.Transcript
 
     opts = [
@@ -477,7 +477,7 @@ defmodule Alto.Runner.SerialCompactionTest do
       ]
     ]
 
-    BackgroundCompactor.scope(opts, fn options ->
+    Compactor.scope(opts, fn options ->
       {:ok, run} = Setup.open(String.duplicate("earlier work", 300), options)
       {:ok, run} = Transcript.append(run, %{"role" => "user", "content" => "Continue."})
       run = Transcript.start_background(run)

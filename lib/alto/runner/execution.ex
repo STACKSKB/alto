@@ -24,7 +24,7 @@ defmodule Alto.Runner.Execution do
   alias Alto.Runner.Execution.Events
   alias Alto.Runner.Execution.Model
   alias Alto.Runner.Execution.Operation
-  alias Alto.Runner.Execution.BackgroundCompactor
+  alias Alto.Runner.Execution.Compactor
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
   alias Alto.Runner.Execution.Session, as: RunSession
   alias Alto.Event
@@ -103,7 +103,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp run_with_options(task, opts) do
-    BackgroundCompactor.scope(opts, &run_with_compactor(task, &1))
+    Compactor.scope(opts, &run_with_compactor(task, &1))
   end
 
   defp run_with_compactor(task, opts) do
@@ -613,7 +613,7 @@ defmodule Alto.Runner.Execution do
 
       case checked do
         {:ok, %{context_pressure: true} = request} ->
-          if BackgroundCompactor.enabled?(run) do
+          if Compactor.background?(run) do
             {:ok, Map.delete(request, :context_pressure), RunTranscript.start_background(run)}
           else
             compact_model_context(

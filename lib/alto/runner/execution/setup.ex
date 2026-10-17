@@ -11,7 +11,7 @@ defmodule Alto.Runner.Execution.Setup do
   @option_fields ~w(agent_prepare agent_models child_provider_resolver input messaging async_agents
                     agent_scheduler execution_owner checkpoint_version subagent_ticket child_profile
                     child_resume parent_expires_at_ms continuation_store cancel_ref session
-                    session_dir retry_policy tool_presenter background_compactor)a
+                    session_dir retry_policy tool_presenter compactor)a
 
   def open(task, opts) do
     %{} = spec = Keyword.get(opts, :loop, Alto.default_loop())

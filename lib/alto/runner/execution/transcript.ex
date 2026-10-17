@@ -11,51 +11,33 @@ defmodule Alto.Runner.Execution.Transcript do
   alias Alto.Runner.Execution.Events
   alias Alto.Runner.Execution.Model
   alias Alto.Runner.Execution.Call
-  alias Alto.Runner.Execution.BackgroundCompactor
+  alias Alto.Runner.Execution.Compactor
 
   @doc "Start one snapshot reduction without waiting for its result."
   def start_background(run) do
-    cond do
-      not BackgroundCompactor.enabled?(run) or BackgroundCompactor.pending?(run) ->
-        run
-
-      run.session == nil or run.compaction_count >= max_compactions(run) ->
-        run
-
-      true ->
-        case reduction_plan(run, :model_context_pressure) do
-          {:ok, input, module, opts} ->
-            # Cancellation may happen after immutable artifact publication but
-            # before installation. A retry must not reuse that artifact path.
-            attempt = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-            input = %{input | artifact_id: input.artifact_id <> "-bg-" <> attempt}
-            snapshot = %{messages_rev: run.messages_rev, input: input}
-            worker_run = Map.put(run, :background_reducer, true)
-
-            BackgroundCompactor.start(run, snapshot, fn ->
-              reducer_outcome(worker_run, input, module, opts)
-            end)
-
-            run
-
-          {:error, _reason, run} ->
-            run
-        end
+    if Compactor.enabled?(run) and Compactor.background?(run) and run.session != nil and
+         run.compaction_count < max_compactions(run) do
+      case start_reduction(run, :model_context_pressure) do
+        {:ok, next} -> next
+        {:error, _, next} -> next
+      end
+    else
+      run
     end
   end
 
   @doc "Install a ready snapshot plus its unchanged append-only tail. Never waits for reduction."
   def poll(run) do
-    if BackgroundCompactor.enabled?(run) do
-      case BackgroundCompactor.take(run) do
+    if Compactor.enabled?(run) do
+      case Compactor.take(run) do
         {:ready, snapshot, outcome} ->
-          case settle_background(run, snapshot, outcome, 0) do
+          case settle_reduction(run, snapshot, outcome, 0) do
             {:ok, next} -> next
             {:error, _, next} -> next
           end
 
         _ ->
-          BackgroundCompactor.sync(run)
+          Compactor.sync(run)
       end
     else
       run
@@ -63,7 +45,7 @@ defmodule Alto.Runner.Execution.Transcript do
   end
 
   @doc "Collect ready work and cancel unfinished reduction before termination or checkpointing."
-  def finish(run), do: run |> poll() |> BackgroundCompactor.cancel()
+  def finish(run), do: run |> poll() |> Compactor.cancel()
 
   def append(run, message) do
     message_bytes = byte_size(JSON.encode!(message))
@@ -91,7 +73,9 @@ defmodule Alto.Runner.Execution.Transcript do
   def reduce(%{session: nil} = run, _opts),
     do: {:error, :compaction_requires_session, run}
 
-  def reduce(run, opts) do
+  def reduce(run, opts), do: Compactor.scope(run, &reduce_scoped(&1, opts))
+
+  defp reduce_scoped(run, opts) do
     required_headroom = Keyword.get(opts, :required_headroom, 0)
     reason = Keyword.get(opts, :reason, :manual)
 
@@ -102,24 +86,20 @@ defmodule Alto.Runner.Execution.Transcript do
       run.compaction_count >= max_compactions(run) ->
         {:error, {:compaction_limit, max_compactions(run)}, run}
 
-      BackgroundCompactor.pending?(run) ->
-        outcome =
-          Call.run(
-            fn -> BackgroundCompactor.take(run, true) end,
-            Budget.remaining(run.budget),
-            run.cancel_ref
-          )
-
-        case outcome do
-          {:ready, snapshot, result} ->
-            settle_background(run, snapshot, result, required_headroom)
-
-          {:error, reason} ->
-            {:error, reason, BackgroundCompactor.cancel(run)}
-        end
-
       true ->
-        compact_middle(run, required_headroom, reason)
+        with {:ok, run} <- start_reduction(run, reason) do
+          case Call.run(
+                 fn -> Compactor.take(run, true) end,
+                 Budget.remaining(run.budget),
+                 run.cancel_ref
+               ) do
+            {:ready, snapshot, result} ->
+              settle_reduction(run, snapshot, result, required_headroom)
+
+            {:error, reason} ->
+              {:error, reason, Compactor.cancel(run)}
+          end
+        end
     end
   end
 
@@ -146,10 +126,17 @@ defmodule Alto.Runner.Execution.Transcript do
     end
   end
 
-  defp compact_middle(run, required_headroom, reason) do
-    case reduction_plan(run, reason) do
-      {:ok, input, module, opts} -> execute_reducer(run, input, module, opts, required_headroom)
-      error -> error
+  defp start_reduction(run, reason) do
+    if Compactor.pending?(run) do
+      {:ok, run}
+    else
+      with {:ok, input, module, opts} <- reduction_plan(run, reason) do
+        Compactor.start(run, %{messages_rev: run.messages_rev, input: input}, fn ->
+          reducer_outcome(Map.put(run, :compaction_model, true), input, module, opts)
+        end)
+
+        {:ok, run}
+      end
     end
   end
 
@@ -176,6 +163,12 @@ defmodule Alto.Runner.Execution.Transcript do
   defp reduction_input(run, pinned, middle, recent, text, reason) do
     count = run.compaction_count + 1
     run_id = run.session_id
+    artifact_id = if count == 1, do: run_id, else: run_id <> "-context-#{count}"
+    # Discarded background work may already have published its artifact.
+    artifact_id =
+      if Compactor.background?(run),
+        do: artifact_id <> "-bg-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+        else: artifact_id
 
     %{
       pinned: pinned,
@@ -191,7 +184,7 @@ defmodule Alto.Runner.Execution.Transcript do
       run_id: run_id,
       reason: reason,
       count: count,
-      artifact_id: if(count == 1, do: run_id, else: run_id <> "-context-#{count}"),
+      artifact_id: artifact_id,
       artifact_options:
         [session_dir: run.session_dir] ++
           if(run.compaction[:artifact_dir],
@@ -199,20 +192,6 @@ defmodule Alto.Runner.Execution.Transcript do
             else: []
           )
     }
-  end
-
-  defp execute_reducer(run, input, module, opts, headroom) do
-    case reducer_outcome(run, input, module, opts) do
-      {:compacted, result, accounting} ->
-        run = Map.merge(run, accounting)
-        apply_outcome(run, input, result, headroom)
-
-      {:error, {:cancelled, _} = reason} ->
-        {:error, reason, run}
-
-      {:error, reason} ->
-        record_compact_failed(run, reason)
-    end
   end
 
   defp reducer_outcome(run, input, module, opts) do
@@ -240,10 +219,7 @@ defmodule Alto.Runner.Execution.Transcript do
             end
           end
 
-          result = module.compact(input, model, opts)
-
-          {:compacted, result,
-           Agent.get(accounting, &Map.take(&1, [:model_requests, :usage]), :infinity)}
+          {:compacted, module.compact(input, model, opts)}
         after
           if Process.alive?(accounting), do: Agent.stop(accounting)
         end
@@ -262,8 +238,8 @@ defmodule Alto.Runner.Execution.Transcript do
   defp apply_outcome(run, _input, other, _headroom),
     do: record_compact_failed(run, {:compaction_failed, other})
 
-  defp settle_background(run, snapshot, outcome, headroom) do
-    run = BackgroundCompactor.sync(run)
+  defp settle_reduction(run, snapshot, outcome, headroom) do
+    run = Compactor.sync(run)
     tail_length = length(run.messages_rev) - length(snapshot.messages_rev)
     {tail_rev, prefix_rev} = Enum.split(run.messages_rev, max(tail_length, 0))
 
@@ -272,7 +248,8 @@ defmodule Alto.Runner.Execution.Transcript do
       input = %{snapshot.input | recent: snapshot.input.recent ++ Enum.reverse(tail_rev)}
 
       case outcome do
-        {:compacted, result, _accounting} -> apply_outcome(run, input, result, headroom)
+        {:compacted, result} -> apply_outcome(run, input, result, headroom)
+        {:error, {:cancelled, _} = reason} -> {:error, reason, run}
         {:error, reason} -> record_compact_failed(run, reason)
       end
     else

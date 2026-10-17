@@ -1,4 +1,4 @@
-defmodule Alto.Runner.Execution.BackgroundCompactor do
+defmodule Alto.Runner.Execution.Compactor do
   @moduledoc false
   use GenServer
 
@@ -7,34 +7,47 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
 
   # This scope belongs to one execution, including executions restored from a
   # checkpoint. Neither workers nor their process identities are checkpointed.
-  def scope(opts, fun) do
-    compaction = Keyword.get(opts, :compaction, false)
+  def scope(opts, fun) when is_list(opts) do
+    if Keyword.get(opts, :compaction, false) in [false, nil],
+      do: fun.(opts),
+      else: with_server(fn pid -> fun.(Keyword.put(opts, :compactor, pid)) end)
+  end
 
-    if is_list(compaction) and Keyword.get(compaction, :mode) == :background do
-      {:ok, pid} = GenServer.start_link(__MODULE__, nil)
+  def scope(%{compactor: pid} = run, fun) when is_pid(pid), do: fun.(run)
 
-      try do
-        fun.(Keyword.put(opts, :background_compactor, pid))
-      after
-        if Process.alive?(pid), do: GenServer.stop(pid)
+  def scope(run, fun) when is_map(run) do
+    with_server(fn pid ->
+      case fun.(Map.put(run, :compactor, pid)) do
+        {:ok, next} -> {:ok, Map.delete(next, :compactor)}
+        {:error, reason, next} -> {:error, reason, Map.delete(next, :compactor)}
       end
-    else
-      fun.(opts)
+    end)
+  end
+
+  defp with_server(fun) do
+    {:ok, pid} = GenServer.start_link(__MODULE__, nil)
+
+    try do
+      fun.(pid)
+    after
+      if Process.alive?(pid), do: GenServer.stop(pid)
     end
   end
 
-  def enabled?(run), do: is_pid(Map.get(run, :background_compactor))
+  def background?(run), do: is_list(run.compaction) and run.compaction[:mode] == :background
+
+  def enabled?(run), do: is_pid(Map.get(run, :compactor))
 
   def start(run, snapshot, fun),
-    do: GenServer.call(run.background_compactor, {:start, snapshot, fun}, :infinity)
+    do: GenServer.call(run.compactor, {:start, snapshot, fun}, :infinity)
 
-  def pending?(run), do: enabled?(run) and GenServer.call(run.background_compactor, :pending?)
+  def pending?(run), do: enabled?(run) and GenServer.call(run.compactor, :pending?)
 
   def take(run, wait \\ false),
-    do: GenServer.call(run.background_compactor, if(wait, do: :await, else: :take), :infinity)
+    do: GenServer.call(run.compactor, if(wait, do: :await, else: :take), :infinity)
 
   def cancel(run) do
-    if enabled?(run), do: GenServer.call(run.background_compactor, :cancel, :infinity)
+    if enabled?(run), do: GenServer.call(run.compactor, :cancel, :infinity)
     sync(run)
   end
 
@@ -43,9 +56,9 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
   def reserve_model(run) do
     if enabled?(run) do
       GenServer.call(
-        run.background_compactor,
+        run.compactor,
         {:reserve_model, run.model_requests, run.max_steps,
-         Map.get(run, :background_reducer, false)}
+         Map.get(run, :compaction_model, false)}
       )
     else
       if is_integer(run.max_steps) and run.model_requests >= run.max_steps,
@@ -55,8 +68,8 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
   end
 
   def account(run, evidence) do
-    if Map.get(run, :background_reducer, false) do
-      GenServer.call(run.background_compactor, {:account, evidence})
+    if Map.get(run, :compaction_model, false) do
+      GenServer.call(run.compactor, {:account, evidence})
     end
   end
 
@@ -65,17 +78,18 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
   def sync(run) do
     if enabled?(run) do
       %{count: count, usage: usage, attempts: attempts} =
-        GenServer.call(run.background_compactor, :drain)
+        GenServer.call(run.compactor, :drain)
 
-      merged = Usage.merge(usage, run.usage)
+      merged =
+        if background?(run),
+          do: Usage.merge(usage, run.usage),
+          else: Usage.merge(run.usage, usage)
 
-      run
-      |> Map.put(:model_requests, run.model_requests + count)
-      |> Map.put(:usage, merged)
-      |> Map.put(
-        :provider_attempts,
-        Enum.take(Map.get(run, :provider_attempts, []) ++ attempts, -32)
-      )
+      Map.merge(run, %{
+        model_requests: run.model_requests + count,
+        usage: merged,
+        provider_attempts: Enum.take(Map.get(run, :provider_attempts, []) ++ attempts, -32)
+      })
     else
       run
     end
@@ -112,11 +126,11 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
     {:reply, :ok, %{state | job: nil}}
   end
 
-  def handle_call({:reserve_model, count, limit, background?}, _from, state) do
+  def handle_call({:reserve_model, count, limit, reducer?}, _from, state) do
     steps = max(state.steps, count)
 
     cond do
-      background? and state.job == nil ->
+      reducer? and state.job == nil ->
         {:reply, {:error, :reduction_model_closed}, state}
 
       is_integer(limit) and steps >= limit ->
@@ -124,7 +138,7 @@ defmodule Alto.Runner.Execution.BackgroundCompactor do
 
       true ->
         state =
-          if background?,
+          if reducer?,
             do: update_in(state.accounting.count, &(&1 + 1)),
             else: state
 

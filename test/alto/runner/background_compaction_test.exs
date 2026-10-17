@@ -2,7 +2,7 @@ defmodule Alto.Runner.BackgroundCompactionTest do
   use ExUnit.Case, async: true
 
   alias Alto.Context.Transcript
-  alias Alto.Runner.Execution.{BackgroundCompactor, Setup}
+  alias Alto.Runner.Execution.{Compactor, Setup}
   alias Alto.Runner.Execution.Transcript, as: RunTranscript
 
   defmodule Reducer do
@@ -21,6 +21,16 @@ defmodule Alto.Runner.BackgroundCompactionTest do
         :crash ->
           exit(:reducer_crash)
 
+        {:model_then, terminal} ->
+          {:ok, completion} = model.(%{messages: [%{"role" => "user", "content" => "reduce"}]})
+          send(opts[:owner], {:model_done, model})
+
+          case terminal do
+            :success -> {:ok, %{content: completion.message, data: %{}}}
+            :crash -> exit(:after_model)
+            _ -> receive do: (:never -> :ok)
+          end
+
         :model ->
           with {:ok, completion} <-
                  model.(%{messages: [%{"role" => "user", "content" => "reduce"}]}) do
@@ -37,10 +47,19 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     def stream(request, _sink, opts) do
       send(opts[:owner], {:request, self(), request})
 
+      tokens =
+        if request.messages == [%{"role" => "user", "content" => "reduce"}],
+          do: opts[:reduction_tokens] || 100,
+          else: 100
+
       receive do
         {:complete, message, calls} ->
           {:ok,
-           %{message: message, tool_calls: calls, usage: %{input_tokens: 100, output_tokens: 10}}}
+           %{
+             message: message,
+             tool_calls: calls,
+             usage: %{input_tokens: tokens, output_tokens: 10}
+           }}
       end
     end
   end
@@ -187,13 +206,13 @@ defmodule Alto.Runner.BackgroundCompactionTest do
       run = RunTranscript.start_background(run)
       assert_receive {:reducer, reducer, _}, 2_000
       {:ok, run} = RunTranscript.append(run, %{"role" => "user", "content" => "late steering"})
-      task = :sys.get_state(run.background_compactor).job.task
+      task = :sys.get_state(run.compactor).job.task
       ref = Process.monitor(task.pid)
       send(reducer, :release)
       assert_receive {:DOWN, ^ref, :process, _, :normal}, 2_000
       # The task sends its result before exiting. Synchronize with its owner
       # after observing that exit so poll exercises the ready-result path.
-      await_ready(run.background_compactor)
+      await_ready(run.compactor)
       reduced = RunTranscript.poll(run)
       assert reduced.compaction_count == 1
       assert hd(reduced.messages_rev)["content"] == "late steering"
@@ -228,7 +247,7 @@ defmodule Alto.Runner.BackgroundCompactionTest do
       assert_receive {:DOWN, ^ref, :process, ^first, _}, 2_000
 
       assert {:error, :reduction_model_closed} =
-               BackgroundCompactor.reserve_model(Map.put(run, :background_reducer, true))
+               Compactor.reserve_model(Map.put(run, :compaction_model, true))
 
       run = RunTranscript.start_background(run)
       assert_receive {:reducer, second, second_input}, 2_000
@@ -257,7 +276,7 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     assert %{status: :suspended, checkpoint: packet} = paused = Alto.await(handle)
     assert_receive {:DOWN, ^ref, :process, ^reducer, _}, 2_000
     assert {:ok, decoded} = Alto.Runner.Checkpoint.decode(packet["state"])
-    refute Map.has_key?(decoded.run, :background_compactor)
+    refute Map.has_key?(decoded.run, :compactor)
     assert decoded.run.model_requests == paused.model_requests
 
     {:ok, resumed} = Alto.start("current", Keyword.put(opts, :checkpoint, {packet, :approve}))
@@ -296,6 +315,7 @@ defmodule Alto.Runner.BackgroundCompactionTest do
   end
 
   test "background model usage merges without overwriting foreground accounting", %{opts: opts} do
+    opts = Keyword.put(opts, :provider, {Provider, owner: self(), reduction_tokens: 20})
     {:ok, handle} = Alto.start("current", opts)
     assert_receive {:reducer, reducer, _}, 2_000
     assert_receive {:request, foreground, _}, 2_000
@@ -306,7 +326,8 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     assert_receive {:DOWN, ^ref, :process, ^reducer, :normal}, 2_000
     send(foreground, {:complete, "done", []})
     assert %{status: :ok, model_requests: 2, usage: usage} = Alto.await(handle)
-    assert usage.input_tokens == 200
+    assert usage.input_tokens == 120
+    assert usage.last_input_tokens == 100
     assert usage.output_tokens == 20
     assert usage.requests == 2
   end
@@ -329,17 +350,105 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     end
   end
 
-  test "compaction remains blocking unless background mode is selected", %{opts: opts} do
+  @tag capture_log: true
+  test "both reduction modes retain accounting after completion, crash, timeout and cancellation",
+       %{opts: opts} do
+    for mode <- [:blocking, :background], terminal <- [:success, :crash, :timeout, :cancel] do
+      cancel_ref = make_ref()
+
+      options =
+        opts
+        |> Keyword.update!(:compaction, &Keyword.put(&1, :mode, mode))
+        |> Keyword.merge(
+          cancel_ref: cancel_ref,
+          provider_timeout: if(terminal == :timeout, do: 500, else: 5_000)
+        )
+
+      task =
+        Task.async(fn ->
+          with_run(options, fn run ->
+            run = RunTranscript.start_background(run)
+            result = RunTranscript.reduce(run)
+
+            next =
+              case result do
+                {:ok, next} ->
+                  assert terminal == :success
+                  assert next.compaction_count == 1
+                  next
+
+                {:error, reason, next} ->
+                  assert terminal != :success
+                  if terminal == :cancel, do: assert(reason == {:cancelled, :operator})
+                  assert next.messages_rev == run.messages_rev
+                  assert next.compaction_count == 0
+                  next
+              end
+
+            assert RunTranscript.finish(next) == next
+            next
+          end)
+        end)
+
+      assert_receive {:reducer, reducer, _}, 2_000
+      monitor = Process.monitor(reducer)
+      send(reducer, {:model_then, terminal})
+      assert_receive {:request, provider, _}, 2_000
+      send(provider, {:complete, "summary", []})
+      assert_receive {:model_done, callback}, 2_000
+      if terminal == :cancel, do: send(task.pid, {:alto_cancel, cancel_ref, :operator})
+      next = Task.await(task, 2_000)
+      assert next.model_requests == 1
+      assert next.usage.input_tokens == 100
+      assert next.usage.output_tokens == 10
+      assert next.usage.requests == 1
+      assert [%{usage: %{input_tokens: 100}}] = next.provider_attempts
+      assert_receive {:DOWN, ^monitor, :process, ^reducer, _}, 2_000
+      assert {:error, :reduction_model_closed} = callback.(%{messages: []})
+      refute_received {:request, _, _}
+    end
+  end
+
+  test "standalone reductions release their coordinator on failure and success", %{opts: opts} do
+    for mode <- [:blocking, :background] do
+      opts =
+        opts
+        |> Keyword.update!(:compaction, &Keyword.put(&1, :mode, mode))
+        |> Keyword.put(:session, Alto.Session.generate_id())
+
+      {:ok, run} = Setup.open("current", opts)
+      task = Task.async(fn -> RunTranscript.reduce(run) end)
+      assert_receive {:reducer, reducer, _}, 2_000
+      send(reducer, :fail)
+      assert {:error, :cannot_reduce, next} = Task.await(task)
+      refute Compactor.enabled?(next)
+      task = Task.async(fn -> RunTranscript.reduce(next) end)
+      assert_receive {:reducer, reducer, _}, 2_000
+      send(reducer, :release)
+      assert {:ok, next} = Task.await(task)
+      refute Compactor.enabled?(next)
+      assert next.compaction_count == 1
+    end
+  end
+
+  test "default blocking mode waits for reduction before dispatching foreground work", %{
+    opts: opts
+  } do
     opts = Keyword.update!(opts, :compaction, &Keyword.delete(&1, :mode))
-    {:ok, run} = Setup.open("current", Keyword.put(opts, :session, Alto.Session.generate_id()))
-    assert run.compaction[:mode] == :blocking
-    refute BackgroundCompactor.enabled?(run)
+    {:ok, handle} = Alto.start("current", opts)
+    assert_receive {:reducer, reducer, _}, 2_000
+    refute_receive {:request, _, _}, 50
+    send(reducer, :release)
+    assert_receive {:request, foreground, request}, 2_000
+    assert Enum.any?(request.messages, &(&1["content"] == "Earlier work summarized."))
+    send(foreground, {:complete, "done", []})
+    assert %{status: :ok, output: "done"} = Alto.await(handle)
   end
 
   defp with_run(opts, fun) do
     opts = Keyword.put(opts, :session, Alto.Session.generate_id())
 
-    BackgroundCompactor.scope(opts, fn opts ->
+    Compactor.scope(opts, fn opts ->
       {:ok, run} = Setup.open("current", opts)
       fun.(run)
     end)
