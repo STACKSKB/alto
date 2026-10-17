@@ -70,10 +70,8 @@ defmodule Alto.Contrib.Command.Executors.Bubblewrap do
 
   @impl true
   def execute(%{invocation: invocation, sandbox: sandbox}) do
-    case Unsandboxed.execute(invocation) do
-      {:ok, result} -> {:ok, Map.put(result, :sandbox, sandbox)}
-      {:error, reason} -> {:error, reason}
-    end
+    with {:ok, result} <- Unsandboxed.execute(invocation),
+         do: {:ok, Map.put(result, :sandbox, sandbox)}
   end
 
   @impl true

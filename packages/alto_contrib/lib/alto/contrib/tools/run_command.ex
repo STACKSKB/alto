@@ -8,10 +8,8 @@ defmodule Alto.Contrib.Tools.RunCommand do
 
   @impl true
   def prepare(arguments, %{} = context, opts \\ []) do
-    case Alto.Contrib.Command.prepare(arguments, context, opts) do
-      {:ok, prepared} -> {:ok, prepared, prepared.approval_details}
-      {:error, reason} -> {:error, reason}
-    end
+    with {:ok, prepared} <- Alto.Contrib.Command.prepare(arguments, context, opts),
+         do: {:ok, prepared, prepared.approval_details}
   end
 
   @impl true
