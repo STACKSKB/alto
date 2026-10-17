@@ -55,12 +55,12 @@ defmodule Alto.Contrib.Retry.Transient do
   # Match the observed structured transient error, not arbitrary provider text
   # or loosely coerced codes. HTTP 200 SSE errors do not carry an HTTP status.
   defp stream_error_kind({:transport_error, _reason}), do: :transport
-  defp stream_error_kind({:http_error, 429, _detail}), do: {:http, 429}
-  defp stream_error_kind({:http_error, 429, _detail, _metadata}), do: {:http, 429}
-  defp stream_error_kind({:http_error, status, _detail}) when status >= 500, do: {:http, status}
 
-  defp stream_error_kind({:http_error, status, _detail, _metadata}) when status >= 500,
+  defp stream_error_kind({:http_error, status, _detail}) when status == 429 or status >= 500,
     do: {:http, status}
+
+  defp stream_error_kind({:http_error, status, detail, _metadata}),
+    do: stream_error_kind({:http_error, status, detail})
 
   defp stream_error_kind(
          {:provider_error,
@@ -101,14 +101,9 @@ defmodule Alto.Contrib.Retry.Transient do
   defp body_headers(%{"metadata" => %{"headers" => headers}}), do: headers
   defp body_headers(_), do: nil
 
-  defp header_pairs(headers) when is_list(headers) do
-    Enum.flat_map(headers, fn
-      {key, value} -> [{key, value}]
-      _ -> []
-    end)
-  end
+  defp header_pairs(headers) when is_list(headers) or is_map(headers),
+    do: for({key, value} <- headers, do: {key, value})
 
-  defp header_pairs(headers) when is_map(headers), do: Enum.to_list(headers)
   defp header_pairs(_), do: []
 
   defp normalize_key(key) when is_binary(key) and byte_size(key) <= 80 do
@@ -121,15 +116,11 @@ defmodule Alto.Contrib.Retry.Transient do
   defp normalize_value(value), do: value
 
   defp parse_retry_after(value, now_ms) do
-    case bounded_string(value) do
-      nil ->
-        nil
-
-      raw ->
-        case Integer.parse(String.trim(raw)) do
-          {seconds, ""} when seconds >= 0 -> min(seconds * 1_000, 60_001)
-          _ -> parse_http_date(raw, now_ms)
-        end
+    with raw when is_binary(raw) <- bounded_string(value) do
+      case Integer.parse(String.trim(raw)) do
+        {seconds, ""} when seconds >= 0 -> min(seconds * 1_000, 60_001)
+        _ -> parse_http_date(raw, now_ms)
+      end
     end
   end
 
@@ -141,21 +132,17 @@ defmodule Alto.Contrib.Retry.Transient do
   end
 
   defp parse_reset(value, now_ms) do
-    case bounded_string(value) do
-      nil ->
-        nil
+    with raw when is_binary(raw) <- bounded_string(value) do
+      case Float.parse(String.trim(raw)) do
+        {number, ""} when number >= 1.0e12 ->
+          min(max(trunc(number) - now_ms, 0), 60_001)
 
-      raw ->
-        case Float.parse(String.trim(raw)) do
-          {number, ""} when number >= 1.0e12 ->
-            min(max(trunc(number) - now_ms, 0), 60_001)
+        {number, ""} when number >= 0 ->
+          min(max(ceil(number * 1_000 - now_ms), 0), 60_001)
 
-          {number, ""} when number >= 0 ->
-            min(max(ceil(number * 1_000 - now_ms), 0), 60_001)
-
-          _ ->
-            nil
-        end
+        _ ->
+          nil
+      end
     end
   end
 
