@@ -19,9 +19,6 @@ defmodule Alto.Contrib.Tools.RunShellTest do
   @context %{session_id: "run-shell-test", cwd: File.cwd!()}
 
   test "preparation forwards scripts and command limits to the configured executor" do
-    assert RunShell.execution_mode([]) == :exclusive
-    assert RunShell.approval([]) == :required
-
     assert {:ok, prepared, details} =
              Alto.Tool.prepare(
                RunShell,

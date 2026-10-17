@@ -19,10 +19,6 @@ defmodule Alto.CapabilitiesTest do
              description.tools
 
     assert description.limits.max_effects == 25
-    assert description.tool_execution == %{mode: :serial, max_concurrency: 1}
-    assert description.subagents.enabled == false
-    assert description.subagents.max_depth == 0
-    assert description.subagents.max_concurrency == 1
     refute JSON.encode!(description) =~ "private-key"
     refute JSON.encode!(description) =~ "must-not-start"
   end

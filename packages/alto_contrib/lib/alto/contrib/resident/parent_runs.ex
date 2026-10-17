@@ -12,30 +12,24 @@ defmodule Alto.Contrib.Resident.ParentRuns do
   def bindings(name \\ Service), do: Service.component(name, :parent_bindings)
 
   def children(config, name) do
+    # Parent frames need the checkpoint envelope; larger child retention limits
+    # also apply to the aggregate packet.
+    parent_bytes = max(3_000_000, config.child_runs[:max_batch_bytes])
+    task_limit = config.scheduling[:max_tasks]
+
     Enum.map(
       [
-        {ledger(name), "parent-continuations"},
-        {budgets(name), "task-budgets"},
-        {bindings(name), "parent-bindings"}
+        {ledger(name), "parent-continuations", config.child_runs[:max_retained], parent_bytes},
+        {budgets(name), "task-budgets", task_limit, 3_000_000},
+        {bindings(name), "parent-bindings", task_limit, 3_000_000}
       ],
-      fn {server, id} ->
-        # Parent frames need the existing checkpoint envelope; larger child
-        # retention settings also apply to the unified aggregate packet.
-        envelope_bytes =
-          if id == "parent-continuations",
-            do: max(3_000_000, config.child_runs[:max_batch_bytes]),
-            else: 3_000_000
-
+      fn {server, id, limit, envelope_bytes} ->
         Supervisor.child_spec(
           {OperationLog,
            name: server,
            id: id,
            dir: Path.join(config.state_dir, "operations"),
-           max_ops:
-             if(id == "parent-continuations",
-               do: config.child_runs[:max_retained],
-               else: config.scheduling[:max_tasks]
-             ),
+           max_ops: limit,
            max_log_bytes: config.child_runs[:max_log_bytes],
            max_recovery_bytes: envelope_bytes,
            max_record_bytes: envelope_bytes * 2},
@@ -66,10 +60,7 @@ defmodule Alto.Contrib.Resident.ParentRuns do
   end
 
   def inspect_task(config, profile, id, binding \\ nil, name \\ Service) do
-    with {:ok, opts} <- Config.resolve(config, profile),
-         :ok <- matches_binding(opts, binding),
-         store when not is_nil(store) <- Keyword.get(opts, :continuation_store),
-         {:ok, candidate} <- latest(store, id, name, is_nil(Keyword.get(opts, :budget_account))) do
+    with {:ok, _store, candidate} <- candidate(config, profile, id, binding, name) do
       candidate
     else
       nil -> nil
@@ -80,11 +71,8 @@ defmodule Alto.Contrib.Resident.ParentRuns do
   end
 
   def recoverable(config, profile, id, requested, binding, name \\ Service) do
-    with {:ok, opts} <- Config.resolve(config, profile),
-         :ok <- matches_binding(opts, binding),
-         store when not is_nil(store) <- Keyword.get(opts, :continuation_store),
-         {:ok, candidate} when not is_nil(candidate) <-
-           latest(store, id, name, is_nil(Keyword.get(opts, :budget_account))),
+    with {:ok, store, candidate} when not is_nil(candidate) <-
+           candidate(config, profile, id, binding, name),
          true <-
            requested["key"] == candidate.identity["key"] and
              requested["generation"] == candidate.identity["generation"] and
@@ -97,17 +85,14 @@ defmodule Alto.Contrib.Resident.ParentRuns do
     else
       false -> {:error, :stale_or_claimed_parent_continuation}
       nil -> {:error, :parent_recovery_not_enabled}
-      {:ok, nil} -> {:error, :parent_continuation_not_found}
+      {:ok, _, nil} -> {:error, :parent_continuation_not_found}
       {:error, _} = error -> error
     end
   end
 
   def decide_child(config, payload, requested, name \\ Service) do
-    with {:ok, opts} <- Config.resolve(config, payload["profile"]),
-         :ok <- matches_binding(opts, payload["parent_store"]),
-         store when not is_nil(store) <- Keyword.get(opts, :continuation_store),
-         {:ok, candidate} when not is_nil(candidate) <-
-           latest(store, payload["id"], name, is_nil(Keyword.get(opts, :budget_account))),
+    with {:ok, store, candidate} when not is_nil(candidate) <-
+           candidate(config, payload["profile"], payload["id"], payload["parent_store"], name),
          true <- candidate.phase == :children,
          {:ok, cell} <-
            Continuation.restore(store, candidate.identity),
@@ -131,10 +116,18 @@ defmodule Alto.Contrib.Resident.ParentRuns do
        }}
     else
       false -> {:error, :stale_or_mismatched_child_continuation}
-      {:ok, nil} -> {:error, :parent_continuation_not_found}
+      {:ok, _, nil} -> {:error, :parent_continuation_not_found}
       {:error, _} = error -> error
       _ -> {:error, :invalid_child_decision}
     end
+  end
+
+  defp candidate(config, profile, id, binding, name) do
+    with {:ok, opts} <- Config.resolve(config, profile),
+         :ok <- matches_binding(opts, binding),
+         store when not is_nil(store) <- Keyword.get(opts, :continuation_store),
+         {:ok, candidate} <- latest(store, id, name, is_nil(Keyword.get(opts, :budget_account))),
+         do: {:ok, store, candidate}
   end
 
   def store_binding(opts) do
