@@ -773,39 +773,29 @@ defmodule Alto.Contrib.FrontEnd.Registry do
   # Checkpoint packets are accepted only through this trusted Elixir API.
   # Socket start_run never accepts continuation state or approval decisions.
   defp execution_session_opts(opts, config_opts, state) do
-    case Keyword.get(opts, :continuation) do
-      nil ->
-        checkpoint_session_opts(opts, state)
+    case {opts[:continuation], opts[:checkpoint], opts[:resume]} do
+      {nil, nil, resume} ->
+        resume_opts(resume, state)
 
-      identity ->
-        with true <-
-               is_nil(Keyword.get(opts, :checkpoint)) and is_nil(Keyword.get(opts, :resume)),
-             {:ok, resolved} <-
+      {nil, {%{"session_id" => session} = packet, decision}, _}
+      when decision in [:approve, :deny] ->
+        with :ok <- Alto.Session.validate_id(session),
+             do: {:ok, [session: session, checkpoint: {packet, decision}]}
+
+      {nil, _, _} ->
+        {:error, :invalid_checkpoint}
+
+      {identity, nil, nil} ->
+        with {:ok, resolved} <-
                Alto.Runner.Execution.Parent.options(
                  Keyword.put(config_opts, :continuation, identity)
                ),
              session = Keyword.get(resolved, :session),
-             :ok <- Alto.Session.validate_id(session) do
-          {:ok, [session: session, continuation: identity]}
-        else
-          false -> {:error, :conflicting_continuation_options}
-          {:error, _} = error -> error
-        end
-    end
-  end
-
-  defp checkpoint_session_opts(opts, state) do
-    case Keyword.get(opts, :checkpoint) do
-      nil ->
-        resume_opts(Keyword.get(opts, :resume), state)
-
-      {%{"session_id" => session} = packet, decision} when decision in [:approve, :deny] ->
-        with :ok <- Alto.Session.validate_id(session) do
-          {:ok, [session: session, checkpoint: {packet, decision}]}
-        end
+             :ok <- Alto.Session.validate_id(session),
+             do: {:ok, [session: session, continuation: identity]}
 
       _ ->
-        {:error, :invalid_checkpoint}
+        {:error, :conflicting_continuation_options}
     end
   end
 
