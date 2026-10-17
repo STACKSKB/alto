@@ -67,14 +67,7 @@ defmodule Alto.TUI.App do
   end
 
   @impl true
-  def handle_event(event, state) do
-    pending? = Map.get(state, :stream_events, []) != []
-
-    case do_handle_event(event, flush_stream(state)) do
-      {:noreply, next, opts} when pending? -> {:noreply, next, Keyword.put(opts, :render?, true)}
-      result -> result
-    end
-  end
+  def handle_event(event, state), do: dispatch(event, state, &do_handle_event/2)
 
   defp do_handle_event(event, state) do
     event = Alto.TUI.DragInput.latest(event, state.drag_poll)
@@ -366,11 +359,12 @@ defmodule Alto.TUI.App do
 
   def handle_info({:tui_stream_frame, _}, state), do: {:noreply, state, render?: false}
 
-  def handle_info(message, state) do
-    pending? = Map.get(state, :stream_events, []) != []
-    result = do_handle_info(message, flush_stream(state))
+  def handle_info(message, state), do: dispatch(message, state, &do_handle_info/2)
 
-    case result do
+  defp dispatch(message, state, handler) do
+    pending? = Map.get(state, :stream_events, []) != []
+
+    case handler.(message, flush_stream(state)) do
       {:noreply, next, opts} when pending? -> {:noreply, next, Keyword.put(opts, :render?, true)}
       other -> other
     end
