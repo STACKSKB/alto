@@ -55,9 +55,9 @@ codec for unusual runtime values; it does not call back into Session. Complex ma
 keys share the protocol's key encoder. A bounded display projection is retained
 only for opaque runtime values and complex keys, not ordinary text bodies.
 
-[Session.event_data/1](../lib/alto/session.ex) handles compatibility with old
-exact-only and dual-body records. Recovery, socket replay, saved-session usage
-and child activity readers use it. Old logs remain readable and are not rewritten.
+[Session.event_data/1](../lib/alto/session.ex) projects the typed event tree for
+recovery, socket replay, saved-session usage and child activity. The October 18
+cleanup removed replay of old exact-only and dual-body events; no migration is provided.
 For a synthetic 32 KiB text event, the complete record fell from **76,688 B to
 32,987 B (57.0%)**, with exact round-trip and fresh-VM replay verified.
 

@@ -22,16 +22,6 @@ defmodule Alto.SessionEventDataTest do
     assert length(:binary.matches(JSON.encode!(record), "body")) == 500
   end
 
-  test "legacy exact-only and dual records still replay" do
-    data = %{message: "legacy", kind: :tool}
-
-    assert Session.event_data(%{"data" => Session.encode_term(data)}) ==
-             {:ok, Protocol.encode_term(data)}
-
-    assert Session.event_data(%{"wire_data" => %{"message" => "saved"}, "data" => %{}}) ==
-             {:ok, %{"message" => "saved"}}
-  end
-
   test "safe exact decoding rejects opaque functions and compressed ETF" do
     record =
       Session.event_record("run", Event.durable(:model_completed, %{callback: fn -> :ok end}))

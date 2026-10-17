@@ -125,8 +125,7 @@ defmodule Alto.Contrib.Listeners.Connection do
     Alto.Result.traverse(records, fn record ->
       case Alto.Session.event_data(record) do
         {:ok, data} ->
-          {:ok,
-           record |> Map.delete("wire_data") |> Map.put("data", data) |> Protocol.encode_term()}
+          {:ok, record |> Map.put("data", data) |> Protocol.encode_term()}
 
         {:error, reason} ->
           {:error, {:session_event_payload, reason}}

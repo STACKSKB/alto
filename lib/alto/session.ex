@@ -163,14 +163,9 @@ defmodule Alto.Session do
       {:error, {:too_large, size, max}} ->
         {:error, {:session_too_large, id, size, max}}
 
-      {:error, {:session_corrupt, _, _}} = corrupt ->
-        corrupt
-
-      {:error, {:invalid_session_id, _}} = invalid ->
-        invalid
-
-      {:error, {:session_unsettled_tool_dispatch, _}} = unsettled ->
-        unsettled
+      {:error, reason} = error
+      when elem(reason, 0) in ~w(session_corrupt invalid_session_id session_unsettled_tool_dispatch)a ->
+        error
 
       {:error, reason} ->
         {:error, {:session_read_failed, reason}}
@@ -317,15 +312,9 @@ defmodule Alto.Session do
 
   def decode_term(other), do: {:error, {:invalid_term_payload, other}}
 
-  @doc "Project either generation of saved event data without creating atoms."
-  def event_data(%{"wire_data" => data}), do: {:ok, data}
-
-  def event_data(%{"data" => %{"$event_term" => 1} = data}),
+  @doc "Project saved event data without creating atoms."
+  def event_data(%{"data" => data}),
     do: Alto.Persistence.EventCodec.project(data, max_bytes: @max_log_bytes)
-
-  def event_data(%{"data" => data}) do
-    with {:ok, term} <- decode_term(data), do: {:ok, Alto.TermProjection.encode_term(term)}
-  end
 
   def event_data(_), do: {:error, :invalid_event_data}
 
@@ -554,11 +543,20 @@ defmodule Alto.Session do
   end
 
   defp summarize(id, opts) do
-    with {:ok, records} <- read(id, opts) do
-      started = for %{"type" => "started", "session_owner" => true} = r <- records, do: r
-      completed = for %{"type" => "completed", "session_owner" => true} = r <- records, do: r
-      first = List.first(started, %{})
+    reducer = fn
+      %{"type" => "started", "session_owner" => true} = record,
+      {first, runs, completed, status} ->
+        {if(runs == 0, do: record, else: first), runs + 1, completed, status}
 
+      %{"type" => "completed", "session_owner" => true} = record, {first, runs, completed, _} ->
+        {first, runs, completed + 1, record["status"]}
+
+      _, acc ->
+        acc
+    end
+
+    with {:ok, {first, runs, completed, status}} <-
+           scan_records(id, opts, {%{}, 0, 0, nil}, reducer) do
       {:ok,
        %{
          id: id,
@@ -566,9 +564,9 @@ defmodule Alto.Session do
          task: first["task"],
          parent_session_id: first["parent_session_id"],
          agent_identity: first["agent_identity"],
-         runs: length(started),
-         completed_runs: length(completed),
-         last_status: List.last(completed, %{})["status"]
+         runs: runs,
+         completed_runs: completed,
+         last_status: status
        }}
     end
   end

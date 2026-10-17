@@ -37,7 +37,8 @@ defmodule Alto.Integration.SessionsTest do
     assert {:ok, records} = Session.read(first.session_id, session_dir: c.dir)
     assert Enum.count(records, &(&1["type"] == "completed")) == 2
     assert {:ok, sessions} = Session.list(session_dir: c.dir)
-    assert Enum.any?(sessions, &(&1.id == first.session_id))
+    summary = Enum.find(sessions, &(&1.id == first.session_id))
+    assert %{task: "first", runs: 2, completed_runs: 2, last_status: "ok"} = summary
     assert {:ok, page} = Session.events(first.session_id, limit: 1, session_dir: c.dir)
     assert length(page.events) == 1
 
