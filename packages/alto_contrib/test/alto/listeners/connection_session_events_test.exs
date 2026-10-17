@@ -1,14 +1,13 @@
 defmodule Alto.Contrib.Listeners.ConnectionSessionEventsTest do
   use ExUnit.Case, async: true
+  @moduletag :tmp_dir
 
   alias Alto.Event
   alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
   alias Alto.Session
 
-  test "fresh VM replays projection without creating atoms from stored terms" do
-    dir = Path.join(System.tmp_dir!(), "alto-fresh-replay-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  test "fresh VM replays projection without creating atoms from stored terms", %{tmp_dir: dir} do
     key = "only_in_original_vm_#{System.unique_integer([:positive])}"
     data = %{String.to_atom(key) => "survives restart"}
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
@@ -48,14 +47,7 @@ defmodule Alto.Contrib.Listeners.ConnectionSessionEventsTest do
     assert hd(reply["events"])["data"] == %{key => "survives restart"}
   end
 
-  test "oversized transcript replies fail explicitly instead of timing out" do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-reply-bound-#{Base.encode16(:crypto.strong_rand_bytes(8))}"
-      )
-
-    on_exit(fn -> File.rm_rf!(dir) end)
+  test "oversized transcript replies fail explicitly instead of timing out", %{tmp_dir: dir} do
     {:ok, id} = Session.create("task", %{}, session_dir: dir)
     message = %{"role" => "user", "content" => String.duplicate("x", 4_000)}
     {:ok, _snapshot} = Session.persist_settled(id, [message], 4_000, session_dir: dir)

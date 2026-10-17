@@ -36,10 +36,10 @@ defmodule Alto.Runner.MultimodalTest do
 
   defp content, do: Alto.Content.new([Alto.Content.image("image/png", @png, 1, 1)])
 
-  test "typed image survives execution, parallel batches and transcript persistence" do
-    dir = Path.join(System.tmp_dir!(), "alto-vision-run-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @tag :tmp_dir
+  test "typed image survives execution, parallel batches and transcript persistence", %{
+    tmp_dir: dir
+  } do
     assert %Alto.Runner.Result{status: :ok} =
              result =
              Alto.Contrib.run("inspect",

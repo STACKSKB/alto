@@ -1,15 +1,13 @@
 defmodule Alto.Contrib.CatalogRecoveryTest do
   use ExUnit.Case, async: false
+  @moduletag :tmp_dir
 
   import ExUnit.CaptureIO
 
   alias Alto.Contrib.Catalog
   alias Alto.TUI.State
 
-  test "invalid TUI settings fail before registering a project" do
-    root = Path.join(System.tmp_dir!(), "alto-tui-config-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  test "invalid TUI settings fail before registering a project", %{tmp_dir: root} do
     path = Path.join(root, "harness.json")
     config = Alto.Test.TUI.config(tui: [narrow_context_width: 101])
 
@@ -20,10 +18,7 @@ defmodule Alto.Contrib.CatalogRecoveryTest do
     refute File.exists?(path)
   end
 
-  test "an invalid catalog is replaced only after a warning and confirmation" do
-    root = Path.join(System.tmp_dir!(), "alto-tui-recovery-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  test "an invalid catalog is replaced only after a warning and confirmation", %{tmp_dir: root} do
     path = Path.join(root, "harness.json")
     old = JSON.encode!(%{"version" => 2, "projects" => [%{"id" => "old"}], "tasks" => []})
     File.write!(path, old)
@@ -51,10 +46,7 @@ defmodule Alto.Contrib.CatalogRecoveryTest do
     assert File.read!(path) == current
   end
 
-  test "the Mix entry point warns and exits cleanly when overwrite is declined" do
-    root = Path.join(System.tmp_dir!(), "alto-tui-entry-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  test "the Mix entry point warns and exits cleanly when overwrite is declined", %{tmp_dir: root} do
     catalog = Path.join(root, "harness.json")
     config = Path.join(root, "config.exs")
     invalid = ~s({"version":2,"projects":[],"tasks":[{"title":42}]})
@@ -73,10 +65,7 @@ defmodule Alto.Contrib.CatalogRecoveryTest do
     assert File.read!(catalog) == invalid
   end
 
-  test "malformed tasks in a current-version catalog reach the recovery prompt" do
-    root = Path.join(System.tmp_dir!(), "alto-tui-shape-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  test "malformed tasks in a current-version catalog reach the recovery prompt", %{tmp_dir: root} do
     path = Path.join(root, "harness.json")
 
     File.write!(

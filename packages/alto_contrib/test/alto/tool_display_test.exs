@@ -2,10 +2,10 @@ defmodule Alto.ToolDisplayTest do
   use ExUnit.Case, async: true
   alias Alto.Contrib.ToolDisplay
 
-  test "edit and write results contain actual unified diffs and render real newlines" do
-    root = Path.join(System.tmp_dir!(), "alto-diff-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @tag :tmp_dir
+  test "edit and write results contain actual unified diffs and render real newlines", %{
+    tmp_dir: root
+  } do
     File.write!(Path.join(root, "a.txt"), "before\n")
     context = %{cwd: root, session_id: "diff-test"}
 

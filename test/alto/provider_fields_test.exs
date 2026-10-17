@@ -27,9 +27,10 @@ defmodule Alto.ProviderFieldsTest do
     end
   end
 
-  test "opaque provider metadata survives resume without replacing message structure" do
-    dir = Path.join(System.tmp_dir!(), "alto-reasoning-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @tag :tmp_dir
+  test "opaque provider metadata survives resume without replacing message structure", %{
+    tmp_dir: dir
+  } do
     opts = [provider: {Provider, owner: self()}, tools: [], session: :new, session_dir: dir]
     assert %Alto.Runner.Result{status: :ok} = first = Alto.run("hello", opts)
     assert_receive {:reasoning_request, _}

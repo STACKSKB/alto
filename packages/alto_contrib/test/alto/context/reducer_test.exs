@@ -23,10 +23,10 @@ defmodule Alto.Context.ReducerTest do
     end
   end
 
-  test "custom reducers can call the bounded model from a Task and retain schemas" do
-    dir = Path.join(System.tmp_dir!(), "alto-reducer-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @tag :tmp_dir
+  test "custom reducers can call the bounded model from a Task and retain schemas", %{
+    tmp_dir: dir
+  } do
     assert {:ok, run} =
              Alto.Runner.Execution.Setup.open(String.duplicate("source", 100),
                provider: {Provider, owner: self()},

@@ -4,16 +4,9 @@ defmodule Alto.Contrib.Tools.IdentityTransformTest do
   alias Alto.Runner.Budget
   alias Alto.Runner.Execution.Tool, as: ExecutionTool
 
-  test "identity protected-path transform does not duplicate large write input in approval details" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-identity-transform-#{System.unique_integer([:positive])}"
-      )
-
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
-
+  @tag :tmp_dir
+  test "identity protected-path transform does not duplicate large write input in approval details",
+       %{tmp_dir: root} do
     {module, opts} = Alto.Contrib.Tools.ProtectPaths.wrap(Alto.Contrib.Tools.WriteFile, [])
     assert {:ok, tools} = Alto.Tool.Registry.build([{module, opts}])
     tool = tools["write_file"]

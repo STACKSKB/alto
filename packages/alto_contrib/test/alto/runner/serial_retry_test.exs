@@ -97,12 +97,9 @@ defmodule Alto.Runner.SerialRetryTest do
     assert retry_events() == [{1, 4, :transport}, {2, 4, :transport}]
   end
 
+  @tag :tmp_dir
   test "session diagnostics distinguish silent attempts, retries and success without request content",
-       %{agent: agent} do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-retry-diagnostics-#{System.unique_integer([:positive])}")
-
-    on_exit(fn -> File.rm_rf!(dir) end)
+       %{agent: agent, tmp_dir: dir} do
     parent = self()
 
     script = fn
@@ -174,12 +171,11 @@ defmodule Alto.Runner.SerialRetryTest do
     end
   end
 
+  @tag :tmp_dir
   test "attempt evidence preserves bounded rate hints alongside the selected retry delay", %{
-    agent: agent
+    agent: agent,
+    tmp_dir: dir
   } do
-    dir = Path.join(System.tmp_dir!(), "alto-rate-hints-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
     script = fn
       0 ->
         {:error,

@@ -3,20 +3,13 @@ defmodule Alto.AtomicFileTest do
 
   alias Alto.AtomicFile
 
+  @moduletag :tmp_dir
   setup do
-    dir = Path.join(System.tmp_dir!(), "alto-atomic-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
     original_path = System.get_env("PATH")
-
-    on_exit(fn ->
-      File.rm_rf!(dir)
-      restore_path(original_path)
-    end)
-
-    %{dir: dir}
+    on_exit(fn -> restore_path(original_path) end)
   end
 
-  test "reports post-rename directory sync failure as uncertain", %{dir: dir} do
+  test "reports post-rename directory sync failure as uncertain", %{tmp_dir: dir} do
     bin = Path.join(dir, "bin")
     File.mkdir!(bin)
     sync = Path.join(bin, "sync")

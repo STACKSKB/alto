@@ -2,10 +2,9 @@ defmodule Alto.AtomicFileBatchTest do
   use ExUnit.Case, async: true
   import Bitwise
 
-  test "independent synced objects preserve private permissions and an error leaves only a published prefix" do
-    dir = Path.join(System.tmp_dir!(), "alto-batch-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @tag :tmp_dir
+  test "independent synced objects preserve private permissions and an error leaves only a published prefix",
+       %{tmp_dir: dir} do
     one = Path.join(dir, "one")
     two = Path.join(dir, "two")
 
