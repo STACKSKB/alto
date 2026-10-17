@@ -744,51 +744,8 @@ defmodule Alto.TUI.State do
 
   def hydrate_selected(state), do: hydrate_sync(state)
 
-  defp hydrate_sync(%__MODULE__{} = state) do
-    task = selected_task(state)
-    session_id = task && task["conversation_id"]
-    backend = task && task_backend(task)
-
-    entries =
-      Map.put_new_lazy(state.entries, state.selected_task_id, fn ->
-        if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend),
-          do: load_session_entries(session_id, state.catalog_opts),
-          else: []
-      end)
-
-    usage =
-      Map.put_new_lazy(state.usage, state.selected_task_id, fn ->
-        if is_binary(session_id) and
-             Alto.TUI.Backend.ui(
-               %{state | selected_backend: backend, entries: entries},
-               :session_usage?
-             ) ==
-               true,
-           do: load_session_usage(session_id, state.catalog_opts),
-           else: Usage.new()
-      end)
-
-    sizes =
-      Map.new(entries, fn {id, entries} ->
-        {id, Map.get_lazy(state.entry_bytes, id, fn -> :erlang.external_size(entries) end)}
-      end)
-
-    state = %{state | entries: entries, entry_bytes: sizes, usage: usage}
-
-    state =
-      if is_binary(session_id) and Alto.TUI.Backend.runner?(state.run_options, backend) and
-           not Map.has_key?(state.subagents, state.selected_task_id) do
-        restore_subagents(
-          state,
-          state.selected_task_id,
-          Alto.TUI.Subagents.load(session_id, state.catalog_opts)
-        )
-      else
-        state
-      end
-
-    evict_inactive_caches(state)
-  end
+  defp hydrate_sync(state),
+    do: state |> Alto.TUI.History.hydrate(selected_task(state)) |> evict_inactive_caches()
 
   @doc false
   def load_session_entries(session_id, opts) do

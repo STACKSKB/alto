@@ -24,6 +24,9 @@ defmodule Alto.TUI.HistoryTest do
         opts
       )
 
+    event = Alto.Event.durable(:model_completed, %{usage: %{input_tokens: 17, output_tokens: 3}})
+    :ok = Alto.Session.append(session, Alto.Session.event_record("saved-run", event), opts)
+
     Code.ensure_loaded!(Alto.TUI.Backends.Native)
 
     task = %{
@@ -48,6 +51,7 @@ defmodule Alto.TUI.HistoryTest do
 
   test "selection returns before hydration and paints saved entries independently of discovery",
        %{state: state} do
+    initial = state
     state = State.select_task(state, "task-a")
     assert state.selected_task_id == "task-a"
     refute Map.has_key?(state.entries, "task-a")
@@ -64,6 +68,12 @@ defmodule Alto.TUI.HistoryTest do
     {:noreply, state} = App.handle_info({:DOWN, monitor, :process, pid, :normal}, state)
     assert state.history_load == nil
     assert State.select_task(state, "task-a").history_load == nil
+
+    sync = State.select_task(%{initial | async_history?: false}, "task-a")
+    caches = [:entries, :entry_bytes, :usage, :subagents, :subagent_bytes]
+    assert Map.take(sync, caches) == Map.take(state, caches)
+    assert State.current_usage(sync).total_tokens == 20
+    assert State.hydrate_selected(sync) == sync
   end
 
   test "rapid switching cancels obsolete work and ignores queued results", %{
