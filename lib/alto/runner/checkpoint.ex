@@ -534,17 +534,14 @@ defmodule Alto.Runner.Checkpoint do
     ]
   end
 
-  defp fingerprint_data(%_{} = resource) do
-    if Alto.Resource.implementation?(resource),
-      do: resource |> stable_resource() |> fingerprint_data(),
+  defp fingerprint_data(value) when is_map(value) do
+    if Alto.Resource.implementation?(value),
+      do: value |> stable_resource() |> fingerprint_data(),
       else:
-        resource
+        value
         |> Map.to_list()
         |> Map.new(fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
   end
-
-  defp fingerprint_data(value) when is_map(value),
-    do: Map.new(Map.to_list(value), fn {k, v} -> {fingerprint_data(k), fingerprint_data(v)} end)
 
   defp fingerprint_data(value) when is_tuple(value),
     do: value |> Tuple.to_list() |> Enum.map(&fingerprint_data/1) |> List.to_tuple()
