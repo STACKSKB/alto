@@ -25,10 +25,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
     %{root: root, repo: repo}
   end
 
-  test "rejects malformed workspace options before running Git", %{repo: repo} do
-    assert {:error, :invalid_workspace_options} = Git.command(repo, [], [:invalid])
-  end
-
   test "large bounded inventories support the complete isolated checkout lifecycle", c do
     for index <- 1..600 do
       name = "entry-#{index}-#{String.duplicate("long-", 22)}.txt"

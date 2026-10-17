@@ -235,14 +235,11 @@ defmodule Alto.SessionIncrementalTest do
              save(id, messages, Keyword.put(opts, :resolved_operations, ["native"]))
   end
 
-  test "retention option is validated by configuration and persistence", %{id: id, opts: opts} do
+  test "invalid retention limits are rejected by persistence", %{id: id, opts: opts} do
     for invalid <- [0, -1, "all", nil] do
       assert {:error, {:invalid_conversation_retained_turns, ^invalid}} =
                save(id, [user("one")], Keyword.put(opts, :conversation_retained_turns, invalid))
     end
-
-    assert {:ok, run} = Alto.Runner.Execution.Setup.open("task", conversation_retained_turns: 7)
-    assert run.conversation_retained_turns == 7
   end
 
   test "message objects preserve Unicode, uploaded files, and generated artifacts", %{

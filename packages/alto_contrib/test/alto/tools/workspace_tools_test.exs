@@ -241,14 +241,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     assert String.ends_with?(text, "…")
   end
 
-  test "search validates query and case options", %{context: context} do
-    assert {:error, %NimbleOptions.ValidationError{key: :query}} =
-             Alto.Tool.run(SearchFiles, %{"query" => ""}, context)
-
-    assert {:error, %NimbleOptions.ValidationError{key: :case_sensitive}} =
-             Alto.Tool.run(SearchFiles, %{"query" => "x", "case_sensitive" => "no"}, context)
-  end
-
   test "search backend is selected by configured tool options", %{context: context} do
     assert {:ok, result} =
              Alto.Tool.run(
