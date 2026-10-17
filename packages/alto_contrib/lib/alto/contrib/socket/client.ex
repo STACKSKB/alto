@@ -11,9 +11,12 @@ defmodule Alto.Contrib.Socket.Client do
   use GenServer
 
   @default_timeout 5_000
-  @default_max_line_bytes 1_048_576
-  @default_max_pending 100
-  @default_max_events 1_000
+  @bounds [
+    max_line_bytes: 1_048_576,
+    max_pending: 100,
+    max_events: 1_000,
+    max_event_bytes: 8_000_000
+  ]
 
   defstruct [:pid]
 
@@ -76,17 +79,11 @@ defmodule Alto.Contrib.Socket.Client do
 
   @impl true
   def init({path, opts, owner}) do
-    max_line_bytes = Keyword.get(opts, :max_line_bytes, @default_max_line_bytes)
-    max_pending = Keyword.get(opts, :max_pending, @default_max_pending)
-    max_events = Keyword.get(opts, :max_events, @default_max_events)
-    max_event_bytes = Keyword.get(opts, :max_event_bytes, 8_000_000)
+    bounds = Map.new(@bounds, fn {key, default} -> {key, Keyword.get(opts, key, default)} end)
     timeout = Keyword.get(opts, :connect_timeout, @default_timeout)
 
     with true <- is_pid(owner),
-         true <- valid_bound?(max_line_bytes),
-         true <- valid_bound?(max_pending),
-         true <- valid_bound?(max_events),
-         true <- valid_bound?(max_event_bytes) and valid_timeout?(timeout),
+         true <- Enum.all?(Map.values(bounds), &valid_bound?/1) and valid_timeout?(timeout),
          {:ok, socket} <-
            :gen_tcp.connect(
              {:local, path},
@@ -95,22 +92,17 @@ defmodule Alto.Contrib.Socket.Client do
                :binary,
                active: false,
                packet: :line,
-               packet_size: max_line_bytes + 1,
-               buffer: max_line_bytes + 1
+               packet_size: bounds.max_line_bytes + 1,
+               buffer: bounds.max_line_bytes + 1
              ],
              timeout
            ) do
       :ok = :inet.setopts(socket, active: :once)
 
       {:ok,
-       %{
+       Map.merge(bounds, %{
          socket: socket,
-         owner_pid: owner,
          owner_ref: Process.monitor(owner),
-         max_line_bytes: max_line_bytes,
-         max_pending: max_pending,
-         max_events: max_events,
-         max_event_bytes: max_event_bytes,
          event_bytes: 0,
          closed: nil,
          events: :queue.new(),
@@ -118,7 +110,7 @@ defmodule Alto.Contrib.Socket.Client do
          waiters: :queue.new(),
          pending: %{},
          next_id: 1
-       }}
+       })}
     else
       false -> {:stop, :invalid_bounds}
       {:error, reason} -> {:stop, reason}

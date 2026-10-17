@@ -154,47 +154,35 @@ defmodule Alto.Contrib.Socket.ClientTest do
     assert {:error, :invalid_envelope} = Alto.Contrib.Socket.Client.next(client, 0)
   end
 
-  test "event count overflow is explicit rather than silently dropping" do
-    {path, listener} = socket_fixture()
-    parent = self()
+  for {bound, limits} <- [count: [max_events: 1], bytes: [max_event_bytes: 1]] do
+    @tag limits: limits
+    test "event #{bound} overflow closes the socket instead of dropping notifications", %{
+      limits: limits
+    } do
+      {path, listener} = socket_fixture()
+      parent = self()
 
-    spawn(fn ->
-      {:ok, socket} = :gen_tcp.accept(listener)
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
 
-      send_json(socket, [
-        %{"v" => 1, "type" => "event", "id" => "e-1"},
-        %{"v" => 1, "type" => "event", "id" => "e-2"},
-        %{"v" => 1, "type" => "event", "id" => "e-3"}
-      ])
+        events =
+          for id <- 1..3,
+              do: %{
+                "v" => 1,
+                "type" => "event",
+                "id" => "e-#{id}",
+                "data" => String.duplicate("x", 100)
+              }
 
-      send(parent, {:overflow_closed, :gen_tcp.recv(socket, 0, 1_000)})
-    end)
+        send_json(socket, events)
+        send(parent, {:overflow_closed, :gen_tcp.recv(socket, 0, 1_000)})
+      end)
 
-    {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_events: 1)
-    assert_receive {:overflow_closed, {:error, :closed}}, 1_500
-    assert {:error, :event_buffer_overflow} = Alto.Contrib.Socket.Client.next(client)
-    Alto.Contrib.Socket.Client.close(client)
-  end
-
-  test "event byte overflow is explicit" do
-    {path, listener} = socket_fixture()
-
-    spawn(fn ->
-      {:ok, socket} = :gen_tcp.accept(listener)
-
-      send_json(socket, [
-        %{"v" => 1, "type" => "event", "id" => "e-1", "data" => String.duplicate("x", 100)},
-        %{"v" => 1, "type" => "event", "id" => "e-2", "data" => String.duplicate("x", 100)}
-      ])
-
-      receive do
-        :close -> :gen_tcp.close(socket)
-      end
-    end)
-
-    {:ok, client} = Alto.Contrib.Socket.Client.connect(path, max_event_bytes: 1)
-    assert eventually_overflow(client)
-    Alto.Contrib.Socket.Client.close(client)
+      {:ok, client} = Alto.Contrib.Socket.Client.connect(path, limits)
+      assert_receive {:overflow_closed, {:error, :closed}}, 1_500
+      assert {:error, :event_buffer_overflow} = Alto.Contrib.Socket.Client.next(client)
+      Alto.Contrib.Socket.Client.close(client)
+    end
   end
 
   test "owner death closes the socket" do
@@ -273,18 +261,6 @@ defmodule Alto.Contrib.Socket.ClientTest do
       {:DOWN, ^ref, :process, ^pid, _reason} -> true
     after
       1_000 -> false
-    end
-  end
-
-  defp eventually_overflow(client, attempts \\ 3)
-  defp eventually_overflow(_client, 0), do: false
-
-  defp eventually_overflow(client, attempts) do
-    case Alto.Contrib.Socket.Client.next(client, 500) do
-      {:error, :event_buffer_overflow} -> true
-      {:ok, _event} -> eventually_overflow(client, attempts - 1)
-      {:error, :closed} -> false
-      {:error, _reason} -> eventually_overflow(client, attempts - 1)
     end
   end
 end
