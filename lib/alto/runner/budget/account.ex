@@ -108,31 +108,20 @@ defmodule Alto.Runner.Budget.Account do
   end
 
   @doc false
-  def snapshot(%{initial: initial, packet: packet} = current) do
-    with :ok <- valid_initial(initial), :ok <- valid_packet(packet, initial), do: {:ok, current}
-  end
-
-  defp valid_initial(initial) when is_map(initial) do
-    if Enum.sort(Map.keys(initial)) == Enum.sort(@limits) and
-         Enum.all?(@limits, &valid_cap?(initial[&1])),
-       do: :ok,
-       else: {:error, :invalid_budget_account}
-  end
-
-  defp valid_initial(_), do: {:error, :invalid_budget_account}
-
-  defp valid_packet(packet, initial) when is_map(packet) do
-    if map_size(packet) == 4 and
+  def snapshot(%{initial: initial, packet: packet} = current)
+      when is_map(initial) and is_map(packet) do
+    if map_size(initial) == 2 and map_size(packet) == 4 and
+         Enum.all?(@limits, &valid_cap?(initial[&1])) and
          Enum.all?(@limits, &(valid_cap?(packet[&1]) and packet[&1] <= initial[&1])) and
          Enum.all?(Enum.zip(@counters, @limits), fn {counter, cap} ->
            is_integer(packet[counter]) and packet[counter] >= 0 and
              packet[counter] <= initial[cap]
          end),
-       do: :ok,
+       do: {:ok, current},
        else: {:error, :invalid_budget_account}
   end
 
-  defp valid_packet(_, _), do: {:error, :invalid_budget_account}
+  def snapshot(_), do: {:error, :invalid_budget_account}
 
   defp limits(opts) do
     with true <- Keyword.keyword?(opts),
