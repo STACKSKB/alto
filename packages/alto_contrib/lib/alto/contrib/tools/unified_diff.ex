@@ -56,19 +56,12 @@ defmodule Alto.Contrib.Tools.UnifiedDiff do
   defp hunk_ranges(records) do
     max_index = length(records) - 1
 
-    records
-    |> Enum.with_index()
-    |> Enum.flat_map(fn
-      {{:eq, _line, _old, _new}, _index} ->
-        []
-
-      {_record, index} ->
-        [{max(0, index - @context_lines), min(max_index, index + @context_lines)}]
-    end)
+    for(
+      {{kind, _, _, _}, index} <- Enum.with_index(records),
+      kind != :eq,
+      do: {max(0, index - @context_lines), min(max_index, index + @context_lines)}
+    )
     |> Enum.reduce([], fn
-      range, [] ->
-        [range]
-
       {first, last}, [{previous_first, previous_last} | rest]
       when first <= previous_last + 1 ->
         [{previous_first, max(previous_last, last)} | rest]

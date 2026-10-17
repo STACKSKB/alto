@@ -1322,7 +1322,7 @@ defmodule Alto.TUI.App do
         text =
           for(%{"type" => "text", "text" => text} <- data.message, do: text) |> Enum.join("\n")
 
-        last = State.current_entries(%{state | selected_task_id: task_id}) |> List.last()
+        last = state |> State.task_entries(task_id) |> List.last()
 
         cond do
           text == "" -> state

@@ -347,15 +347,15 @@ defmodule Alto.Contrib.Resident.Tasks do
 
   def handle_info(:repair_admissions, state) do
     pending =
-      Enum.reduce(state.pending_admissions, MapSet.new(), fn id, waiting ->
+      MapSet.filter(state.pending_admissions, fn id ->
         result =
           if OperationLog.request(state.ledger, {:status, id}) == {:intended},
             do: repair_admission(state, id),
             else: :ok
 
         case result do
-          :ok -> waiting
-          {:error, :queue_full} -> MapSet.put(waiting, id)
+          :ok -> false
+          {:error, :queue_full} -> true
           {:error, reason} -> exit({:task_admission_failed, id, reason})
         end
       end)
