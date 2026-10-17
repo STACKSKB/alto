@@ -289,9 +289,7 @@ defmodule Alto.OperationLog do
 
   defp evictable?(_entry), do: false
 
-  defp validate_key(key) when is_binary(key) do
-    if byte_size(key) in 1..@max_key_bytes, do: :ok, else: {:error, {:invalid_op_key, key}}
-  end
+  defp validate_key(key) when is_binary(key) and byte_size(key) in 1..@max_key_bytes, do: :ok
 
   defp validate_key(key), do: {:error, {:invalid_op_key, key}}
 

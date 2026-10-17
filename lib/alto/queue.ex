@@ -479,9 +479,8 @@ defmodule Alto.Queue do
   defp validate_due(at) when is_integer(at) and at >= 0, do: :ok
   defp validate_due(_at), do: {:error, :bad_entry}
 
-  defp validate_key(key, state) when is_binary(key) do
-    if byte_size(key) in 1..state.max_key_bytes, do: :ok, else: {:error, {:invalid_key, key}}
-  end
+  defp validate_key(key, state) when is_binary(key) and byte_size(key) in 1..state.max_key_bytes,
+    do: :ok
 
   defp validate_key(key, _state), do: {:error, {:invalid_key, key}}
 

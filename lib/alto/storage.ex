@@ -123,14 +123,8 @@ defmodule Alto.Storage do
           end
         end
 
-      case result do
-        {:ok, _pid} ->
-          result
-
-        error ->
-          release(lock)
-          error
-      end
+      unless match?({:ok, _pid}, result), do: release(lock)
+      result
     end
   end
 
@@ -161,8 +155,7 @@ defmodule Alto.Storage do
   def ensure_private_file(path) when is_binary(path) do
     case File.open(path, [:write, :binary, :exclusive]) do
       {:ok, io} ->
-        result = File.close(io)
-        if result == :ok, do: File.chmod(path, 0o600), else: result
+        with :ok <- File.close(io), do: File.chmod(path, 0o600)
 
       {:error, :eexist} ->
         File.chmod(path, 0o600)
