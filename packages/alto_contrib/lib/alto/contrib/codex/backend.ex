@@ -24,7 +24,7 @@ defmodule Alto.Contrib.Codex.Backend do
 
   @doc "Connect, subscribe the caller, and read the current account snapshot."
   def connect(opts \\ [], subscriber \\ self()) do
-    client_opts = client_options(opts) |> Keyword.put(:instance, subscriber)
+    client_opts = Keyword.take(opts, @client_keys) |> Keyword.put(:instance, subscriber)
 
     with {:ok, client} <- Client.ensure_started(client_opts),
          :ok <- Client.subscribe(client, subscriber),
@@ -133,22 +133,22 @@ defmodule Alto.Contrib.Codex.Backend do
 
   @doc "Translate typed input to App Server text, image and audio parts."
   def user_input(%Alto.Content{blocks: blocks}) do
-    Enum.flat_map(blocks, fn
+    Enum.map(blocks, fn
       %{"type" => "text", "text" => text} ->
-        [%{"type" => "text", "text" => text}]
+        %{"type" => "text", "text" => text}
 
       %{"type" => "image", "media_type" => media, "data" => data} ->
-        [%{"type" => "image", "url" => "data:#{media};base64,#{data}"}]
+        %{"type" => "image", "url" => "data:#{media};base64,#{data}"}
 
       %{"type" => "file", "media_type" => "audio/" <> _ = media, "data" => data} ->
-        [%{"type" => "audio", "url" => "data:#{media};base64,#{data}"}]
+        %{"type" => "audio", "url" => "data:#{media};base64,#{data}"}
 
       block ->
         # App Server has no document input part. Keep a private local copy so
         # Codex can inspect it with its own file tools within its permissions.
         case Alto.Contrib.Attachment.materialize([block]) do
           {:ok, [file]} ->
-            [%{"type" => "text", "text" => "Attached file: #{file.name}\n#{file.path}"}]
+            %{"type" => "text", "text" => "Attached file: #{file.name}\n#{file.path}"}
 
           {:error, reason} ->
             raise ArgumentError, "Cannot stage Codex attachment: #{inspect(reason)}"
@@ -249,13 +249,8 @@ defmodule Alto.Contrib.Codex.Backend do
   defp history_turn(_turn), do: []
 
   def item_entry(%{"type" => "userMessage", "content" => content}) when is_list(content) do
-    text =
-      content
-      |> Enum.flat_map(fn
-        %{"type" => "text", "text" => text} when is_binary(text) -> [text]
-        _other -> []
-      end)
-      |> Enum.join("\n")
+    parts = for %{"type" => "text", "text" => text} <- content, is_binary(text), do: text
+    text = Enum.join(parts, "\n")
 
     if text == "", do: nil, else: %{kind: :user, text: text}
   end
@@ -300,8 +295,6 @@ defmodule Alto.Contrib.Codex.Backend do
   def item_summary(_item), do: nil
 
   defp item_detail(item), do: item |> Map.drop(["id", "type"]) |> Alto.Contrib.Display.result()
-
-  defp client_options(opts), do: Keyword.take(opts, @client_keys)
 
   defp platform_open(url) do
     candidates =

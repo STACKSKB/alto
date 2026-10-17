@@ -34,18 +34,15 @@ defmodule Alto.Contrib.Reasoning do
 
   def apply_options(options, _format, nil), do: options
 
-  def apply_options(options, :openrouter, effort),
-    do:
-      Map.update(
-        options,
-        "reasoning",
-        %{"effort" => effort, "exclude" => false},
-        &Map.merge(&1, %{"effort" => effort, "exclude" => false})
-      )
+  def apply_options(options, format, effort) when format in [:openrouter, :anthropic] do
+    {key, fields} =
+      case format do
+        :openrouter -> {"reasoning", %{"effort" => effort, "exclude" => false}}
+        :anthropic -> {"output_config", %{"effort" => effort}}
+      end
 
-  def apply_options(options, :anthropic, effort),
-    do:
-      Map.update(options, "output_config", %{"effort" => effort}, &Map.put(&1, "effort", effort))
+    Map.update(options, key, fields, &Map.merge(&1, fields))
+  end
 
   def apply_options(options, :openai, effort), do: Map.put(options, "reasoning_effort", effort)
 
@@ -60,9 +57,9 @@ defmodule Alto.Contrib.Reasoning do
   def configure_run(options, nil), do: options
 
   def configure_run(options, effort) when is_binary(effort) do
-    Keyword.update!(options, :provider, fn
-      {module, opts} -> {module, Keyword.put(opts, :reasoning_effort, effort)}
-      module when is_atom(module) -> {module, [reasoning_effort: effort]}
+    Keyword.update!(options, :provider, fn provider ->
+      {module, opts} = Alto.Capabilities.normalize(provider)
+      {module, Keyword.put(opts, :reasoning_effort, effort)}
     end)
   end
 
