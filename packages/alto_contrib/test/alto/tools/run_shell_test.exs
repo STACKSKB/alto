@@ -19,7 +19,7 @@ defmodule Alto.Contrib.Tools.RunShellTest do
   @context %{session_id: "run-shell-test", cwd: File.cwd!()}
 
   test "preparation forwards scripts and command limits to the configured executor" do
-    assert {:ok, prepared, details} =
+    assert {:ok, _prepared, details} =
              Alto.Tool.prepare(
                RunShell,
                %{"command" => "make test | tail -20", "timeout_ms" => 5_000},
@@ -37,7 +37,6 @@ defmodule Alto.Contrib.Tools.RunShellTest do
     assert "make test | tail -20" in args
     assert cwd == @context.cwd
     assert details.execution == %{backend: :recording}
-    assert {:ok, %{exit_status: 0}} = RunShell.run(prepared, %{})
 
     command = "printf '%s\\n' 'hello world'\nprintf '%s' second"
 

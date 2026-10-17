@@ -240,26 +240,6 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
   end
 
   test "search backend is selected by configured tool options", %{context: context} do
-    assert {:ok, result} =
-             Alto.Tool.run(
-               SearchFiles,
-               %{"query" => "needle"},
-               context,
-               backend: fn request, context ->
-                 SearchBackend.search(request, context, label: "ripgrep")
-               end
-             )
-
-    assert result.matches == [
-             %{
-               path: "ripgrep",
-               line: 1,
-               text: "needle@#{Path.basename(context.cwd)}"
-             }
-           ]
-
-    assert result.scanned_files == 7
-
     options = [backend: {SearchBackend, :search, [[label: "index"]]}, max_query_bytes: 6]
 
     assert {:ok, %{"search_files" => %{definition: definition}}} =

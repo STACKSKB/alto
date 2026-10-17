@@ -236,23 +236,19 @@ defmodule Alto.Contrib.External.Process do
     watchdog =
       spawn(fn ->
         Process.flag(:trap_exit, true)
-        monitor = Process.monitor(owner)
+        Process.link(owner)
         send(owner, {ready, self()})
 
         receive do
           {:disarm, ^owner} ->
             Process.unlink(owner)
-            Process.demonitor(monitor, [:flush])
-
-          {:DOWN, ^monitor, :process, ^owner, _} ->
-            kill_group(pid, kill)
 
           {:EXIT, ^owner, _} ->
             kill_group(pid, kill)
         end
       end)
 
-    receive do: ({^ready, ^watchdog} -> Process.link(watchdog))
+    receive do: ({^ready, ^watchdog} -> :ok)
     watchdog
   end
 

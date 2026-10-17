@@ -3,10 +3,9 @@ defmodule Alto.Contrib.External.ProcessTest do
 
   alias Alto.Contrib.External.Process, as: ExternalProcess
 
-  test "closing a process group stops its child and grandchild" do
-    root = Path.join(System.tmp_dir!(), "alto-process-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(root) end)
-    File.mkdir_p!(root)
+  @moduletag :tmp_dir
+
+  test "closing a process group stops its child and grandchild", %{tmp_dir: root} do
     child = Path.join(root, "child")
     grandchild = Path.join(root, "grandchild")
 
@@ -25,42 +24,40 @@ defmodule Alto.Contrib.External.ProcessTest do
     refute File.exists?(grandchild)
   end
 
-  test "an owner killed while a process is running still cleans the whole group" do
-    root =
-      Path.join(System.tmp_dir!(), "alto-process-owner-#{System.unique_integer([:positive])}")
+  for reason <- [:normal, :killed] do
+    @tag exit_reason: reason
+    test "owner #{reason} exit cleans the whole process group", %{
+      tmp_dir: root,
+      exit_reason: reason
+    } do
+      parent = self()
+      child = Path.join(root, "child")
+      grandchild = Path.join(root, "grandchild")
 
-    on_exit(fn -> File.rm_rf!(root) end)
-    File.mkdir_p!(root)
-    parent = self()
-    child = Path.join(root, "child")
-    grandchild = Path.join(root, "grandchild")
+      script =
+        "(sleep 0.2; echo child > #{child}) & (sleep 0.4; echo grandchild > #{grandchild}) & wait"
 
-    script =
-      "(sleep 0.2; echo child > #{child}) & (sleep 0.4; echo grandchild > #{grandchild}) & wait"
+      owner =
+        spawn(fn ->
+          {:ok, _process} =
+            ExternalProcess.open(System.find_executable("sh"), ["-c", script],
+              cwd: root,
+              startup_timeout: 1_000
+            )
 
-    owner =
-      spawn(fn ->
-        {:ok, _process} =
-          ExternalProcess.open(System.find_executable("sh"), ["-c", script],
-            cwd: root,
-            startup_timeout: 1_000
-          )
+          send(parent, {:process_ready, self()})
+          receive do: (:stop -> :ok)
+        end)
 
-        send(parent, {:process_ready, self()})
-        receive do: (:never -> :ok)
-      end)
-
-    assert_receive {:process_ready, ^owner}, 2_000
-    Process.exit(owner, :kill)
-    Process.sleep(600)
-    refute File.exists?(child)
-    refute File.exists?(grandchild)
+      assert_receive {:process_ready, ^owner}, 2_000
+      if reason == :normal, do: send(owner, :stop), else: Process.exit(owner, :kill)
+      Process.sleep(600)
+      refute File.exists?(child)
+      refute File.exists?(grandchild)
+    end
   end
 
-  test "stopping the MCP client cleans its child process group" do
-    root = Path.join(System.tmp_dir!(), "alto-mcp-process-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(root) end)
-    File.mkdir_p!(root)
+  test "stopping the MCP client cleans its child process group", %{tmp_dir: root} do
     child = Path.join(root, "child")
     grandchild = Path.join(root, "grandchild")
 
@@ -85,10 +82,9 @@ defmodule Alto.Contrib.External.ProcessTest do
     refute File.exists?(grandchild)
   end
 
-  test "malformed JSON-RPC startup line reports a bounded error instead of crashing" do
-    root = Path.join(System.tmp_dir!(), "alto-bad-rpc-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  test "malformed JSON-RPC startup line reports a bounded error instead of crashing", %{
+    tmp_dir: root
+  } do
     server = Path.join(root, "bad-server")
     File.write!(server, "#!/bin/sh\nprintf '%s\\n' '{\"jsonrpc\":'\n")
     File.chmod!(server, 0o755)
@@ -105,17 +101,12 @@ defmodule Alto.Contrib.External.ProcessTest do
     refute inspect(reason) =~ ~s({"jsonrpc":)
   end
 
-  test "missing and non-executable paths return startup errors" do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-missing-executable-#{System.unique_integer([:positive])}"
-      )
+  test "missing and non-executable paths return startup errors", %{tmp_dir: root} do
+    path = Path.join(root, "missing-executable")
 
     assert {:error, {:process_open_failed, :enoent}} = ExternalProcess.open(path, [])
     File.write!(path, "not executable")
     File.chmod!(path, 0o600)
-    on_exit(fn -> File.rm(path) end)
     assert {:error, {:process_open_failed, :eacces}} = ExternalProcess.open(path, [])
   end
 
