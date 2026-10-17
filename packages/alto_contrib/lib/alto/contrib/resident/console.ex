@@ -10,6 +10,8 @@ defmodule Alto.Contrib.Resident.Console do
   alias Alto.Contrib.Socket.{Client, SSH}
   alias Alto.Contrib.Resident.Config
 
+  @active_statuses ~w(running waiting queued starting awaiting_admission waiting_approval)
+
   defstruct opts: [],
             workspace_id: nil,
             workspace_root: nil,
@@ -51,8 +53,7 @@ defmodule Alto.Contrib.Resident.Console do
   def complete_folders(%{client: nil}, _path), do: {:error, :disconnected}
 
   def complete_folders(model, path) do
-    reply =
-      request(model.client, %{type: "command", name: "projects.complete", payload: %{path: path}})
+    reply = command(model.client, "projects.complete", %{path: path})
 
     folders = reply["folders"] || []
     completion = Map.get(reply, "completion", nil)
@@ -88,7 +89,7 @@ defmodule Alto.Contrib.Resident.Console do
         try do
           # Approval/result notifications are delivered regardless of domain.
           request(client, %{type: "attach", domains: ["live"]})
-          reply = request(client, %{type: "command", name: "projects.list", payload: %{}})
+          reply = command(client, "projects.list", %{})
           default = reply["default"]
 
           projects = reply["projects"]
@@ -159,7 +160,7 @@ defmodule Alto.Contrib.Resident.Console do
     do: %{model | notice: "No workspace to close"}
 
   defp do_perform(model, {:close_workspace, id}, _owner) do
-    reply = request(model.client, %{type: "command", name: "projects.close", payload: %{id: id}})
+    reply = command(model.client, "projects.close", %{id: id})
     project = reply["project"]
     task = selected(model)
 
@@ -182,10 +183,8 @@ defmodule Alto.Contrib.Resident.Console do
   end
 
   defp do_perform(model, {action, path}, _owner) when action in [:workspace, :create_workspace] do
-    command = if action == :create_workspace, do: "projects.create", else: "projects.open"
-
-    reply =
-      request(model.client, %{type: "command", name: command, payload: %{path: path}})
+    operation = if action == :create_workspace, do: "projects.create", else: "projects.open"
+    reply = command(model.client, operation, %{path: path})
 
     project = reply["project"]
 
@@ -200,7 +199,7 @@ defmodule Alto.Contrib.Resident.Console do
   defp do_perform(model, :efforts, _owner) do
     task = selected(model)
     profile = (task && task.config) || Keyword.get(model.opts, :profile, "coding")
-    info = task_command(model.client, "efforts", %{"profile" => profile})
+    info = command(model.client, "tasks.efforts", %{"profile" => profile})
 
     same_model? =
       model.effort_catalog && model.effort_catalog["profile"] == profile &&
@@ -232,14 +231,14 @@ defmodule Alto.Contrib.Resident.Console do
   end
 
   defp do_perform(model, {:command, name, payload}, _owner) do
-    request(model.client, %{type: "command", name: name, payload: payload})
+    command(model.client, name, payload)
     refresh_after_success(model, "Decision recorded")
   end
 
   defp do_perform(model, :recover, _owner) do
     case selected(model) do
       %{durable: true, id: id, revision: revision} ->
-        detail = task_command(model.client, "get", %{"id" => id})["task"]
+        detail = command(model.client, "tasks.get", %{"id" => id})["task"]
         parent = detail["parent_continuation"]
 
         if is_map(parent) and is_map(parent["identity"]) do
@@ -250,7 +249,7 @@ defmodule Alto.Contrib.Resident.Console do
               "continuation_revision" => parent["revision"]
             })
 
-          task_command(model.client, "recover", payload)
+          command(model.client, "tasks.recover", payload)
           refresh_after_success(model, "Recovery requested")
         else
           %{model | notice: "No recoverable parent continuation"}
@@ -279,15 +278,7 @@ defmodule Alto.Contrib.Resident.Console do
       byte_size(text) > 32_000 ->
         %{model | notice: "Message exceeds 32000 bytes"}
 
-      task &&
-          task.status in [
-            "running",
-            "waiting",
-            "queued",
-            "starting",
-            "awaiting_admission",
-            "waiting_approval"
-          ] ->
+      task && task.status in @active_statuses ->
         %{model | notice: "This task is still running; start a new task for independent work"}
 
       task && task.status == "requires_operator" ->
@@ -309,7 +300,7 @@ defmodule Alto.Contrib.Resident.Console do
             do: Map.put(payload, "resume", task.session_id),
             else: payload
 
-        reply = task_command(model.client, "submit", payload)
+        reply = command(model.client, "tasks.submit", payload)
         model = reset_history(%{model | selected_id: reply["task_id"]})
         refresh_after_success(model, "Sent")
     end
@@ -318,15 +309,8 @@ defmodule Alto.Contrib.Resident.Console do
   defp do_perform(model, :cancel, _owner) do
     case selected(model) do
       %{durable: true, id: id, status: status}
-      when status in [
-             "running",
-             "waiting",
-             "queued",
-             "starting",
-             "awaiting_admission",
-             "waiting_approval"
-           ] ->
-        task_command(model.client, "cancel", %{"id" => id})
+      when status in @active_statuses ->
+        command(model.client, "tasks.cancel", %{"id" => id})
         refresh_after_success(model, "Cancellation requested")
 
       %{run_id: run, status: status} when not is_nil(run) and status in ["running", "waiting"] ->
@@ -341,7 +325,7 @@ defmodule Alto.Contrib.Resident.Console do
   defp do_perform(model, {:reconcile, resolution, note}, _owner) do
     case selected(model) do
       %{durable: true, id: id, revision: revision, status: "requires_operator"} ->
-        task_command(model.client, "reconcile", %{
+        command(model.client, "tasks.reconcile", %{
           "id" => id,
           "revision" => revision,
           "resolution" => resolution,
@@ -361,7 +345,7 @@ defmodule Alto.Contrib.Resident.Console do
         %{model | notice: "Resolve this approval with the previous version before upgrading"}
 
       %{durable: true, status: "waiting_approval", id: id, revision: revision} ->
-        task_command(model.client, "decide", %{
+        command(model.client, "tasks.decide", %{
           "id" => id,
           "revision" => revision,
           "decision" => Atom.to_string(decision)
@@ -424,7 +408,7 @@ defmodule Alto.Contrib.Resident.Console do
     sessions = request(model.client, %{type: "sessions"})["sessions"]
 
     queued =
-      task_command(model.client, "list", %{
+      command(model.client, "tasks.list", %{
         "session_ids" => Enum.map(sessions, & &1["id"]),
         "ids" => if(model.selected_id, do: [model.selected_id], else: [])
       })
@@ -534,7 +518,7 @@ defmodule Alto.Contrib.Resident.Console do
   defp load_task_detail(model) do
     case selected(model) do
       %{durable: true, id: id} = task ->
-        detail = task_command(model.client, "get", %{"id" => id})["task"]
+        detail = command(model.client, "tasks.get", %{"id" => id})["task"]
 
         updated = %{
           task
@@ -553,11 +537,7 @@ defmodule Alto.Contrib.Resident.Console do
       %{workspace_loaded: false, session_id: session, id: id} = task
       when is_binary(session) ->
         project =
-          request(model.client, %{
-            type: "command",
-            name: "projects.session",
-            payload: %{session_id: session}
-          })["project"]
+          command(model.client, "projects.session", %{session_id: session})["project"]
 
         updated = %{
           task
@@ -844,8 +824,8 @@ defmodule Alto.Contrib.Resident.Console do
     |> Enum.sort_by(& &1["id"])
   end
 
-  defp task_command(client, name, payload),
-    do: request(client, %{type: "command", name: "tasks." <> name, payload: payload})
+  defp command(client, name, payload),
+    do: request(client, %{type: "command", name: name, payload: payload})
 
   defp request(client, command) do
     case Client.request(client, command) do
