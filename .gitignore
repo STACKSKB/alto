@@ -1,5 +1,6 @@
 /_build/
 /cover/
+/tmp/
 /deps/
 **/deps/
 **/_build/

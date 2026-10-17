@@ -5,11 +5,10 @@ defmodule Alto.RecoveryTest do
   alias Alto.OperationLog
   alias Alto.Queue
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-recovery-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     queue_dir = Path.join(root, "queue")
     ledger_dir = Path.join(root, "ledger")
-    on_exit(fn -> File.rm_rf!(root) end)
     %{queue_dir: queue_dir, ledger_dir: ledger_dir}
   end
 

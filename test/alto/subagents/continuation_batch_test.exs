@@ -4,9 +4,8 @@ defmodule Alto.Subagents.ContinuationTest do
   alias Alto.OperationLog
   alias Alto.Subagents.Continuation
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-journal-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     %{dir: dir, id: "journal-" <> Integer.to_string(System.unique_integer([:positive]))}
   end
 

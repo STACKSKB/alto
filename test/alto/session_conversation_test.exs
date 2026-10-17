@@ -4,9 +4,8 @@ defmodule Alto.SessionConversationTest do
   alias Alto.Context.Transcript
   alias Alto.Session
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-conversation-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     %{dir: dir}
   end
 

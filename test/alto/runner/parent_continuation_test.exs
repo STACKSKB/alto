@@ -81,9 +81,8 @@ defmodule Alto.Runner.ParentContinuationTest do
     end
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-parent-live-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     :persistent_term.put({IntegrateTool, :observer}, self())
     on_exit(fn -> :persistent_term.erase({IntegrateTool, :observer}) end)
     %{dir: dir}

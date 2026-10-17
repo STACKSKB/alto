@@ -14,9 +14,8 @@ defmodule Alto.Integration.SessionsTest do
     end
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-sessions-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     %{dir: dir, opts: [provider: {Provider, owner: self()}, session_dir: dir]}
   end
 

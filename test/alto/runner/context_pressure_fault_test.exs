@@ -47,12 +47,8 @@ defmodule Alto.Runner.ContextPressureFaultTest do
     end
   end
 
-  setup do
-    directory =
-      Path.join(System.tmp_dir!(), "alto-pressure-fault-#{System.unique_integer([:positive])}")
-
-    on_exit(fn -> File.rm_rf!(directory) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: directory} do
     messages = [
       %{"role" => "system", "content" => "system"},
       %{"role" => "user", "content" => String.duplicate("h", 600)},

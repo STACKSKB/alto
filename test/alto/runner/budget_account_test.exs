@@ -4,13 +4,10 @@ defmodule Alto.Runner.BudgetAccountTest do
   alias Alto.OperationLog
   alias Alto.Runner.Budget.Account
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-budget-account-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     ledger_opts = [id: "budget", name: nil, dir: dir, max_ops: 8]
     ledger = start_supervised!({OperationLog, ledger_opts})
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, ledger: ledger, ledger_opts: ledger_opts}
   end
 

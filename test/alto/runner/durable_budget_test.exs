@@ -21,12 +21,8 @@ defmodule Alto.Runner.DurableBudgetTest do
     end
   end
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-durable-budget-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     ledger_opts = [id: "budgets", name: nil, dir: dir]
     ledger = start_supervised!({OperationLog, ledger_opts})
     {:ok, account} = Account.open(ledger, "tree", max_effects: 10, max_model_requests: 3)

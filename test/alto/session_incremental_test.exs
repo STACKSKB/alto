@@ -3,9 +3,8 @@ defmodule Alto.SessionIncrementalTest do
   alias Alto.Session
   alias Alto.Context.Transcript
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-incremental-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     {:ok, id} = Session.create("incremental", %{}, session_dir: dir)
     %{dir: dir, id: id, opts: [session_dir: dir]}
   end

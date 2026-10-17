@@ -3,9 +3,8 @@ defmodule Alto.SessionRecoveryTest do
   alias Alto.Session
   alias Alto.Context.Transcript
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-recovery-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     opts = [session_dir: dir]
     {:ok, id} = Session.create("original task", %{run_id: "run-old"}, opts)
     messages = [%{"role" => "user", "content" => "original task"}]

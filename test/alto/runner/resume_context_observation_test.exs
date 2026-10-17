@@ -8,10 +8,8 @@ defmodule Alto.Runner.ResumeContextObservationTest do
   alias Alto.Test.ResumeContextFixture.OtherProvider
   alias Alto.Test.ResumeContextFixture.Reducer
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-resume-usage-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     opts = [
       session: "observed-resume",
       session_dir: dir,

@@ -3,12 +3,9 @@ defmodule Alto.OperationLogCheckpointUpdateTest do
 
   alias Alto.OperationLog
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-checkpoint-update-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     {:ok, pid} = OperationLog.start_link(id: "ledger", dir: dir, name: nil, max_attempts: 2)
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, name: pid}
   end
 

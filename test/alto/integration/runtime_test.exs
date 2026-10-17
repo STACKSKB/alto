@@ -62,11 +62,8 @@ defmodule Alto.Integration.RuntimeTest do
     end
   end
 
-  setup do
-    cwd = Path.join(System.tmp_dir!(), "alto-runtime-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(cwd)
-    on_exit(fn -> File.rm_rf!(cwd) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: cwd} do
     %{
       cwd: cwd,
       options: [

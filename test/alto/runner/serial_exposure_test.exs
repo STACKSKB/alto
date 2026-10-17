@@ -123,10 +123,8 @@ defmodule Alto.Runner.SerialExposureTest do
   defp parent_loop(depth, opts \\ []),
     do: Alto.loop(SpawnOnceLoop, opts ++ [subagents: Alto.Subagents.bounded(max_depth: depth)])
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-s03-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     %{dir: dir}
   end
 

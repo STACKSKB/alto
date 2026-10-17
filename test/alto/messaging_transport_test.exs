@@ -23,9 +23,8 @@ defmodule Alto.MessagingTransportTest do
     assert {:error, :transport_offline} = Input.open(transport: {Unavailable, []})
   end
 
-  setup do
-    directory = Path.join(System.tmp_dir!(), "alto-mailbox-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(directory) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: directory} do
     %{directory: directory}
   end
 

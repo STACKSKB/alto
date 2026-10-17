@@ -15,12 +15,8 @@ defmodule Alto.Runner.ResumeContextIdentityTest do
     defdelegate stream(request, sink, opts), to: Fixture.Provider
   end
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-resume-identity-#{System.unique_integer([:positive])}")
-
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     opts = [
       session: "identity-resume",
       session_dir: dir,

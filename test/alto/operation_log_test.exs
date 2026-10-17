@@ -10,11 +10,8 @@ defmodule Alto.OperationLogTest do
 
   defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-ledger-#{System.unique_integer([:positive])}")
-
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     %{dir: dir, id: "l" <> Integer.to_string(System.unique_integer([:positive]))}
   end
 

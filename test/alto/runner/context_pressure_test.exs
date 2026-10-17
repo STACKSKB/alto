@@ -27,10 +27,8 @@ defmodule Alto.Runner.ContextPressureTest do
     def handle_event(%{type: :model_completed}, state, _), do: {{:stop, :done}, state, []}
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-pressure-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     messages = [
       %{"role" => "system", "content" => "system"},
       %{"role" => "user", "content" => String.duplicate("history", 200)},

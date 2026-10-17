@@ -2,14 +2,8 @@ defmodule Alto.OperationLogCheckpointTest do
   use ExUnit.Case, async: true
   alias Alto.OperationLog
 
-  setup do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-checkpoint-" <> Integer.to_string(System.unique_integer([:positive]))
-      )
-
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     name = String.to_atom("checkpoint_" <> Integer.to_string(System.unique_integer([:positive])))
     {:ok, _} = OperationLog.start_link(id: "l", dir: dir, name: name)
     %{dir: dir, name: name}

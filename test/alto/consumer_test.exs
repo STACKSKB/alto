@@ -16,11 +16,8 @@ defmodule Alto.ConsumerTest do
 
   defp entry_keys(entries), do: Enum.map(entries, & &1.operation_key)
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-consumer-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     tag = System.unique_integer([:positive])
     qname = :"consumer_queue_#{tag}"
     lname = :"consumer_ledger_#{tag}"

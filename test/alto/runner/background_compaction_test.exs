@@ -64,10 +64,8 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     end
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-background-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     history = [
       %{"role" => "system", "content" => "system"},
       %{"role" => "user", "content" => "initial requirement"},

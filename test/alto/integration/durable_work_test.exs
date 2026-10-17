@@ -2,9 +2,8 @@ defmodule Alto.Integration.DurableWorkTest do
   use ExUnit.Case, async: true
   alias Alto.{Consumer, OperationLog, Queue}
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-durable-flow-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     clock = :atomics.new(1, [])
     :atomics.put(clock, 1, 10_000)
 

@@ -76,16 +76,9 @@ defmodule Alto.Runner.CheckpointTest do
     def load_checkpoint(_state, _spec), do: raise("checkpoint programmer error")
   end
 
-  setup do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "alto-checkpoint-#{Base.encode16(:crypto.strong_rand_bytes(8))}"
-      )
-
-    File.mkdir_p!(dir)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     File.write!(Path.join(dir, "input"), "original")
-    on_exit(fn -> File.rm_rf!(dir) end)
 
     opts = [
       cwd: dir,

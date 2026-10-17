@@ -2,8 +2,8 @@ defmodule Alto.QueueCompactionTest do
   use ExUnit.Case, async: true
   alias Alto.Queue
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-compact-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     clock = :atomics.new(1, signed: false)
     :atomics.put(clock, 1, 1_000)
 
@@ -16,7 +16,6 @@ defmodule Alto.QueueCompactionTest do
       lease_ms: 100
     ]
 
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, opts: opts, clock: clock, path: Path.join(dir, "messages.jsonl")}
   end
 
