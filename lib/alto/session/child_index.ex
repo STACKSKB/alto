@@ -25,24 +25,24 @@ defmodule Alto.Session.ChildIndex do
 
         case File.lstat(path, time: :posix) do
           {:ok, %{type: :regular} = stat} ->
-            stamp = {stat.major_device, stat.inode, stat.size, stat.mtime, stat.ctime}
+            stamp = [stat.major_device, stat.inode, stat.size, stat.mtime, stat.ctime]
 
             record =
               case Map.get(previous, name) do
-                {^stamp, record} when not is_nil(record) -> record
+                [^stamp, record] when not is_nil(record) -> record
                 _ -> Alto.Session.Children.header(path)
               end
 
-            {name, {stamp, record}}
+            {name, [stamp, record]}
 
           _ ->
-            {name, {nil, nil}}
+            {name, [nil, nil]}
         end
       end)
 
     headers =
       for name <- names,
-          {_, %{"type" => "started", "subagent" => true} = record} <- [entries[name]],
+          [_, %{"type" => "started", "subagent" => true} = record] <- [entries[name]],
           do: %{id: Path.rootname(name), started: record}
 
     if entries != previous, do: save(dir, entries)
@@ -56,20 +56,15 @@ defmodule Alto.Session.ChildIndex do
       for {name, [stamp, record]} <- entries,
           is_binary(name) and is_list(stamp) and length(stamp) == 5 and is_map(record),
           into: %{},
-          do: {name, {List.to_tuple(stamp), Alto.Retained.detach(record)}}
+          do: {name, [stamp, Alto.Retained.detach(record)]}
     else
       _ -> %{}
     end
   end
 
   defp save(dir, entries) do
-    values =
-      Map.new(entries, fn {name, {stamp, record}} ->
-        {name, [if(is_tuple(stamp), do: Tuple.to_list(stamp)), record]}
-      end)
-
     # A failed/missing cache is harmless; the next scan rebuilds it from logs.
-    Alto.Storage.write_json(cache_path(dir), %{"v" => 1, "entries" => values}, 4_000_000)
+    Alto.Storage.write_json(cache_path(dir), %{"v" => 1, "entries" => entries}, 4_000_000)
   end
 
   defp cache_path(dir), do: Path.join([dir, ".cache", "children.json"])
