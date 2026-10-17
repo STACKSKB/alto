@@ -56,6 +56,12 @@ defmodule Alto.TUI.MarkdownTest do
       %{kind: :reasoning, text: "## Next\n\nA `small` note."},
       %{kind: :assistant, text: ""},
       %{kind: :assistant, text: String.duplicate("Earlier **styled** 猫. ", 500)},
+      %{
+        kind: :assistant,
+        text:
+          "| File | Result |\n| --- | --- |\n" <>
+            Enum.map_join(1..12, "\n", &"| `file#{&1}.ex` | **猫 verified** |")
+      },
       %{kind: :user, text: "last"}
     ]
 

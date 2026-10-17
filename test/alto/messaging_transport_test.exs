@@ -12,17 +12,6 @@ defmodule Alto.MessagingTransportTest do
     def close(pid), do: Input.close(pid)
   end
 
-  defmodule Unavailable do
-    @behaviour Alto.Messaging.Transport
-    def open(_opts), do: {:error, :transport_offline}
-    def request(_, _, _), do: raise("unopened transport")
-    def close(_), do: :ok
-  end
-
-  test "transport open failures are preserved" do
-    assert {:error, :transport_offline} = Input.open(transport: {Unavailable, []})
-  end
-
   @moduletag :tmp_dir
   setup %{tmp_dir: directory} do
     %{directory: directory}

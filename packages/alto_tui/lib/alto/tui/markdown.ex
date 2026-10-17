@@ -43,7 +43,7 @@ defmodule Alto.TUI.Markdown do
   defp tail_block(block, width, height) do
     if block_bytes(block) >= @windowed_block_bytes do
       Alto.TUI.Cache.fetch({__MODULE__, :block_tails}, {width, block, height}, 256, fn ->
-        plan = layout_blocks([block], width)
+        plan = layout_parts([block], width)
         {window(plan, max(plan.rows - height, 0), height), plan.rows}
       end)
     else
@@ -55,17 +55,10 @@ defmodule Alto.TUI.Markdown do
   defp block_bytes({:code, language, source}), do: byte_size(language) + byte_size(source)
   defp block_bytes({_, source}), do: byte_size(source)
 
-  defp block_bytes({:table, headers, records}) do
-    Enum.reduce(headers, 0, &(byte_size(&1) + &2)) +
-      Enum.reduce(records, 0, fn row, size ->
-        Enum.reduce(row, size, &(byte_size(&1) + &2))
-      end)
-  end
-
   @doc "Count native wrapped rows without exporting a grid of styled cells."
   def layout(source, width) do
     Alto.TUI.Cache.fetch({__MODULE__, :layouts}, {source, max(width, 1)}, 256, fn ->
-      source |> String.split("\n") |> blocks([]) |> layout_blocks(max(width, 1))
+      source |> String.split("\n") |> blocks([]) |> layout_parts(max(width, 1))
     end)
   end
 
@@ -75,7 +68,7 @@ defmodule Alto.TUI.Markdown do
 
     parsed =
       Map.new(Enum.uniq(sources), fn source ->
-        {source, source |> String.split("\n") |> blocks([]) |> expand_tables()}
+        {source, source |> String.split("\n") |> blocks([])}
       end)
 
     frequencies = parsed |> Map.values() |> List.flatten() |> Enum.frequencies()
@@ -108,9 +101,7 @@ defmodule Alto.TUI.Markdown do
     end)
   end
 
-  defp layout_blocks(blocks, width), do: layout_parts(expand_tables(blocks), width, %{})
-
-  defp layout_parts(blocks, width, metrics) do
+  defp layout_parts(blocks, width, metrics \\ %{}) do
     {parts, rows} =
       blocks
       |> Enum.map_reduce(0, fn block, offset ->
@@ -306,15 +297,7 @@ defmodule Alto.TUI.Markdown do
     session = CellSession.new(width + 1, height)
 
     try do
-      :ok =
-        CellSession.draw(session, [
-          {native_widget(block, content_source(block), offset),
-           %Rect{width: width, height: height}}
-        ])
-
-      CellSession.take_cells(session).cells
-      |> Enum.chunk_every(width + 1)
-      |> Enum.map(&Enum.take(&1, width))
+      native_page(session, block, content_source(block), width, height, offset)
       |> styled_rows()
     after
       CellSession.close(session)
@@ -328,7 +311,7 @@ defmodule Alto.TUI.Markdown do
     end)
   end
 
-  defp blocks([], acc), do: Enum.reverse(acc)
+  defp blocks([], acc), do: acc |> Enum.reverse() |> expand_tables()
   defp blocks(["" | rest], acc), do: blocks(rest, acc)
 
   defp blocks([line | rest], acc) do
@@ -456,13 +439,6 @@ defmodule Alto.TUI.Markdown do
 
   defp render_block({:code, language, code}, width) do
     [code_label(language, width) | code_rows(materialize({:code, language, code}, width), width)]
-  end
-
-  defp render_block({:table, _, _} = table, width) do
-    expand_tables([table])
-    |> Enum.map(&materialize(&1, width))
-    |> Enum.intersperse([Line.new([])])
-    |> List.flatten()
   end
 
   defp bold_lines(lines) do
