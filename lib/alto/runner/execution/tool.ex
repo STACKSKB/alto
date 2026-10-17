@@ -14,27 +14,18 @@ defmodule Alto.Runner.Execution.Tool do
   @doc "Prepare one invocation and return the opaque value and display-safe details."
   def prepare(%{module: module, opts: opts} = tool, arguments, caps) do
     transforms = Map.get(tool, :transforms, [])
-    Code.ensure_loaded!(module)
 
-    if transforms != [] or function_exported?(module, :prepare, 3) or
-         function_exported?(module, :arguments, 1) do
-      case Call.run(
+    with {:ok, prepared, details} <-
+           Call.run(
              fn ->
                Alto.Tool.prepare(module, arguments, Alto.Tool.context(caps), opts, transforms)
              end,
              Budget.timeout(caps.budget, caps.tool_timeout),
              caps.cancel_ref
            ) do
-        {:ok, prepared, details} ->
-          if :erlang.external_size(details) <= caps.max_approval_details_bytes,
-            do: {:ok, prepared, details},
-            else: {:error, {:approval_details_limit, caps.max_approval_details_bytes}}
-
-        {:error, _} = error ->
-          error
-      end
-    else
-      {:ok, arguments, %{}}
+      if :erlang.external_size(details) <= caps.max_approval_details_bytes,
+        do: {:ok, prepared, details},
+        else: {:error, {:approval_details_limit, caps.max_approval_details_bytes}}
     end
   end
 
