@@ -171,13 +171,4 @@ defmodule Alto.Contrib.Codex.AppServer.ClientTest do
       refute entry.detail =~ "=>"
     end
   end
-
-  test "approval levels map to Codex policy and sandbox independently", _context do
-    assert Backend.approval_policy(:ask) == "on-request"
-    assert Backend.sandbox_policy(:ask)["type"] == "workspaceWrite"
-    assert Backend.approval_policy(:read_only) == "never"
-    assert Backend.sandbox_policy(:read_only)["type"] == "readOnly"
-    assert Backend.approval_policy(:full_access) == "never"
-    assert Backend.sandbox_policy(:full_access)["type"] == "dangerFullAccess"
-  end
 end

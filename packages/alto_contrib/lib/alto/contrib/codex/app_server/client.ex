@@ -51,14 +51,14 @@ defmodule Alto.Contrib.Codex.AppServer.Client do
   @doc "Reply to a server-initiated request such as an approval prompt."
   @spec respond(pid(), String.t() | integer(), map()) :: :ok | {:error, term()}
   def respond(client, id, result) when (is_binary(id) or is_integer(id)) and is_map(result) do
-    JSONRPC.call(client, {:respond, id, result})
+    JSONRPC.call(client, {:respond, id, "result", result})
   end
 
   @doc "Reject a server-initiated request that Alto cannot safely service."
   @spec reject(pid(), String.t() | integer(), integer(), String.t()) :: :ok | {:error, term()}
   def reject(client, id, code \\ -32601, message \\ "unsupported by Alto")
       when (is_binary(id) or is_integer(id)) and is_integer(code) and is_binary(message) do
-    JSONRPC.call(client, {:reject, id, code, message})
+    JSONRPC.call(client, {:respond, id, "error", %{"code" => code, "message" => message}})
   end
 
   def account(client), do: request(client, "account/read", %{"refreshToken" => false})
@@ -119,19 +119,9 @@ defmodule Alto.Contrib.Codex.AppServer.Client do
     JSONRPC.handle_request(state, method, params, from, deadline)
   end
 
-  def handle_call({:respond, id, result}, _from, %{phase: :ready} = state) do
-    {:reply, JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "id" => id, "result" => result}),
+  def handle_call({:respond, id, field, value}, _from, %{phase: :ready} = state) do
+    {:reply, JSONRPC.send_payload(state, %{"jsonrpc" => "2.0", "id" => id, field => value}),
      state}
-  end
-
-  def handle_call({:reject, id, code, message}, _from, %{phase: :ready} = state) do
-    payload = %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "error" => %{"code" => code, "message" => message}
-    }
-
-    {:reply, JSONRPC.send_payload(state, payload), state}
   end
 
   def handle_call(_request, _from, state),

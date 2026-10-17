@@ -335,7 +335,7 @@ defmodule Alto.Messaging do
 
   defp dispatch({:restore, saved}, %{kind: :agent, id: root}, state) do
     if valid_saved?(saved, root) and map_size(Map.merge(state.entries, saved)) <= 256 do
-      result =
+      {reply, next} =
         Enum.reduce_while(saved, {:ok, state}, fn {id, value}, {:ok, acc} ->
           case restore_entry(acc, id, value) do
             {:ok, entry} ->
@@ -353,10 +353,7 @@ defmodule Alto.Messaging do
           end
         end)
 
-      case result do
-        {:ok, next} -> {:reply, :ok, next}
-        {error, next} -> {:reply, error, next}
-      end
+      {:reply, reply, next}
     else
       {:reply, {:error, :invalid_messaging_snapshot}, state}
     end
