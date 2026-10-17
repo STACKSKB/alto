@@ -1535,7 +1535,7 @@ defmodule Alto.TUI.App do
   end
 
   defp select_overlay(%{overlay: overlay} = state) do
-    case Enum.at(Menu.items(overlay), overlay.index) do
+    case Menu.selected(overlay) do
       nil ->
         state
 
@@ -1652,7 +1652,7 @@ defmodule Alto.TUI.App do
   defp handle_mouse(state, %Mouse{kind: "down", button: "left", x: x, y: y}) do
     {width, height} = state.dimensions
 
-    activate_target(state, View.hit_target(state, width, height, x, y), x)
+    activate_target(state, View.hit_target(state, width, height, x, y))
   end
 
   defp handle_mouse(state, %Mouse{kind: "drag", x: x}) do
@@ -1683,11 +1683,11 @@ defmodule Alto.TUI.App do
 
   defp handle_mouse(state, _mouse), do: state
 
-  defp activate_target(state, :search_prev, _x), do: search_move(state, -1)
-  defp activate_target(state, :search_next, _x), do: search_move(state, 1)
-  defp activate_target(state, :search_close, _x), do: Search.close(state)
+  defp activate_target(state, :search_prev), do: search_move(state, -1)
+  defp activate_target(state, :search_next), do: search_move(state, 1)
+  defp activate_target(state, :search_close), do: Search.close(state)
 
-  defp activate_target(state, {:search_result, index}, _x),
+  defp activate_target(state, {:search_result, index}),
     do:
       state
       |> Search.select(index)
@@ -1695,13 +1695,13 @@ defmodule Alto.TUI.App do
       |> Map.put(:focus, :transcript)
       |> View.reveal_search()
 
-  defp activate_target(state, seam, _x) when seam in [:left_seam, :right_seam],
+  defp activate_target(state, seam) when seam in [:left_seam, :right_seam],
     do: %{state | dragging: seam}
 
-  defp activate_target(state, :new_workspace, _x), do: open_workspace_form(state)
-  defp activate_target(state, {:close_workspace, id}, _x), do: State.close_workspace(state, id)
+  defp activate_target(state, :new_workspace), do: open_workspace_form(state)
+  defp activate_target(state, {:close_workspace, id}), do: State.close_workspace(state, id)
 
-  defp activate_target(state, {:rail_row, row}, _x) do
+  defp activate_target(state, {:rail_row, row}) do
     selected = state |> State.select_rail_row(row) |> backend_action(:prepare)
 
     case row do
@@ -1710,26 +1710,26 @@ defmodule Alto.TUI.App do
     end
   end
 
-  defp activate_target(state, {:setting, :entry_mode}, _x), do: toggle_composer_mode(state)
-  defp activate_target(state, {:setting, :details}, _x), do: toggle_details(state)
-  defp activate_target(state, {:setting, kind}, _x), do: open_overlay(state, kind)
+  defp activate_target(state, {:setting, :entry_mode}), do: toggle_composer_mode(state)
+  defp activate_target(state, {:setting, :details}), do: toggle_details(state)
+  defp activate_target(state, {:setting, kind}), do: open_overlay(state, kind)
 
-  defp activate_target(state, pane, _x) when pane in [:composer, :transcript, :details],
+  defp activate_target(state, pane) when pane in [:composer, :transcript, :details],
     do: %{state | focus: pane}
 
-  defp activate_target(state, target, _x)
+  defp activate_target(state, target)
        when target in [:details_close, :details_drawer_outside],
        do: State.close_details_drawer(state)
 
-  defp activate_target(state, {:approval, decision}, _x),
+  defp activate_target(state, {:approval, decision}),
     do: decide_approval(%{state | focus: :details}, approval_decision(decision))
 
-  defp activate_target(%{overlay: form} = state, {:folder_suggestion, index}, _x),
+  defp activate_target(%{overlay: form} = state, {:folder_suggestion, index}),
     do: %{state | overlay: Menu.complete_folder(form, Enum.at(form.suggestions, index))}
 
-  defp activate_target(state, {:overlay_row, row}, _x), do: handle_overlay_click(state, row)
-  defp activate_target(state, :overlay_outside, _x), do: close_overlay(state)
-  defp activate_target(state, _target, _x), do: state
+  defp activate_target(state, {:overlay_row, row}), do: handle_overlay_click(state, row)
+  defp activate_target(state, :overlay_outside), do: close_overlay(state)
+  defp activate_target(state, _target), do: state
 
   defp scroll_details(state, delta),
     do: %{

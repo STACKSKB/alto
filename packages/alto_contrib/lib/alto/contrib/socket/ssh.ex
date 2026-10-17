@@ -222,24 +222,16 @@ defmodule Alto.Contrib.Socket.SSH do
     dir =
       Path.join(System.tmp_dir!(), "alto_resident-ssh-#{random_suffix()}")
 
-    case File.mkdir(dir) do
-      :ok ->
-        case {File.chmod(dir, 0o700), ensure_absent(Path.join(dir, "forward.sock"))} do
-          {:ok, :ok} ->
-            {:ok, dir, Path.join(dir, "forward.sock")}
+    with :ok <- File.mkdir(dir) do
+      case File.chmod(dir, 0o700) do
+        :ok ->
+          {:ok, dir, Path.join(dir, "forward.sock")}
 
-          {chmod_result, absent_result} ->
-            File.rm_rf(dir)
-            if chmod_result != :ok, do: chmod_result, else: absent_result
-        end
-
-      error ->
-        error
+        error ->
+          File.rm_rf(dir)
+          error
+      end
     end
-  end
-
-  defp ensure_absent(path) do
-    if File.exists?(path), do: {:error, :socket_already_exists}, else: :ok
   end
 
   defp random_suffix do
