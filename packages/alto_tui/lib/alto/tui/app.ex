@@ -745,13 +745,13 @@ defmodule Alto.TUI.App do
         {:ok, state}
 
       nil ->
-        case Alto.Input.open(
-               transport: state.run_options[:messaging_transport],
-               max_bytes: 16_000_000,
-               id: "task-" <> task_id
-             ) do
-          {:ok, input} -> {:ok, put_in(state.inputs[task_id], input)}
-          {:error, reason} -> {:error, reason}
+        with {:ok, input} <-
+               Alto.Input.open(
+                 transport: state.run_options[:messaging_transport],
+                 max_bytes: 16_000_000,
+                 id: "task-" <> task_id
+               ) do
+          {:ok, put_in(state.inputs[task_id], input)}
         end
     end
   end
@@ -992,10 +992,8 @@ defmodule Alto.TUI.App do
 
     opts = Keyword.put(state.catalog_opts, :backend, Atom.to_string(state.selected_backend))
 
-    case Catalog.create_task(state.selected_project_id, title, opts) do
-      {:ok, task} -> {:ok, State.put_task(state, task), task}
-      {:error, reason} -> {:error, reason}
-    end
+    with {:ok, task} <- Catalog.create_task(state.selected_project_id, title, opts),
+         do: {:ok, State.put_task(state, task), task}
   end
 
   def ensure_task(state, _prompt), do: {:ok, state, State.selected_task(state)}

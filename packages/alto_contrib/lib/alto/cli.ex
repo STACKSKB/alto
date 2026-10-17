@@ -215,16 +215,11 @@ defmodule Alto.Contrib.CLI do
          {:ok, listener_specs} <- serve_listener_specs(config, options),
          {:ok, queue} <- start_serve_queue(config),
          registry_opts = serve_registry_opts(config, queue, base_options),
-         {:ok, registry} <- Registry.start_link(registry_opts) do
-      case start_serve_listeners(listener_specs, registry) do
-        {:ok, descriptions} ->
-          Enum.each(descriptions, &IO.puts(:stderr, "alto: " <> &1))
-          IO.puts(:stderr, "alto: serving configuration as \"default\" (Ctrl-C to stop)")
-          Process.sleep(:infinity)
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+         {:ok, registry} <- Registry.start_link(registry_opts),
+         {:ok, descriptions} <- start_serve_listeners(listener_specs, registry) do
+      Enum.each(descriptions, &IO.puts(:stderr, "alto: " <> &1))
+      IO.puts(:stderr, "alto: serving configuration as \"default\" (Ctrl-C to stop)")
+      Process.sleep(:infinity)
     end
   end
 
@@ -369,18 +364,15 @@ defmodule Alto.Contrib.CLI do
 
   defp setup(_options, []) do
     if Onboarding.terminal?() do
-      case Onboarding.resolve(
-             force: true,
-             interactive: true,
-             api_key: environment_api_key(),
-             provider: {OpenAICompatible, default_provider_options()}
-           ) do
-        {:ok, %{model: model}} ->
-          IO.puts(:stderr, "OpenRouter setup complete. Default model: #{model}")
-          :ok
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, %{model: model}} <-
+             Onboarding.resolve(
+               force: true,
+               interactive: true,
+               api_key: environment_api_key(),
+               provider: {OpenAICompatible, default_provider_options()}
+             ) do
+        IO.puts(:stderr, "OpenRouter setup complete. Default model: #{model}")
+        :ok
       end
     else
       {:error, "--setup requires an interactive terminal"}

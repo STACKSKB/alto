@@ -9,10 +9,8 @@ defmodule Alto.Runner.Execution do
 
   @doc "Check cancellation and the shared deadline without executing an effect."
   def check(context) do
-    case Alto.Runner.Execution.Call.cancellation(context.cancel_ref) do
-      :continue -> Alto.Runner.Budget.check(context.budget)
-      cancelled -> cancelled
-    end
+    with :continue <- Alto.Runner.Execution.Call.cancellation(context.cancel_ref),
+         do: Alto.Runner.Budget.check(context.budget)
   end
 
   @doc "Build a terminal outcome when a scheduler stops before its next effect."
@@ -771,38 +769,34 @@ defmodule Alto.Runner.Execution do
             do: Map.put(assistant, "alto_provider_metadata", completion.metadata),
             else: assistant
 
-        case RunTranscript.append(run, assistant) do
-          {:ok, run} ->
-            run = add_pending_provider_calls(run, calls)
+        with {:ok, run} <- RunTranscript.append(run, assistant) do
+          run = add_pending_provider_calls(run, calls)
 
-            if calls == [] and message in [nil, "", []] do
-              {:error,
-               {:reasoning_only_model_response,
-                %{
-                  terminal_status: Map.get(completion, :terminal_status, :incomplete),
-                  finish_reason: completion[:finish_reason],
-                  usage: completion.usage,
-                  usage_known: completion[:usage_known],
-                  metadata: Map.get(completion, :metadata, %{})
-                }}, run}
-            else
-              event =
-                Event.durable(:model_completed, %{
-                  message: message,
-                  reasoning: Map.get(completion, :reasoning),
-                  tool_calls: calls,
-                  usage: completion.usage,
-                  usage_known: completion[:usage_known],
-                  finish_reason: completion[:finish_reason],
-                  terminal_status: completion[:terminal_status],
-                  metadata: Map.get(completion, :metadata, %{})
-                })
+          if calls == [] and message in [nil, "", []] do
+            {:error,
+             {:reasoning_only_model_response,
+              %{
+                terminal_status: Map.get(completion, :terminal_status, :incomplete),
+                finish_reason: completion[:finish_reason],
+                usage: completion.usage,
+                usage_known: completion[:usage_known],
+                metadata: Map.get(completion, :metadata, %{})
+              }}, run}
+          else
+            event =
+              Event.durable(:model_completed, %{
+                message: message,
+                reasoning: Map.get(completion, :reasoning),
+                tool_calls: calls,
+                usage: completion.usage,
+                usage_known: completion[:usage_known],
+                finish_reason: completion[:finish_reason],
+                terminal_status: completion[:terminal_status],
+                metadata: Map.get(completion, :metadata, %{})
+              })
 
-              {:event, event, run}
-            end
-
-          {:error, reason, run} ->
-            {:error, reason, run}
+            {:event, event, run}
+          end
         end
     end
   end
@@ -1083,10 +1077,8 @@ defmodule Alto.Runner.Execution do
           # Agent operations have crossed the dispatch boundary too. Retain an
           # unknown outcome before stopping, so cancellation cannot strand the
           # conversation behind an unresolved operation fence.
-          case commit_tool_outcome(job, {:unknown, reason}, next) do
-            {:event, event, settled} -> {:error, reason, Events.record(settled, event)}
-            {:error, _, _} = error -> error
-          end
+          with {:event, event, settled} <- commit_tool_outcome(job, {:unknown, reason}, next),
+               do: {:error, reason, Events.record(settled, event)}
 
         {:error, reason, next} ->
           outcome =
