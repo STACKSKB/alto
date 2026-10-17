@@ -630,12 +630,12 @@ defmodule Alto.TUI.State do
     visible = visible_focuses(state)
 
     next =
-      1..length(@focuses)
-      |> Enum.map(&Integer.mod(start + &1 * step, length(@focuses)))
-      |> Enum.map(&Enum.at(@focuses, &1))
-      |> Enum.find(&(&1 in visible))
+      Enum.find_value(1..length(@focuses), :composer, fn offset ->
+        focus = Enum.at(@focuses, Integer.mod(start + offset * step, length(@focuses)))
+        if focus in visible, do: focus
+      end)
 
-    %{state | focus: next || :composer}
+    %{state | focus: next}
   end
 
   @doc "Move focus away from a pane omitted by the responsive layout."

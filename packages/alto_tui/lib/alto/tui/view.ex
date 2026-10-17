@@ -891,17 +891,12 @@ defmodule Alto.TUI.View do
   defp segment_span(segment),
     do: Span.new(segment.text, style: style(fg: :white, bg: @panel_alt, modifiers: [:bold]))
 
+  defp selected_rail_index(_state, []), do: nil
+
   defp selected_rail_index(state, rows) do
     target = state.selected_task_id || state.selected_project_id
-
-    case Enum.find_index(rows, &(&1.id == target)) do
-      nil -> safe_selected(0, rows)
-      index -> index
-    end
+    Enum.find_index(rows, &(&1.id == target)) || 0
   end
-
-  defp safe_selected(_index, []), do: nil
-  defp safe_selected(index, items), do: index |> max(0) |> min(length(items) - 1)
 
   defp block(title, focused?) do
     %Block{
