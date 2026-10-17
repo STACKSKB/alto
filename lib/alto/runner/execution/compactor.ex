@@ -26,12 +26,7 @@ defmodule Alto.Runner.Execution.Compactor do
 
   defp with_server(fun) do
     {:ok, pid} = GenServer.start_link(__MODULE__, nil)
-
-    try do
-      fun.(pid)
-    after
-      if Process.alive?(pid), do: GenServer.stop(pid)
-    end
+    Call.with_server(pid, fun)
   end
 
   def background?(run), do: is_list(run.compaction) and run.compaction[:mode] == :background

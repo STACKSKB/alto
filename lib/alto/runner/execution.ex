@@ -54,11 +54,9 @@ defmodule Alto.Runner.Execution do
     case Alto.Messaging.scope(opts, fn opts ->
            {:ok, agents} = Alto.Runner.Agents.start_link(self())
 
-           try do
+           Call.with_server(agents, fn agents ->
              run_with_input(task, Keyword.put(opts, :async_agents, agents), scheduler)
-           after
-             if Process.alive?(agents), do: GenServer.stop(agents)
-           end
+           end)
          end) do
       {:error, reason} -> Result.error(reason)
       outcome -> outcome

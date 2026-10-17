@@ -11,6 +11,15 @@ defmodule Alto.Runner.Execution.Call do
     end)
   end
 
+  @doc "Run with an owned server, stopping it on return or exception."
+  def with_server(pid, fun) do
+    try do
+      fun.(pid)
+    after
+      if Process.alive?(pid), do: GenServer.stop(pid)
+    end
+  end
+
   @doc """
   Return the participant's value under a deadline and cancellation boundary.
   Infrastructure failures return `{:error, {:participant_failed, reason}}`;

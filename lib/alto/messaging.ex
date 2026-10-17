@@ -114,11 +114,7 @@ defmodule Alto.Messaging do
       nil ->
         {:ok, router} = start_link(owner: self(), transport: opts[:messaging_transport])
 
-        try do
-          open_scope(router, opts, fun)
-        after
-          if Process.alive?(router), do: GenServer.stop(router)
-        end
+        Alto.Runner.Execution.Call.with_server(router, &open_scope(&1, opts, fun))
 
       other ->
         {:error, {:invalid_option, :messaging, other}}

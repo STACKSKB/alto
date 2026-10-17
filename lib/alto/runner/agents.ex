@@ -8,11 +8,7 @@ defmodule Alto.Runner.Agents do
     runner = Keyword.get(opts, :runner, Runner)
     {:ok, pid} = GenServer.start(__MODULE__, {self(), specs, concurrency, start, runner, opts})
 
-    try do
-      await_batch(pid, check)
-    after
-      if Process.alive?(pid), do: GenServer.stop(pid)
-    end
+    Alto.Runner.Execution.Call.with_server(pid, &await_batch(&1, check))
   end
 
   defp await_batch(pid, check) do

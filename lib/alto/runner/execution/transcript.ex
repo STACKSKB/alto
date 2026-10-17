@@ -204,7 +204,7 @@ defmodule Alto.Runner.Execution.Transcript do
       fn ->
         {:ok, accounting} = Agent.start_link(fn -> run end)
 
-        try do
+        Call.with_server(accounting, fn accounting ->
           model = fn request ->
             try do
               request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
@@ -220,9 +220,7 @@ defmodule Alto.Runner.Execution.Transcript do
           end
 
           {:compacted, module.compact(input, model, opts)}
-        after
-          if Process.alive?(accounting), do: Agent.stop(accounting)
-        end
+        end)
       end,
       Budget.timeout(run.budget, run.provider_timeout),
       run.cancel_ref

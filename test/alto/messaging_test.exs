@@ -1,6 +1,28 @@
 defmodule Alto.MessagingTest do
   use ExUnit.Case, async: true
 
+  test "scoped execution releases owned routers on return and exception but keeps borrowed routers" do
+    {:ok, borrowed} = Alto.Messaging.start_link()
+
+    for options <- [[], [messaging: borrowed]], outcome <- [:return, :raise] do
+      execute = fn ->
+        Alto.Messaging.scope(options, fn opts ->
+          send(self(), {:scope_router, opts[:messaging].router})
+          if outcome == :raise, do: raise("execution failed"), else: :finished
+        end)
+      end
+
+      if outcome == :raise,
+        do: assert_raise(RuntimeError, "execution failed", execute),
+        else: assert(execute.() == :finished)
+
+      assert_receive {:scope_router, router}
+      assert Process.alive?(router) == (router == borrowed)
+    end
+
+    GenServer.stop(borrowed)
+  end
+
   test "router attributes parent and ancestor authority without trusting message claims" do
     {:ok, router} = Alto.Messaging.start_link()
     {:ok, root} = Alto.Messaging.register(router)
