@@ -55,19 +55,28 @@ defmodule Alto.Contrib.Socket.ClientTest do
     end
   end
 
-  test "invalid commands and request timeouts do not consume pending capacity" do
+  test "invalid commands and expired requests release capacity without misrouting late replies" do
     {path, listener} = socket_fixture()
     parent = self()
 
-    spawn_link(fn ->
-      {:ok, socket} = :gen_tcp.accept(listener)
-      {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
-      send(parent, {:request, JSON.decode!(String.trim(line))})
+    server =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
+        {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
+        expired = JSON.decode!(String.trim(line))
+        send(parent, {:request, expired})
+        {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
+        current = JSON.decode!(String.trim(line))
 
-      receive do
-        :close -> :gen_tcp.close(socket)
-      end
-    end)
+        send_json(socket, [
+          %{"v" => 1, "type" => "ok", "id" => expired["id"], "value" => "late"},
+          %{"v" => 1, "type" => "ok", "id" => current["id"], "value" => "current"}
+        ])
+
+        receive do
+          :close -> :gen_tcp.close(socket)
+        end
+      end)
 
     {:ok, client} =
       Alto.Contrib.Socket.Client.connect(path, max_pending: 1, max_line_bytes: 100)
@@ -89,9 +98,11 @@ defmodule Alto.Contrib.Socket.ClientTest do
 
     assert_receive {:request, %{"v" => 1, "id" => "c-1", "type" => "sessions"}}
 
-    assert {:error, :timeout} =
-             Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"}, timeout: 20)
+    assert {:ok, %{"id" => "c-2", "value" => "current"}} =
+             Alto.Contrib.Socket.Client.request(client, %{"type" => "sessions"}, timeout: 1_000)
 
+    assert {:error, :timeout} = Alto.Contrib.Socket.Client.next(client, 0)
+    send(server, :close)
     Alto.Contrib.Socket.Client.close(client)
     File.rm(path)
   end
@@ -206,14 +217,15 @@ defmodule Alto.Contrib.Socket.ClientTest do
     Alto.Contrib.Socket.Client.close(client)
   end
 
-  test "a waiting next receives the socket close reason" do
+  test "socket closure settles both pending requests and notification waiters" do
     {path, listener} = socket_fixture()
     parent = self()
 
     server =
       spawn(fn ->
         {:ok, socket} = :gen_tcp.accept(listener)
-        send(parent, :accepted)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+        send(parent, :request_received)
 
         receive do
           :close -> :gen_tcp.close(socket)
@@ -221,10 +233,14 @@ defmodule Alto.Contrib.Socket.ClientTest do
       end)
 
     {:ok, client} = Alto.Contrib.Socket.Client.connect(path)
-    assert_receive :accepted
-    task = Task.async(fn -> Alto.Contrib.Socket.Client.next(client, 5_000) end)
+    notification = :gen_server.send_request(client.pid, {:next, 5_000})
+    request = :gen_server.send_request(client.pid, {:request, %{type: "sessions"}, 5_000})
+    assert_receive :request_received
     send(server, :close)
-    assert {:error, :closed} = Task.await(task, 1_000)
+
+    for waiter <- [notification, request] do
+      assert {:reply, {:error, :closed}} = :gen_server.receive_response(waiter, 1_000)
+    end
   end
 
   defp socket_fixture do

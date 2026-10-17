@@ -215,16 +215,8 @@ defmodule Alto.Contrib.Socket.Client do
   def handle_info({:DOWN, ref, :process, _owner, _reason}, %{owner_ref: ref} = state),
     do: {:stop, :normal, state}
 
-  def handle_info({:request_timeout, id}, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _} ->
-        {:noreply, state}
-
-      {{from, _timer}, pending} ->
-        GenServer.reply(from, {:error, :timeout})
-        {:noreply, %{state | pending: pending}}
-    end
-  end
+  def handle_info({:request_timeout, id}, state),
+    do: {:noreply, finish_request(state, id, {:error, :timeout})}
 
   def handle_info({:next_timeout, from}, state) do
     {found, waiters} = remove_waiter(state.waiters, from)
@@ -248,16 +240,8 @@ defmodule Alto.Contrib.Socket.Client do
   defp close_state(state, reason) do
     :gen_tcp.close(state.socket)
 
-    Enum.each(state.pending, fn {_id, {from, timer}} ->
-      Process.cancel_timer(timer)
-      GenServer.reply(from, {:error, reason})
-    end)
-
-    state.waiters
-    |> :queue.to_list()
-    |> Enum.each(fn {from, timer} ->
-      Process.cancel_timer(timer)
-      GenServer.reply(from, {:error, reason})
+    Enum.each(Map.values(state.pending) ++ :queue.to_list(state.waiters), fn waiter ->
+      reply(waiter, {:error, reason})
     end)
 
     %{
@@ -287,33 +271,32 @@ defmodule Alto.Contrib.Socket.Client do
     end
   end
 
-  defp handle_reply(%{"id" => id} = envelope, state) when is_binary(id) do
-    case Map.pop(state.pending, id) do
-      {nil, _} ->
-        state
+  defp handle_reply(envelope, state) do
+    result =
+      if envelope["type"] == "ok",
+        do: {:ok, envelope},
+        else: {:error, {:server, envelope["code"], envelope["detail"]}}
 
-      {{from, timer}, pending} ->
-        Process.cancel_timer(timer)
-
-        reply =
-          if envelope["type"] == "ok",
-            do: {:ok, envelope},
-            else: {:error, {:server, envelope["code"], envelope["detail"]}}
-
-        GenServer.reply(from, reply)
-        %{state | pending: pending}
-    end
+    finish_request(state, envelope["id"], result)
   end
 
-  defp handle_reply(_envelope, state), do: state
+  defp finish_request(state, id, result) do
+    {waiter, pending} = Map.pop(state.pending, id)
+    if waiter, do: reply(waiter, result)
+    %{state | pending: pending}
+  end
+
+  defp reply({from, timer}, result) do
+    Process.cancel_timer(timer)
+    GenServer.reply(from, result)
+  end
 
   defp enqueue_event(event, state) do
     bytes = :erlang.external_size(event)
 
     case :queue.out(state.waiters) do
-      {{:value, {from, timer}}, waiters} ->
-        Process.cancel_timer(timer)
-        GenServer.reply(from, {:ok, event})
+      {{:value, waiter}, waiters} ->
+        reply(waiter, {:ok, event})
         {:ok, %{state | waiters: waiters}}
 
       {:empty, _}
