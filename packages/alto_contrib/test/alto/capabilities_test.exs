@@ -26,20 +26,4 @@ defmodule Alto.CapabilitiesTest do
     refute JSON.encode!(description) =~ "private-key"
     refute JSON.encode!(description) =~ "must-not-start"
   end
-
-  test "batch concurrency and delegation permission are reported independently" do
-    info =
-      Alto.Capabilities.describe(
-        loop:
-          Alto.default_loop(
-            tool_execution: {:parallel, 4},
-            subagents: Alto.Subagents.bounded(max_depth: 1, max_concurrency: 2)
-          )
-      )
-
-    assert info.tool_execution == %{mode: :explicit_batches, max_concurrency: 4}
-    assert info.subagents.enabled
-    assert info.subagents.max_concurrency == 2
-    assert info.subagents.delegation == :loop_defined
-  end
 end

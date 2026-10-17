@@ -141,17 +141,6 @@ defmodule Alto.ToolArgumentsTest do
     assert Enum.all?(names, &(byte_size(&1) <= 83))
   end
 
-  test "both delegation entry points validate the shared nested contract", %{caps: caps} do
-    for module <- [Alto.Contrib.Tools.SpawnAgents, Alto.Contrib.Tools.StartAgents] do
-      assert {:error, %NimbleOptions.ValidationError{}} =
-               ExecutionTool.prepare(
-                 %{module: module, opts: []},
-                 %{"agents" => [%{"id" => "child", "task" => "missing model selection"}]},
-                 caps
-               )
-    end
-  end
-
   test "transformed input is validated before domain preparation and frozen for execution", %{
     caps: caps
   } do

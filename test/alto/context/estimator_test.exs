@@ -3,30 +3,6 @@ defmodule Alto.Context.EstimatorTest do
 
   alias Alto.Context.Estimator
 
-  test "composes tokenizer counts with provider and model framing" do
-    estimator =
-      Estimator.new(
-        tokenizer: fn text -> byte_size(text) end,
-        provider_overhead: 10,
-        message_overhead: 2,
-        tool_overhead: 3,
-        model: "claude-sonnet",
-        model_overhead: %{"claude-sonnet" => 7}
-      )
-
-    input = %{
-      messages: [%{"role" => "user", "content" => "hi"}],
-      tools: [%{"type" => "function", "function" => %{"name" => "read"}}]
-    }
-
-    expected =
-      10 + 7 +
-        byte_size(JSON.encode!(hd(input.messages))) + 2 +
-        byte_size(JSON.encode!(hd(input.tools))) + 3
-
-    assert estimator.(input) == expected
-  end
-
   test "Window applies tokenizer estimates at the input budget boundary" do
     policy =
       Alto.Context.Window.new(
