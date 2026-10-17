@@ -36,6 +36,10 @@ defmodule Alto.Runner.Execution do
 
   require Logger
 
+  @message_fields Enum.flat_map(~w(role content tool_calls tool_call_id name)a, fn key ->
+                    [key, Atom.to_string(key)]
+                  end)
+
   @type provider_spec :: module() | {module(), keyword()}
   @type approval_spec :: Alto.Approval.policy()
   @type run_result :: Result.t()
@@ -758,22 +762,7 @@ defmodule Alto.Runner.Execution do
         {:error, :empty_model_response, run}
 
       true ->
-        fields =
-          Map.drop(
-            Map.get(completion, :provider_fields, %{}),
-            [
-              "role",
-              "content",
-              "tool_calls",
-              "tool_call_id",
-              "name",
-              :role,
-              :content,
-              :tool_calls,
-              :tool_call_id,
-              :name
-            ]
-          )
+        fields = Map.drop(Map.get(completion, :provider_fields, %{}), @message_fields)
 
         assistant = Map.merge(assistant_message(message, calls), fields)
 

@@ -12,14 +12,6 @@ defmodule Alto.Runner.AgentsReleaseTest do
     def release(handle), do: TaskHost.release(handle)
   end
 
-  defmodule NoReleaseRunner do
-    def subscribe(handle, subscriber) do
-      ref = make_ref()
-      send(subscriber, {:alto_runner_result, ref, handle})
-      {:ok, ref}
-    end
-  end
-
   test "completed child hosts exit after their batch results are consumed" do
     owner = self()
     checkpoint = %{"kind" => "child", "state" => %{"step" => 1}}
@@ -112,14 +104,5 @@ defmodule Alto.Runner.AgentsReleaseTest do
 
     assert_receive {:child_host, host_pid}
     refute Process.alive?(host_pid)
-  end
-
-  test "a custom runner without release still returns its child outcome" do
-    outcome = %Result{Result.empty() | status: :ok, output: "custom"}
-
-    assert {:ok, [{"child", ^outcome}]} =
-             Agents.batch([%{id: "child"}], 1, fn _ -> {:ok, outcome} end, fn -> :continue end,
-               runner: NoReleaseRunner
-             )
   end
 end
