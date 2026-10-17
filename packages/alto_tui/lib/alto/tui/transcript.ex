@@ -4,18 +4,8 @@ defmodule Alto.TUI.Transcript do
   alias ExRatatui.Text.{Line, Span}
 
   def render(entries, width, assistant \\ "alto") do
-    document(entries, width, assistant).text
-  end
-
-  def document(entries, width, assistant \\ "alto", opts \\ []) do
-    cached(:documents, {entries, width, assistant, opts}, 4, fn ->
-      groups = Enum.map(entries, &cached_rows(&1, width, assistant, opts))
-
-      %{
-        text: Text.new(groups |> Enum.intersperse([Line.new([])]) |> List.flatten()),
-        groups: groups
-      }
-    end)
+    index = index(entries, width)
+    Text.new(window(index, 0, index.rows, assistant))
   end
 
   @doc "Native row-count index; off-screen styled cells are never materialized."
@@ -88,7 +78,7 @@ defmodule Alto.TUI.Transcript do
     end)
   end
 
-  def window(index, offset, height) do
+  def window(index, offset, height, assistant \\ "alto") do
     Alto.TUI.Window.slice(index, offset, height, fn entry, plan, start, count ->
       case plan do
         {:literal, rows} ->
@@ -102,7 +92,7 @@ defmodule Alto.TUI.Transcript do
               count - if(start == 0, do: 1, else: 0)
             )
 
-          if start == 0, do: [assistant_label(entry, "alto") | body], else: body
+          if start == 0, do: [assistant_label(entry, assistant) | body], else: body
       end
     end)
   end
@@ -136,7 +126,12 @@ defmodule Alto.TUI.Transcript do
         |> Enum.take(-height)
       end)
     else
-      cached_rows(entry, width, assistant, [])
+      cached(:entries, {entry, width, assistant, []}, 512, fn ->
+        text(entry)
+        |> Alto.TUI.Viewport.rows(width)
+        |> Tuple.to_list()
+        |> Enum.map(&literal_line/1)
+      end)
     end
   end
 
@@ -159,24 +154,8 @@ defmodule Alto.TUI.Transcript do
 
   defp literal_line(row), do: Line.new([Span.new(row)])
 
-  defp cached_rows(entry, width, assistant, opts) do
-    cached(:entries, {entry, width, assistant, opts}, 512, fn ->
-      entry_rows(entry, width, assistant, opts)
-    end)
-  end
-
   defp cached(kind, id, limit, build),
     do: Alto.TUI.Cache.fetch({__MODULE__, kind}, id, limit, build)
-
-  defp entry_rows(entry, width, assistant, opts) do
-    if markdown?(entry) do
-      [assistant_label(entry, assistant) | Alto.TUI.Markdown.render(entry.text, width).lines]
-    else
-      Alto.TUI.Viewport.rows(text(entry, opts), width)
-      |> Tuple.to_list()
-      |> Enum.map(&Line.new([Span.new(&1)]))
-    end
-  end
 
   def text(entry, opts \\ []) do
     kind = to_string(entry[:kind] || "message")

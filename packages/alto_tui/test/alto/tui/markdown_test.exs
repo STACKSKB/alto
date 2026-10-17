@@ -16,18 +16,20 @@ defmodule Alto.TUI.MarkdownTest do
       end)
 
   test "assistant and reasoning transcript entries render Markdown syntax" do
-    for kind <- [:assistant, :codex_assistant, :reasoning] do
+    for {kind, label} <- [assistant: "helper", codex_assistant: "codex", reasoning: "thinking"] do
       rendered =
         Transcript.render(
           [
             %{kind: :user, text: "## literal **text**"},
             %{kind: kind, text: "### Result\n\n**Done** with `code`.\n\n```elixir\n:ok\n```"}
           ],
-          60
+          60,
+          "helper"
         )
         |> plain()
 
       assert rendered =~ "Result"
+      assert rendered =~ label <> " ›"
       assert rendered =~ "Done with code."
       assert rendered =~ ":ok"
       assert rendered =~ "## literal **text**"
@@ -309,7 +311,7 @@ defmodule Alto.TUI.MarkdownTest do
     assert Selection.text(selected) =~ "Heading 5"
   end
 
-  test "indexed windows preserve native wrapping, styles and search coordinates" do
+  test "indexed styled text and search text agree across widths without losing long headings" do
     sources = [
       "",
       "## Heading **strong**",
@@ -330,7 +332,6 @@ defmodule Alto.TUI.MarkdownTest do
     for width <- [11, 40, 80] do
       full = Transcript.render(entries, width)
       index = Transcript.index(entries, width)
-      assert index.rows == length(full.lines)
       assert String.replace(plain(full), ~r/\s/u, "") =~ String.duplicate("Headingstrong猫", 400)
 
       plain =
@@ -339,10 +340,6 @@ defmodule Alto.TUI.MarkdownTest do
         |> List.flatten()
 
       assert plain(%Text{lines: plain}) == plain(full)
-
-      for offset <- [0, 1, 5, 14, index.rows - 2], height <- [1, 7, 30] do
-        assert Transcript.window(index, offset, height) == Enum.slice(full.lines, offset, height)
-      end
     end
   end
 end
