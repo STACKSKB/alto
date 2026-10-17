@@ -269,9 +269,10 @@ defmodule Alto.TUI.AppTest do
     {_, text} = Alto.TUI.Subagents.details(state)
     assert text =~ "Provider timeout"
     assert text =~ "error"
-    terminal = ExRatatui.init_test_terminal(150, 42)
-    ExRatatui.draw(terminal, View.widgets(state, %{width: 150, height: 42}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "child only output"
+
+    assert render_widgets(View.widgets(state, %{width: 150, height: 42}), 150, 42) =~
+             "child only output"
+
     {:noreply, state} = App.handle_event(%Key{code: "esc"}, state)
     assert state.selected_agent_id == nil
     assert map_size(state.runs) == 1
@@ -305,10 +306,9 @@ defmodule Alto.TUI.AppTest do
 
     assert form.overlay.kind == :worktree_form
     {:noreply, form} = App.handle_event(%ExRatatui.Event.Paste{content: "Local experiment"}, form)
-    terminal = ExRatatui.init_test_terminal(120, 36)
-    ExRatatui.draw(terminal, View.widgets(form, %{width: 120, height: 36}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "Create local worktree"
-    assert ExRatatui.get_buffer_content(terminal) =~ "Local experiment"
+    screen = render_widgets(View.widgets(form, %{width: 120, height: 36}), 120, 36)
+    assert screen =~ "Create local worktree"
+    assert screen =~ "Local experiment"
     {:noreply, pending} = App.handle_event(%Key{code: "s", modifiers: ["ctrl"]}, form)
     assert pending.overlay.kind == :worktree_creating
     assert_receive {:alto_worktree_created, _, {:ok, result}} = message, 15_000
@@ -428,9 +428,7 @@ defmodule Alto.TUI.AppTest do
       end)
 
     assert suggestions.y > input.y
-    terminal = ExRatatui.init_test_terminal(120, 36)
-    assert :ok = ExRatatui.draw(terminal, widgets)
-    screen = ExRatatui.get_buffer_content(terminal)
+    screen = render_widgets(widgets, 120, 36)
     assert screen =~ "alpha/"
     assert screen =~ "another folder/"
     refute screen =~ "a-file"
@@ -441,17 +439,7 @@ defmodule Alto.TUI.AppTest do
     assert Alto.TUI.Menu.value(completed.overlay, :path) == context.root <> "/alpha/"
     assert completed.overlay.suggestion_index == nil
 
-    {:noreply, clicked} =
-      App.handle_event(
-        %Mouse{kind: "down", button: "left", x: suggestions.x + 1, y: suggestions.y + 1},
-        typed
-      )
-
-    {:noreply, clicked} =
-      App.handle_event(
-        %Mouse{kind: "up", button: "left", x: suggestions.x + 1, y: suggestions.y + 1},
-        clicked
-      )
+    clicked = click(typed, suggestions.x + 1, suggestions.y + 1)
 
     assert Alto.TUI.Menu.value(clicked.overlay, :path) == context.root <> "/another folder/"
     assert clicked.overlay.suggestions == [context.root <> "/another folder/nested/"]
@@ -491,11 +479,7 @@ defmodule Alto.TUI.AppTest do
     assert View.hit_target(selected, 80, 20, x, y) ==
              {:folder_suggestion, selected.overlay.suggestion_index}
 
-    {:noreply, clicked} =
-      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, selected)
-
-    {:noreply, clicked} =
-      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+    clicked = click(selected, x, y)
 
     assert Alto.TUI.Menu.value(clicked.overlay, :path) == expected
   end
@@ -546,11 +530,7 @@ defmodule Alto.TUI.AppTest do
     x = div(width - div(width * 62, 100), 2) + 2
     y = div(height - div(height * 62, 100), 2) + 2
 
-    {:noreply, clicked} =
-      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, chooser)
-
-    {:noreply, clicked} =
-      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+    clicked = click(chooser, x, y)
 
     assert Alto.TUI.Menu.value(clicked.overlay, :path) == context.root <> "/another folder/"
   end
@@ -603,21 +583,11 @@ defmodule Alto.TUI.AppTest do
     popup_height = div(20 * 62, 100)
     popup_y = div(20 - popup_height, 2)
     popup_x = div(80 - div(80 * 62, 100), 2)
-    terminal = ExRatatui.init_test_terminal(80, 20)
-    ExRatatui.draw(terminal, View.widgets(chooser, %{width: 80, height: 20}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "› " <> String.slice(expected, 0, 10)
 
-    {:noreply, selected} =
-      App.handle_event(
-        %Mouse{kind: "down", button: "left", x: popup_x + 2, y: popup_y + popup_height - 2},
-        chooser
-      )
+    assert render_widgets(View.widgets(chooser, %{width: 80, height: 20}), 80, 20) =~
+             "› " <> String.slice(expected, 0, 10)
 
-    {:noreply, selected} =
-      App.handle_event(
-        %Mouse{kind: "up", button: "left", x: popup_x + 2, y: popup_y + popup_height - 2},
-        selected
-      )
+    selected = click(chooser, popup_x + 2, popup_y + popup_height - 2)
 
     assert Alto.TUI.Menu.value(selected.overlay, :path) == expected
   end
@@ -642,10 +612,7 @@ defmodule Alto.TUI.AppTest do
     x = list.x + 1
     y = list.y + 2
     assert View.hit_target(form, 50, 16, x - 2, y) == :overlay
-    {:noreply, chooser} = App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, form)
-
-    {:noreply, chooser} =
-      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, chooser)
+    chooser = click(form, x, y)
 
     assert chooser.overlay.kind == :folder
     {:noreply, returned} = App.handle_event(%Key{code: "esc"}, chooser)
@@ -655,10 +622,7 @@ defmodule Alto.TUI.AppTest do
     ExRatatui.draw(terminal, View.widgets(returned, frame))
     assert ExRatatui.get_buffer_content(terminal) =~ "Create folder"
 
-    {:noreply, opened} =
-      App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, returned)
-
-    {:noreply, opened} = App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, opened)
+    opened = click(returned, x, y)
     assert opened.overlay == nil
     assert File.dir?(Path.join(context.root, "猫 folder"))
   end
@@ -677,10 +641,7 @@ defmodule Alto.TUI.AppTest do
     x = list.x + 1
     y = list.y + length(form.overlay.items)
     assert View.hit_target(form, width, height, x, y) == :overlay
-    {:noreply, clicked} = App.handle_event(%Mouse{kind: "down", button: "left", x: x, y: y}, form)
-
-    {:noreply, clicked} =
-      App.handle_event(%Mouse{kind: "up", button: "left", x: x, y: y}, clicked)
+    clicked = click(form, x, y)
 
     assert clicked.overlay == form.overlay
     refute File.exists?(Path.join(context.root, "must-not-create"))
@@ -1617,9 +1578,7 @@ defmodule Alto.TUI.AppTest do
     assert View.hit_target(state, 150, 36, layout.transcript.x + 2, 1) == :transcript
     assert View.hit_target(state, 150, 36, layout.right_seam, 1) == :right_seam
     assert length(View.selection_content(state, 150, 36)) == 3
-    terminal = ExRatatui.init_test_terminal(150, 36)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, %{width: 150, height: 36}))
-    screen = ExRatatui.get_buffer_content(terminal)
+    screen = render_widgets(View.widgets(state, %{width: 150, height: 36}), 150, 36)
     assert screen =~ "visible response"
     assert screen =~ "visible draft"
     assert screen =~ "context"
@@ -1956,9 +1915,7 @@ defmodule Alto.TUI.AppTest do
       widgets = View.widgets(state, %{width: 120, height: 36})
       {panel, _} = Enum.find(widgets, fn {_, rect} -> rect == layout.details end)
       assert panel.text =~ "Action failed: File change failed"
-      terminal = ExRatatui.init_test_terminal(120, 36)
-      assert :ok = ExRatatui.draw(terminal, widgets)
-      screen = ExRatatui.get_buffer_content(terminal)
+      screen = render_widgets(widgets, 120, 36)
       assert screen =~ "File change failed"
 
       for internal <- ["Alto.Runner", "Prepare tool job", "1258", "• 116"],
@@ -2002,9 +1959,8 @@ defmodule Alto.TUI.AppTest do
     state = state!(context)
     state = %{state | dimensions: {80, 24}, focus: :composer}
 
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(state, %{width: 80, height: 24}))
-    assert ExRatatui.get_buffer_content(terminal) =~ "D:CTX"
+    assert render_widgets(View.widgets(state, %{width: 80, height: 24}), 80, 24) =~
+             "D:CTX"
 
     segments = View.settings_segments(state)
     context_index = Enum.find_index(segments, &(&1.target == {:setting, :details}))
@@ -2014,22 +1970,7 @@ defmodule Alto.TUI.AppTest do
       layout.settings.x +
         Enum.sum(Enum.map(Enum.take(segments, context_index), &String.length(&1.text)))
 
-    assert {:noreply, drawer} =
-             App.handle_event(
-               %Mouse{
-                 kind: "down",
-                 button: "left",
-                 x: context_x,
-                 y: layout.settings.y
-               },
-               state
-             )
-
-    {:noreply, drawer} =
-      App.handle_event(
-        %Mouse{kind: "up", button: "left", x: context_x, y: layout.settings.y},
-        drawer
-      )
+    drawer = click(state, context_x, layout.settings.y)
 
     assert drawer.details_return_focus == :composer
     assert drawer.focus == :details
@@ -2039,15 +1980,10 @@ defmodule Alto.TUI.AppTest do
 
     assert State.focus_next(drawer).focus == :details
 
-    terminal = ExRatatui.init_test_terminal(80, 24)
-    assert :ok = ExRatatui.draw(terminal, View.widgets(drawer, %{width: 80, height: 24}))
-    buffer = ExRatatui.get_buffer_content(terminal)
+    buffer = render_widgets(View.widgets(drawer, %{width: 80, height: 24}), 80, 24)
     assert buffer =~ "click header / Esc close"
 
-    assert {:noreply, closed} =
-             App.handle_event(%Mouse{kind: "down", button: "left", x: 5, y: 10}, drawer)
-
-    {:noreply, closed} = App.handle_event(%Mouse{kind: "up", button: "left", x: 5, y: 10}, closed)
+    closed = click(drawer, 5, 10)
 
     refute closed.details_return_focus
     assert closed.focus == :composer
@@ -2532,6 +2468,19 @@ defmodule Alto.TUI.AppTest do
     assert buffer =~ "B:CODEX"
     assert buffer =~ "quota 22.0%"
     assert buffer =~ "cache 60.0%"
+  end
+
+  defp click(state, x, y) do
+    down = %Mouse{kind: "down", button: "left", x: x, y: y}
+    assert {:noreply, pressed} = App.handle_event(down, state)
+    assert {:noreply, released} = App.handle_event(%{down | kind: "up"}, pressed)
+    released
+  end
+
+  defp render_widgets(widgets, width, height) do
+    terminal = ExRatatui.init_test_terminal(width, height)
+    assert :ok = ExRatatui.draw(terminal, widgets)
+    ExRatatui.get_buffer_content(terminal)
   end
 
   defp state!(context, opts \\ []) do

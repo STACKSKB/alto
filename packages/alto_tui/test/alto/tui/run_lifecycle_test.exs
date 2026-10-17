@@ -4,7 +4,6 @@ defmodule Alto.TUI.RunLifecycleTest do
 
   alias Alto.TUI.App
   alias Alto.TUI.State
-  alias Alto.TUI.View
   alias ExRatatui.Event.Key
   alias ExRatatui.Runtime
 
@@ -320,13 +319,7 @@ defmodule Alto.TUI.RunLifecycleTest do
   test "queuing does not hide approvals and cancellation removes their stale handles", %{
     root: root
   } do
-    app =
-      start_app(root,
-        provider: nil,
-        loop: Alto.rule_loop(steps: ["approval_probe"]),
-        tools: [ApprovalProbe],
-        approval: &Alto.Contrib.Approval.interactive/2
-      )
+    app = approval_app(root)
 
     submit(app, "{}")
     eventually(fn -> state(app).pending_approvals != [] end)
@@ -340,9 +333,7 @@ defmodule Alto.TUI.RunLifecycleTest do
     end)
 
     submit(app, "next")
-    terminal = ExRatatui.init_test_terminal(160, 40)
-    ExRatatui.draw(terminal, View.widgets(state(app), %{width: 160, height: 40}))
-    screen = ExRatatui.get_buffer_content(terminal)
+    screen = screen(app)
     assert screen =~ "approval required"
     assert screen =~ "waiting for approval"
     assert screen =~ "1 queued"
@@ -354,14 +345,7 @@ defmodule Alto.TUI.RunLifecycleTest do
   end
 
   test "timed-out approvals disappear without requiring a reply to a dead waiter", %{root: root} do
-    app =
-      start_app(root,
-        provider: nil,
-        loop: Alto.rule_loop(steps: ["approval_probe"]),
-        tools: [ApprovalProbe],
-        approval: &Alto.Contrib.Approval.interactive/2,
-        approval_timeout: 500
-      )
+    app = approval_app(root, approval_timeout: 500)
 
     submit(app, "{}")
     eventually(fn -> state(app).pending_approvals != [] end)
@@ -372,13 +356,7 @@ defmodule Alto.TUI.RunLifecycleTest do
   test "AUTO overrides configured interactive approval, including a waiting request", %{
     root: root
   } do
-    app =
-      start_app(root,
-        provider: nil,
-        loop: Alto.rule_loop(steps: ["approval_probe", "approval_probe"]),
-        tools: [ApprovalProbe],
-        approval: &Alto.Contrib.Approval.interactive/2
-      )
+    app = approval_app(root, loop: Alto.rule_loop(steps: ["approval_probe", "approval_probe"]))
 
     submit(app, "{}")
     eventually(fn -> state(app).pending_approvals != [] end)
@@ -401,14 +379,7 @@ defmodule Alto.TUI.RunLifecycleTest do
       true
     end
 
-    app =
-      start_app(root,
-        provider: nil,
-        loop: Alto.rule_loop(steps: ["approval_probe"]),
-        tools: [ApprovalProbe],
-        approval: &Alto.Contrib.Approval.interactive/2,
-        tui: [approval_reviewer: reviewer]
-      )
+    app = approval_app(root, tui: [approval_reviewer: reviewer])
 
     select_approval(app, "review")
     submit(app, "{}")
@@ -583,6 +554,17 @@ defmodule Alto.TUI.RunLifecycleTest do
     key(app, "f2")
     Enum.each(String.graphemes(filter), &key(app, &1))
     key(app, "enter")
+  end
+
+  defp approval_app(root, overrides \\ []) do
+    options = [
+      provider: nil,
+      loop: Alto.rule_loop(steps: ["approval_probe"]),
+      tools: [ApprovalProbe],
+      approval: &Alto.Contrib.Approval.interactive/2
+    ]
+
+    start_app(root, Keyword.merge(options, overrides))
   end
 
   defp start_app(root, options \\ nil, backend \\ Alto.TUI.Backends.Native) do
