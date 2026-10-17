@@ -6,37 +6,10 @@ defmodule Alto.Contrib.FrontEnd.RegistryTest do
   alias Alto.Session
   alias Alto.TestSupport.EchoTool
   alias Alto.TestSupport.GuardedEchoTool
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   @approval_timeout_ms 300
   @receive_timeout 2_000
-
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, _sink, opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:provider_request, request})
-
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok,
-         %{
-           message: "finished",
-           tool_calls: [],
-           usage: %{"input_tokens" => 4, "output_tokens" => 2}
-         }}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}],
-           usage: %{"input_tokens" => 3, "output_tokens" => 1}
-         }}
-      end
-    end
-  end
 
   defmodule BlockingProvider do
     @behaviour Alto.Provider

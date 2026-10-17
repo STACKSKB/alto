@@ -5,30 +5,9 @@ defmodule Alto.Contrib.Listeners.WebServerTest do
   alias Alto.Contrib.Listeners.WebServer
   alias Alto.TestSupport.EchoTool
   alias Alto.TestSupport.GuardedEchoTool
+  alias Alto.TestSupport.ToolThenAnswerProvider
 
   @approval_timeout_ms 5_000
-
-  defmodule ToolThenAnswerProvider do
-    @behaviour Alto.Provider
-
-    @impl true
-    def describe(_opts), do: %{}
-
-    @impl true
-    def stream(request, sink, _opts) do
-      sink.(Alto.Event.live(:model_delta, %{text: "partial"}))
-
-      if Enum.any?(request.messages, &(&1["role"] == "tool")) do
-        {:ok, %{message: "finished", tool_calls: []}}
-      else
-        {:ok,
-         %{
-           message: nil,
-           tool_calls: [%{id: "call-1", name: "echo", arguments_json: ~s({"value":"hello"})}]
-         }}
-      end
-    end
-  end
 
   setup do
     root = Path.join(System.tmp_dir!(), "alto-web-#{System.unique_integer([:positive])}")
@@ -40,12 +19,12 @@ defmodule Alto.Contrib.Listeners.WebServerTest do
 
     resolver = fn
       "tool-loop" ->
-        {:ok, [provider: ToolThenAnswerProvider, tools: [EchoTool]]}
+        {:ok, [provider: {ToolThenAnswerProvider, delta: "partial"}, tools: [EchoTool]]}
 
       "guarded-loop" ->
         {:ok,
          [
-           provider: ToolThenAnswerProvider,
+           provider: {ToolThenAnswerProvider, delta: "partial"},
            tools: [GuardedEchoTool],
            approval: &Alto.Contrib.Approval.socket/2,
            approval_timeout: @approval_timeout_ms
