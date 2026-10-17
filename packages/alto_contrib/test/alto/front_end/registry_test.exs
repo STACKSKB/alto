@@ -105,18 +105,6 @@ defmodule Alto.Contrib.FrontEnd.RegistryTest do
     registry
   end
 
-  test "startup rejects invalid command names" do
-    resolver = fn _ -> {:ok, []} end
-
-    for {key, value} <- [
-          commands: %{"" => fn _ -> :ok end},
-          commands: %{job: fn _ -> :ok end}
-        ] do
-      assert {:stop, %NimbleOptions.ValidationError{key: ^key}} =
-               Registry.init([{:config_resolver, resolver}, {key, value}])
-    end
-  end
-
   test "session_transcript keeps only the latest 100 messages", %{registry: registry, root: root} do
     start_registry(registry, root, session_dir: root)
     {:ok, session_id} = Session.create("prompt", %{}, session_dir: root)

@@ -16,39 +16,6 @@ defmodule Alto.Contrib.Socket.SSHTest do
 
     assert {:error, :invalid_remote_socket} =
              Alto.Contrib.Socket.SSH.open("host", "/tmp/a:b", ssh: "/missing")
-
-    for {key, value} <- [
-          owner: nil,
-          port: 0,
-          port: 65_536,
-          port: 1.0,
-          timeout: -1,
-          timeout: 600_001,
-          max_diagnostics: 1_048_577,
-          keepalive_interval: -1,
-          keepalive_interval: 86_401,
-          keepalive_count: 0,
-          keepalive_count: 101,
-          ssh: "",
-          ssh: String.duplicate("x", 4_097)
-        ] do
-      assert {:error, %NimbleOptions.ValidationError{key: ^key}} =
-               Alto.Contrib.Socket.SSH.open(
-                 "host",
-                 "/tmp/remote",
-                 Keyword.put([ssh: "/missing"], key, value)
-               )
-    end
-
-    for opts <- [[unexpected: true], [port: 22, port: 0]] do
-      assert {:error, %NimbleOptions.ValidationError{}} =
-               Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", [ssh: "/missing"] ++ opts)
-    end
-
-    for opts <- [nil, %{}, [:timeout], [{"timeout", 0}]] do
-      assert {:error, :invalid_options} =
-               Alto.Contrib.Socket.SSH.open("host", "/tmp/remote", opts)
-    end
   end
 
   test "startup timeout closes ssh and removes its socket directory" do

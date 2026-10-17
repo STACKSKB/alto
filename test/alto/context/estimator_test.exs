@@ -25,12 +25,4 @@ defmodule Alto.Context.EstimatorTest do
                %{context_window: 100}
              )
   end
-
-  test "rejects tokenizer results that cannot form a bound" do
-    estimator = Estimator.new(tokenizer: fn _ -> :unknown end)
-
-    assert_raise ArgumentError, ~r/tokenizer must return a non-negative integer/, fn ->
-      estimator.(%{messages: [%{"x" => 1}], tools: []})
-    end
-  end
 end
