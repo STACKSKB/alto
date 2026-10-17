@@ -819,13 +819,6 @@ defmodule Alto.Runner.Execution do
     Map.put(run, :pending_provider_calls, pending)
   end
 
-  defp check_provider_correlation(run, call_id, name) do
-    case Map.get(Map.get(run, :pending_provider_calls, %{}), {call_id, name}) do
-      count when is_integer(count) and count > 0 -> :ok
-      _other -> {:error, {:uncorrelated_provider_tool_call, call_id, name}}
-    end
-  end
-
   defp consume_pending_provider_call(run, call_id, name) do
     key = {call_id, name}
     pending = Map.get(run, :pending_provider_calls, %{})
@@ -916,7 +909,7 @@ defmodule Alto.Runner.Execution do
 
   defp check_model_exposure(_name, :native, _run), do: :ok
 
-  defp check_model_exposure(name, :provider, run) when is_binary(name) do
+  defp check_model_exposure(name, :provider, run) do
     if MapSet.member?(run.request_model_tools || run.model_tools, name) do
       :ok
     else
@@ -924,16 +917,15 @@ defmodule Alto.Runner.Execution do
     end
   end
 
-  defp check_model_exposure(name, :provider, _run), do: {:error, {:invalid_tool_name, name}}
-
-  defp tool_origin(run, id, name),
-    do: if(check_provider_correlation(run, id, name) == :ok, do: :provider, else: :native)
+  defp tool_origin(run, id, name) do
+    case Map.get(Map.get(run, :pending_provider_calls, %{}), {id, name}) do
+      count when is_integer(count) and count > 0 -> :provider
+      _ -> :native
+    end
+  end
 
   defp parallel_call?(%{name: name}, run) do
-    case Map.get(run.tools, name) do
-      %{execution_mode: :parallel, approval: :never} -> true
-      _ -> false
-    end
+    match?(%{execution_mode: :parallel, approval: :never}, Map.get(run.tools, name))
   end
 
   defp parallel_call?(_, _), do: false
