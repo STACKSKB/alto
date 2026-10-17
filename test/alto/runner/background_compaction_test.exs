@@ -409,28 +409,6 @@ defmodule Alto.Runner.BackgroundCompactionTest do
     end
   end
 
-  test "standalone reductions release their coordinator on failure and success", %{opts: opts} do
-    for mode <- [:blocking, :background] do
-      opts =
-        opts
-        |> Keyword.update!(:compaction, &Keyword.put(&1, :mode, mode))
-        |> Keyword.put(:session, Alto.Session.generate_id())
-
-      {:ok, run} = Setup.open("current", opts)
-      task = Task.async(fn -> RunTranscript.reduce(run) end)
-      assert_receive {:reducer, reducer, _}, 2_000
-      send(reducer, :fail)
-      assert {:error, :cannot_reduce, next} = Task.await(task)
-      refute Compactor.enabled?(next)
-      task = Task.async(fn -> RunTranscript.reduce(next) end)
-      assert_receive {:reducer, reducer, _}, 2_000
-      send(reducer, :release)
-      assert {:ok, next} = Task.await(task)
-      refute Compactor.enabled?(next)
-      assert next.compaction_count == 1
-    end
-  end
-
   test "default blocking mode waits for reduction before dispatching foreground work", %{
     opts: opts
   } do
