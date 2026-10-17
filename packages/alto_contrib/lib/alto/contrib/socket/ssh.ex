@@ -31,7 +31,8 @@ defmodule Alto.Contrib.Socket.SSH do
          {:ok, opts} <- validate_options(opts),
          {:ok, ssh} <- resolve_ssh(opts),
          {:ok, dir, local_path} <- make_socket_dir(),
-         {:ok, pid} <- start_link_process(host, remote_socket, local_path, opts, dir, ssh),
+         {:ok, pid} <-
+           GenServer.start(__MODULE__, {host, remote_socket, local_path, opts, dir, ssh}),
          result <- await_listener(pid, local_path, opts[:timeout]) do
       case result do
         :ok ->
@@ -57,17 +58,10 @@ defmodule Alto.Contrib.Socket.SSH do
     :exit, _ -> :ok
   end
 
-  defp start_link_process(host, remote, local, opts, dir, ssh) do
-    GenServer.start(
-      __MODULE__,
-      {host, remote, local, opts, dir, ssh, opts[:owner]}
-    )
-  end
-
   @impl true
-  def init({host, remote, local, opts, dir, ssh, owner}) do
+  def init({host, remote, local, opts, dir, ssh}) do
     Process.flag(:trap_exit, true)
-    Process.monitor(owner)
+    Process.monitor(opts[:owner])
     args = ssh_args(host, remote, local, opts)
 
     try do
@@ -93,9 +87,6 @@ defmodule Alto.Contrib.Socket.SSH do
   end
 
   defp ssh_args(host, remote, local, opts) do
-    interval = opts[:keepalive_interval]
-    count = opts[:keepalive_count]
-
     [
       "-N",
       "-T",
@@ -104,20 +95,12 @@ defmodule Alto.Contrib.Socket.SSH do
       "-o",
       "BatchMode=yes",
       "-o",
-      "ServerAliveInterval=#{interval}",
+      "ServerAliveInterval=#{opts[:keepalive_interval]}",
       "-o",
-      "ServerAliveCountMax=#{count}",
+      "ServerAliveCountMax=#{opts[:keepalive_count]}",
       "-L",
-      "#{local}:#{remote}",
-      maybe_port(opts),
-      host
-    ]
-    |> List.flatten()
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp maybe_port(opts) do
-    if port = opts[:port], do: ["-p", Integer.to_string(port)]
+      "#{local}:#{remote}"
+    ] ++ if(opts[:port], do: ["-p", Integer.to_string(opts[:port]), host], else: [host])
   end
 
   defp validate_options(opts) do
@@ -156,12 +139,8 @@ defmodule Alto.Contrib.Socket.SSH do
 
       Process.alive?(pid) ->
         case status(pid) do
-          {nil, _} -> :wait
+          {nil, _} -> wait_or_timeout(pid, path, deadline)
           {exit_status, diagnostic} -> {:error, {:ssh_exit, exit_status, diagnostic}}
-        end
-        |> case do
-          :wait -> wait_or_timeout(pid, path, deadline)
-          result -> result
         end
 
       true ->
