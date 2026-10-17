@@ -175,20 +175,20 @@ defmodule Alto.TUI.Search do
 
     cached(:projection, {entries, query, width}, fn ->
       layout = Transcript.index(entries, width, expanded: true)
-      document = %{groups: Transcript.plain_groups(layout)}
+      groups = Transcript.plain_groups(layout)
       matches = find(entries, query)
       wrapped = wrapped_pattern(query)
 
       {positions, _} =
-        Enum.map_reduce(Enum.zip(document.groups, entries), 0, fn {lines, entry}, row ->
+        Enum.map_reduce(Enum.zip(groups, entries), 0, fn {lines, entry}, row ->
           assistant? = Transcript.markdown?(entry)
           body = if assistant?, do: Enum.drop(lines, 1), else: lines
-          mapping = source_rows(body, source(entry), row + if(assistant?, do: 1, else: 0))
+          body_row = row + if(assistant?, do: 1, else: 0)
+          mapping = source_rows(body, source(entry), body_row)
           text = Enum.map_join(body, "\n", &line_text/1)
           offsets = if wrapped, do: Enum.take(scan(wrapped, text), @max_matches), else: []
 
-          {{row + if(assistant?, do: 1, else: 0), text, offsets, mapping},
-           row + length(lines) + 1}
+          {{body_row, text, offsets, mapping}, row + length(lines) + 1}
         end)
 
       positions = List.to_tuple(positions)
@@ -205,9 +205,9 @@ defmodule Alto.TUI.Search do
               Map.merge(match, %{row: first_row, ranges: ranges})
 
             [{start, size}] ->
-              prefix = binary_part(text, 0, start)
-              first_row = row + length(String.split(prefix, "\n")) - 1
-              first_col = byte_size(List.last(String.split(prefix, "\n")))
+              prefix = binary_part(text, 0, start) |> String.split("\n")
+              first_row = row + length(prefix) - 1
+              first_col = byte_size(List.last(prefix))
               parts = binary_part(text, start, size) |> String.split("\n")
 
               ranges =
@@ -233,15 +233,13 @@ defmodule Alto.TUI.Search do
     |> Enum.reduce_while({[], 0}, fn {line, row}, {rows, cursor} ->
       text = line_text(line)
 
-      cond do
-        text == "" ->
-          {:cont, {rows, cursor}}
-
-        true ->
-          case :binary.match(source, text, scope: {cursor, byte_size(source) - cursor}) do
-            {start, size} -> {:cont, {[{row, start, size} | rows], start + size}}
-            :nomatch -> {:halt, nil}
-          end
+      if text == "" do
+        {:cont, {rows, cursor}}
+      else
+        case :binary.match(source, text, scope: {cursor, byte_size(source) - cursor}) do
+          {start, size} -> {:cont, {[{row, start, size} | rows], start + size}}
+          :nomatch -> {:halt, nil}
+        end
       end
     end)
     |> case do
@@ -290,12 +288,11 @@ defmodule Alto.TUI.Search do
         Transcript.viewport(State.visible_entries(state), width, offset, height, expanded: true)
 
       ranges =
-        data.matches
-        |> Enum.with_index()
-        |> Enum.flat_map(fn {match, i} ->
-          Enum.map(match.ranges, fn {row, col, size} -> {row, {col, size, i == selected}} end)
-        end)
-        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+        for {match, i} <- Enum.with_index(data.matches),
+            {row, col, size} <- match.ranges,
+            do: {row, {col, size, i == selected}}
+
+      ranges = Enum.group_by(ranges, &elem(&1, 0), &elem(&1, 1))
 
       %{
         text
@@ -312,7 +309,7 @@ defmodule Alto.TUI.Search do
 
   defp highlight_line(line, ranges) do
     {spans, _} =
-      Enum.map_reduce(line.spans, 0, fn span, offset ->
+      Enum.flat_map_reduce(line.spans, 0, fn span, offset ->
         last = offset + byte_size(span.content)
 
         boundaries =
@@ -337,7 +334,7 @@ defmodule Alto.TUI.Search do
         {parts, last}
       end)
 
-    %{line | spans: List.flatten(spans)}
+    %{line | spans: spans}
   end
 
   def result_line(match, number, width, entries) do
