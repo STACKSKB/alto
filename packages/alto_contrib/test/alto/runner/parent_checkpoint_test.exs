@@ -15,12 +15,9 @@ defmodule Alto.Runner.ParentCheckpointTest do
     def load_checkpoint(state, _spec), do: {:ok, state}
   end
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-parent-checkpoint-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     ledger = start_supervised!({OperationLog, name: nil, id: "parents", dir: dir})
-    on_exit(fn -> File.rm_rf!(dir) end)
     {:ok, account} = Account.open(ledger, "tree", max_effects: 50, max_model_requests: 20)
     opts = [budget_account: account, max_effects: 50, max_model_requests: 20, run_timeout: 10_000]
     {:ok, budget} = Budget.new(opts)

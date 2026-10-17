@@ -3,13 +3,10 @@ defmodule Alto.QueueMatchingTest do
 
   alias Alto.Queue
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-queue-matching-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     name = String.to_atom("queue_matching_#{System.unique_integer([:positive])}")
     {:ok, _pid} = Queue.start_link(id: "mail", dir: dir, name: name)
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, name: name}
   end
 

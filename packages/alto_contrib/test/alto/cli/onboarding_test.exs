@@ -8,11 +8,8 @@ defmodule Alto.Contrib.CLI.OnboardingTest do
     def list_models(opts), do: {:ok, Keyword.fetch!(opts, :models)}
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-onboarding-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{credentials_path: Path.join(root, "credentials.json")}
   end
 

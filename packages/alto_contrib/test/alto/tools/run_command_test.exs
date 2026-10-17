@@ -20,10 +20,8 @@ defmodule Alto.Contrib.Tools.RunCommandTest do
                    do: nil,
                    else: "elixir(1) and erl(1) are required to probe degraded cleanup"
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-command-#{System.unique_integer([:positive])}")
-    File.mkdir!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root, context: %{session_id: "test", cwd: root}}
   end
 

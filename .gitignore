@@ -1,6 +1,7 @@
 /_build/
 /cover/
 /tmp/
+/packages/alto_contrib/tmp/
 /deps/
 **/deps/
 **/_build/

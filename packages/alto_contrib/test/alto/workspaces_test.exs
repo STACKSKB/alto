@@ -81,15 +81,14 @@ defmodule Alto.WorkspacesTest do
     def apply(source, integration, path, opts), do: Backend.apply(source, integration, path, opts)
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-workspaces-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     source = Path.join(dir, "source")
     File.mkdir_p!(source)
     ledger_opts = [id: "resources", name: nil, dir: Path.join(dir, "ledger"), max_ops: 2]
     ledger = start_supervised!({OperationLog, ledger_opts})
     manager = Workspaces.new(root: Path.join(dir, "workspaces"), ledger: ledger, backend: Backend)
     assert {:ok, snapshot} = Workspaces.prepare(manager, source)
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{manager: manager, snapshot: snapshot, ledger_opts: ledger_opts, source: source}
   end
 

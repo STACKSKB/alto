@@ -3,10 +3,8 @@ defmodule Alto.Examples.UpstreamSkillsTest do
   import Alto.TestSupport.Git, only: [git!: 2]
   Code.require_file("../../../../examples/upstream_skills/lib/upstream_skills.ex", __DIR__)
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-upstream-skills-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     source = Path.join(root, "source")
     File.mkdir_p!(Path.join(source, "example/scripts"))
     File.mkdir_p!(Path.join(source, "example/references"))
@@ -30,7 +28,6 @@ defmodule Alto.Examples.UpstreamSkillsTest do
     git!(source, ["commit", "--quiet", "-m", "original"])
     commit = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
     destination = Path.join(root, "skills")
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, source: source, commit: commit, destination: destination}
   end
 

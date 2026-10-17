@@ -23,10 +23,8 @@ defmodule Alto.Contrib.Tools.WorkspaceToolsTest do
     end
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-tools-#{System.unique_integer([:positive])}")
-    File.mkdir!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root, context: %{session_id: "test", cwd: root}}
   end
 

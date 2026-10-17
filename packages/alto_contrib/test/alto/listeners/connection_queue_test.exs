@@ -10,10 +10,8 @@ defmodule Alto.Contrib.Listeners.ConnectionQueueTest do
   alias Alto.Contrib.FrontEnd.Registry
   alias Alto.Contrib.Listeners.Connection
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-conn-queue-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     queue = :"conn-queue-#{System.unique_integer([:positive])}"
     {:ok, _} = Alto.Queue.start_link(id: "conn-queue", dir: dir, name: queue)
 

@@ -26,12 +26,8 @@ defmodule Alto.Runner.ParentContinuationSessionTest do
     def load_checkpoint(state, _spec), do: {:ok, state}
   end
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-parent-session-#{System.unique_integer([:positive])}")
-
-    on_exit(fn -> File.rm_rf!(dir) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     ledger =
       start_supervised!(
         {OperationLog,

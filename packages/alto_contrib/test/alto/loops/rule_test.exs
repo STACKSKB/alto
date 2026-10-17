@@ -38,9 +38,8 @@ defmodule Alto.Loops.RuleTest do
   end
 
   describe "queue tools end to end" do
-    setup do
-      dir = Path.join(System.tmp_dir!(), "alto-rule-test-#{System.unique_integer([:positive])}")
-      on_exit(fn -> File.rm_rf!(dir) end)
+    @moduletag :tmp_dir
+    setup %{tmp_dir: dir} do
       name = :"rule_queue_#{System.unique_integer([:positive])}"
       {:ok, _queue} = Alto.Queue.start_link(id: "rule-queue", dir: dir, name: name)
 

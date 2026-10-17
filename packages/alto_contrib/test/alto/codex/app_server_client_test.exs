@@ -4,9 +4,8 @@ defmodule Alto.Contrib.Codex.AppServer.ClientTest do
   alias Alto.Contrib.Codex.AppServer.Client
   alias Alto.Contrib.Codex.Backend
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-codex-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     server = Path.join(root, "app_server.exs")
 
     File.write!(server, """
@@ -72,7 +71,6 @@ defmodule Alto.Contrib.Codex.AppServer.ClientTest do
     """)
 
     File.chmod!(server, 0o755)
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, server: server}
   end
 

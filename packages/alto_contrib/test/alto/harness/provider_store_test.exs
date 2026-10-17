@@ -4,12 +4,8 @@ defmodule Alto.Harness.ProviderStoreTest do
   alias Alto.Contrib.ProviderProfile
   alias Alto.Contrib.ProviderStore
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-provider-store-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{path: Path.join(root, "credentials.json")}
   end
 

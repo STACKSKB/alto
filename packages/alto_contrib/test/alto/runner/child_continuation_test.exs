@@ -144,11 +144,9 @@ defmodule Alto.Runner.ChildContinuationTest do
     end
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-child-resume-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     File.write!(Path.join(dir, "input"), "original")
-    on_exit(fn -> File.rm_rf!(dir) end)
 
     ledger_opts = [
       id: "children",

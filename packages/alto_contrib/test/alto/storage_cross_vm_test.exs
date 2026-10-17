@@ -7,15 +7,13 @@ defmodule Alto.StorageCrossVMTest do
   alias Alto.Queue
   alias Alto.Session
 
-  setup do
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     unless Node.alive?() do
       {:ok, _pid} =
         Node.start(String.to_atom("alto_test_#{System.unique_integer()}"), :shortnames)
     end
 
-    root = Path.join(System.tmp_dir!(), "alto-cross-vm-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root}
   end
 

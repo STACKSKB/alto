@@ -4,8 +4,8 @@ defmodule Alto.Contrib.Workspaces.ApplyTest do
   alias Alto.OperationLog
   alias Alto.Contrib.Workspaces
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-apply-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     source = Path.join(root, "source")
     File.mkdir_p!(source)
     git!(source, ["init", "-q"])
@@ -23,7 +23,6 @@ defmodule Alto.Contrib.Workspaces.ApplyTest do
     ledger = start_supervised!({OperationLog, opts})
     manager = Workspaces.new(root: Path.join(root, "workspaces"), ledger: ledger)
     {:ok, snapshot} = Workspaces.prepare(manager, source)
-    on_exit(fn -> File.rm_rf!(root) end)
     %{manager: manager, snapshot: snapshot, source: source, opts: opts}
   end
 

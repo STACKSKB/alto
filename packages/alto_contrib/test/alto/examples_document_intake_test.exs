@@ -31,9 +31,8 @@ defmodule Alto.Examples.DocumentIntakeTest do
     def stream(_request, _sink, _opts), do: {:ok, %{message: ~s|{"fields":[]}|, tool_calls: []}}
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-doc-example-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(dir) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     {:ok, dir: dir}
   end
 

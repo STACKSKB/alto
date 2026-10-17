@@ -4,9 +4,8 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
 
   alias Alto.Contrib.Workspaces.GitPatch
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "alto-git-patch-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     git!(dir, ["init", "-q"])
     File.write!(Path.join(dir, "a.txt"), "a\n")
     File.write!(Path.join(dir, "b.txt"), "b\n")
@@ -14,7 +13,6 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
     File.write!(Path.join(dir, "binary.bin"), <<0, 1, 2, 255>>)
     git!(dir, ["add", "."])
     git!(dir, ["commit", "-qm", "base"])
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}
   end
 

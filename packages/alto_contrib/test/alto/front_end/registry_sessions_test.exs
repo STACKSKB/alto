@@ -99,11 +99,8 @@ defmodule Alto.Contrib.FrontEnd.RegistrySessionsTest do
     def resolve_child_provider(_, _), do: {:error, :unknown_profile}
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-served-sess-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root, session_dir: Path.join(root, "sessions")}
   end
 

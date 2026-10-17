@@ -4,12 +4,8 @@ defmodule Alto.Contrib.Tools.FileResultRetentionTest do
   alias Alto.Contrib.Tools.ReadFile
   alias Alto.Contrib.Tools.SearchFiles
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-retained-files-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root, context: %{cwd: root}}
   end
 

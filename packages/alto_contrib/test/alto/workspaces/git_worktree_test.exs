@@ -6,8 +6,8 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
   alias Alto.Contrib.Workspaces.Git
   alias Alto.Contrib.Tools.CreateWorktree
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-linked-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     source = Path.join(root, "source")
     File.mkdir_p!(source)
     git!(source, ["init", "-q"])
@@ -24,7 +24,6 @@ defmodule Alto.Contrib.Workspaces.GitWorktreeTest do
       )
 
     context = %{session_id: "test", cwd: source}
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, source: source, manager: manager, context: context, ledger_opts: ledger_opts}
   end
 

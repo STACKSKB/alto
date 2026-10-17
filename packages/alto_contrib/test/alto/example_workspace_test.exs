@@ -6,7 +6,8 @@ defmodule Alto.ExampleWorkspaceTest do
                 do: nil,
                 else: "bwrap(1) is required for the workspace example integration test"
 
-  setup do
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     model = System.get_env("ALTO_MODEL")
     System.put_env("ALTO_MODEL", "test-model")
 
@@ -14,12 +15,8 @@ defmodule Alto.ExampleWorkspaceTest do
       if model, do: System.put_env("ALTO_MODEL", model), else: System.delete_env("ALTO_MODEL")
     end)
 
-    root =
-      Path.join(System.tmp_dir!(), "alto-example-workspace-#{System.unique_integer([:positive])}")
-
     File.mkdir_p!(Path.join(root, ".git"))
     File.write!(Path.join(root, ".git/config"), "original")
-    on_exit(fn -> File.rm_rf!(root) end)
     assert {:ok, options} = Alto.Contrib.Config.load(@config)
 
     options =

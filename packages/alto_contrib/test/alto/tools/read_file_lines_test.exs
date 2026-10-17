@@ -2,10 +2,8 @@ defmodule Alto.Contrib.Tools.ReadFileLinesTest do
   use ExUnit.Case, async: true
   alias Alto.Contrib.Tools.ReadFile
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-lines-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     File.write!(Path.join(root, "source"), "α\r\nsecond line\nthird\nlast")
     %{root: root, context: %{cwd: root}}
   end

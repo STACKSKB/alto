@@ -3,10 +3,8 @@ defmodule Alto.AttachmentTest do
   alias Alto.Contrib.Attachment
   alias Alto.Content
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-attachments-#{System.unique_integer([:positive])}")
-    File.mkdir!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root, opts: [directory: Path.join(root, "files")]}
   end
 

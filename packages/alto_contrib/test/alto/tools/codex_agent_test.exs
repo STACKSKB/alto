@@ -1,9 +1,8 @@
 defmodule Alto.Contrib.Tools.CodexAgentTest do
   use ExUnit.Case, async: true
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-codex-agent-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     server = Path.join(root, "server.py")
     log = Path.join(root, "requests.jsonl")
 
@@ -60,8 +59,6 @@ defmodule Alto.Contrib.Tools.CodexAgentTest do
             emit({'id': 'dynamic', 'method': 'item/tool/call', 'params': {'threadId': 'thread-1', 'turnId': 'turn-1', 'callId': 'call-one', 'tool': 'list_agents', 'arguments': {}}})
             emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
     """)
-
-    on_exit(fn -> File.rm_rf!(root) end)
 
     tool =
       {Alto.Contrib.Tools.CodexAgent,

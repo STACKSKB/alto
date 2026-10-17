@@ -16,13 +16,11 @@ defmodule Alto.Contrib.Tools.ExternalToolsTest do
     def execute({_invocation, result}), do: result
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-external-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     System.cmd("git", ["init", "--quiet"], cd: root)
     File.write!(Path.join(root, "sample.txt"), "hello\n")
     context = %{session_id: "test", cwd: root}
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, context: context}
   end
 

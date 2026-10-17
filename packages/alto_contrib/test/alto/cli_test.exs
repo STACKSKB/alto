@@ -90,10 +90,8 @@ defmodule Alto.CLITest do
     end
   end
 
-  setup do
-    root = Path.join(System.tmp_dir!(), "alto-cli-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
-    on_exit(fn -> File.rm_rf!(root) end)
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     %{root: root}
   end
 

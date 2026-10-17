@@ -4,10 +4,8 @@ defmodule Alto.Contrib.Workspaces.GitTest do
 
   alias Alto.Contrib.Workspaces.Git
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "alto-workspace-git-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: root} do
     repo = Path.join(root, "repo")
     File.mkdir_p!(repo)
     git!(repo, ["init", "--quiet"])
@@ -21,7 +19,6 @@ defmodule Alto.Contrib.Workspaces.GitTest do
       "base"
     ])
 
-    on_exit(fn -> File.rm_rf!(root) end)
     %{root: root, repo: repo}
   end
 

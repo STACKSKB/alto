@@ -69,10 +69,8 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     def handle_event(_event, state, _spec), do: {:continue, state, []}
   end
 
-  setup do
-    dir =
-      Path.join(System.tmp_dir!(), "alto-runner-workspaces-#{System.unique_integer([:positive])}")
-
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     source = Path.join(dir, "source")
     File.mkdir_p!(source)
     File.write!(Path.join(source, "tracked.txt"), "base\n")
@@ -84,7 +82,6 @@ defmodule Alto.Runner.SerialWorkspaceTest do
     ledger = start_supervised!({OperationLog, ledger_opts})
     manager = Workspaces.new(root: Path.join(dir, "workspaces"), ledger: ledger)
 
-    on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, source: source, manager: manager}
   end
 
