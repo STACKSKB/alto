@@ -272,24 +272,8 @@ defmodule Alto.Contrib.Resident.CheckpointTest do
   defp submit(name, id, profile),
     do: Tasks.command(name, "submit", %{"id" => id, "profile" => profile, "task" => "{}"})
 
-  defp wait_for(name, id, status, attempts \\ 150)
-
-  defp wait_for(name, id, status, 0),
-    do:
-      flunk(
-        "#{id} did not become #{status}: #{inspect(Tasks.command(name, "get", %{"id" => id}))}"
-      )
-
-  defp wait_for(name, id, status, attempts) do
-    case Tasks.command(name, "get", %{"id" => id}) do
-      {:ok, %{"task" => %{"status" => ^status} = task}} ->
-        task
-
-      _ ->
-        Process.sleep(20)
-        wait_for(name, id, status, attempts - 1)
-    end
-  end
+  defp wait_for(name, id, status),
+    do: Alto.Test.ResidentTask.await(name, id, status, 150, 20)
 
   test "old approval packets remain retained and require upgrade reconciliation", %{
     name: name,

@@ -591,17 +591,6 @@ defmodule Alto.Contrib.Resident.LifecycleTest do
     {key, plan}
   end
 
-  defp eventually(name, id, status, tries \\ 300)
-  defp eventually(_name, _id, _status, 0), do: flunk("task did not finish")
-
-  defp eventually(name, id, status, tries) do
-    case Tasks.command(name, "get", %{"id" => id}) do
-      {:ok, %{"task" => %{"status" => ^status} = task}} ->
-        task
-
-      _ ->
-        Process.sleep(20)
-        eventually(name, id, status, tries - 1)
-    end
-  end
+  defp eventually(name, id, status),
+    do: Alto.Test.ResidentTask.await(name, id, status, 300, 20)
 end

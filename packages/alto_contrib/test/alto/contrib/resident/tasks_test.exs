@@ -488,17 +488,6 @@ defmodule Alto.Contrib.Resident.TasksTest do
         )
   end
 
-  defp eventually(name, id, status, attempts \\ 150)
-  defp eventually(_name, id, status, 0), do: flunk("#{id} did not become #{status}")
-
-  defp eventually(name, id, status, attempts) do
-    case Tasks.command(name, "get", %{"id" => id}) do
-      {:ok, %{"task" => %{"status" => ^status} = task}} ->
-        task
-
-      _ ->
-        Process.sleep(20)
-        eventually(name, id, status, attempts - 1)
-    end
-  end
+  defp eventually(name, id, status),
+    do: Alto.Test.ResidentTask.await(name, id, status, 150, 20)
 end
