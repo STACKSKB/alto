@@ -310,27 +310,23 @@ defmodule Alto.Messaging do
   end
 
   defp dispatch({:snapshot, seal}, %{kind: :agent, id: root}, state) do
+    operation = if seal, do: :checkpoint, else: :snapshot
+
     saved =
-      Alto.Result.reduce(state.entries, %{}, fn {id, entry}, acc ->
-        if descendant?(id, root, state.entries) do
-          with {:ok, input} <-
-                 if(seal,
-                   do: Alto.Input.request(entry.input, :checkpoint),
-                   else: Alto.Input.request(entry.input, :snapshot)
-                 ) do
-            status = if entry.status == :closed and not entry.pause, do: :closed, else: :pending
+      state.entries
+      |> Stream.filter(fn {id, _entry} -> descendant?(id, root, state.entries) end)
+      |> Alto.Result.reduce(%{}, fn {id, entry}, acc ->
+        with {:ok, input} <- Alto.Input.request(entry.input, operation) do
+          status = if entry.status == :closed and not entry.pause, do: :closed, else: :pending
 
-            value = %{
-              input: input,
-              status: status,
-              label: entry.label,
-              parent: entry.parent
-            }
+          value = %{
+            input: input,
+            status: status,
+            label: entry.label,
+            parent: entry.parent
+          }
 
-            {:ok, Map.put(acc, id, value)}
-          end
-        else
-          {:ok, acc}
+          {:ok, Map.put(acc, id, value)}
         end
       end)
 
@@ -413,9 +409,8 @@ defmodule Alto.Messaging do
           sender = attribute_relationship(sender, id, state.entries)
           message = Map.merge(message, %{sender: sender, recipient: id})
 
-          if status == :closed,
-            do: safe(fn -> Alto.Input.request(input, {:duplicate, message}) end),
-            else: safe(fn -> Alto.Input.request(input, {:enqueue, message}) end)
+          operation = if status == :closed, do: :duplicate, else: :enqueue
+          safe(fn -> Alto.Input.request(input, {operation, message}) end)
       end
 
     {:reply, reply, state}
