@@ -65,7 +65,7 @@ defmodule Alto.Contrib.Tools.EditFile do
         context,
         {opts.max_file_bytes, opts.patch_bytes, opts.preview_bytes},
         fn content ->
-          with :ok <- validate_utf8(content),
+          with true <- String.valid?(content) or {:error, :file_is_not_utf8},
                {:ok, updated, replacements} <- apply_edits(content, edits, opts.max_file_bytes),
                do: {:ok, updated, %{replacements: replacements}}
         end
@@ -77,17 +77,12 @@ defmodule Alto.Contrib.Tools.EditFile do
   def run(prepared, %{} = context, _opts \\ []),
     do: FileChange.commit(prepared, context)
 
-  defp validate_size(size, max_file_bytes) when size <= max_file_bytes, do: :ok
-  defp validate_size(_size, max_file_bytes), do: {:error, {:file_too_large, max_file_bytes}}
-
-  defp validate_utf8(content) do
-    if String.valid?(content), do: :ok, else: {:error, :file_is_not_utf8}
-  end
-
   defp apply_edits(content, edits, max_file_bytes) do
     with {:ok, replacements} <- collect_replacements(content, edits),
          {:ok, chunks} <- replace_ranges(content, replacements),
-         :ok <- validate_size(IO.iodata_length(chunks), max_file_bytes) do
+         true <-
+           IO.iodata_length(chunks) <= max_file_bytes or
+             {:error, {:file_too_large, max_file_bytes}} do
       {:ok, IO.iodata_to_binary(chunks), length(replacements)}
     end
   end
@@ -125,30 +120,25 @@ defmodule Alto.Contrib.Tools.EditFile do
   end
 
   defp select_matches(content, matches, false, edit_index) when length(matches) > 1 do
-    locations = Enum.take(matches, 9)
-    visible = Enum.take(locations, 8)
-    truncated? = length(locations) > 8
+    count = length(matches)
 
     info = %{
       edit_index: edit_index,
-      match_lines: Enum.map(visible, fn {offset, _size} -> line_at(content, offset) end),
-      locations_truncated: truncated?,
+      match_lines:
+        Enum.map(Enum.take(matches, 8), fn {offset, _size} -> line_at(content, offset) end),
+      locations_truncated: count > 8,
       hint:
         "Include more surrounding text to identify one occurrence, or set replace_all=true only if every occurrence is intended."
     }
 
-    {:error, {:ambiguous_match, length(matches), info}}
+    {:error, {:ambiguous_match, count, info}}
   end
 
-  defp select_matches(_content, [match | _], false, _edit_index), do: {:ok, [match]}
-  defp select_matches(_content, matches, true, _edit_index), do: {:ok, matches}
+  defp select_matches(_content, matches, replace_all?, _edit_index) when is_boolean(replace_all?),
+    do: {:ok, matches}
 
   defp line_at(content, offset) do
-    content
-    |> binary_part(0, offset)
-    |> then(&:binary.matches(&1, "\n"))
-    |> length()
-    |> Kernel.+(1)
+    1 + length(:binary.matches(binary_part(content, 0, offset), "\n"))
   end
 
   defp replace_ranges(content, replacements) do
