@@ -1,10 +1,6 @@
 defmodule Alto.Contrib.Resident.Tools.ApplyWorkerPatch do
   @moduledoc "Apply a descendant worker's captured patch through Alto's prepared approval contract."
-  @behaviour Alto.Tool
-
-  def name(_opts \\ []), do: :apply_worker_patch
-  def execution_mode(_opts \\ []), do: :exclusive
-  def approval(_opts \\ []), do: :required
+  use Alto.Tool, name: :apply_worker_patch, execution_mode: :exclusive, approval: :required
 
   def schema(_opts \\ []) do
     Alto.Tool.object_schema(
@@ -20,7 +16,7 @@ defmodule Alto.Contrib.Resident.Tools.ApplyWorkerPatch do
     )
   end
 
-  def prepare(arguments, context), do: prepare(arguments, context, [])
+  def prepare(arguments, context, opts \\ [])
 
   def prepare(%{"workspace_id" => id, "revision" => revision} = args, context, opts)
       when map_size(args) == 2 do
@@ -51,7 +47,7 @@ defmodule Alto.Contrib.Resident.Tools.ApplyWorkerPatch do
 
   defp affected_files(_), do: []
 
-  def run(prepared, context), do: run(prepared, context, [])
+  def run(prepared, context, opts \\ [])
 
   def run(%{"workspace_id" => id} = prepared, context, opts) do
     with {:ok, manager, _} <- Alto.Contrib.Resident.Workspaces.for_descendant(context, id, opts),

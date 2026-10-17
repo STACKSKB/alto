@@ -1,10 +1,6 @@
 defmodule Alto.Contrib.Resident.Tools.Mailbox do
   @moduledoc "Team-local messages. Sender identity and readable address come from Alto."
-  @behaviour Alto.Tool
-
-  def name(_opts \\ []), do: :team_mailbox
-  def execution_mode(_opts \\ []), do: :parallel
-  def approval(_opts \\ []), do: :never
+  use Alto.Tool, name: :team_mailbox, execution_mode: :parallel, approval: :never
 
   def schema(_opts \\ []) do
     Alto.Tool.object_schema(
@@ -25,6 +21,6 @@ defmodule Alto.Contrib.Resident.Tools.Mailbox do
     )
   end
 
-  def run(args, context), do: run(args, context, [])
-  def run(args, context, opts), do: Alto.Contrib.Resident.Mailbox.execute(context, args, opts)
+  def run(args, context, opts \\ []),
+    do: Alto.Contrib.Resident.Mailbox.execute(context, args, opts)
 end

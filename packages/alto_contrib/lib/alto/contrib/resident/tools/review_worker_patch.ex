@@ -1,10 +1,6 @@
 defmodule Alto.Contrib.Resident.Tools.ReviewWorkerPatch do
   @moduledoc "Bounded, execution-scoped inspection of descendant worker patches."
-  @behaviour Alto.Tool
-
-  def name(_opts \\ []), do: :review_worker_patch
-  def execution_mode(_opts \\ []), do: :parallel
-  def approval(_opts \\ []), do: :never
+  use Alto.Tool, name: :review_worker_patch, execution_mode: :parallel, approval: :never
 
   def schema(_opts \\ []) do
     Alto.Tool.object_schema(
@@ -18,7 +14,7 @@ defmodule Alto.Contrib.Resident.Tools.ReviewWorkerPatch do
     )
   end
 
-  def run(args, context), do: run(args, context, [])
+  def run(args, context, opts \\ [])
 
   def run(%{"workspace_id" => id} = args, context, opts) do
     with true <- Map.keys(args) -- ~w(workspace_id cursor) == [],
