@@ -363,17 +363,14 @@ defmodule Alto.OperationLog do
   ## Durable storage and replay
 
   defp load(state) do
-    with :ok <- DurableLog.open(state.dir, state.path), do: replay(state)
+    with :ok <- DurableLog.open(state.dir, state.path) do
+      DurableLog.replay(state.path, state.max_log_bytes, state, fn lines ->
+        Alto.Result.reduce(Enum.with_index(lines, 1), state, &apply_logged/2)
+      end)
+    end
   end
 
-  defp replay(state),
-    do: DurableLog.replay(state.path, state.max_log_bytes, state, &replay_lines(state, &1))
-
-  defp replay_lines(state, lines) do
-    Alto.JSONLines.fold(state, lines, &apply_logged/3)
-  end
-
-  defp apply_logged(state, line, number) do
+  defp apply_logged({line, number}, state) do
     with :ok <- validate_record_bytes(line, state),
          {:ok, encoded} when is_binary(encoded) <- JSON.decode(line),
          {:ok, stored} <- Codec.decode(encoded, max_bytes: state.max_record_bytes),

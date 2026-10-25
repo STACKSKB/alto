@@ -32,13 +32,11 @@ defmodule Alto.Persistence.Retained do
 
   def deadline_ok(_), do: {:error, :invalid_deadline}
 
-  def call_timeout(:infinity), do: @default_call_timeout
+  defp call_timeout(:infinity), do: @default_call_timeout
 
-  def call_timeout(deadline) when is_integer(deadline) do
+  defp call_timeout(deadline) do
     max(deadline - System.monotonic_time(:millisecond), 1)
   end
-
-  def call_timeout(_), do: 0
 
   @doc "Execute a native ledger request under the supplied absolute monotonic deadline."
   @spec request(GenServer.server(), OperationLog.request(), integer() | :infinity) :: term()

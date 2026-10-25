@@ -80,16 +80,9 @@ defmodule Alto.Runner.Budget.Account do
                fn %{packet: packet} ->
                  maximum = min(cap, packet[limit])
 
-                 cond do
-                   deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
-                     {:error, :run_timeout}
-
-                   packet[counter] < maximum ->
-                     {:ok, Map.update!(packet, counter, &(&1 + 1))}
-
-                   true ->
-                     {:error, {error, maximum}}
-                 end
+                 if packet[counter] < maximum,
+                   do: {:ok, Map.update!(packet, counter, &(&1 + 1))},
+                   else: {:error, {error, maximum}}
                end
              ),
            do: :ok

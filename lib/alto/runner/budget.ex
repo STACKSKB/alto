@@ -215,8 +215,7 @@ defmodule Alto.Runner.Budget do
          cap,
          _error
        ) do
-    with :ok <- check(budget),
-         :ok <-
+    with :ok <-
            Account.take(account, if(index == 1, do: :effect, else: :model), cap, budget.deadline),
          do: check(budget)
   end
