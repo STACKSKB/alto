@@ -202,16 +202,16 @@ defmodule Alto.Runner.Execution.Transcript do
 
     Call.run(
       fn ->
-        {:ok, accounting} = Agent.start_link(fn -> run end)
+        {:ok, model_host} = Agent.start_link(fn -> run end)
 
-        Call.with_server(accounting, fn accounting ->
+        Call.with_server(model_host, fn model_host ->
           model = fn request ->
             try do
               request = request |> Map.put_new(:tools, []) |> Map.put(:tool_choice, :none)
 
-              Agent.get_and_update(
-                accounting,
-                &Model.request(request, &1, compaction_sink(run.event_sink)),
+              Agent.get(
+                model_host,
+                &elem(Model.request(request, &1, compaction_sink(run.event_sink)), 0),
                 :infinity
               )
             catch

@@ -33,25 +33,8 @@ defmodule Alto.Runner.Execution.Model do
            do: Alto.Provider.stream(provider, request, attempt_sink, opts)
     end
 
-    caps =
-      Map.merge(run, %{provider_module: provider, requested_model: Keyword.get(opts, :model)})
-
-    {outcome, evidence} = attempt_stream(invoke, sink, caps, step, 1, [])
-    evidence = Enum.reverse(evidence)
-
-    usage =
-      Enum.reduce(evidence, Usage.new(), fn data, acc ->
-        Usage.merge(acc, Usage.normalize(data.usage))
-      end)
-
-    run = %{run | model_requests: run.model_requests + 1, usage: Usage.merge(run.usage, usage)}
-
-    run =
-      Map.put(
-        run,
-        :provider_attempts,
-        Enum.take(Map.get(run, :provider_attempts, []) ++ evidence, -32)
-      )
+    {outcome, run} = attempt_stream(invoke, sink, run, step, 1)
+    run = %{run | model_requests: run.model_requests + 1}
 
     case outcome do
       {:ok, completion} when is_map(completion) ->
@@ -136,10 +119,10 @@ defmodule Alto.Runner.Execution.Model do
 
   def reserve_output(request, _budget), do: {:ok, request}
 
-  defp attempt_stream(invoke, sink, caps, step, attempt, attempts) do
+  defp attempt_stream(invoke, sink, caps, step, attempt) do
     case Call.cancellation(caps.cancel_ref) do
       {:cancelled, reason} ->
-        {{:error, {:cancelled, reason}}, attempts}
+        {{:error, {:cancelled, reason}}, caps}
 
       :continue ->
         # Shared with the provider process: output is delivered immediately,
@@ -226,14 +209,19 @@ defmodule Alto.Runner.Execution.Model do
           Map.merge(evidence, %{
             step: step,
             attempt: attempt,
-            provider_module: caps.provider_module,
-            requested_model: caps.requested_model,
+            provider_module: elem(caps.provider, 0),
+            requested_model: Keyword.get(elem(caps.provider, 1), :model),
             duration_ms: System.monotonic_time(:millisecond) - started,
             output_delivered: :atomics.get(delivered, 1) != 0,
             outcome: outcome_kind(outcome)
           })
 
-        attempts = [evidence | attempts]
+        caps =
+          Map.merge(caps, %{
+            usage: Usage.merge(caps.usage, Usage.normalize(evidence.usage)),
+            provider_attempts: Enum.take(Map.get(caps, :provider_attempts, []) ++ [evidence], -32)
+          })
+
         Compactor.account(caps, evidence)
         diagnostic(caps, :provider_attempt_finished, evidence)
 
@@ -272,15 +260,15 @@ defmodule Alto.Runner.Execution.Model do
             )
 
             case sleep_backoff(delay, caps.cancel_ref, caps.budget) do
-              :ok -> attempt_stream(invoke, sink, caps, step, attempt + 1, attempts)
-              error -> {error, attempts}
+              :ok -> attempt_stream(invoke, sink, caps, step, attempt + 1)
+              error -> {error, caps}
             end
 
           {:error, _} = error ->
-            {error, attempts}
+            {error, caps}
 
           :stop ->
-            {outcome, attempts}
+            {outcome, caps}
         end
     end
   end

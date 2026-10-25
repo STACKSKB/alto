@@ -85,13 +85,13 @@ defmodule Alto.Runner.SerialUsageTest do
     result =
       Alto.run("task",
         provider: {FailingProvider, usage: usage},
-        provider_retries: 1,
+        provider_retries: 35,
         retry_policy: fn _, _ -> {:retry, 0, :test} end
       )
 
-    assert result.usage.output_tokens == 12288
-    assert result.usage.requests == 2
-    assert length(result.provider_attempts) == 2
+    assert result.usage.output_tokens == 221_184
+    assert result.usage.requests == 36
+    assert Enum.map(result.provider_attempts, & &1.attempt) == Enum.to_list(5..36)
     result = Alto.run("task", provider: FailingProvider)
     assert result.usage.requests == 0
     assert [%{usage: nil}] = result.provider_attempts
