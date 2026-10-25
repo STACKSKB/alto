@@ -288,7 +288,14 @@ defmodule Alto.Runner.SerialRetryTest do
   end
 
   test "cancellation wins during backoff", %{agent: agent} do
-    script = fn _n -> {:error, {:transport_error, :down}} end
+    script = fn _n ->
+      {:error,
+       %Alto.Provider.Failure{
+         reason: {:transport_error, :down},
+         usage: %{input_tokens: 100, output_tokens: 7}
+       }}
+    end
+
     owner = self()
 
     {:ok, handle} =
@@ -305,8 +312,12 @@ defmodule Alto.Runner.SerialRetryTest do
     assert :ok = Alto.cancel(handle, :operator_stop)
 
     assert %Alto.Runner.Result{status: :cancelled, reason: :operator_stop} =
-             _ = Alto.await(handle, 2_000)
+             result = Alto.await(handle, 2_000)
 
+    assert result.usage.input_tokens == 100
+    assert result.usage.output_tokens == 7
+    assert result.usage.requests == 1
+    assert [%{attempt: 1, usage: %{output_tokens: 7}}] = result.provider_attempts
     assert attempts(agent) == 1
   end
 

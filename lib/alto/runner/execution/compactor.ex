@@ -47,7 +47,7 @@ defmodule Alto.Runner.Execution.Compactor do
   end
 
   # Foreground and reducer calls reserve local max_steps slots together, while
-  # Model.stream still reserves each transport attempt from the shared Budget.
+  # Model.request still reserves each transport attempt from the shared Budget.
   def reserve_model(run) do
     if enabled?(run) do
       GenServer.call(

@@ -144,21 +144,21 @@ defmodule Alto.Runner.SSERetryTest do
 
     success = sse(%{"choices" => [%{"delta" => %{"content" => "done"}}]})
 
-    outcome =
-      Model.stream(
-        Provider,
-        request,
-        sink,
-        [
-          counter: counter,
-          chunks: chunks,
-          success: success,
-          parent: parent,
-          repeat_error: repeat_error
-        ],
-        caps,
-        1
-      )
+    run =
+      Map.merge(caps, %{
+        provider:
+          {Provider,
+           counter: counter,
+           chunks: chunks,
+           success: success,
+           parent: parent,
+           repeat_error: repeat_error},
+        model_requests: 0,
+        max_steps: 1,
+        usage: Alto.Usage.new()
+      })
+
+    {outcome, _run} = Model.request(request, run, sink)
 
     {outcome, :atomics.get(counter, 1), request}
   end

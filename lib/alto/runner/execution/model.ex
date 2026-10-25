@@ -26,47 +26,49 @@ defmodule Alto.Runner.Execution.Model do
   defp dispatch(request, run, sink, step) do
     {provider, opts} = run.provider
     Alto.Events.notify(run.event_sink, Event.live(:model_started, %{step: step}))
-    attempts = :ets.new(__MODULE__, [:set, :public])
+    budget = run.budget
 
-    try do
-      outcome =
-        stream(provider, request, sink, opts, Map.put(run, :accounting_table, attempts), step)
+    invoke = fn attempt_sink ->
+      with :ok <- Budget.take_model(budget),
+           do: Alto.Provider.stream(provider, request, attempt_sink, opts)
+    end
 
-      evidence = :ets.tab2list(attempts) |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
+    caps =
+      Map.merge(run, %{provider_module: provider, requested_model: Keyword.get(opts, :model)})
 
-      usage =
-        Enum.reduce(evidence, Usage.new(), fn data, acc ->
-          Usage.merge(acc, Usage.normalize(data.usage))
-        end)
+    {outcome, evidence} = attempt_stream(invoke, sink, caps, step, 1, [])
+    evidence = Enum.reverse(evidence)
 
-      run = %{run | model_requests: run.model_requests + 1, usage: Usage.merge(run.usage, usage)}
+    usage =
+      Enum.reduce(evidence, Usage.new(), fn data, acc ->
+        Usage.merge(acc, Usage.normalize(data.usage))
+      end)
 
-      run =
-        Map.put(
-          run,
-          :provider_attempts,
-          Enum.take(Map.get(run, :provider_attempts, []) ++ evidence, -32)
-        )
+    run = %{run | model_requests: run.model_requests + 1, usage: Usage.merge(run.usage, usage)}
 
-      case outcome do
-        {:ok, completion} when is_map(completion) ->
-          known? = is_map(completion[:usage])
+    run =
+      Map.put(
+        run,
+        :provider_attempts,
+        Enum.take(Map.get(run, :provider_attempts, []) ++ evidence, -32)
+      )
 
-          completion =
-            completion
-            |> Map.put(:usage, Usage.normalize(completion[:usage]))
-            |> Map.put(:usage_known, known?)
+    case outcome do
+      {:ok, completion} when is_map(completion) ->
+        known? = is_map(completion[:usage])
 
-          {{:ok, completion}, run}
+        completion =
+          completion
+          |> Map.put(:usage, Usage.normalize(completion[:usage]))
+          |> Map.put(:usage_known, known?)
 
-        {:ok, other} ->
-          {{:error, {:invalid_completion, other}}, run}
+        {{:ok, completion}, run}
 
-        {:error, reason} ->
-          {{:error, Alto.Provider.Failure.reason(reason)}, run}
-      end
-    after
-      :ets.delete(attempts)
+      {:ok, other} ->
+        {{:error, {:invalid_completion, other}}, run}
+
+      {:error, reason} ->
+        {{:error, Alto.Provider.Failure.reason(reason)}, run}
     end
   end
 
@@ -134,35 +136,10 @@ defmodule Alto.Runner.Execution.Model do
 
   def reserve_output(request, _budget), do: {:ok, request}
 
-  @doc "Stream a model request with bounded transient-error retries before any output is delivered."
-  @spec stream(module(), map(), function(), keyword(), map(), pos_integer()) ::
-          term()
-  def stream(provider, request, sink, provider_opts, caps, step)
-      when is_atom(provider) and is_function(sink, 1) and is_integer(step) and step > 0 do
-    budget = caps.budget
-
-    invoke = fn attempt_sink ->
-      with :ok <- Budget.take_model(budget),
-           do: Alto.Provider.stream(provider, request, attempt_sink, provider_opts)
-    end
-
-    attempt_stream(
-      invoke,
-      sink,
-      Map.merge(caps, %{
-        provider_module: provider,
-        requested_model: Keyword.get(provider_opts, :model)
-      }),
-      step,
-      1
-    )
-    |> unwrap()
-  end
-
-  defp attempt_stream(invoke, sink, caps, step, attempt) do
+  defp attempt_stream(invoke, sink, caps, step, attempt, attempts) do
     case Call.cancellation(caps.cancel_ref) do
       {:cancelled, reason} ->
-        {:error, {:cancelled, reason}}
+        {{:error, {:cancelled, reason}}, attempts}
 
       :continue ->
         # Shared with the provider process: output is delivered immediately,
@@ -256,7 +233,7 @@ defmodule Alto.Runner.Execution.Model do
             outcome: outcome_kind(outcome)
           })
 
-        if caps[:accounting_table], do: :ets.insert(caps.accounting_table, {attempt, evidence})
+        attempts = [evidence | attempts]
         Compactor.account(caps, evidence)
         diagnostic(caps, :provider_attempt_finished, evidence)
 
@@ -294,14 +271,16 @@ defmodule Alto.Runner.Execution.Model do
               })
             )
 
-            with :ok <- sleep_backoff(delay, caps.cancel_ref, caps.budget),
-                 do: attempt_stream(invoke, sink, caps, step, attempt + 1)
+            case sleep_backoff(delay, caps.cancel_ref, caps.budget) do
+              :ok -> attempt_stream(invoke, sink, caps, step, attempt + 1, attempts)
+              error -> {error, attempts}
+            end
 
           {:error, _} = error ->
-            error
+            {error, attempts}
 
           :stop ->
-            outcome
+            {outcome, attempts}
         end
     end
   end
