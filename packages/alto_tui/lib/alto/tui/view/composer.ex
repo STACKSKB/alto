@@ -59,7 +59,7 @@ defmodule Alto.TUI.View.Composer do
       value
       |> String.split("\n", trim: false)
       |> Enum.with_index()
-      |> Enum.map_reduce({0, nil}, fn {line, line_index}, {start_row, found_cursor} ->
+      |> Enum.flat_map_reduce({0, nil}, fn {line, line_index}, {start_row, found_cursor} ->
         graphemes = String.graphemes(line)
         cursor? = context.focused? and line_index == cursor_line
         column = min(cursor_column, length(graphemes))
@@ -88,7 +88,7 @@ defmodule Alto.TUI.View.Composer do
         {line_rows, {start_row + length(line_rows), cursor_row}}
       end)
 
-    {Text.new(List.flatten(rows)), cursor_row}
+    {Text.new(rows), cursor_row}
   end
 
   defp wrap_prose_line(graphemes, width, offset \\ 0)
@@ -127,23 +127,10 @@ defmodule Alto.TUI.View.Composer do
   defp maybe_add_end_cursor_row(rows, _cursor?, _column, _length, _width), do: rows
 
   defp cursor_projection(rows, column, width) do
-    last_index = length(rows) - 1
-
     index =
-      rows
-      |> Enum.with_index()
-      |> Enum.find_value(last_index, fn {row, index} ->
-        next = Enum.at(rows, index + 1)
-
-        cond do
-          column < row.stop -> index
-          column > row.stop -> nil
-          is_nil(next) -> index
-          next.start > row.stop -> index
-          length(row.graphemes) < width -> index
-          true -> nil
-        end
-      end)
+      Enum.find_index(rows, fn row ->
+        column < row.stop or (column == row.stop and length(row.graphemes) < width)
+      end) || length(rows) - 1
 
     row = Enum.at(rows, index)
     {index, column |> Kernel.-(row.start) |> max(0) |> min(length(row.graphemes))}
