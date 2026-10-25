@@ -50,6 +50,22 @@ defmodule Alto.TUI.MarkdownTest do
     assert byte_size(Transcript.text(%{kind: :tool, text: String.duplicate("x", 50_000)})) < 1_300
   end
 
+  test "live and restored tool output preserve literal JSON after presentation" do
+    output = ~s({"output":"first\\nsecond","items":[1,2]})
+    result = %{output: output, exit_status: 0}
+    live = Alto.Contrib.ToolDisplay.entry(:tool_completed, %{name: "run_command", value: result})
+
+    restored =
+      Alto.Contrib.ToolDisplay.transcript([
+        %{"role" => "tool", "name" => "run_command", "content" => JSON.encode!(result)}
+      ])
+
+    for entry <- [live | restored] do
+      assert Transcript.render([entry], 100) |> plain() =~ output
+      assert Transcript.text(entry, expanded: true) =~ output
+    end
+  end
+
   test "followed tail matches the full transcript at varied widths and heights" do
     entries = [
       %{kind: :user, text: "Original request\n" <> String.duplicate("history ", 100)},
@@ -205,14 +221,6 @@ defmodule Alto.TUI.MarkdownTest do
     for kind <- [:user, :reasoning] do
       assert Transcript.render([%{kind: kind, text: message}], 60) |> plain() =~ "LAST LINE"
     end
-
-    activity =
-      Transcript.render([%{kind: :activity, text: ~s({"output":"first\\nsecond"})}], 60)
-      |> plain()
-
-    assert activity =~ "first"
-    assert activity =~ "second"
-    refute activity =~ "\\n"
   end
 
   test "rich viewport equals the full native render, and copy follows visible formatted text" do

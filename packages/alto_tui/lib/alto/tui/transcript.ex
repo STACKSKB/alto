@@ -173,7 +173,6 @@ defmodule Alto.TUI.Transcript do
 
     text =
       case kind do
-        role when role in ["tool", "activity"] -> Alto.Contrib.Display.result(entry[:text])
         "error" -> Alto.Contrib.Display.error(entry[:text])
         role when role in ["user", "reasoning"] and is_binary(value) -> entry.text
         _ -> Alto.Contrib.Display.text(entry[:text])
@@ -190,12 +189,12 @@ defmodule Alto.TUI.Transcript do
 
   defp preview(value, opts) do
     if opts[:expanded],
-      do: Alto.Contrib.Display.result(value, limit: 20_000),
+      do: Alto.Contrib.Display.text(value, limit: 20_000),
       else: preview(value)
   end
 
   defp preview(value) do
-    text = Alto.Contrib.Display.result(value, limit: 1_200)
+    text = Alto.Contrib.Display.text(value, limit: 1_200)
     lines = String.split(text, "\n")
     shown = Enum.take(lines, 6) |> Enum.join("\n")
 
