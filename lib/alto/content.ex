@@ -101,11 +101,11 @@ defmodule Alto.Content do
 
   def normalize_tool_result(%__MODULE__{blocks: blocks}, limit)
       when is_integer(limit) and limit > 0 do
-    with {:ok, normalized} <- validate_blocks(blocks),
-         encoded <- JSON.encode!(normalized),
+    with :ok <- validate_blocks(blocks),
          true <-
-           byte_size(encoded) <= limit or {:error, {:content_too_large, limit}} do
-      {:ok, normalized}
+           IO.iodata_length(JSON.encode_to_iodata!(blocks)) <= limit or
+             {:error, {:content_too_large, limit}} do
+      {:ok, blocks}
     end
   rescue
     error -> {:error, {:invalid_content, Exception.message(error)}}
@@ -118,21 +118,18 @@ defmodule Alto.Content do
 
   @doc "Validate and wrap provider-neutral content blocks from a transcript."
   @spec decode_transcript(term()) :: :not_content | {:ok, t()} | {:error, term()}
-  def decode_transcript([_ | _] = blocks) do
-    with {:ok, validated} <- validate_blocks(blocks) do
-      {:ok, %__MODULE__{blocks: validated}}
-    end
+  def decode_transcript(blocks) when is_list(blocks) do
+    with :ok <- validate_blocks(blocks), do: {:ok, %__MODULE__{blocks: blocks}}
   end
 
-  def decode_transcript(value) when is_list(value), do: {:error, :empty_content}
   def decode_transcript(_value), do: :not_content
 
   defp validate_blocks([_ | _] = blocks) do
     blocks
-    |> Enum.with_index()
-    |> Alto.Result.traverse(fn {block, index} ->
+    |> Stream.with_index()
+    |> Alto.Result.each(fn {block, index} ->
       case validate_block(block) do
-        {:ok, _} = result -> result
+        :ok -> :ok
         {:error, reason} -> {:error, {:invalid_content_block, index, reason}}
       end
     end)
@@ -142,7 +139,7 @@ defmodule Alto.Content do
 
   defp validate_block(%{"type" => "text", "text" => text} = block)
        when map_size(block) == 2 and is_binary(text) do
-    if String.valid?(text), do: {:ok, block}, else: {:error, :text_must_be_utf8}
+    if String.valid?(text), do: :ok, else: {:error, :text_must_be_utf8}
   end
 
   defp validate_block(
@@ -166,7 +163,7 @@ defmodule Alto.Content do
          true <-
            {parsed_media, parsed_width, parsed_height} === {media_type, width, height} or
              {:error, :image_metadata_mismatch} do
-      {:ok, block}
+      :ok
     else
       :error -> {:error, :invalid_image_base64}
       error -> error
@@ -193,7 +190,7 @@ defmodule Alto.Content do
          true <-
            media != "application/pdf" or String.starts_with?(decoded, "%PDF-") or
              {:error, :invalid_pdf} do
-      {:ok, block}
+      :ok
     else
       :error -> {:error, :invalid_file_base64}
       error -> error
