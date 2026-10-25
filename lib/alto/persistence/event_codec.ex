@@ -1,6 +1,6 @@
 defmodule Alto.Persistence.EventCodec do
   @moduledoc """
-  Versioned JSON storage codec for session event bodies.
+  Versioned JSON storage codec for session event bodies and outcomes.
 
   A single typed tree retains atoms, tuples, map keys and structs while keeping
   text payloads as ordinary JSON strings. `decode/2` restores exact terms using
@@ -10,7 +10,7 @@ defmodule Alto.Persistence.EventCodec do
   Lists are tagged too, so user data cannot impersonate a type marker. Opaque
   runtime values retain bounded ETF plus the protocol's small display projection;
   they use the existing persistence codec and its validation policy on decode.
-  This is deliberately event-specific, not a replacement for the ETF codec used
+  This is deliberately session-specific, not a replacement for the ETF codec used
   by checkpoints and operation logs.
   """
 

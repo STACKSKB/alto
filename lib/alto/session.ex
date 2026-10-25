@@ -275,22 +275,12 @@ defmodule Alto.Session do
 
   @doc "Exact term encoding for opaque payloads (event data, outcomes)."
   @spec encode_term(term()) :: map()
-  def encode_term(term), do: %{"$term" => Base.encode64(:erlang.term_to_binary(term))}
+  defdelegate encode_term(term), to: Alto.Persistence.EventCodec, as: :encode
 
   @doc "Decode an exact term payload."
   @spec decode_term(term()) :: {:ok, term()} | {:error, term()}
-  def decode_term(%{"$term" => encoded}) when is_binary(encoded) do
-    with true <- byte_size(encoded) <= @max_log_bytes,
-         {:ok, term} <-
-           Alto.Persistence.Codec.decode(encoded,
-             max_bytes: @max_log_bytes,
-             validate: &safe_term?/1
-           ) do
-      {:ok, term}
-    else
-      _ -> {:error, :invalid_term_payload}
-    end
-  end
+  def decode_term(%{"$term" => encoded}) when is_binary(encoded),
+    do: decode_term(%{"$event_term" => 1, "value" => ["opaque", encoded, nil]})
 
   def decode_term(%{"$event_term" => 1} = data) do
     with {:ok, term} <-
@@ -357,7 +347,7 @@ defmodule Alto.Session do
       "domain" => Atom.to_string(event.domain),
       "event" => Atom.to_string(event.type),
       "at_ms" => event.at_ms,
-      "data" => Alto.Persistence.EventCodec.encode(event.data)
+      "data" => encode_term(event.data)
     }
   end
 

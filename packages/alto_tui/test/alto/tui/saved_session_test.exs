@@ -60,7 +60,15 @@ defmodule Alto.TUI.SavedSessionTest do
     assert :ok =
              Session.append(
                id,
-               %{"v" => 1, "type" => "completed", "run_id" => "run-a", "status" => "ok"},
+               %{
+                 "v" => 1,
+                 "type" => "completed",
+                 "run_id" => "run-a",
+                 "status" => "ok",
+                 "output" => %{
+                   "$term" => Base.encode64(:erlang.term_to_binary("historical result"))
+                 }
+               },
                opts
              )
 
@@ -68,6 +76,7 @@ defmodule Alto.TUI.SavedSessionTest do
     assert appended.usage.input_tokens == 30
     assert appended.usage.requests == 2
     assert appended.agents["agent-a"].status == "ok"
+    assert appended.agents["agent-a"].result == "historical result\n"
     File.rm!(cache)
     assert {:ok, ^appended} = SavedSession.load(id, opts)
   end
