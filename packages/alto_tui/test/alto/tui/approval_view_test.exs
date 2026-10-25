@@ -9,7 +9,13 @@ defmodule Alto.TUI.ApprovalViewTest do
       call_id: nil,
       execution_mode: :exclusive,
       tool: "run_command",
-      arguments: %{"program" => "echo", "args" => ["unprepared"]},
+      arguments: %{
+        "program" => "echo",
+        "args" => ["unprepared"],
+        "cwd" => "/unprepared",
+        "timeout_ms" => 999,
+        "max_output_bytes" => 999
+      },
       details: %{
         command: %{
           requested_program: "ls",
@@ -35,6 +41,15 @@ defmodule Alto.TUI.ApprovalViewTest do
     refute text =~ "\e"
     refute text =~ "%{"
     refute text =~ "=>"
+    refute text =~ "999"
+
+    request =
+      update_in(request.details.command, &Map.drop(&1, [:cwd, :timeout_ms, :max_output_bytes]))
+
+    text = ApprovalView.text(request)
+    refute text =~ "Folder\n"
+    refute text =~ "Timeout\n"
+    refute text =~ "Output limit\n"
   end
 
   test "remote command strings retain shell meaning and reasons" do
@@ -45,12 +60,21 @@ defmodule Alto.TUI.ApprovalViewTest do
         "cwd" => "/tmp",
         "reason" => "Inspect the project"
       },
-      "details" => %{}
+      "details" => %{"threadId" => "routing-id", "permissions" => %{"network" => false}}
     }
 
     text = ApprovalView.text(request)
     assert text =~ "Run command\n\nls -l && pwd"
     assert text =~ "Reason\nInspect the project"
+    assert text =~ "Folder\n/tmp"
+    assert text =~ ~s(Additional details\n{"permissions":{"network":false}})
+    refute text =~ "routing-id"
+
+    request = put_in(request["arguments"]["command"], ["ls", "folder with spaces"])
+    assert ApprovalView.text(request) =~ "Run command\n\nls 'folder with spaces'"
+
+    request = put_in(request["arguments"], %{"program" => "echo", "args" => ["hello world"]})
+    assert ApprovalView.text(request) =~ "Run command\n\necho 'hello world'"
   end
 
   test "file changes have readable sizes, replacement text and preview" do

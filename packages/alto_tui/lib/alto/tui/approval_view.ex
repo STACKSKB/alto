@@ -10,11 +10,9 @@ defmodule Alto.TUI.ApprovalView do
     command = Map.get(details, "command") || Map.get(args, "command")
 
     cond do
-      is_map(command) and is_binary(command["executable"]) ->
+      (is_map(command) and is_binary(command["executable"])) or
+        tool in ["run_command", "Codex command"] or is_binary(command) or is_list(command) ->
         command_text(command, details, args)
-
-      tool in ["run_command", "Codex command"] or is_binary(command) or is_list(command) ->
-        raw_command(command, details, args)
 
       tool in ["write_file", "edit_file"] ->
         file_text(tool, details, args)
@@ -26,48 +24,39 @@ defmodule Alto.TUI.ApprovalView do
   end
 
   defp command_text(command, details, args) do
-    program = command["requested_program"] || command["executable"]
+    {line, settings, executable, additional} =
+      case command do
+        %{"executable" => executable} when is_binary(executable) ->
+          program = command["requested_program"] || executable
 
-    "Run command\n\n" <>
-      argv([program | command["args"] || []]) <>
-      sections([
-        {"Folder", command["cwd"]},
-        {"Executable", if(program != command["executable"], do: command["executable"])},
-        {"Reason", args["reason"] || details["reason"]},
-        {"Timeout", duration(command["timeout_ms"])},
-        {"Output limit", bytes(command["max_output_bytes"])},
-        {"Execution", execution(details["execution"])}
-      ])
-  end
+          {argv([program | command["args"] || []]), command,
+           if(program != executable, do: executable), nil}
 
-  defp raw_command(command, details, args) do
-    line =
-      cond do
-        is_list(command) -> argv(command)
-        is_binary(command) -> visible(command)
-        is_binary(args["program"]) -> argv([args["program"] | args["args"] || []])
-        true -> "Command not supplied"
+        _ ->
+          {raw_command(command, args), Map.put(args, "cwd", args["cwd"] || details["cwd"]), nil,
+           Map.drop(details, ~w(command cwd reason execution threadId turnId itemId))}
       end
 
     "Run command\n\n" <>
       line <>
       sections([
-        {"Folder", args["cwd"] || details["cwd"]},
+        {"Folder", settings["cwd"]},
+        {"Executable", executable},
         {"Reason", args["reason"] || details["reason"]},
-        {"Timeout", duration(args["timeout_ms"])},
-        {"Output limit", bytes(args["max_output_bytes"])},
+        {"Timeout", duration(settings["timeout_ms"])},
+        {"Output limit", bytes(settings["max_output_bytes"])},
         {"Execution", execution(details["execution"])},
-        {"Additional details",
-         Map.drop(details, [
-           "command",
-           "cwd",
-           "reason",
-           "execution",
-           "threadId",
-           "turnId",
-           "itemId"
-         ])}
+        {"Additional details", additional}
       ])
+  end
+
+  defp raw_command(command, args) do
+    cond do
+      is_list(command) -> argv(command)
+      is_binary(command) -> visible(command)
+      is_binary(args["program"]) -> argv([args["program"] | args["args"] || []])
+      true -> "Command not supplied"
+    end
   end
 
   defp file_text(tool, details, args) do
