@@ -7,9 +7,15 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
   @max_files 256
   @max_file_bytes 128 * 1_024 * 1_024
 
+  def prepare(target, patch_path, patch_sha256, opts \\ []) do
+    with {:ok, prepared} <- manifest(target, patch_path, patch_sha256, opts),
+         :ok <- check(target, patch_path, opts),
+         do: {:ok, prepared}
+  end
+
   # Git parses its own patch grammar. Forward/reverse numstat together include
   # both sides of renames, including names containing tabs and newlines.
-  def prepare(target, patch_path, patch_sha256, opts \\ []) do
+  defp manifest(target, patch_path, patch_sha256, opts) do
     with :ok <- verify_patch(patch_path, patch_sha256),
          {:ok, repo} <- Git.integration_target(target, opts),
          {:ok, forward} <-
@@ -26,41 +32,36 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
         "files" => files
       }
 
-      with :ok <- verify(prepared, patch_path, opts), do: {:ok, prepared}
+      with :ok <- manifest_bound(prepared), do: {:ok, prepared}
     end
   end
 
   def verify(
-        %{"version" => 1, "engine" => version, "target" => repo, "files" => files} = prepared,
+        %{"target" => %{"root" => target}, "patch_sha256" => digest} = prepared,
         patch_path,
         opts
       )
-      when is_map(repo) and is_list(files) do
+      when is_binary(target) and is_binary(digest) do
     with :ok <- manifest_bound(prepared),
-         :ok <- verify_patch(patch_path, prepared["patch_sha256"]),
-         true <- version == engine(),
-         true <- length(files) in 1..@max_files,
-         true <- Enum.all?(files, &(is_map(&1) and is_binary(&1["path"]))),
-         target when is_binary(target) <- repo["root"],
-         {:ok, current_repo} <- Git.integration_target(target, opts),
-         true <- current_repo == repo,
-         {:ok, current} <- snapshots(target, Enum.map(files, & &1["path"])),
-         true <- current == files,
-         {:ok, _} <-
-           Git.command(
-             target,
-             ["apply", "--check", "--whitespace=nowarn", "--", patch_path],
-             opts
-           ) do
-      :ok
+         {:ok, ^prepared} <- manifest(target, patch_path, digest, opts) do
+      check(target, patch_path, opts)
     else
-      false -> {:error, :stale_patch_target}
+      {:ok, _} -> {:error, :stale_patch_target}
       {:error, _} = error -> error
-      _ -> {:error, :invalid_prepared_patch}
     end
   end
 
   def verify(_, _, _), do: {:error, :invalid_prepared_patch}
+
+  defp check(target, patch_path, opts) do
+    with {:ok, _} <-
+           Git.command(
+             target,
+             ["apply", "--check", "--whitespace=nowarn", "--", patch_path],
+             opts
+           ),
+         do: :ok
+  end
 
   # Caller has fenced the resource and verified all preconditions under its
   # target lock. Once Git starts, every failure is uncertain: multi-file writes
@@ -89,7 +90,7 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
            Alto.Result.traverse(String.split(output, <<0>>, trim: true), fn record ->
              case String.split(record, "\t", parts: 3) do
                [_added, _removed, path] ->
-                 with :ok <- valid_path(path), do: {:ok, path}
+                 {:ok, path}
 
                _ ->
                  {:error, :invalid_patch_stat}
@@ -103,7 +104,7 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
     end
   end
 
-  defp valid_path(path) when is_binary(path) do
+  defp valid_path(path) do
     parts = String.split(path, "/")
 
     if String.valid?(path) and byte_size(path) in 1..4_096 and Path.type(path) == :relative and
@@ -112,8 +113,6 @@ defmodule Alto.Contrib.Workspaces.GitPatch do
        do: :ok,
        else: {:error, :invalid_patch_path}
   end
-
-  defp valid_path(_), do: {:error, :invalid_patch_path}
 
   defp snapshots(root, paths) do
     Alto.Result.reduce(paths, {[], 0}, fn path, {files, bytes} ->

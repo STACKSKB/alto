@@ -29,7 +29,7 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
 
   defp digest(patch), do: :crypto.hash(:sha256, patch) |> Base.encode16(case: :lower)
 
-  test "prepare is read-only and leaves the index byte-for-byte unchanged", %{dir: dir} do
+  test "prepare checks applicability without changing files or the index", %{dir: dir} do
     {patch_path, patch} =
       patch_for(dir, fn -> File.write!(Path.join(dir, "a.txt"), "changed\n") end)
 
@@ -38,6 +38,11 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
     assert manifest["patch_sha256"] == digest(patch)
     assert File.read!(Path.join([dir, ".git", "index"])) == before
     assert File.read!(Path.join(dir, "a.txt")) == "a\n"
+
+    File.write!(Path.join(dir, "a.txt"), "conflict\n")
+    assert {:error, {:git_failed, 1, _}} = GitPatch.prepare(dir, patch_path, digest(patch), [])
+    assert File.read!(Path.join(dir, "a.txt")) == "conflict\n"
+    assert File.read!(Path.join([dir, ".git", "index"])) == before
   end
 
   test "disjoint patches can be prepared together, verified, and applied", %{dir: dir} do
@@ -111,6 +116,21 @@ defmodule Alto.Contrib.Workspaces.GitPatchTest do
     File.write!(patch_path, patch <> "\n# tampered\n")
     assert {:error, _reason} = GitPatch.verify(manifest, patch_path, [])
     assert File.read!(Path.join(dir, "a.txt")) == "a\n"
+  end
+
+  test "verification binds every affected file to the approved manifest", %{dir: dir} do
+    {patch_path, patch} =
+      patch_for(dir, fn ->
+        File.write!(Path.join(dir, "a.txt"), "A\n")
+        File.write!(Path.join(dir, "b.txt"), "B\n")
+      end)
+
+    {:ok, manifest} = GitPatch.prepare(dir, patch_path, digest(patch), [])
+    incomplete = Map.update!(manifest, "files", &Enum.take(&1, 1))
+
+    assert {:error, :stale_patch_target} = GitPatch.verify(incomplete, patch_path, [])
+    assert File.read!(Path.join(dir, "a.txt")) == "a\n"
+    assert File.read!(Path.join(dir, "b.txt")) == "b\n"
   end
 
   test "apply reports unknown when the patch disappears after dispatch preparation", %{dir: dir} do
