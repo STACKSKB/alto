@@ -27,14 +27,11 @@ defmodule Alto.TUI.SavedSession do
         if next != prior, do: Alto.Storage.write_json(path, next, 4_000_000)
 
         agents =
-          next["runs"]
-          |> Map.new(fn {_run, saved} ->
-            agent = Map.new(@fields, &{&1, saved[Atom.to_string(&1)]})
+          Map.new(next["runs"], fn {_run, agent} ->
             {agent.agent_id, Alto.Retained.detach(agent)}
           end)
 
-        {:ok,
-         %{usage: Usage.normalize(next["usage"]), agents: agents, truncated: next["truncated"]}}
+        {:ok, %{usage: next["usage"], agents: agents, truncated: next["truncated"]}}
       end
     end
   end
@@ -45,7 +42,7 @@ defmodule Alto.TUI.SavedSession do
       "offset" => 0,
       "digest" => digest(""),
       "records" => 0,
-      "usage" => stringify(Usage.new()),
+      "usage" => Usage.new(),
       "accounting_runs" => %{},
       "runs" => %{},
       "truncated" => false
@@ -76,7 +73,12 @@ defmodule Alto.TUI.SavedSession do
              end),
          true <-
            Enum.all?(runs, fn {id, agent} -> is_binary(id) and valid_agent?(agent) end) do
-      Alto.Retained.detach(state)
+      runs =
+        Map.new(runs, fn {id, saved} ->
+          {id, Map.new(@fields, &{&1, saved[Atom.to_string(&1)]})}
+        end)
+
+      Alto.Retained.detach(%{state | "usage" => Usage.normalize(usage), "runs" => runs})
     else
       _ -> empty()
     end
@@ -141,16 +143,13 @@ defmodule Alto.TUI.SavedSession do
   defp account(state, _record), do: state
 
   defp merge_usage(state, usage),
-    do: %{
-      state
-      | "usage" => stringify(Usage.merge(Usage.normalize(state["usage"]), Usage.normalize(usage)))
-    }
+    do: %{state | "usage" => Usage.merge(state["usage"], Usage.normalize(usage))}
 
   defp activity(state, %{"type" => "started", "subagent" => true} = record, id) do
-    agent = Subagents.saved_agent(id, record) |> stringify() |> Alto.Retained.detach()
+    agent = Subagents.saved_agent(id, record) |> Alto.Retained.detach()
 
     runs =
-      Map.reject(state["runs"], fn {_, value} -> value["agent_id"] == agent["agent_id"] end)
+      Map.reject(state["runs"], fn {_, value} -> value.agent_id == agent.agent_id end)
 
     if map_size(runs) < 256 do
       %{state | "runs" => Map.put(runs, to_string(record["run_id"]), agent)}
@@ -169,9 +168,9 @@ defmodule Alto.TUI.SavedSession do
 
           %{
             agent
-            | "status" => status,
-              "phase" => status,
-              "result" =>
+            | status: status,
+              phase: status,
+              result:
                 Subagents.tail(
                   Subagents.saved_value(record["output"]) <>
                     "\n" <> Subagents.saved_value(record["reason"])
@@ -180,13 +179,12 @@ defmodule Alto.TUI.SavedSession do
         else
           %{
             agent
-            | "activity" => Subagents.tail(agent["activity"] <> Subagents.saved_activity(record))
+            | activity: Subagents.tail(agent.activity <> Subagents.saved_activity(record))
           }
         end
       end)
     end)
   end
 
-  defp stringify(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
   defp digest(bytes), do: Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
 end
