@@ -3,7 +3,7 @@ defmodule Alto.Runner.TaskHost do
   Owns task replies, cancellation, crash outcomes, and completion subscriptions.
   Hosts supply a function accepting a cancellation reference.
   """
-  use GenServer
+  use GenServer, restart: :temporary
   alias Alto.Runner.Result
   alias Alto.Runner.Execution.Call
 
@@ -26,9 +26,6 @@ defmodule Alto.Runner.TaskHost do
       {:error, {:invalid_owner, owner}}
     end
   end
-
-  def child_spec(arg),
-    do: %{id: __MODULE__, start: {__MODULE__, :start_link, [arg]}, restart: :temporary}
 
   def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
 

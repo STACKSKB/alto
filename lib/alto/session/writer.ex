@@ -1,6 +1,6 @@
 defmodule Alto.Session.Writer do
   @moduledoc false
-  use GenServer
+  use GenServer, restart: :temporary
 
   # Reuse the descriptor/OS lock for short bursts, not for the run's lifetime.
   # Every acknowledged line is fsynced. Release after 2ms idle or 20ms of work
@@ -53,9 +53,6 @@ defmodule Alto.Session.Writer do
       GenServer.start_link(__MODULE__, key,
         name: {:via, Registry, {Alto.Session.WriterRegistry, key}}
       )
-
-  def child_spec(key),
-    do: %{id: key, start: {__MODULE__, :start_link, [key]}, restart: :temporary}
 
   @impl true
   def init({dir, id}) do
