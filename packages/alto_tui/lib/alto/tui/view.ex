@@ -30,7 +30,7 @@ defmodule Alto.TUI.View do
     |> add(settings_widget(state), layout.settings)
     |> add(composer_widget(state), layout.composer)
     |> add_status(state, layout.status)
-    |> add_details(state, details_layout(state, width, height, layout.details))
+    |> add_details(state, details_layout(state, layout))
     |> add_overlay(state.overlay, layout.root)
   end
 
@@ -56,12 +56,15 @@ defmodule Alto.TUI.View do
 
   @doc "Calculate the same geometry used for rendering and mouse routing."
   def layout(%State{} = state, width, height) do
-    PaneLayout.calculate(width, height,
-      rail_visible: state.rail_visible?,
-      details_visible: state.details_visible?,
-      rail_width: state.rail_width,
-      details_width: state.details_width
-    )
+    panes =
+      PaneLayout.calculate(width, height,
+        rail_visible: state.rail_visible?,
+        details_visible: state.details_visible?,
+        rail_width: state.rail_width,
+        details_width: state.details_width
+      )
+
+    Map.put(panes, :drawer, context_drawer(state, panes))
   end
 
   @doc "Content that supports ordinary selection; chrome requires Alt+drag."
@@ -79,7 +82,7 @@ defmodule Alto.TUI.View do
 
   def selection_content(state, width, height) do
     layout = layout(state, width, height)
-    details = details_layout(state, width, height, layout.details)
+    details = details_layout(state, layout)
 
     details_content = if details, do: [details.content], else: []
 
@@ -138,7 +141,7 @@ defmodule Alto.TUI.View do
 
   def hit_target(%State{} = state, width, height, x, y) do
     layout = layout(state, width, height)
-    details = details_layout(state, width, height, layout.details)
+    details = details_layout(state, layout)
 
     cond do
       not is_nil(state.search) and PaneLayout.contains?(layout.status, x, y) ->
@@ -202,31 +205,21 @@ defmodule Alto.TUI.View do
     end
   end
 
-  @doc "Rectangle used by narrow context, or nil when the persistent pane is active."
-  def context_overlay_rect(%State{details_return_focus: nil}, _width, _height), do: nil
+  defp context_drawer(%{details_return_focus: nil}, _layout), do: nil
 
-  def context_overlay_rect(%State{}, width, height) when width <= 0 or height <= 1, do: nil
+  defp context_drawer(state, %{details: nil, root: root} = layout)
+       when root.width > 0 and root.height > 1 do
+    drawer_width =
+      if context_fullscreen?(state, root.width),
+        do: root.width,
+        else: min(max(div(root.width * state.narrow_context_width, 100), 1), root.width)
 
-  def context_overlay_rect(%State{} = state, width, height) do
-    layout = layout(state, width, height)
-
-    if layout.details do
-      nil
-    else
-      main_height = layout.status.y
-      fullscreen? = context_fullscreen?(state, width)
-      drawer_width = min(max(div(width * state.narrow_context_width, 100), 1), width)
-
-      if fullscreen? do
-        %Rect{x: 0, y: 0, width: width, height: main_height}
-      else
-        %Rect{x: width - drawer_width, y: 0, width: drawer_width, height: main_height}
-      end
-    end
+    %Rect{x: root.width - drawer_width, y: 0, width: drawer_width, height: layout.status.y}
   end
 
-  defp details_layout(state, width, height, pane) do
-    drawer = context_overlay_rect(state, width, height)
+  defp context_drawer(_state, _layout), do: nil
+
+  defp details_layout(state, %{drawer: drawer, details: pane}) do
     rect = drawer || pane
 
     if rect do
@@ -447,7 +440,7 @@ defmodule Alto.TUI.View do
 
   def details_bottom_scroll(state) do
     {width, height} = state.dimensions
-    details = details_layout(state, width, height, layout(state, width, height).details)
+    details = details_layout(state, layout(state, width, height))
 
     if details do
       {_, text} = details_content(state, details.presentation)

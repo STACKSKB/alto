@@ -1975,7 +1975,7 @@ defmodule Alto.TUI.AppTest do
     assert drawer.focus == :details
 
     assert %ExRatatui.Layout.Rect{x: 20, y: 0, width: 60, height: 23} =
-             View.context_overlay_rect(drawer, 80, 24)
+             View.layout(drawer, 80, 24).drawer
 
     assert State.focus_next(drawer).focus == :details
 
@@ -1990,17 +1990,17 @@ defmodule Alto.TUI.AppTest do
     fullscreen = %{drawer | dimensions: {60, 24}}
 
     assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 60, height: 23} =
-             View.context_overlay_rect(fullscreen, 60, 24)
+             View.layout(fullscreen, 60, 24).drawer
 
     forced_drawer = %{fullscreen | narrow_context: :drawer}
 
     assert %ExRatatui.Layout.Rect{x: 15, y: 0, width: 45, height: 23} =
-             View.context_overlay_rect(forced_drawer, 60, 24)
+             View.layout(forced_drawer, 60, 24).drawer
 
     forced_fullscreen = %{drawer | narrow_context: :fullscreen}
 
     assert %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 23} =
-             View.context_overlay_rect(forced_fullscreen, 80, 24)
+             View.layout(forced_fullscreen, 80, 24).drawer
 
     tiny = %{state | dimensions: {40, 20}}
     tiny_settings = View.settings_segments(tiny)

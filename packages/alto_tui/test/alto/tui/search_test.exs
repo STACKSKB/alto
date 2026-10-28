@@ -156,7 +156,7 @@ defmodule Alto.TUI.SearchTest do
 
     assert clicked.focus == :transcript
     assert clicked.details_return_focus == nil
-    assert View.context_overlay_rect(clicked, 50, 16) == nil
+    assert View.layout(clicked, 50, 16).drawer == nil
     assert Search.count(clicked) == "2/2"
     assert View.hit_target(clicked, 50, 16, 1, 15) == :search_prev
     {:noreply, closed} = App.handle_event(%Key{code: "esc"}, clicked)
@@ -238,10 +238,10 @@ defmodule Alto.TUI.SearchTest do
        %{state: state} do
     original = %{state | dimensions: {80, 24}, focus: :transcript, runs: %{run: %{task_id: nil}}}
     {:noreply, searching} = App.handle_event(%Key{code: "f", modifiers: ["ctrl"]}, original)
-    assert View.context_overlay_rect(searching, 80, 24) == nil
+    assert View.layout(searching, 80, 24).drawer == nil
     {:noreply, drawer} = App.handle_event(%Key{code: "tab"}, searching)
     assert drawer.focus == :details
-    rect = View.context_overlay_rect(drawer, 80, 24)
+    rect = View.layout(drawer, 80, 24).drawer
     assert rect.x > 0
     assert rect.width < 80
     assert screen(drawer, 80, 24) =~ "search results"
@@ -305,7 +305,7 @@ defmodule Alto.TUI.SearchTest do
     drawer = State.open_details_drawer(shown)
     resumed = Search.open(drawer)
     assert resumed.details_return_focus == drawer.details_return_focus
-    assert View.context_overlay_rect(resumed, 80, 24) != nil
+    assert View.layout(resumed, 80, 24).drawer != nil
     assert screen(resumed, 80, 24) =~ "Approve F8"
     refute screen(resumed, 80, 24) =~ "search results"
   end
@@ -347,11 +347,11 @@ defmodule Alto.TUI.SearchTest do
       if manual? do
         assert closed.details_return_focus == :transcript
         assert closed.focus == :details
-        assert View.context_overlay_rect(closed, 80, 24) != nil
+        assert View.layout(closed, 80, 24).drawer != nil
       else
         assert closed.details_return_focus == nil
         assert closed.focus == :transcript
-        assert View.context_overlay_rect(closed, 80, 24) == nil
+        assert View.layout(closed, 80, 24).drawer == nil
       end
     end
   end

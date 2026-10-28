@@ -333,7 +333,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
       assert state.details_scroll == cap
 
       rect =
-        View.context_overlay_rect(state, width, height) ||
+        View.layout(state, width, height).drawer ||
           View.layout(state, width, height).details
 
       wheel = %Mouse{kind: "scroll_down", x: rect.x + 2, y: rect.y + 2}
@@ -362,7 +362,7 @@ defmodule Alto.TUI.ApprovalControlsTest do
       }
 
       rect =
-        View.context_overlay_rect(state, width, height) ||
+        View.layout(state, width, height).drawer ||
           View.layout(state, width, height).details
 
       down = %Mouse{kind: "down", button: "left", x: rect.x + 1, y: rect.y + 2}
