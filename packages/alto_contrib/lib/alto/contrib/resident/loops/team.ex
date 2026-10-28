@@ -38,28 +38,20 @@ defmodule Alto.Contrib.Resident.Loops.Team do
     do: {{:error, {:unexpected_team_event, event.type, state.phase}}, state, []}
 
   @impl true
-  def dump_checkpoint(%{phase: :children, task: task, inner: nil}, _spec),
-    do: {:ok, %{phase: :children, task: task, inner: nil}}
+  def dump_checkpoint(%{phase: :children, task: _, inner: nil} = state, _spec)
+      when map_size(state) == 3,
+      do: {:ok, state}
 
-  def dump_checkpoint(%{phase: :integrating, task: task, inner: inner}, spec) do
-    with {:ok, encoded} <- Default.dump_checkpoint(inner, spec),
-         do: {:ok, %{phase: :integrating, task: task, inner: encoded}}
+  def dump_checkpoint(%{phase: :integrating, task: _, inner: inner} = state, spec)
+      when map_size(state) == 3 do
+    with {:ok, inner} <- Default.dump_checkpoint(inner, spec),
+         do: {:ok, %{state | inner: inner}}
   end
 
-  def dump_checkpoint(_state, _spec), do: {:error, :team_checkpoint_unavailable}
+  def dump_checkpoint(_state, _spec), do: {:error, :invalid_team_checkpoint}
 
   @impl true
-  def load_checkpoint(%{phase: :children, task: task, inner: nil} = checkpoint, _spec)
-      when map_size(checkpoint) == 3,
-      do: {:ok, %{phase: :children, task: task, inner: nil}}
-
-  def load_checkpoint(%{phase: :integrating, task: task, inner: encoded} = checkpoint, spec)
-      when map_size(checkpoint) == 3 do
-    with {:ok, inner} <- Default.load_checkpoint(encoded, spec),
-         do: {:ok, %{phase: :integrating, task: task, inner: inner}}
-  end
-
-  def load_checkpoint(_checkpoint, _spec), do: {:error, :invalid_team_checkpoint}
+  def load_checkpoint(state, spec), do: dump_checkpoint(state, spec)
 
   @doc "Resolve a saved worker name from the current trusted profile."
   @impl true
