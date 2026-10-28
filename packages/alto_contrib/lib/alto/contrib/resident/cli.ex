@@ -57,6 +57,18 @@ defmodule Alto.Contrib.Resident.CLI do
     with {:ok, _} <- Application.ensure_all_started(:alto_contrib), do: run_started(args)
   end
 
+  @doc "Start a configured resident service and wait for its termination."
+  def serve(%Config{} = config) do
+    with {:ok, pid} <- Service.start(config) do
+      IO.puts(:stderr, "alto: resident service at #{Config.socket_path(config)}")
+      monitor = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^pid, reason} -> {:error, {:service_stopped, reason}}
+      end
+    end
+  end
+
   defp run_started(args) do
     {opts, args, invalid} =
       OptionParser.parse(
@@ -89,15 +101,7 @@ defmodule Alto.Contrib.Resident.CLI do
   defp dispatch(["help"], _opts), do: IO.puts(@help)
 
   defp dispatch(["serve", path], _opts) do
-    with {:ok, config} <- Config.load(path),
-         {:ok, pid} <- Service.start(config) do
-      IO.puts("Alto is listening at #{Config.socket_path(config)}")
-      monitor = Process.monitor(pid)
-
-      receive do
-        {:DOWN, ^monitor, :process, ^pid, reason} -> {:error, {:service_stopped, reason}}
-      end
-    end
+    with {:ok, config} <- Config.load(path), do: serve(config)
   end
 
   defp dispatch(args, opts) do

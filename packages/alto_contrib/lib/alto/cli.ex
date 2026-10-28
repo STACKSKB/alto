@@ -195,18 +195,7 @@ defmodule Alto.Contrib.CLI do
     if Keyword.has_key?(cli, :port) or Keyword.has_key?(cli, :socket) do
       {:error, "resident socket/state are selected by the trusted resident configuration"}
     else
-      with {:ok, pid} <- Alto.Contrib.Resident.Service.start(config) do
-        IO.puts(
-          :stderr,
-          "alto: resident service at #{Alto.Contrib.Resident.Config.socket_path(config)}"
-        )
-
-        ref = Process.monitor(pid)
-
-        receive do
-          {:DOWN, ^ref, :process, ^pid, reason} -> {:error, {:resident_stopped, reason}}
-        end
-      end
+      Alto.Contrib.Resident.CLI.serve(config)
     end
   end
 
