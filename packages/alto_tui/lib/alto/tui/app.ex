@@ -1234,12 +1234,8 @@ defmodule Alto.TUI.App do
 
         run =
           if event.type == :model_completed do
-            Map.update(
-              run,
-              :accounted_usage,
-              Alto.Usage.normalize(event.data[:usage]),
-              &Alto.Usage.merge(&1, Alto.Usage.normalize(event.data[:usage]))
-            )
+            usage = Alto.Usage.normalize(event.data[:usage])
+            Map.update(run, :accounted_usage, usage, &Alto.Usage.merge(&1, usage))
           else
             run
           end
