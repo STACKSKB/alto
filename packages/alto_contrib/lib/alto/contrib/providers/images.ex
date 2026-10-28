@@ -91,26 +91,20 @@ defmodule Alto.Contrib.Providers.Images do
 
     defstruct images: [], usage: nil, error: nil
     def new, do: %__MODULE__{}
-    def consume(state, "[DONE]", _sink), do: state
+    def consume(state, :done, _sink), do: state
+    def consume(state, %{"type" => "image_generation.partial_image"}, _sink), do: state
 
-    def consume(state, payload, _sink) do
-      case JSON.decode(payload) do
-        {:ok, %{"type" => "image_generation.partial_image"}} ->
-          state
-
-        {:ok, %{"type" => "image_generation.completed"} = image} ->
-          case decode_images([image]) do
-            {:ok, images} -> %{state | images: state.images ++ images, usage: image["usage"]}
-            {:error, reason} -> %{state | error: reason}
-          end
-
-        {:ok, %{"error" => error}} ->
-          %{state | error: {:provider_error, error}}
-
-        _ ->
-          %{state | error: :invalid_image_response}
+    def consume(state, %{"type" => "image_generation.completed"} = image, _sink) do
+      case decode_images([image]) do
+        {:ok, images} -> %{state | images: state.images ++ images, usage: image["usage"]}
+        {:error, reason} -> %{state | error: reason}
       end
     end
+
+    def consume(state, %{"error" => error}, _sink),
+      do: %{state | error: {:provider_error, error}}
+
+    def consume(state, _, _sink), do: %{state | error: :invalid_image_response}
 
     def from_response(%{"data" => [_ | _] = images} = response, _sink) do
       with {:ok, images} <- decode_images(images),

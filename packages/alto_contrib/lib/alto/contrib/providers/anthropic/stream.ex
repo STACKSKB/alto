@@ -26,25 +26,13 @@ defmodule Alto.Contrib.Providers.Anthropic.Stream do
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
-  @spec consume(t(), binary(), (Event.t() -> any())) :: t()
-  def consume(%__MODULE__{error: error} = state, _payload, _sink) when not is_nil(error),
-    do: state
+  @spec consume(t(), term(), (Event.t() -> any())) :: t()
+  def consume(state, %{"type" => _} = event, sink), do: consume_event(state, event, sink)
 
-  def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
-    case JSON.decode(payload) do
-      {:ok, %{"type" => _type} = event} ->
-        consume_event(state, event, sink)
+  def consume(state, %{"error" => error}, _sink),
+    do: %{state | error: {:provider_error, error}}
 
-      {:ok, %{"error" => error}} ->
-        %{state | error: {:provider_error, error}}
-
-      {:ok, other} ->
-        %{state | error: {:unexpected_stream_payload, other}}
-
-      {:error, _error} ->
-        %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
-    end
-  end
+  def consume(state, other, _sink), do: %{state | error: {:unexpected_stream_payload, other}}
 
   @spec from_response(map(), (Event.t() -> any())) :: {:ok, t()} | {:error, term()}
   def from_response(%{"content" => blocks, "stop_reason" => reason} = response, sink)

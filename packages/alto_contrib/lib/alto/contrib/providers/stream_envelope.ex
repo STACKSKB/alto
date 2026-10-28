@@ -250,7 +250,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
   defp consume_payloads(payloads, completion, decoder, sink) do
     Enum.reduce_while(payloads, completion, fn payload, state ->
-      next = decoder.consume(state, payload, sink)
+      next = consume_payload(state, payload, decoder, sink)
 
       if accounting(next, decoder) != accounting(state, decoder) do
         emit_accounting(next, decoder, sink)
@@ -258,6 +258,15 @@ defmodule Alto.Contrib.Providers.StreamEnvelope do
 
       if next.error, do: {:halt, next}, else: {:cont, next}
     end)
+  end
+
+  defp consume_payload(state, "[DONE]", decoder, sink), do: decoder.consume(state, :done, sink)
+
+  defp consume_payload(state, payload, decoder, sink) do
+    case JSON.decode(payload) do
+      {:ok, event} -> decoder.consume(state, event, sink)
+      {:error, _} -> %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
+    end
   end
 
   defp accounting(state, decoder) do

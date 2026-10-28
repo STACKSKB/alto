@@ -28,24 +28,14 @@ defmodule Alto.Contrib.Providers.OpenAICompatible.Stream do
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
-  @spec consume(t(), binary(), (Event.t() -> any())) :: t()
-  def consume(%__MODULE__{} = state, "[DONE]", _sink), do: %{state | done?: true}
+  @spec consume(t(), term(), (Event.t() -> any())) :: t()
+  def consume(state, :done, _sink), do: %{state | done?: true}
 
-  def consume(%__MODULE__{} = state, payload, sink) when is_binary(payload) do
-    case JSON.decode(payload) do
-      {:ok, %{"error" => error}} ->
-        %{state | error: {:provider_error, error}}
+  def consume(state, %{"error" => error}, _sink),
+    do: %{state | error: {:provider_error, error}}
 
-      {:ok, decoded} when is_map(decoded) ->
-        consume_chunk(state, decoded, sink)
-
-      {:error, _error} ->
-        %{state | error: {:invalid_stream_json, "Invalid JSON in provider stream"}}
-
-      {:ok, other} ->
-        %{state | error: {:unexpected_stream_payload, other}}
-    end
-  end
+  def consume(state, %{} = chunk, sink), do: consume_chunk(state, chunk, sink)
+  def consume(state, other, _sink), do: %{state | error: {:unexpected_stream_payload, other}}
 
   @spec from_response(map(), (Event.t() -> any())) :: {:ok, t()} | {:error, term()}
   def from_response(%{"error" => error}, _sink), do: {:error, {:provider_error, error}}

@@ -2,6 +2,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
   use ExUnit.Case, async: true
 
   alias Alto.Contrib.Providers.Anthropic
+  alias Alto.Contrib.Providers.Images
   alias Alto.Contrib.Providers.OpenAICompatible
 
   defp run(provider, chunks, extra \\ [], status \\ 200) do
@@ -88,7 +89,7 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
   end
 
   test "the HTTP boundary rejects invalid endpoints, failed responses and malformed streams" do
-    for provider <- [Anthropic, OpenAICompatible] do
+    for provider <- [Anthropic, OpenAICompatible, Images] do
       assert {:error, %NimbleOptions.ValidationError{key: :endpoint}} =
                run(provider, [], endpoint: "file:///tmp/model")
 
@@ -97,7 +98,12 @@ defmodule Alto.Contrib.Providers.StreamEnvelopeTest do
 
       assert {:error, {:invalid_provider_response, _}} = run(provider, ["invalid json"])
 
-      for payload <- ["not-json PRIVATE-BODY", "{\"private\":", "\"\\uZZZZ PRIVATE-BODY\""] do
+      for payload <- [
+            "not-json PRIVATE-BODY",
+            "{\"private\":",
+            "\"\\uZZZZ PRIVATE-BODY\"",
+            ~s("[DONE]")
+          ] do
         assert {:error, reason} = run(provider, ["data: " <> payload <> "\n\n"])
         refute inspect(reason) =~ "PRIVATE-BODY"
         refute match?({:provider_exception, _, _}, reason)

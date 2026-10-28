@@ -29,7 +29,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
 
     stream =
       Enum.reduce(chunks, Stream.new(), fn delta, state ->
-        Stream.consume(state, JSON.encode!(%{"choices" => [%{"delta" => delta}]}), sink)
+        Stream.consume(state, %{"choices" => [%{"delta" => delta}]}, sink)
       end)
 
     assert {:ok, completion} = Stream.result(stream)
@@ -54,7 +54,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
     }
 
     stream =
-      Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ ->
+      Stream.consume(Stream.new(), %{"choices" => [%{"delta" => delta}]}, fn _ ->
         :ok
       end)
 
@@ -71,7 +71,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
     }
 
     stream =
-      Stream.consume(Stream.new(), JSON.encode!(%{"choices" => [%{"delta" => delta}]}), fn _ ->
+      Stream.consume(Stream.new(), %{"choices" => [%{"delta" => delta}]}, fn _ ->
         :ok
       end)
 
@@ -123,7 +123,7 @@ defmodule Alto.Contrib.Providers.ReasoningStreamTest do
       "choices" => [%{"delta" => %{"reasoning" => "Thinking"}, "finish_reason" => "length"}]
     }
 
-    state = Stream.consume(Stream.new(), JSON.encode!(response), fn _ -> :ok end)
+    state = Stream.consume(Stream.new(), response, fn _ -> :ok end)
     assert {:ok, result} = Stream.result(state)
     assert result.message == nil
     assert result.finish_reason == "length"

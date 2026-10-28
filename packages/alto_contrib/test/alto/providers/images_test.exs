@@ -92,27 +92,32 @@ defmodule Alto.Contrib.Providers.ImagesTest do
   end
 
   test "partial images are provisional and an incomplete stream fails" do
-    state =
-      Images.Stream.consume(
-        Images.Stream.new(),
-        JSON.encode!(%{type: "image_generation.partial_image", b64_json: "AAAA"}),
-        fn _ -> :ok end
-      )
+    partial =
+      "data: " <>
+        JSON.encode!(%{type: "image_generation.partial_image", b64_json: "AAAA"}) <> "\n\n"
 
-    assert {:error, :empty_image_response} = Images.Stream.result(state)
-
-    state =
-      Images.Stream.consume(
-        state,
+    completed =
+      "data: " <>
         JSON.encode!(%{
           type: "image_generation.completed",
           b64_json: Base.encode64("<svg/>"),
           media_type: "image/svg+xml"
-        }),
-        fn _ -> :ok end
-      )
+        }) <> "\n\ndata: [DONE]\n\n"
 
-    assert {:ok, %{message: [%{"name" => "image-1.svg"}]}} = Images.Stream.result(state)
+    stream = fn body ->
+      Process.put(:image_response, body)
+
+      Images.stream(
+        %{messages: [%{"role" => "user", "content" => "draw"}], tools: []},
+        fn _ -> :ok end,
+        model: "image/model",
+        req_options: [adapter: Adapter]
+      )
+    end
+
+    assert {:error, error} = stream.(partial)
+    assert Alto.Provider.Failure.reason(error) == :empty_image_response
+    assert {:ok, %{message: [%{"name" => "image-1.svg"}]}} = stream.(partial <> completed)
 
     assert {:error, :invalid_image_base64} =
              Images.Stream.from_response(%{"data" => [%{"b64_json" => "!"}]}, fn _ -> :ok end)
