@@ -112,7 +112,11 @@ defmodule Alto.Persistence.EventCodec do
   defp read(["atom", name], {:exact, _}, _) when is_binary(name),
     do: String.to_existing_atom(name)
 
-  defp read(["binary", encoded], _, _), do: Base.decode64!(encoded)
+  defp read(["binary", encoded], mode, _) do
+    value = Base.decode64!(encoded)
+    if mode == :project, do: Alto.TermProjection.encode_term(value), else: value
+  end
+
   defp read(["map", pairs], mode, depth), do: read_map(pairs, mode, depth)
 
   defp read(["struct", name, pairs], :project, depth) when is_binary(name),
@@ -145,6 +149,9 @@ defmodule Alto.Persistence.EventCodec do
 
   defp read_key(key, {:exact, _} = mode, depth), do: read(key, mode, depth)
   defp read_key(["key", _, wire], :project, _) when is_binary(wire), do: wire
+
+  defp read_key(["binary", encoded], :project, _),
+    do: encoded |> Base.decode64!() |> Alto.TermProjection.encode_key()
 
   defp read_key(key, :project, depth) do
     case read(key, :project, depth) do

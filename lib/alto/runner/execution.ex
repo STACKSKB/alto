@@ -1392,7 +1392,7 @@ defmodule Alto.Runner.Execution do
   end
 
   defp encode_tool_result(value, limit) do
-    encoded = if is_binary(value), do: value, else: JSON.encode!(value)
+    encoded = if is_binary(value) and String.valid?(value), do: value, else: JSON.encode!(value)
     bound_tool_result(encoded, limit)
   rescue
     # Normalize unsupported terms without replacing the surrounding result shape.

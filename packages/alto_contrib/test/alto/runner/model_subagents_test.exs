@@ -267,6 +267,8 @@ defmodule Alto.Runner.ModelSubagentsTest do
              "$tuple" => ["http_error", 402, %{"message" => "payment required"}]
            }},
           {:unavailable, "unavailable"},
+          {<<255>>, %{"$inspect" => "<<255>>"}},
+          {%{<<255>> => <<254>>}, %{"<<255>>" => %{"$inspect" => "<<254>>"}}},
           {"provider offline", "provider offline"}
         ] do
       requests = [task("successful"), task("failed") |> Map.put("model", "model-b")]

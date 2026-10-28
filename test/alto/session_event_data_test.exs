@@ -62,8 +62,14 @@ defmodule Alto.SessionEventDataTest do
   end
 
   test "binary payloads round trip without pretending they are UTF-8" do
-    data = %{bytes: <<255, 0, 128>>}
+    data = %{<<255>> => "binary key", :bytes => <<255, 0, 128>>}
     encoded = Alto.Persistence.EventCodec.encode(data) |> JSON.encode!() |> JSON.decode!()
     assert {:ok, ^data} = Session.decode_term(encoded)
+    assert {:ok, projected} = Alto.Persistence.EventCodec.project(encoded)
+
+    assert JSON.decode!(JSON.encode!(projected)) == %{
+             "bytes" => %{"$inspect" => "<<255, 0, 128>>"},
+             "<<255>>" => "binary key"
+           }
   end
 end

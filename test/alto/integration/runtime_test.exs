@@ -293,6 +293,28 @@ defmodule Alto.Integration.RuntimeTest do
     end
   end
 
+  test "binary tool output reaches the model as text while retaining its native event value", c do
+    opts =
+      Keyword.merge(c.options,
+        tools: [{Tool, owner: self(), result: {:ok, <<255>>}}],
+        session: :new,
+        session_dir: c.cwd
+      )
+
+    assert %Result{status: :ok, output: "done", persistence: :ok} =
+             result = Alto.run("read", opts)
+
+    assert_receive {:request, _}
+    assert_receive {:request, request}
+    message = Enum.find(request.messages, &(&1["role"] == "tool"))
+    assert JSON.decode!(message["content"]) == %{"$inspect" => "<<255>>"}
+    assert Enum.any?(result.events, &(&1.type == :tool_completed and &1.data.value == <<255>>))
+
+    assert {:ok, records} = Session.read(result.session_id, session_dir: c.cwd)
+    record = Enum.find(records, &(&1["event"] == "tool_completed"))
+    assert {:ok, %{value: <<255>>}} = Session.decode_term(record["data"])
+  end
+
   test "oversized success, failures and malformed results remain bounded without replay", c do
     large = String.duplicate("private", 20_000)
 

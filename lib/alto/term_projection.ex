@@ -4,15 +4,17 @@ defmodule Alto.TermProjection do
 
   @doc """
   The wire encoding for Elixir terms, per the protocol contract. Lossy but stable:
-  tuples become `{"$tuple": [...]}` and unencodable terms become a bounded
+  tuples become `{"$tuple": [...]}`; invalid UTF-8 binaries and unencodable terms become a bounded
   `inspect/1` string. Applied after the host's own bounds, never instead of
   them.
   """
   @spec encode_term(term()) :: term()
   def encode_term(term)
-      when is_binary(term) or is_integer(term) or is_float(term) or is_boolean(term) or
-             is_nil(term),
+      when is_integer(term) or is_float(term) or is_boolean(term) or is_nil(term),
       do: term
+
+  def encode_term(term) when is_binary(term),
+    do: if(String.valid?(term), do: term, else: %{"$inspect" => bounded_inspect(term)})
 
   def encode_term(atom) when is_atom(atom), do: Atom.to_string(atom)
 
@@ -37,7 +39,10 @@ defmodule Alto.TermProjection do
 
   @doc false
   def encode_key(key) when is_atom(key), do: Atom.to_string(key)
-  def encode_key(key) when is_binary(key), do: key
+
+  def encode_key(key) when is_binary(key),
+    do: if(String.valid?(key), do: key, else: bounded_inspect(key))
+
   def encode_key(key) when is_integer(key), do: Integer.to_string(key)
   def encode_key(key), do: bounded_inspect(key)
 
