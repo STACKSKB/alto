@@ -516,46 +516,38 @@ defmodule Alto.Contrib.Resident.Console do
       %{durable: true, id: id} = task ->
         detail = command(model.client, "tasks.get", %{"id" => id})["task"]
 
-        updated = %{
-          task
-          | title: clean(detail["task"]),
-            evidence: detail["evidence"],
-            approval: detail["approval"],
-            usage: detail["evidence"]["usage"] || detail["usage"] || task.usage
-        }
+        update_selected(model, %{
+          title: clean(detail["task"]),
+          evidence: detail["evidence"],
+          approval: detail["approval"],
+          usage: detail["evidence"]["usage"] || detail["usage"] || task.usage
+        })
 
-        %{
-          model
-          | tasks: Enum.map(model.tasks, fn item -> if item.id == id, do: updated, else: item end)
-        }
-
-      %{workspace_loaded: false, session_id: session, id: id} = task
+      %{workspace_loaded: false, session_id: session}
       when is_binary(session) ->
         project =
           command(model.client, "projects.session", %{session_id: session})["project"]
-
-        updated = %{
-          task
-          | cwd: project && project["root"],
-            workspace_id: project && project["id"],
-            workspace_loaded: true
-        }
 
         projects =
           if project,
             do: [project | Enum.reject(model.projects, &(&1["id"] == project["id"]))],
             else: model.projects
 
-        %{
-          model
-          | tasks:
-              Enum.map(model.tasks, fn item -> if item.id == id, do: updated, else: item end),
-            projects: projects
-        }
+        update_selected(%{model | projects: projects}, %{
+          cwd: project && project["root"],
+          workspace_id: project && project["id"],
+          workspace_loaded: true
+        })
 
       _ ->
         model
     end
+  end
+
+  defp update_selected(model, changes) do
+    update_in(model.tasks, fn tasks ->
+      Enum.map(tasks, &if(&1.id == model.selected_id, do: Map.merge(&1, changes), else: &1))
+    end)
   end
 
   defp load_history(%{selected_id: nil} = model), do: model
