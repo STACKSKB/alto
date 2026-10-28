@@ -59,15 +59,15 @@ defmodule Alto.Queue do
   """
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
-    :ok = validate_id!(id)
+    directory = dir(opts)
+    path = Alto.Storage.log_path!(directory, id)
 
     with {:ok, settings} <-
            NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@options)), @options_schema) do
-      directory = dir(opts)
       settings = Keyword.put_new(settings, :clock, fn -> System.system_time(:millisecond) end)
 
       state =
-        struct!(__MODULE__, [id: id, dir: directory, path: log_path(directory, id)] ++ settings)
+        struct!(__MODULE__, [id: id, dir: directory, path: path] ++ settings)
 
       Alto.Storage.start_server(__MODULE__, state, &load/1, opts)
     end
@@ -76,12 +76,6 @@ defmodule Alto.Queue do
   @doc "Storage directory for queue logs, honouring an explicit override."
   @spec dir(keyword()) :: Path.t()
   def dir(opts \\ []), do: Alto.Storage.dir("queues", Keyword.get(opts, :dir))
-
-  @doc "Check a queue id for directory traversal and shape."
-  @spec validate_id(term()) :: :ok | {:error, term()}
-  def validate_id(id) do
-    if Alto.Storage.valid_id?(id), do: :ok, else: {:error, {:invalid_queue_id, id}}
-  end
 
   @type request ::
           {:put | :admit, binary(), term(), keyword()}
@@ -713,15 +707,6 @@ defmodule Alto.Queue do
       {:ok, restored}
     else
       _ -> {:error, :invalid_queue_snapshot}
-    end
-  end
-
-  defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
-
-  defp validate_id!(id) do
-    case validate_id(id) do
-      :ok -> :ok
-      {:error, reason} -> raise ArgumentError, "invalid queue id: #{inspect(reason)}"
     end
   end
 end

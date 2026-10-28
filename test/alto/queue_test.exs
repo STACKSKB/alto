@@ -15,10 +15,6 @@ defmodule Alto.QueueTest do
     %{dir: dir, id: unique_id()}
   end
 
-  defp tmp_root do
-    Path.join(System.tmp_dir!(), "alto-queue-test-#{System.unique_integer([:positive])}")
-  end
-
   defp unique_id, do: "q" <> Integer.to_string(System.unique_integer([:positive]))
 
   defp start_queue!(opts) do
@@ -352,18 +348,16 @@ defmodule Alto.QueueTest do
     end
   end
 
-  describe "id validation" do
-    test "hostile ids are refused before touching the filesystem" do
-      assert {:error, {:invalid_queue_id, "../escape"}} = Queue.validate_id("../escape")
-      assert {:error, {:invalid_queue_id, "a/b"}} = Queue.validate_id("a/b")
-      assert :ok = Queue.validate_id("jobs-1")
-    end
+  test "queue and ledger reject hostile storage ids before creating files", %{dir: dir} do
+    directory = Path.join(dir, "logs")
 
-    test "start_link raises on an invalid id" do
-      assert_raise ArgumentError, ~r/invalid queue id/, fn ->
-        Queue.start_link(id: "../escape", dir: tmp_root(), name: unique_id())
+    for module <- [Queue, Alto.OperationLog], id <- ["../escape", "a/b"] do
+      assert_raise ArgumentError, ~r/invalid storage id/, fn ->
+        module.start_link(id: id, dir: directory, name: nil)
       end
     end
+
+    assert File.ls!(dir) == []
   end
 
   describe "scheduling input validation" do

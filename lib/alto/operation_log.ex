@@ -48,14 +48,13 @@ defmodule Alto.OperationLog do
 
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
-    :ok = validate_id!(id)
+    directory = dir(opts)
+    path = Alto.Storage.log_path!(directory, id)
 
     with {:ok, limits} <-
            NimbleOptions.validate(Keyword.take(opts, Keyword.keys(@limits)), @limits_schema) do
-      directory = dir(opts)
-
       state =
-        struct!(__MODULE__, [id: id, dir: directory, path: log_path(directory, id)] ++ limits)
+        struct!(__MODULE__, [id: id, dir: directory, path: path] ++ limits)
 
       Alto.Storage.start_server(__MODULE__, state, &load/1, opts)
     end
@@ -352,14 +351,6 @@ defmodule Alto.OperationLog do
     end
   end
 
-  defp validate_id!(id) do
-    if Alto.Storage.valid_id?(id) do
-      :ok
-    else
-      raise ArgumentError, "invalid operation log id: #{inspect(id)}"
-    end
-  end
-
   ## Durable storage and replay
 
   defp load(state) do
@@ -652,6 +643,4 @@ defmodule Alto.OperationLog do
         {:error, {:ledger_write_failed, reason}}
     end
   end
-
-  defp log_path(dir, id), do: Path.join(dir, id <> ".jsonl")
 end

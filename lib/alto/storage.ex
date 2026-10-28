@@ -4,6 +4,13 @@ defmodule Alto.Storage do
   @id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
 
   def valid_id?(id), do: is_binary(id) and Regex.match?(@id_pattern, id)
+
+  def log_path!(dir, id) do
+    if valid_id?(id),
+      do: Path.join(dir, id <> ".jsonl"),
+      else: raise(ArgumentError, "invalid storage id: #{inspect(id)}")
+  end
+
   def dir(name, nil), do: Path.join([state_home(), "alto", name])
   def dir(_name, path) when is_binary(path), do: path
 
