@@ -40,11 +40,11 @@ defmodule Alto.Contrib.Credentials do
   end
 
   @doc "Merge provider values and atomically persist the credential store."
-  @spec put(t(), String.t(), map()) :: {:ok, t()} | {:error, term()}
-  def put(%__MODULE__{} = credentials, provider, values)
-      when is_binary(provider) and provider != "" and is_map(values) do
+  @spec put(Path.t(), String.t(), map()) :: {:ok, t()} | {:error, term()}
+  def put(path, provider, values)
+      when is_binary(path) and is_binary(provider) and provider != "" and is_map(values) do
     with :ok <- validate_values(values) do
-      path = Path.expand(credentials.path)
+      path = Path.expand(path)
 
       Alto.Storage.update_json(path, @max_bytes, fn -> read(path) end, fn document ->
         updated =
@@ -58,7 +58,7 @@ defmodule Alto.Contrib.Credentials do
     end
   end
 
-  def put(_credentials, _provider, _values), do: {:error, :invalid_credentials_update}
+  def put(_path, _provider, _values), do: {:error, :invalid_credentials_update}
 
   defp read(path) do
     case Alto.Storage.read_json(path, @max_bytes, nil, &valid_document?/1) do
@@ -73,8 +73,7 @@ defmodule Alto.Contrib.Credentials do
 
   defp valid_document?(_), do: false
 
-  # A store that group or other can read is refused rather than trusted;
-  # running setup again rewrites it with mode 0600.
+  # A store that group or other can read is refused rather than trusted.
   defp private_mode?(path) do
     case File.stat(path) do
       {:ok, %{mode: mode}} when Bitwise.band(mode, 0o077) == 0 -> :ok

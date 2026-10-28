@@ -45,10 +45,8 @@ defmodule Alto.Contrib.CLI.OnboardingTest do
   end
 
   test "reuses saved credentials without prompting or fetching models", context do
-    assert {:ok, credentials} = Credentials.load(context.credentials_path)
-
     assert {:ok, _credentials} =
-             Credentials.put(credentials, "openrouter", %{
+             Credentials.put(context.credentials_path, "openrouter", %{
                "api_key" => "saved-key",
                "model" => "saved/model"
              })
@@ -76,10 +74,8 @@ defmodule Alto.Contrib.CLI.OnboardingTest do
   end
 
   test "forced setup keeps a saved key on Enter but selects a new model", context do
-    {:ok, credentials} = Credentials.load(context.credentials_path)
-
     {:ok, _} =
-      Credentials.put(credentials, "openrouter", %{
+      Credentials.put(context.credentials_path, "openrouter", %{
         "api_key" => "saved-key",
         "model" => "old/model"
       })

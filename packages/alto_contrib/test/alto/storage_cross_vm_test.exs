@@ -40,14 +40,11 @@ defmodule Alto.StorageCrossVMTest do
     assert length(records) == 41
   end
 
-  test "stale credential snapshots merge across independent VMs", %{root: root} do
+  test "credential updates merge across independent VMs", %{root: root} do
     path = Path.join(root, "credentials.json")
     peers = [peer!(), peer!()]
     on_exit(fn -> Enum.each(peers, &stop_peer/1) end)
     [{_pid_a, node_a}, {_pid_b, node_b}] = peers
-
-    assert {:ok, credentials_a} = :rpc.call(node_a, Credentials, :load, [path])
-    assert {:ok, credentials_b} = :rpc.call(node_b, Credentials, :load, [path])
 
     [
       {node_a, %{"api_key" => "from-a"}},
@@ -55,8 +52,7 @@ defmodule Alto.StorageCrossVMTest do
     ]
     |> Enum.map(fn {node, values} ->
       Task.async(fn ->
-        credentials = if values["api_key"], do: credentials_a, else: credentials_b
-        :rpc.call(node, Credentials, :put, [credentials, "provider", values], 10_000)
+        :rpc.call(node, Credentials, :put, [path, "provider", values], 10_000)
       end)
     end)
     |> Enum.map(&Task.await(&1, 30_000))

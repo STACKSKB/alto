@@ -15,7 +15,7 @@ defmodule Alto.CredentialsTest do
     assert Credentials.get(credentials, "openrouter", "api_key") == nil
 
     assert {:ok, credentials} =
-             Credentials.put(credentials, "openrouter", %{
+             Credentials.put(path, "openrouter", %{
                "api_key" => "secret",
                "model" => "anthropic/claude-sonnet"
              })
@@ -30,9 +30,8 @@ defmodule Alto.CredentialsTest do
   end
 
   test "merges provider preferences without dropping an existing key", %{path: path} do
-    assert {:ok, credentials} = Credentials.load(path)
-    assert {:ok, _saved} = Credentials.put(credentials, "openrouter", %{"api_key" => "key"})
-    assert {:ok, credentials} = Credentials.put(credentials, "openrouter", %{"model" => "model"})
+    assert {:ok, _saved} = Credentials.put(path, "openrouter", %{"api_key" => "key"})
+    assert {:ok, credentials} = Credentials.put(path, "openrouter", %{"model" => "model"})
 
     assert Credentials.get(credentials, "openrouter", "api_key") == "key"
     assert Credentials.get(credentials, "openrouter", "model") == "model"

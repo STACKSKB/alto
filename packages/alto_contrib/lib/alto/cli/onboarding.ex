@@ -82,7 +82,7 @@ defmodule Alto.Contrib.CLI.Onboarding do
 
           true ->
             with {:ok, credentials} <-
-                   Credentials.put(credentials, @provider_id, %{"api_key" => entered}) do
+                   Credentials.put(credentials.path, @provider_id, %{"api_key" => entered}) do
               IO.puts(opts[:output], "Saved OpenRouter credentials to #{credentials.path}")
               {:ok, entered, credentials}
             end
@@ -113,7 +113,7 @@ defmodule Alto.Contrib.CLI.Onboarding do
       with {:ok, models} <- Alto.Provider.list_models({provider, provider_options}),
            {:ok, model} <- select_model(models, opts[:input], opts[:output]),
            {:ok, _credentials} <-
-             Credentials.put(credentials, @provider_id, %{"model" => model}) do
+             Credentials.put(credentials.path, @provider_id, %{"model" => model}) do
         IO.puts(opts[:output], "Selected #{model}")
         {:ok, model}
       end

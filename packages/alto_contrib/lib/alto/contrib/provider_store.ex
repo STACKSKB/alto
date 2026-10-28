@@ -55,7 +55,6 @@ defmodule Alto.Contrib.ProviderStore do
     with :ok <- validate_id(id),
          :ok <- validate_label(label),
          :ok <- validate_url(base_url),
-         {:ok, credentials} <- Credentials.load(path(opts)),
          values <-
            compact(%{
              "type" => @kind,
@@ -67,7 +66,7 @@ defmodule Alto.Contrib.ProviderStore do
          existing = Enum.find(configured, &(&1.id == id)),
          {:ok, credentials} <-
            Credentials.put(
-             credentials,
+             path(opts),
              if(existing, do: existing.credential_id, else: id),
              values
            ) do
